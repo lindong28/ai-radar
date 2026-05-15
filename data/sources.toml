@@ -150,10 +150,10 @@ icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
 [[source]]
 slug = "anthropic_blog"
 name = "Claude Blog"
-url = "https://www.anthropic.com/news/rss.xml"
+url = "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_claude.xml"
 tier = "T1"
-enabled = false  # disabled 2026-05-12: probe failed; see plans/ai-radar-alignment-20260512/source-probe.md
-homepage_url = "https://www.anthropic.com/news"
+enabled = true
+homepage_url = "https://claude.com/blog"
 icon_url = "https://www.google.com/s2/favicons?domain=www.anthropic.com&sz=64"
 
 [[source]]
@@ -298,9 +298,9 @@ icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
 [[source]]
 slug = "anthropic_news"
 name = "Anthropic News"
-url = "https://www.anthropic.com/news/rss.xml"
+url = "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml"
 tier = "T1"
-enabled = false  # disabled 2026-05-12: not present as primary AI Hot source; legacy RSS also returns 404
+enabled = true
 homepage_url = "https://www.anthropic.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=anthropic.com&sz=64"
 
@@ -309,7 +309,7 @@ slug = "lilianweng"
 name = "Lilian Weng's Log"
 url = "https://lilianweng.github.io/index.xml"
 tier = "T1.5"
-enabled = false  # disabled 2026-05-12: not present in AI Hot baseline source set
+enabled = true
 homepage_url = "https://lilianweng.github.io/"
 icon_url = "https://www.google.com/s2/favicons?domain=lilianweng.github.io&sz=64"
 
@@ -354,7 +354,7 @@ slug = "hn_ai"
 name = "Hacker News AI/LLM"
 url = "https://hnrss.org/newest?q=AI+OR+LLM+OR+GPT"
 tier = "T2"
-enabled = false  # disabled 2026-05-12: not present in AI Hot baseline source set
+enabled = true
 homepage_url = "https://news.ycombinator.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=news.ycombinator.com&sz=64"
 
