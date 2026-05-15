@@ -133,10 +133,20 @@ def test_app_js_supports_all_page_channel_pagination_and_full_card_affordances()
     assert "channelFromUrl" in js
     assert "bindChannelControls" in js
     assert "renderPagination" in js
+    assert "renderTimelineLoading" in js
+    assert "category: CATEGORY_URL_VALUES[activeCategory] || \"\"" in js
     assert "showReason: \"selected\"" in js
     assert "sortByScore: false" in js
     assert "clampSummary: true" in js
     assert "compact: true" not in js
+
+
+def test_feed_css_declares_timeline_loading_state() -> None:
+    css = _read("style.css")
+
+    assert ".timeline-loading {" in css
+    assert 'role="status"' in _read("app.js")
+    assert ".timeline-loading-dot {" in css
 
 
 def test_app_js_supports_aihot_style_daily_report() -> None:

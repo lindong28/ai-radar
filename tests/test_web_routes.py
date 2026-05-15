@@ -129,6 +129,25 @@ def _seed_db(tmp_path: Path) -> Path:
     return db_path
 
 
+def _insert_enrichment(conn: sqlite3.Connection, item_id: str, title: str, tags: list[str]) -> None:
+    payload = {
+        "title_zh": title,
+        "summary_zh": "这是一段用于测试分类筛选的中文摘要，长度足够满足结构化校验要求。",
+        "why_recommend": "这是一段用于测试分类筛选的中文推荐理由。",
+        "tags": tags,
+    }
+    conn.execute(
+        """
+        INSERT INTO item_evaluations (
+          item_id, stage, ruleset_version, model_id, input_json, output_json,
+          numeric_json, latency_ms, cost_usd, evaluated_at, error
+        )
+        VALUES (?, 'enrich', 'test.r1', 'fake', '{}', ?, '{}', 1, 0, '2026-05-08T10:07:00Z', NULL)
+        """,
+        (item_id, json.dumps(payload)),
+    )
+
+
 def test_static_clean_routes_and_curated_redirect(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 
@@ -187,6 +206,25 @@ def test_timeline_supports_channel_filters_and_url_page_state(tmp_path: Path) ->
     first_party = client.get("/api/v1/timeline", params={"channel": "firstParty"}).json()["data"]
     assert [item["id"] for item in first_party["items"]] == ["item-openai", "item-claude"]
     assert {item["source_kind"] for item in first_party["items"]} == {"feed"}
+
+
+def test_timeline_category_filter_applies_before_pagination(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_enrichment(conn, "item-openai", "OpenAI API 产品更新", ["产品更新", "OpenAI"])
+    _insert_enrichment(conn, "item-claude", "Claude 研究笔记", ["论文/研究", "Anthropic"])
+    _insert_enrichment(conn, "item-x", "SQLite 研究讨论", ["论文/研究", "教程/实践"])
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    page_one = client.get("/api/v1/timeline", params={"category": "paper", "limit": 1, "page": 1}).json()["data"]
+    page_two = client.get("/api/v1/timeline", params={"category": "paper", "limit": 1, "page": 2}).json()["data"]
+
+    assert page_one["total"] == 2
+    assert [item["id"] for item in page_one["items"]] == ["item-claude"]
+    assert [item["id"] for item in page_two["items"]] == ["item-x"]
+    assert all("论文/研究" in item["topic_tags"] for item in [*page_one["items"], *page_two["items"]])
 
 
 def test_timeline_exposes_latest_curated_metadata_for_all_feed(tmp_path: Path) -> None:

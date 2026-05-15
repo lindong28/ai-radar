@@ -805,6 +805,30 @@ button,
   background: linear-gradient(180deg, rgba(17, 24, 39, 0.78), rgba(15, 23, 42, 0.66));
 }
 
+.timeline-loading {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 40px;
+  align-items: center;
+  gap: 9px;
+  margin-left: 114px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--soft);
+  background: rgba(15, 23, 42, 0.42);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.timeline-loading-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--cyan);
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.1);
+}
+
 .compact-card {
   padding: 12px 14px;
 }
@@ -1492,6 +1516,10 @@ button,
 
   .wide-action {
     width: calc(100% - 66px);
+    margin-left: 66px;
+  }
+
+  .timeline-loading {
     margin-left: 66px;
   }
 

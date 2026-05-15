@@ -7,6 +7,26 @@ from .common import _visible_reason_from_payload, conn_from_request, fts_phrase_
 
 router = APIRouter()
 
+CATEGORY_TAGS = {
+    "ai-models": {"模型发布", "评测/基准", "推理"},
+    "ai-products": {"产品更新", "MCP/工具", "多模态"},
+    "industry": {"行业动态", "安全/对齐", "现象/趋势"},
+    "paper": {"论文/研究"},
+    "tip": {"教程/实践", "开源/仓库", "端侧"},
+}
+
+
+def _matches_category(item: dict[str, object], category: str | None) -> bool:
+    if not category:
+        return True
+    wanted = CATEGORY_TAGS.get(category)
+    if not wanted:
+        return True
+    tags = item.get("topic_tags")
+    if not isinstance(tags, list):
+        return False
+    return any(isinstance(tag, str) and tag in wanted for tag in tags)
+
 
 @router.get("/timeline")
 def timeline(
@@ -15,6 +35,7 @@ def timeline(
     limit: int = Query(default=50, ge=1, le=100),
     page: int = Query(default=1, ge=1),
     channel: str | None = None,
+    category: str | None = None,
     q: str | None = None,
 ) -> dict[str, object]:
     params: list[object] = []
@@ -90,8 +111,10 @@ def timeline(
                 """
             )
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        normalized_category = category if category in CATEGORY_TAGS else None
         offset = 0 if cursor else (page - 1) * limit
-        query_params = [*params, limit + 1, offset]
+        query_params = [*params] if normalized_category else [*params, limit + 1, offset]
+        limit_clause = "" if normalized_category else "LIMIT ? OFFSET ?"
         rows = conn.execute(
             f"""
             SELECT i.*, s.name AS source_name, s.tier,
@@ -115,27 +138,12 @@ def timeline(
               AND c.run_id = (SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1)
             {where}
             ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
-            LIMIT ? OFFSET ?
+            {limit_clause}
             """,
             query_params,
         ).fetchall()
-        total = conn.execute(
-            f"""
-            SELECT COUNT(*)
-            FROM items i
-            JOIN sources s ON s.id=i.source_id
-            {where}
-            """,
-            params,
-        ).fetchone()[0]
-        page_rows = rows[:limit]
-        next_cursor = (
-            f"{page_rows[-1]['published_at']}|{page_rows[-1]['fetched_at']}|{page_rows[-1]['id']}"
-            if len(rows) > limit and page_rows
-            else None
-        )
         items = []
-        for row in page_rows:
+        for row in rows:
             item = item_summary(row, preview_query, conn)
             if row["rank"] is not None:
                 item["rank"] = row["rank"]
@@ -145,5 +153,32 @@ def timeline(
                 if visible_reason:
                     item["reasoning"] = visible_reason
                     item["why_recommend"] = visible_reason
-            items.append(item)
+            if _matches_category(item, normalized_category):
+                items.append(item)
+        if normalized_category:
+            total = len(items)
+            page_items = items[offset : offset + limit]
+            next_cursor = (
+                f"{page_items[-1]['published_at']}|{page_items[-1]['fetched_at']}|{page_items[-1]['id']}"
+                if len(items) > offset + limit and page_items
+                else None
+            )
+            items = page_items
+        else:
+            total = conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM items i
+                JOIN sources s ON s.id=i.source_id
+                {where}
+                """,
+                params,
+            ).fetchone()[0]
+            page_rows = rows[:limit]
+            next_cursor = (
+                f"{page_rows[-1]['published_at']}|{page_rows[-1]['fetched_at']}|{page_rows[-1]['id']}"
+                if len(rows) > limit and page_rows
+                else None
+            )
+            items = items[:limit]
     return ok({"items": items, "next_cursor": next_cursor, "total": total, "page": 1 if cursor else page, "limit": limit})

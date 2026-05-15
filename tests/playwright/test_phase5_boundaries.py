@@ -1,17 +1,38 @@
 from __future__ import annotations
 
+import time
+
 from playwright.sync_api import Page, expect
 
 
+def test_feed_pages_show_loading_state_while_fetching(page: Page, base_url: str) -> None:
+    for path, endpoint in [("/", "/api/v1/curated"), ("/all", "/api/v1/timeline")]:
+        route_pattern = f"**{endpoint}*"
+
+        def delay_response(route):
+            time.sleep(0.35)
+            route.continue_()
+
+        page.route(route_pattern, delay_response)
+        page.goto(f"{base_url}{path}", wait_until="domcontentloaded")
+
+        expect(page.locator(".timeline-loading")).to_be_visible()
+        expect(page.locator(".timeline-loading")).to_contain_text("正在加载")
+        expect(page.locator(".timeline-card").first).to_be_visible(timeout=10_000)
+
+        page.unroute(route_pattern, delay_response)
+
+
 def test_v15a_search_without_results_shows_empty_state(page: Page, base_url: str) -> None:
-    page.goto(f"{base_url}/", wait_until="domcontentloaded")
-    expect(page.locator(".timeline-card").first).to_be_visible(timeout=10_000)
+    for path, endpoint in [("/", "/api/v1/curated"), ("/all", "/api/v1/timeline")]:
+        page.goto(f"{base_url}{path}", wait_until="domcontentloaded")
+        expect(page.locator(".timeline-card").first).to_be_visible(timeout=10_000)
 
-    with page.expect_response(lambda response: "/api/v1/curated" in response.url and "q=" in response.url):
-        page.locator('input[type="search"]').fill("xyzzyqwertynonexistent")
+        with page.expect_response(lambda response: endpoint in response.url and "q=" in response.url):
+            page.locator('input[type="search"]').fill("xyzzyqwertynonexistent")
 
-    expect(page.locator(".empty-state")).to_contain_text("没有匹配条目")
-    assert page.locator(".timeline-card").count() == 0
+        expect(page.locator(".empty-state")).to_contain_text("没有匹配条目")
+        assert page.locator(".timeline-card").count() == 0
 
 
 def test_v18_unknown_tab_paths_return_404(page: Page, base_url: str) -> None:

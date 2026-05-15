@@ -475,6 +475,14 @@ function debounceInput(input, callback) {
   });
 }
 
+function renderTimelineLoading(container) {
+  if (!container) return;
+  container.innerHTML = `<div class="timeline-loading" role="status" aria-live="polite">
+    <span class="timeline-loading-dot" aria-hidden="true"></span>
+    <span>正在加载</span>
+  </div>`;
+}
+
 export async function initTimeline() {
   initNavigation();
   const list = document.querySelector("#list");
@@ -498,14 +506,15 @@ export async function initTimeline() {
     visibleItems = rawItems;
     syncCategoryControls(activeCategory, activeChannel);
     syncChannelControls(activeChannel, activeCategory);
-    renderTimeline(list, rawItems.filter((item) => itemMatchesCategory(item, activeCategory)), {
+    const hasQuery = Boolean(search.value.trim());
+    renderTimeline(list, rawItems, {
       showScore: true,
       showReason: "selected",
       showRelated: false,
       sortByScore: false,
       clampSummary: true,
-      emptyTitle: activeCategory === "all" ? "暂无内容" : `${CATEGORY_LABELS[activeCategory]}分类暂无内容`,
-      emptyBody: activeCategory === "all" ? "当前还没有可展示的 AI 动态。" : `可以切换到${CHANNEL_LABELS[activeChannel]}全部内容继续浏览。`,
+      emptyTitle: hasQuery ? "没有匹配条目" : activeCategory === "all" ? "暂无内容" : `${CATEGORY_LABELS[activeCategory]}分类暂无内容`,
+      emptyBody: hasQuery ? "清空搜索后可回到默认列表。" : activeCategory === "all" ? "当前还没有可展示的 AI 动态。" : `可以切换到${CHANNEL_LABELS[activeChannel]}全部内容继续浏览。`,
     });
     renderPagination(pagination, {
       page: meta.page || currentPage,
@@ -522,11 +531,14 @@ export async function initTimeline() {
     const q = search.value.trim();
     const urlPage = page > 1 ? String(page) : "";
     if (updateUrl) updateFeedUrl("/all", { q, category: activeCategory, channel: activeChannel, page: urlPage }, mode);
+    renderTimelineLoading(list);
+    if (pagination) pagination.hidden = true;
     const data = await api(queryPath("/api/v1/timeline", {
       limit: 40,
       page,
       q,
       channel: CHANNEL_URL_VALUES[activeChannel] || "",
+      category: CATEGORY_URL_VALUES[activeCategory] || "",
     }));
     renderView(data.items, data);
   }
@@ -583,6 +595,7 @@ export async function initCurated() {
   }
 
   async function load(q = "") {
+    renderTimelineLoading(list);
     const data = await api(queryPath("/api/v1/curated", { q }));
     currentItems = data.items;
     renderView(q);
