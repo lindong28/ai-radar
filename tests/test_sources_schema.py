@@ -1,0 +1,101 @@
+"""Phase 1 schema tests for new sources.toml fields: kind / homepage_url / icon_url."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from airadar.sources.loader import SourceConfig, load_sources
+
+
+def _write_toml(path: Path, lines: list[str]) -> Path:
+    out = path / "sources.toml"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
+
+
+def test_kind_defaults_to_feed(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "minimal"',
+            'name = "Minimal Feed"',
+            'url = "https://example.com/feed.xml"',
+            'tier = "T2"',
+        ],
+    )
+    sources = load_sources(path)
+    assert len(sources) == 1
+    assert sources[0].kind == "feed"
+    assert sources[0].homepage_url is None
+    assert sources[0].icon_url is None
+
+
+def test_kind_x_is_accepted(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "twitter_user"',
+            'name = "X User"',
+            'url = "https://rsshub.app/twitter/user/example"',
+            'tier = "T1.5"',
+            'kind = "x"',
+            'homepage_url = "https://x.com/example"',
+            'icon_url = "https://abs.twimg.com/favicons/twitter.ico"',
+        ],
+    )
+    source = load_sources(path)[0]
+    assert source.kind == "x"
+    assert source.homepage_url == "https://x.com/example"
+    assert source.icon_url == "https://abs.twimg.com/favicons/twitter.ico"
+
+
+def test_invalid_kind_rejected(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "bad_kind"',
+            'name = "Bad"',
+            'url = "https://example.com/feed.xml"',
+            'tier = "T2"',
+            'kind = "podcast"',
+        ],
+    )
+    with pytest.raises(ValueError, match="invalid kind"):
+        load_sources(path)
+
+
+@pytest.mark.parametrize("field", ["homepage_url", "icon_url"])
+def test_optional_url_fields_validated_when_present(tmp_path: Path, field: str) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "bad_url"',
+            'name = "Bad URL"',
+            'url = "https://example.com/feed.xml"',
+            'tier = "T2"',
+            f'{field} = "ftp://nope.example/icon"',
+        ],
+    )
+    with pytest.raises(ValueError, match=field):
+        load_sources(path)
+
+
+def test_dataclass_supports_new_fields_directly() -> None:
+    source = SourceConfig(
+        slug="x_user",
+        name="X User",
+        url="https://rsshub.app/twitter/user/example",
+        tier="T1.5",
+        kind="x",
+        homepage_url="https://x.com/example",
+        icon_url="https://abs.twimg.com/favicons/twitter.ico",
+    )
+    assert source.kind == "x"
+    assert source.homepage_url == "https://x.com/example"
+    assert source.icon_url == "https://abs.twimg.com/favicons/twitter.ico"
+    assert source.enabled is True

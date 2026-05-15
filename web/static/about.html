@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Radar · 关于</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css?v=20260515-parity3">
+  </head>
+  <body>
+    <aside id="app-sidebar" class="sidebar" aria-label="主导航">
+      <button type="button" class="sidebar-close" aria-label="关闭导航">×</button>
+      <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
+      <div class="divider"></div>
+      <nav class="side-nav">
+        <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
+        <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
+        <a class="side-link" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
+        <a class="side-link side-link-active" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span></a>
+      </nav>
+    </aside>
+    <main class="app-main">
+      <div class="app-mobile-bar">
+        <button type="button" class="app-hamburger" aria-label="打开导航" aria-expanded="false" aria-controls="app-sidebar">≡</button>
+        <a class="app-mobile-brand" aria-label="AI Radar 首页" href="/"><span class="app-mobile-brand-text">AI RADAR</span></a>
+        <span class="app-mobile-bar-spacer" aria-hidden="true"></span>
+      </div>
+      <section class="card page-header">
+        <div>
+          <h1>关于</h1>
+          <p class="page-subtitle">产品定位、来源（信源池）、设计原则、联系方式</p>
+        </div>
+        <div class="feed-filter">
+          <input id="search" type="search" placeholder="搜索当前页面...">
+        </div>
+      </section>
+      <section class="about-content">
+        <section class="about-section">
+          <h2>产品定位</h2>
+          <p>
+            AI Radar 是一个工程师视角的公开只读 AI 信息流站点。它借鉴 AIHOT 的时间线、精选和日报形态，
+            但目标从选题创作转为日常信息消费：帮助维护者和公开访问者快速判断哪些 AI 动态值得继续精读。
+          </p>
+        </section>
+        <section class="about-section">
+          <h2>来源（信源池）</h2>
+          <p class="source-note">停用源仅停止继续抓取，历史精选条目仍可能展示。停用日期：2026-05-12（AI Hot baseline 对齐时移除）。</p>
+          <div class="sources-table-wrap">
+            <table class="sources-table">
+              <thead>
+                <tr>
+                  <th>slug</th>
+                  <th>名称</th>
+                  <th>tier</th>
+                  <th>状态</th>
+                  <th>kind</th>
+                </tr>
+              </thead>
+              <tbody id="sources-table"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="about-section">
+          <h2>设计原则</h2>
+          <p>
+            核心原则沿用项目愿景文档：脚本优先、Precision 高于 Recall、信源分级、反馈可回归、结构化数据优先。
+            <a class="inline-link" href="https://github.com/AIPlanetLive/ai-assistant/blob/main/docs/ai-radar/VISION.md#4-%E6%A0%B8%E5%BF%83%E5%8E%9F%E5%88%99-binding" target="_blank" rel="noopener noreferrer">查看 VISION.md</a>
+          </p>
+        </section>
+        <section class="about-section">
+          <h2>评分说明</h2>
+          <p>
+            精选阈值为 6.5 分。LLM 按 relevance、density、recency、authority、engineering 五维评分；
+            默认权重为 relevance 0.30、density 0.20、recency 0.15、authority 0.15、engineering 0.20。
+          </p>
+        </section>
+        <section class="about-section">
+          <h2>联系方式</h2>
+          <p>
+            维护者：lindong。项目仓库
+            <a class="inline-link" href="https://github.com/AIPlanetLive/ai-radar" target="_blank" rel="noopener noreferrer">github.com/AIPlanetLive/ai-radar</a>；
+            维护者 X
+            <a class="inline-link" href="https://x.com/lindong28" target="_blank" rel="noopener noreferrer">@lindong28</a>。
+            如有信源建议或内容问题，欢迎在仓库提 issue。
+          </p>
+          <p class="last-updated">最后更新时间：2026-05-11</p>
+        </section>
+      </section>
+    </main>
+    <script type="module">
+      import { initAbout } from "/app.js?v=20260515-parity3";
+      initAbout();
+    </script>
+  </body>
+</html>

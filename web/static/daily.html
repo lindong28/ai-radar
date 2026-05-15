@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Radar · AI 日报</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css?v=20260515-parity3">
+  </head>
+  <body class="daily-page">
+    <aside id="app-sidebar" class="sidebar" aria-label="主导航">
+      <button type="button" class="sidebar-close" aria-label="关闭导航">×</button>
+      <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
+      <div class="divider"></div>
+      <nav class="side-nav">
+        <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
+        <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
+        <a class="side-link side-link-active" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
+        <a class="side-link" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span></a>
+      </nav>
+    </aside>
+    <main class="app-main daily-main">
+      <div class="app-mobile-bar">
+        <button type="button" class="app-hamburger" aria-label="打开导航" aria-expanded="false" aria-controls="app-sidebar">≡</button>
+        <a class="app-mobile-brand" aria-label="AI Radar 首页" href="/"><span class="app-mobile-brand-text">AI RADAR</span></a>
+        <span class="app-mobile-bar-spacer" aria-hidden="true"></span>
+      </div>
+      <div class="daily-shell">
+        <div class="daily-layout">
+          <aside class="daily-side daily-archive-panel" aria-label="日报归档">
+            <a class="daily-side-latest daily-latest-card" href="/daily">
+              <span class="daily-side-latest-label">最新一期</span>
+              <time id="daily-latest-date" class="daily-side-latest-date" datetime=""></time>
+            </a>
+            <div id="daily-archive" class="daily-side-months daily-archive-list"></div>
+          </aside>
+          <article class="daily-report" aria-labelledby="daily-title">
+            <header class="daily-masthead">
+              <div class="daily-masthead-eyebrow daily-kicker">
+                <span id="daily-volume">VOL.</span>
+                <span class="sep">·</span>
+                <span class="daily-story-count">LOADING</span>
+                <span class="sep">·</span>
+                <span>AI RADAR DAILY</span>
+              </div>
+              <h1 id="daily-title" class="daily-masthead-title"><span>AI</span><span class="accent">RADAR</span><span class="zh">日报</span></h1>
+              <div class="daily-masthead-meta daily-date-line">
+                <time class="daily-readable-date daily-masthead-date" datetime=""></time>
+                <span class="daily-masthead-meta-rule" aria-hidden="true"></span>
+                <strong class="daily-masthead-tagline">DAILY · 每日八时</strong>
+              </div>
+            </header>
+            <div id="daily-fallback" class="notice-banner" hidden></div>
+            <section id="daily-sections" class="daily-sections" aria-live="polite">
+              <div class="daily-loading">LOADING DAILY</div>
+            </section>
+            <nav class="daily-report-nav" aria-label="日报翻页">
+              <a class="daily-prev" href="/daily">← 前一日</a>
+              <a class="daily-next" href="/daily">后一日 →</a>
+            </nav>
+          </article>
+        </div>
+      </div>
+    </main>
+    <script type="module">
+      import { initDaily } from "/app.js?v=20260515-parity3";
+      initDaily();
+    </script>
+  </body>
+</html>

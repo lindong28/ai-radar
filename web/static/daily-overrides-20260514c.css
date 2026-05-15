@@ -1,0 +1,158 @@
+/* Temporary daily-page overrides use a new path because Cloudflare caches /style.css aggressively. */
+.daily-article-title {
+  color: #e7eef6;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.daily-loading {
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(5, 8, 18, 0.24);
+  color: var(--soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+
+.daily-article-summary {
+  color: #c7d0dc;
+}
+
+@media (min-width: 761px) and (max-width: 1100px) {
+  .daily-page {
+    overflow-x: hidden;
+  }
+
+  .daily-page .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr) 56px;
+    align-items: center;
+    width: 100%;
+    height: 62px;
+    padding: 8px 12px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(5, 8, 18, 0.96);
+  }
+
+  .daily-page .sidebar-brand {
+    grid-column: 2;
+    justify-self: center;
+    height: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-family: var(--font-serif);
+    font-size: 16px;
+    font-weight: 400;
+  }
+
+  .daily-page .side-nav {
+    grid-column: 1;
+    grid-row: 1;
+    display: grid;
+    gap: 6px;
+    margin-top: 0;
+    padding: 0;
+    justify-items: start;
+  }
+
+  .daily-page .nav-toggle {
+    display: inline-flex;
+    width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    justify-self: start;
+    padding: 0;
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .daily-page .side-link {
+    display: none;
+    width: 100%;
+    min-height: 42px;
+    white-space: nowrap;
+  }
+
+  .daily-page .side-nav.open {
+    position: absolute;
+    top: 62px;
+    left: 12px;
+    right: 12px;
+    z-index: 11;
+    padding: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 10px;
+    background: rgba(5, 8, 18, 0.98);
+  }
+
+  .daily-page .side-nav.open .side-link {
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .daily-page .app-main {
+    width: 100%;
+    margin-left: 0;
+    padding: 12px 20px 72px;
+  }
+
+  .daily-page .daily-layout {
+    display: block;
+    width: min(100%, 888px);
+    margin: 0 auto;
+  }
+
+  .daily-page .daily-archive-panel {
+    position: static;
+    display: block;
+    margin: 0 0 112px;
+  }
+
+  .daily-page .daily-archive-list {
+    margin-top: 34px;
+  }
+
+  .daily-page .daily-side-day {
+    grid-template-columns: 42px minmax(0, 1fr) 28px;
+    min-height: 37px;
+    align-items: center;
+  }
+
+  .daily-page .daily-side-day strong {
+    white-space: nowrap;
+  }
+
+  .daily-page .daily-report {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  .daily-page .daily-masthead {
+    padding-top: 0;
+  }
+
+  .daily-page .daily-masthead-title {
+    font-size: clamp(64px, 9.5vw, 104px);
+  }
+}
+
+@media (max-width: 760px) {
+  .daily-masthead-title {
+    margin: 8px 0 14px;
+    font-size: 41px;
+  }
+
+  .daily-article-title {
+    font-size: 17px;
+    font-weight: 600;
+  }
+}

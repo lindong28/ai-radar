@@ -1,0 +1,23 @@
+# Database
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db.bak*
+
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+.venv/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Env
+.env

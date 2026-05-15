@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Radar · Item</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css?v=20260515-parity3">
+  </head>
+  <body>
+    <aside id="app-sidebar" class="sidebar" aria-label="主导航">
+      <button type="button" class="sidebar-close" aria-label="关闭导航">×</button>
+      <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
+      <div class="divider"></div>
+      <nav class="side-nav">
+        <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
+        <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
+        <a class="side-link" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
+        <a class="side-link" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span></a>
+      </nav>
+    </aside>
+    <main class="app-main">
+      <div class="app-mobile-bar">
+        <button type="button" class="app-hamburger" aria-label="打开导航" aria-expanded="false" aria-controls="app-sidebar">≡</button>
+        <a class="app-mobile-brand" aria-label="AI Radar 首页" href="/"><span class="app-mobile-brand-text">AI RADAR</span></a>
+        <span class="app-mobile-bar-spacer" aria-hidden="true"></span>
+      </div>
+      <article id="detail" class="detail"></article>
+    </main>
+    <script type="module">
+      import { initItem } from "/app.js?v=20260515-parity3";
+      initItem();
+    </script>
+  </body>
+</html>

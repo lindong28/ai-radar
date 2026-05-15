@@ -1,0 +1,964 @@
+async function api(path) {
+  const response = await fetch(path);
+  const payload = await response.json();
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  return payload.data;
+}
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  })[char]);
+}
+
+function dateKey(value) {
+  const parts = shanghaiDateParts(value);
+  return `${Number(parts.month)}月${Number(parts.day)}日`;
+}
+
+function shanghaiDateParts(value) {
+  const date = new Date(value);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  return Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+}
+
+function dateBucket(value) {
+  const parts = shanghaiDateParts(value);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function isoDateTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function timeKey(value) {
+  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+}
+
+function itemTime(item) {
+  return item.published_at || item.fetched_at;
+}
+
+function itemDateBucket(item) {
+  return dateBucket(itemTime(item));
+}
+
+function excerpt(item) {
+  if (item.summary_zh) return item.summary_zh;
+  return item.source_kind === "x" ? item.content_text || item.content_preview || "" : item.content_preview || "";
+}
+
+const CATEGORY_LABELS = {
+  all: "全部",
+  model: "模型",
+  product: "产品",
+  industry: "行业",
+  paper: "论文",
+  practice: "技巧",
+};
+
+const CATEGORY_TAGS = {
+  model: ["模型发布", "评测/基准", "推理"],
+  product: ["产品更新", "MCP/工具", "多模态"],
+  industry: ["行业动态", "安全/对齐", "现象/趋势"],
+  paper: ["论文/研究"],
+  practice: ["教程/实践", "开源/仓库", "端侧"],
+};
+
+const CATEGORY_URL_VALUES = {
+  all: "",
+  model: "ai-models",
+  product: "ai-products",
+  industry: "industry",
+  paper: "paper",
+  practice: "tip",
+};
+
+const CATEGORY_FROM_URL = Object.fromEntries(Object.entries(CATEGORY_URL_VALUES).map(([key, value]) => [value, key]));
+
+const CHANNEL_LABELS = {
+  all: "全部",
+  firstParty: "一手信源",
+  news: "资讯",
+  x: "推文",
+};
+
+const CHANNEL_URL_VALUES = {
+  all: "",
+  firstParty: "firstParty",
+  news: "news",
+  x: "x",
+};
+
+const CHANNEL_FROM_URL = Object.fromEntries(Object.entries(CHANNEL_URL_VALUES).map(([key, value]) => [value, key]));
+
+function currentParams() {
+  return new URLSearchParams(location.search);
+}
+
+function categoryFromUrl() {
+  return CATEGORY_FROM_URL[currentParams().get("category") || ""] || "all";
+}
+
+function channelFromUrl() {
+  return CHANNEL_FROM_URL[currentParams().get("channel") || ""] || "all";
+}
+
+function pageFromUrl() {
+  const value = Number(currentParams().get("page") || "1");
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
+}
+
+function searchFromUrl() {
+  return currentParams().get("q") || "";
+}
+
+function updateHiddenFeedInputs(category, dateValue = "", channel = "all") {
+  const categoryInput = document.querySelector("#category-param");
+  if (categoryInput) categoryInput.value = CATEGORY_URL_VALUES[category] || "";
+  const channelInput = document.querySelector("#channel-param");
+  if (channelInput) channelInput.value = CHANNEL_URL_VALUES[channel] || "";
+  const dateInput = document.querySelector("#daily-date-param");
+  if (dateInput) dateInput.value = dateValue || currentParams().get("date") || "";
+}
+
+function feedUrl(path, { q = "", category = "all", channel = "all", date = "", page = "1" } = {}) {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (CATEGORY_URL_VALUES[category]) params.set("category", CATEGORY_URL_VALUES[category]);
+  if (CHANNEL_URL_VALUES[channel]) params.set("channel", CHANNEL_URL_VALUES[channel]);
+  if (date) params.set("date", date);
+  if (page) params.set("page", page);
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+function updateFeedUrl(path, { q = "", category = "all", channel = "all", date = "", page = "" } = {}, mode = "replace") {
+  const next = feedUrl(path, { q, category, channel, date, page });
+  if (mode === "push") history.pushState({}, "", next);
+  else history.replaceState({}, "", next);
+}
+
+function itemMatchesCategory(item, category) {
+  if (!category || category === "all") return true;
+  const tags = Array.isArray(item.topic_tags) ? item.topic_tags : [];
+  const wanted = CATEGORY_TAGS[category] || [];
+  return tags.some((tag) => wanted.includes(tag));
+}
+
+function updateCategoryControls(root, activeCategory, activeChannel = "all") {
+  if (!root) return;
+  const q = document.querySelector("#search")?.value.trim() || "";
+  const date = document.querySelector("#daily-date")?.value || currentParams().get("date") || "";
+  root.querySelectorAll("[data-category]").forEach((control) => {
+    const category = control.dataset.category || "all";
+    const active = category === activeCategory;
+    control.classList.toggle("seg-item-active", active);
+    control.setAttribute("aria-pressed", active ? "true" : "false");
+    if (control.tagName === "A") {
+      control.setAttribute("href", feedUrl(location.pathname || "/", { q, category, channel: activeChannel, date }));
+    }
+  });
+  updateHiddenFeedInputs(activeCategory, date, activeChannel);
+}
+
+function bindCategoryControls(onChange) {
+  const root = document.querySelector("[data-category-filter]");
+  if (!root) return () => {};
+  root.addEventListener("click", (event) => {
+    const control = event.target.closest("[data-category]");
+    if (!control) return;
+    event.preventDefault();
+    onChange(control.dataset.category || "all");
+  });
+  return (activeCategory, activeChannel = "all") => updateCategoryControls(root, activeCategory, activeChannel);
+}
+
+function updateChannelControls(root, activeChannel, activeCategory = "all") {
+  if (!root) return;
+  const q = document.querySelector("#search")?.value.trim() || "";
+  root.querySelectorAll("[data-channel]").forEach((control) => {
+    const channel = control.dataset.channel || "all";
+    const active = channel === activeChannel;
+    control.classList.toggle("seg-item-active", active);
+    control.setAttribute("aria-pressed", active ? "true" : "false");
+    if (control.tagName === "A") {
+      control.setAttribute("href", feedUrl(location.pathname || "/", { q, category: activeCategory, channel }));
+    }
+  });
+  updateHiddenFeedInputs(activeCategory, "", activeChannel);
+}
+
+function bindChannelControls(onChange) {
+  const root = document.querySelector("[data-channel-filter]");
+  if (!root) return () => {};
+  root.addEventListener("click", (event) => {
+    const control = event.target.closest("[data-channel]");
+    if (!control) return;
+    event.preventDefault();
+    onChange(control.dataset.channel || "all");
+  });
+  return (activeChannel, activeCategory = "all") => updateChannelControls(root, activeChannel, activeCategory);
+}
+
+function badges(item) {
+  const sourceTags = Array.isArray(item.enriched_tags) ? item.enriched_tags : item.topic_tags;
+  const topics = Array.isArray(sourceTags) ? sourceTags.slice(0, 4) : [];
+  if (!topics.length) topics.push(item.source_kind === "x" ? "社交" : "AI");
+  const parts = topics.map((tag) => `<span class="tag">${esc(tag)}</span>`);
+  return parts.join("");
+}
+
+function scorePill(item) {
+  if (item.weighted_score == null) return "";
+  const title = "LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明";
+  const score = Math.round(Number(item.weighted_score) * 10);
+  const tier = scoreTierClass(score);
+  const selected = item.rank == null ? "" : `<span class="hot-pill">精选</span>`;
+  return `<div class="score-stack ${tier}" title="${esc(title)}">${selected}<span class="score-pill ${tier}" title="${esc(title)}">${score}</span></div>`;
+}
+
+function scoreTierClass(score) {
+  if (score >= 80) return "score-high";
+  if (score >= 65) return "score-mid";
+  return "score-muted";
+}
+
+function sourceInitial(item) {
+  return String(item.source_name || item.source_id || "?").trim().slice(0, 1).toUpperCase() || "?";
+}
+
+function safeCssUrl(value) {
+  return String(value || "").replace(/["\\\n\r]/g, "");
+}
+
+function xHandleFromUrl(value) {
+  const match = String(value || "").match(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([^/?#]+)/i);
+  return match ? match[1] : "";
+}
+
+function sourceAvatarUrl(item) {
+  if (item.source_kind === "x") {
+    const handle = xHandleFromUrl(item.source_homepage_url) || xHandleFromUrl(item.url);
+    if (handle) return `https://unavatar.io/x/${encodeURIComponent(handle)}`;
+  }
+  return item.source_icon_url || "";
+}
+
+function sourceDisplayName(item) {
+  if (item.source_kind === "x") return item.source_name || item.source_id;
+  const name = item.source_name || item.source_id;
+  const suffixes = {
+    openai_blog: "官网动态（RSS）",
+    anthropic_news: "Newsroom（RSS）",
+    anthropic_blog: "Blog（RSS）",
+    claude_code_releases: "GitHub Releases（RSS）",
+    huggingface_blog: "Blog（RSS）",
+    simonw: "Weblog（RSS）",
+    ithome: "RSS",
+  };
+  return suffixes[item.source_id] ? `${name}：${suffixes[item.source_id]}` : `${name}（RSS）`;
+}
+
+function sourceLine(item) {
+  const homepage = item.source_homepage_url || item.url || "#";
+  const icon = safeCssUrl(sourceAvatarUrl(item));
+  const img = icon ? `<img class="source-avatar" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
+  const author = item.author ? `<span class="source-author">${esc(item.author)}</span>` : "";
+  return `<div class="source-line">
+    <a class="source-link" href="${esc(homepage)}" target="_blank" rel="noopener noreferrer">
+      <span class="source-icon">${img}<span class="source-initial">${esc(sourceInitial(item))}</span></span>
+      <span class="source-name">${esc(sourceDisplayName(item))}</span>
+    </a>
+    ${author}
+  </div>`;
+}
+
+function itemHref(item) {
+  const url = String(item.url || "");
+  return url.split("#", 1)[0] || url;
+}
+
+function articleMedia(item) {
+  const assets = Array.isArray(item.media_assets) ? item.media_assets.filter((asset) => asset?.type === "image" && asset.url) : [];
+  if (!assets.length) return "";
+  const images = assets.slice(0, 4).map((asset) => `
+    <a class="article-media-link" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">
+      <img class="article-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer">
+    </a>`).join("");
+  return `<div class="article-media article-media-count-${Math.min(assets.length, 4)}">${images}</div>`;
+}
+
+function itemTitleText(item) {
+  return item.title_zh || item.title || excerpt(item);
+}
+
+function relatedDiscussions(item) {
+  const related = Array.isArray(item.related_discussions) ? item.related_discussions : [];
+  if (!related.length) return "";
+  const label = `关联讨论 ${related.length} 条`;
+  const tooltip = related.map((entry) => {
+    const source = entry.source_kind === "x" ? "X" : "来源";
+    const authorName = String(entry.author || "");
+    const author = authorName ? ` (${authorName.startsWith("@") ? authorName : `@${authorName}`})` : "";
+    return `<span class="dup-tooltip-item">${esc(source)}：${esc(entry.source_name || entry.source_id)}${esc(author)}</span>`;
+  }).join("");
+  return `<span class="timeline-dup-count timeline-dup-hover">${esc(label)}<span class="dup-tooltip">${tooltip}</span></span>`;
+}
+
+function itemCard(item, showScore, options = {}) {
+  const compact = Boolean(options.compact);
+  const showReason = options.showReason === "selected" ? item.rank != null : options.showReason !== false;
+  const reason = !compact && showReason && item.reasoning ? `<div class="reason">推荐理由：${esc(item.reasoning)}</div>` : "";
+  const showRelated = !compact && options.showRelated !== false;
+  const isX = item.source_kind === "x";
+  const itemTitle = itemTitleText(item);
+  const title = itemTitle
+    ? `<a class="item-title" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(itemTitle)}</a>`
+    : "";
+  const media = compact ? "" : articleMedia(item);
+  return `<article class="item-row timeline-card${isX ? " x-card" : ""}${compact ? " compact-card" : ""}${options.clampSummary ? " clamped-card" : ""}" data-source-id="${esc(item.source_id)}" data-published-date="${esc(itemDateBucket(item))}">
+    <div class="card-topline">
+      ${sourceLine(item)}
+      ${showScore ? scorePill(item) : ""}
+    </div>
+    ${title}
+    <p class="summary">${esc(excerpt(item))}</p>
+    ${media}
+    <div class="tags">${badges(item)}</div>
+    ${showRelated ? relatedDiscussions(item) : ""}
+    ${reason ? '<hr class="timeline-divider">' : ""}
+    ${reason}
+  </article>`;
+}
+
+function renderTimeline(container, items, options = {}) {
+  const showScore = Boolean(options.showScore);
+  const compact = Boolean(options.compact);
+  const emptyTitle = options.emptyTitle || "暂无内容";
+  const emptyBody = options.emptyBody || "稍后再回来看看。";
+  if (!items.length) {
+    container.innerHTML = `<div class="empty-state">
+      <h2>${esc(emptyTitle)}</h2>
+      <p>${esc(emptyBody)}</p>
+    </div>`;
+    return;
+  }
+  let lastDate = "";
+  const sortByScore = options.sortByScore ?? showScore;
+  const renderedItems = sortByScore
+    ? [...items].sort((a, b) => (
+      itemDateBucket(b).localeCompare(itemDateBucket(a))
+      || Number(b.weighted_score || 0) - Number(a.weighted_score || 0)
+      || String(b.id || "").localeCompare(String(a.id || ""))
+    ))
+    : items;
+  container.innerHTML = renderedItems.map((item) => {
+    const day = dateKey(itemTime(item));
+    const bucket = itemDateBucket(item);
+    const dateLabel = day === lastDate ? "" : `<div class="timeline-date date-group"><time datetime="${esc(bucket)}" title="${esc(bucket)}">${esc(day)}</time></div>`;
+    lastDate = day;
+    return `${dateLabel}<div class="timeline-entry">
+      <div class="timeline-time"><time datetime="${esc(isoDateTime(itemTime(item)))}" title="${esc(bucket)}">${esc(timeKey(itemTime(item)))}</time><span></span></div>
+      ${itemCard(item, showScore, {
+        compact,
+        showReason: options.showReason,
+        showRelated: options.showRelated,
+        clampSummary: options.clampSummary,
+      })}
+    </div>`;
+  }).join("");
+}
+
+function initNavigation() {
+  const sidebar = document.querySelector(".sidebar");
+  const toggle = document.querySelector(".app-hamburger");
+  const close = document.querySelector(".sidebar-close");
+  if (!sidebar || !toggle || toggle.dataset.bound === "true") return;
+  const setOpen = (open) => {
+    document.body.classList.toggle("sidebar-open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  toggle.dataset.bound = "true";
+  toggle.addEventListener("click", () => {
+    setOpen(!document.body.classList.contains("sidebar-open"));
+  });
+  close?.addEventListener("click", () => setOpen(false));
+  sidebar.querySelectorAll(".side-link").forEach((link) => {
+    link.addEventListener("click", () => {
+      setOpen(false);
+    });
+  });
+}
+
+function queryPath(path, params) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value != null && value !== "") search.set(key, value);
+  }
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+function listScrollKey() {
+  return `ai-radar-scroll:${location.pathname}`;
+}
+
+function rememberListScroll(list) {
+  list.addEventListener("click", (event) => {
+    const link = event.target.closest("a.item-title");
+    if (link) sessionStorage.setItem(listScrollKey(), String(window.scrollY));
+  });
+}
+
+function restoreListScroll() {
+  const value = sessionStorage.getItem(listScrollKey());
+  if (!value) return;
+  requestAnimationFrame(() => window.scrollTo(0, Number(value)));
+}
+
+function paginationPages(current, totalPages) {
+  const pages = new Set([1, totalPages, current - 1, current, current + 1]);
+  return [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
+}
+
+function paginationLink(label, page, { q, category, channel, current = false, rel = "" }) {
+  const attrs = [
+    `class="pagination-link${current ? " pagination-link-active" : ""}"`,
+    `href="${esc(feedUrl("/all", { q, category, channel, page: String(page) }))}"`,
+    `data-page="${esc(page)}"`,
+  ];
+  if (current) attrs.push('aria-current="page"');
+  if (rel) attrs.push(`rel="${esc(rel)}"`);
+  return `<a ${attrs.join(" ")}>${esc(label)}</a>`;
+}
+
+function renderPagination(root, { page, total, limit, q = "", category = "all", channel = "all" }) {
+  if (!root) return;
+  const totalPages = Math.ceil(Number(total || 0) / Number(limit || 1));
+  if (totalPages <= 1) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  const current = Math.min(Math.max(Number(page || 1), 1), totalPages);
+  const parts = [];
+  if (current > 1) parts.push(paginationLink("‹ 上一页", current - 1, { q, category, channel, rel: "prev" }));
+  let last = 0;
+  for (const value of paginationPages(current, totalPages)) {
+    if (last && value - last > 1) parts.push('<span class="pagination-gap">…</span>');
+    parts.push(paginationLink(String(value), value, { q, category, channel, current: value === current }));
+    last = value;
+  }
+  if (current < totalPages) parts.push(paginationLink("下一页 ›", current + 1, { q, category, channel, rel: "next" }));
+  root.hidden = false;
+  root.innerHTML = parts.join("");
+}
+
+function debounceInput(input, callback) {
+  let timer = null;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(callback, 200);
+  });
+}
+
+export async function initTimeline() {
+  initNavigation();
+  const list = document.querySelector("#list");
+  const pagination = document.querySelector("#pagination");
+  const search = document.querySelector("#search");
+  let activeCategory = categoryFromUrl();
+  let activeChannel = channelFromUrl();
+  let visibleItems = [];
+  let currentPage = pageFromUrl();
+  const syncCategoryControls = bindCategoryControls((category) => {
+    activeCategory = category;
+    load({ page: 1, mode: "push" });
+  });
+  const syncChannelControls = bindChannelControls((channel) => {
+    activeChannel = channel;
+    load({ page: 1, mode: "push" });
+  });
+  search.value = searchFromUrl();
+
+  function renderView(rawItems, meta = {}) {
+    visibleItems = rawItems;
+    syncCategoryControls(activeCategory, activeChannel);
+    syncChannelControls(activeChannel, activeCategory);
+    renderTimeline(list, rawItems.filter((item) => itemMatchesCategory(item, activeCategory)), {
+      showScore: true,
+      showReason: "selected",
+      showRelated: false,
+      sortByScore: false,
+      clampSummary: true,
+      emptyTitle: activeCategory === "all" ? "暂无内容" : `${CATEGORY_LABELS[activeCategory]}分类暂无内容`,
+      emptyBody: activeCategory === "all" ? "当前还没有可展示的 AI 动态。" : `可以切换到${CHANNEL_LABELS[activeChannel]}全部内容继续浏览。`,
+    });
+    renderPagination(pagination, {
+      page: meta.page || currentPage,
+      total: meta.total || rawItems.length,
+      limit: meta.limit || 40,
+      q: search.value.trim(),
+      category: activeCategory,
+      channel: activeChannel,
+    });
+  }
+
+  async function load({ page = pageFromUrl(), mode = "replace", updateUrl = true } = {}) {
+    currentPage = page;
+    const q = search.value.trim();
+    const urlPage = page > 1 ? String(page) : "";
+    if (updateUrl) updateFeedUrl("/all", { q, category: activeCategory, channel: activeChannel, page: urlPage }, mode);
+    const data = await api(queryPath("/api/v1/timeline", {
+      limit: 40,
+      page,
+      q,
+      channel: CHANNEL_URL_VALUES[activeChannel] || "",
+    }));
+    renderView(data.items, data);
+  }
+
+  async function runSearch() {
+    await load({ page: 1, mode: "replace" });
+  }
+
+  debounceInput(search, runSearch);
+  search.closest("form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runSearch();
+  });
+  pagination?.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-page]");
+    if (!link) return;
+    event.preventDefault();
+    const nextPage = Number(link.dataset.page || "1");
+    load({ page: nextPage, mode: "push" });
+  });
+  window.addEventListener("popstate", () => {
+    activeCategory = categoryFromUrl();
+    activeChannel = channelFromUrl();
+    search.value = searchFromUrl();
+    load({ page: pageFromUrl(), updateUrl: false });
+  });
+  rememberListScroll(list);
+  await load({ page: currentPage, updateUrl: false });
+  restoreListScroll();
+}
+
+export async function initCurated() {
+  initNavigation();
+  const search = document.querySelector("#search");
+  const list = document.querySelector("#list");
+  const runMeta = document.querySelector("#run-meta");
+  let activeCategory = categoryFromUrl();
+  let currentItems = [];
+  if (runMeta) runMeta.textContent = "AI 自动挑选的高价值内容（日期为原文发布日，截至 2026 年）";
+  const syncCategoryControls = bindCategoryControls((category) => {
+    activeCategory = category;
+    updateFeedUrl("/", { q: search.value.trim(), category: activeCategory }, "push");
+    renderView();
+  });
+  search.value = searchFromUrl();
+
+  function renderView(q = "") {
+    syncCategoryControls(activeCategory);
+    renderTimeline(list, currentItems.filter((item) => itemMatchesCategory(item, activeCategory)), {
+      showScore: true,
+      emptyTitle: q ? "没有匹配条目" : activeCategory === "all" ? "暂无精选条目" : `${CATEGORY_LABELS[activeCategory]}分类暂无精选`,
+      emptyBody: q ? "清空搜索后可回到默认列表。" : "可以切换到全部继续浏览精选内容。",
+    });
+  }
+
+  async function load(q = "") {
+    const data = await api(queryPath("/api/v1/curated", { q }));
+    currentItems = data.items;
+    renderView(q);
+  }
+
+  async function runSearch() {
+    updateFeedUrl("/", { q: search.value.trim(), category: activeCategory }, "replace");
+    await load(search.value.trim());
+  }
+
+  debounceInput(search, runSearch);
+  search.closest("form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runSearch();
+  });
+  rememberListScroll(list);
+  await load(search.value.trim());
+  restoreListScroll();
+}
+
+function todayIso() {
+  return dateBucket(new Date().toISOString());
+}
+
+function isDateString(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value || "") && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime());
+}
+
+function isFutureDate(value) {
+  return isDateString(value) && value > todayIso();
+}
+
+function shouldFallbackToRecentContentDate(value) {
+  return !value || !isDateString(value) || isFutureDate(value);
+}
+
+function addDays(value, days) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+const DAILY_SECTION_DEFS = [
+  {
+    key: "model",
+    number: "01",
+    title: "模型发布/更新",
+    subtitle: "MODEL RELEASES",
+    tags: ["模型发布", "评测/基准"],
+  },
+  {
+    key: "product",
+    number: "02",
+    title: "产品发布/更新",
+    subtitle: "PRODUCT",
+    tags: ["产品更新", "MCP/工具", "多模态", "编码", "搜索", "图像生成", "视频"],
+  },
+  {
+    key: "industry",
+    number: "03",
+    title: "行业动态",
+    subtitle: "INDUSTRY",
+    tags: ["行业动态", "安全/对齐", "现象/趋势"],
+  },
+  {
+    key: "paper",
+    number: "04",
+    title: "论文研究",
+    subtitle: "RESEARCH",
+    tags: ["论文/研究", "arXiv", "研究"],
+  },
+  {
+    key: "practice",
+    number: "05",
+    title: "技巧与观点",
+    subtitle: "TIPS & TAKES",
+    tags: ["教程/实践", "开源/仓库", "端侧", "部署/工程", "大佬观点"],
+  },
+];
+
+const CHINESE_DIGITS = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+
+function dailyDateFromPath() {
+  const match = location.pathname.match(/^\/daily\/(\d{4}-\d{2}-\d{2})\/?$/);
+  return match ? match[1] : "";
+}
+
+function dailyPath(dateValue = "") {
+  return dateValue ? `/daily/${dateValue}` : "/daily";
+}
+
+function dailyYearLabel(year) {
+  return String(year).split("").map((digit) => CHINESE_DIGITS[Number(digit)] || digit).join("");
+}
+
+function chineseNumber(value) {
+  if (value <= 10) return value === 10 ? "十" : CHINESE_DIGITS[value];
+  if (value < 20) return `十${CHINESE_DIGITS[value - 10]}`;
+  const tens = Math.floor(value / 10);
+  const ones = value % 10;
+  return `${CHINESE_DIGITS[tens]}十${ones ? CHINESE_DIGITS[ones] : ""}`;
+}
+
+function readableDailyDate(value) {
+  if (!isDateString(value)) return "";
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const weekday = new Intl.DateTimeFormat("zh-CN", { weekday: "long", timeZone: "UTC" }).format(date);
+  return `${dailyYearLabel(year)}年${chineseNumber(month)}月${chineseNumber(day)}日　${weekday}`;
+}
+
+function dailySectionKey(item) {
+  const tags = Array.isArray(item.topic_tags) ? item.topic_tags : [];
+  const matched = DAILY_SECTION_DEFS.find((section) => section.tags.some((tag) => tags.includes(tag)));
+  if (matched) return matched.key;
+  return item.source_kind === "x" ? "practice" : "industry";
+}
+
+function dailySourceMeta(item) {
+  const sourceType = item.source_kind === "x" ? (item.tier === "T1" ? "官方·X" : "X") : (item.tier === "T1" ? "官方" : "综合资讯");
+  const source = item.source_name || item.source_id || "来源";
+  const author = item.author ? `：${item.author}` : "";
+  return `${sourceType} · ${source}${author}`;
+}
+
+function dailySourceParts(item) {
+  const role = item.source_kind === "x" ? (item.tier === "T1" ? "官方·X" : "X") : (item.tier === "T1" ? "官方" : "综合资讯");
+  const source = item.source_name || item.source_id || "来源";
+  const author = item.author ? ` (${item.author.startsWith("@") ? item.author : `@${item.author}`})` : "";
+  const label = item.source_kind === "x" ? `X：${source}${author}` : `${source}`;
+  return { role, label };
+}
+
+function renderDailyReport(container, items, activeDate) {
+  if (!items.length) {
+    container.innerHTML = `<div class="daily-empty">
+      <h2>${esc(activeDate)}：当日没有日报内容</h2>
+      <p>可以从左侧归档选择最近一期，或返回最新日报。</p>
+    </div>`;
+    return;
+  }
+  const grouped = Object.fromEntries(DAILY_SECTION_DEFS.map((section) => [section.key, []]));
+  items.forEach((item) => {
+    grouped[dailySectionKey(item)].push(item);
+  });
+  container.innerHTML = DAILY_SECTION_DEFS
+    .filter((section) => grouped[section.key].length)
+    .map((section) => {
+      const sectionItems = grouped[section.key];
+      const articles = sectionItems.map((item) => {
+        const title = itemTitleText(item);
+        const source = dailySourceParts(item);
+        return `<article class="daily-article" data-published-date="${esc(itemDateBucket(item))}">
+          <h3 class="daily-article-title"><a href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(title)}</a></h3>
+          <div class="daily-article-source daily-article-meta"><span class="role-tag">${esc(source.role)}</span><span>${esc(source.label)}</span></div>
+          <p class="daily-article-summary">${esc(excerpt(item))}</p>
+        </article>`;
+      }).join("");
+      return `<section class="daily-section" data-section="${esc(section.key)}">
+        <header class="daily-section-header">
+          <div class="daily-section-no daily-section-number">${esc(section.number)}</div>
+          <h2 class="daily-section-title">${esc(section.title)}</h2>
+          <span class="daily-section-subtitle">${esc(section.subtitle)}</span>
+          <div class="daily-section-count"><strong>${sectionItems.length}</strong><span> 篇</span></div>
+        </header>
+        <div class="daily-section-articles daily-article-list">${articles}</div>
+      </section>`;
+    })
+    .join("");
+}
+
+function renderDailyHeader(activeDate, count) {
+  const volume = document.querySelector("#daily-volume");
+  const storyCount = document.querySelector(".daily-story-count");
+  const readableDate = document.querySelector(".daily-readable-date");
+  if (volume) volume.textContent = `VOL.${activeDate.replaceAll("-", ".")}`;
+  if (storyCount) storyCount.textContent = `${count} STORIES`;
+  if (readableDate) {
+    readableDate.textContent = readableDailyDate(activeDate);
+    readableDate.setAttribute("datetime", activeDate);
+  }
+}
+
+async function renderDailyArchive(activeDate, latestAvailableDate) {
+  const archive = document.querySelector("#daily-archive");
+  const latestDateEl = document.querySelector("#daily-latest-date");
+  if (latestDateEl) {
+    latestDateEl.textContent = latestAvailableDate;
+    latestDateEl.setAttribute("datetime", latestAvailableDate);
+  }
+  if (!archive) return;
+  const archiveAnchorDate = latestAvailableDate || activeDate;
+  const candidates = Array.from({ length: 16 }, (_, index) => addDays(archiveAnchorDate, -index));
+  const results = await Promise.all(candidates.map(async (dateValue) => {
+    const data = await api(queryPath("/api/v1/curated", { date: dateValue }));
+    if (!data.items.length) return null;
+    return {
+      date: dateValue,
+      title: itemTitleText(data.items[0]),
+      count: data.count,
+    };
+  }));
+  const days = results.filter(Boolean).slice(0, 12);
+  const monthLabel = archiveAnchorDate.slice(0, 7).replace("-", " 年 ") + " 月";
+  archive.innerHTML = `<div class="daily-archive-month">${esc(monthLabel)}</div>
+    ${days.map((day) => `<a class="daily-side-day${day.date === activeDate ? " is-active" : ""}" href="${esc(dailyPath(day.date))}">
+      <span>${Number(day.date.slice(8, 10))} 日</span>
+      <strong>${esc(day.title)}</strong>
+      <em>${day.count}</em>
+    </a>`).join("")}`;
+}
+
+export async function initDaily() {
+  initNavigation();
+  const list = document.querySelector("#daily-sections");
+  const previousLink = document.querySelector(".daily-prev");
+  const nextLink = document.querySelector(".daily-next");
+  const fallbackBanner = document.querySelector("#daily-fallback");
+  const requestedDate = currentParams().get("date") || dailyDateFromPath();
+  let activeDate = isDateString(requestedDate) && !isFutureDate(requestedDate) ? requestedDate : todayIso();
+  let latestAvailableDate = "";
+
+  function setFallbackBanner(requested, resolved) {
+    if (!fallbackBanner) return;
+    if (!requested || requested === resolved) {
+      fallbackBanner.hidden = true;
+      fallbackBanner.textContent = "";
+      return;
+    }
+    fallbackBanner.hidden = false;
+    fallbackBanner.textContent = `日期 ${requested} 无效或无内容，已切到最近一期 ${resolved}`;
+  }
+
+  function syncDateControls(latestDate = "") {
+    if (previousLink) previousLink.href = dailyPath(addDays(activeDate, -1));
+    if (nextLink) {
+      const nextDate = addDays(activeDate, 1);
+      const isFutureIssue = latestDate && nextDate > latestDate;
+      nextLink.hidden = isFutureIssue;
+      if (isFutureIssue) {
+        nextLink.removeAttribute("href");
+      } else {
+        nextLink.href = dailyPath(nextDate);
+      }
+    }
+  }
+
+  function updateUrl(mode = "push", dateValue = activeDate) {
+    const next = dateValue ? dailyPath(dateValue) : "/daily";
+    if (mode === "replace") {
+      history.replaceState({}, "", next);
+    } else {
+      history.pushState({}, "", next);
+    }
+  }
+
+  async function latestContentDate() {
+    if (latestAvailableDate) return latestAvailableDate;
+    const data = await api("/api/v1/curated");
+    latestAvailableDate = data.items.length ? itemDateBucket(data.items[0]) : data.date || todayIso();
+    return latestAvailableDate;
+  }
+
+  async function load(requested = activeDate, options = {}) {
+    const latest = await latestContentDate();
+    const data = await api(queryPath("/api/v1/curated", { date: activeDate }));
+    if (options.allowRecentFallback && !data.items.length) {
+      if (latest && latest !== activeDate) {
+        activeDate = latest;
+        updateUrl("replace");
+        return load(requested, { allowRecentFallback: false });
+      }
+    }
+    const resolvedDate = data.date || activeDate;
+    if (resolvedDate !== activeDate) {
+      activeDate = resolvedDate;
+      updateUrl("replace");
+    }
+    activeDate = data.date || activeDate;
+    renderDailyHeader(activeDate, data.count);
+    setFallbackBanner(requested, activeDate);
+    syncDateControls(latest);
+    renderDailyReport(list, data.items, activeDate);
+    await renderDailyArchive(activeDate, latest);
+  }
+
+  async function goToDate(nextDate, mode = "push") {
+    const requested = nextDate;
+    activeDate = isDateString(nextDate) ? nextDate : todayIso();
+    updateUrl(mode);
+    await load(requested);
+  }
+
+  if (previousLink) previousLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    goToDate(addDays(activeDate, -1));
+  });
+  if (nextLink) nextLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    goToDate(addDays(activeDate, 1));
+  });
+  rememberListScroll(list);
+  if (currentParams().get("date") && isDateString(requestedDate) && !isFutureDate(requestedDate)) updateUrl("replace");
+  if (!requestedDate || !isDateString(requestedDate) || isFutureDate(requestedDate)) {
+    const latest = await latestContentDate();
+    activeDate = latest || activeDate;
+    if (requestedDate) updateUrl("replace");
+  }
+  await load(requestedDate || activeDate, { allowRecentFallback: shouldFallbackToRecentContentDate(requestedDate) });
+  restoreListScroll();
+}
+
+export async function initAbout() {
+  initNavigation();
+  const search = document.querySelector("#search");
+  const table = document.querySelector("#sources-table");
+  let sources = [];
+
+  function render() {
+    const q = search.value.trim().toLowerCase();
+    const filtered = q
+      ? sources.filter((source) => `${source.id} ${source.name} ${source.tier} ${source.kind}`.toLowerCase().includes(q))
+      : sources;
+    if (!filtered.length) {
+      table.innerHTML = `<tr><td colspan="5">没有匹配信源</td></tr>`;
+      return;
+    }
+    table.innerHTML = filtered.map((source) => `<tr>
+      <td><code>${esc(source.id)}</code></td>
+      <td><a href="${esc(source.homepage_url || source.url)}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a></td>
+      <td>${esc(source.tier)}</td>
+      <td>${source.enabled ? "启用" : '<span title="自 2026-05-12 起停止抓取">停用</span>'}</td>
+      <td>${esc(source.kind || "feed")}</td>
+    </tr>`).join("");
+  }
+
+  const data = await api("/api/v1/sources");
+  sources = data.sources;
+  debounceInput(search, render);
+  render();
+}
+
+export async function initItem() {
+  const id = new URLSearchParams(location.search).get("id");
+  const root = document.querySelector("#detail");
+  if (!id) {
+    root.innerHTML = missingItem("缺少内容 ID");
+    return;
+  }
+  if (!/^[a-f0-9]{16}$/i.test(id)) {
+    root.innerHTML = missingItem("未找到这条内容");
+    return;
+  }
+  let data;
+  try {
+    data = await api(`/api/v1/items/${encodeURIComponent(id)}`);
+  } catch (error) {
+    root.innerHTML = missingItem("未找到这条内容");
+    return;
+  }
+  root.innerHTML = `<section class="card detail-card">
+    ${sourceLine(data.item)}
+    <h1>正在打开原文</h1>
+    <p class="meta">${esc(data.item.title)}</p>
+    <a class="origin" href="${esc(itemHref(data.item))}">打开原文</a>
+  </section>`;
+  location.replace(itemHref(data.item));
+}
+
+function missingItem(title) {
+  return `<section class="card detail-card empty-state">
+    <h1>${esc(title)}</h1>
+    <p>这条内容可能已被删除，或链接里的 ID 不正确。</p>
+    <div class="empty-actions">
+      <a class="origin" href="/">返回精选</a>
+      <a class="origin" href="/all">查看全部 AI 动态</a>
+    </div>
+  </section>`;
+}

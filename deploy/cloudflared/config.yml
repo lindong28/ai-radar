@@ -1,0 +1,8 @@
+tunnel: c01ac79f-0d39-4bf4-9475-0c4e526d5f84
+credentials-file: /Users/lindong/.cloudflared/c01ac79f-0d39-4bf4-9475-0c4e526d5f84.json
+protocol: quic
+
+ingress:
+  - hostname: aiplanet.live
+    service: http://localhost:8000
+  - service: http_status:404
