@@ -176,7 +176,7 @@ uv run uvicorn airadar.web.app:app --host 0.0.0.0 --port 8000
 
 ## 致谢
 
-AI Radar 的 UX 设计和创意灵感来自 [AIHOT](http://aihot.virxact.com/)。本项目在时间线、精选和日报的形态上借鉴了 AIHOT 的设计理念，同时将其从选题创作工具转变为日常 AI 信息消费工具。
+AI Radar 的 UX 设计和创意灵感来自 [AIHOT](http://aihot.virxact.com/)（[项目介绍](https://mp.weixin.qq.com/s/r6CE2U3Y0-pU05wF3_PuTQ)）。本项目在时间线、精选和日报的形态上借鉴了 AIHOT 的设计理念，并计划将项目改造为每个人都可以根据自己的需求进行配置和部署的的个性化信息消费工具。
 
 ## License
 
