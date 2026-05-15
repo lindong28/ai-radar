@@ -33,7 +33,7 @@ ON items(source_id, published_at DESC);
 CREATE TABLE IF NOT EXISTS item_evaluations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id TEXT NOT NULL REFERENCES items(id),
-  stage TEXT NOT NULL CHECK (stage IN ('prefilter', 'scoring')),
+  stage TEXT NOT NULL CHECK (stage IN ('prefilter', 'scoring', 'enrich')),
   ruleset_version TEXT NOT NULL,
   model_id TEXT NOT NULL,
   input_json TEXT NOT NULL,

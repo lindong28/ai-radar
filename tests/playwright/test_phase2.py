@@ -350,24 +350,9 @@ def test_v12_date_groups_are_descending(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/", cards=True)
     date_values = page.locator(".timeline-date time").evaluate_all("els => els.map(el => el.getAttribute('datetime'))")
     assert date_values == sorted(date_values, reverse=True)
-    score_groups = page.evaluate(
-        """() => {
-          const groups = [];
-          let current = null;
-          for (const child of document.querySelector("#list").children) {
-            if (child.classList.contains("date-group")) {
-              current = [];
-              groups.push(current);
-            } else if (child.classList.contains("timeline-entry") && current) {
-              const value = Number(child.querySelector(".score-pill")?.textContent?.trim() || 0);
-              if (value) current.push(value);
-            }
-          }
-          return groups;
-        }"""
-    )
-    for group in score_groups:
-        assert group == sorted(group, reverse=True)
+    for group in _grouped_times(page):
+        values = [_minutes(value) for value in group]
+        assert values == sorted(values, reverse=True)
 
 
 def test_v14_v15_search_filters_and_clears(page: Page, base_url: str) -> None:

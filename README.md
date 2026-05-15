@@ -55,7 +55,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 ## 自动化调度
 
-`pipeline.sh` 会按顺序执行 `fetch → prefilter → score → enrich → curate`，每个阶段只处理尚未完成对应评估的新条目；单个阶段失败时会记录 `FAIL` 并继续执行后续阶段，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
+`pipeline.sh` 会按顺序执行 `fetch → prefilter → score → enrich → curate`，每个阶段只处理尚未完成对应评估的新条目；单个阶段失败时会记录 `FAIL` 并继续执行后续阶段，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。脚本会用 `.pipeline.lock` 跳过重叠运行，避免某次 pipeline 超过 15 分钟时下一次 cron/launchd 同时写数据库。
 
 cron 和 launchd 不会继承交互式 shell 中临时 `export` 的 API Key。启用自动调度前，先确认项目根目录 `.env` 或 `~/.claude/.env` 中包含流水线需要的 LLM API Key；`./run.sh` 会在每个阶段启动时读取这两个位置。
 

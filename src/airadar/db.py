@@ -47,8 +47,21 @@ def _execute_migration_idempotent(conn: sqlite3.Connection, sql: str) -> None:
             raise
 
 
+def _migration_already_applied(conn: sqlite3.Connection, migration_name: str) -> bool:
+    if migration_name != "004_enrich_stage.sql":
+        return False
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='airadar_migrations'"
+    ).fetchone()
+    if table is None:
+        return False
+    return bool(conn.execute("SELECT 1 FROM airadar_migrations WHERE id='004_enrich_stage'").fetchone())
+
+
 def migrate(path: str | Path | None = None) -> None:
     with get_conn(path) as conn:
         for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            if _migration_already_applied(conn, migration.name):
+                continue
             _execute_migration_idempotent(conn, migration.read_text(encoding="utf-8"))
         conn.commit()

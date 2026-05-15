@@ -4,7 +4,17 @@ from airadar.topics import CONTROLLED_VOCABULARY, is_in_vocabulary, topic_tags
 
 
 def test_controlled_vocabulary_contains_core_aihot_tags() -> None:
-    required = {"模型发布", "安全/对齐", "教程/实践", "大佬观点", "现象/趋势", "行业动态", "MCP/工具", "智能体"}
+    required = {
+        "模型发布",
+        "评测/基准",
+        "安全/对齐",
+        "教程/实践",
+        "大佬观点",
+        "现象/趋势",
+        "行业动态",
+        "MCP/工具",
+        "智能体",
+    }
     assert required.issubset(CONTROLLED_VOCABULARY)
 
 

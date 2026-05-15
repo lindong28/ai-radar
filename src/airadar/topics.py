@@ -20,6 +20,7 @@ CONTROLLED_VOCABULARY: tuple[str, ...] = (
     "GitHub",
     "安全/对齐",
     "模型发布",
+    "评测/基准",
     "编码",
     "视频",
     "现象/趋势",

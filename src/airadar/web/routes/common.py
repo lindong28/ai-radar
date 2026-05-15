@@ -35,6 +35,29 @@ RELATED_STOPWORDS = {
 }
 CURATED_MEDIA_FULL_RANK_LIMIT = 12
 CURATED_MEDIA_PREVIEW_RANK_LIMIT = 13
+CATEGORY_TAGS = {
+    "ai-models": {"模型发布"},
+    "ai-products": {"产品更新", "MCP/工具"},
+    "industry": {"行业动态", "安全/对齐", "现象/趋势"},
+    "paper": {"论文/研究"},
+    "tip": {"教程/实践", "部署/工程", "大佬观点"},
+}
+
+
+def matches_category(item: dict[str, Any], category: str | None) -> bool:
+    if not category:
+        return True
+    wanted = CATEGORY_TAGS.get(category)
+    if not wanted:
+        return True
+    tags = item.get("topic_tags")
+    if not isinstance(tags, list):
+        return False
+    if category == "ai-models" and "教程/实践" in tags:
+        return False
+    if category == "ai-products" and "模型发布" in tags and "产品更新" not in tags:
+        return False
+    return any(isinstance(tag, str) and tag in wanted for tag in tags)
 
 
 class _ImageSrcParser(HTMLParser):

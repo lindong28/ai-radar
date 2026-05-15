@@ -111,6 +111,7 @@ def test_app_js_uses_title_and_media_as_natural_external_targets() -> None:
     js = _read("app.js")
 
     assert "article-media-link" in js
+    assert 'aria-label="${esc(label)}"' in js
     assert '<a class="item-title"' in js
     assert "x-media-affordance" not in js
     assert "mediaAffordance" not in js

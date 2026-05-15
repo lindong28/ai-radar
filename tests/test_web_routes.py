@@ -227,6 +227,83 @@ def test_timeline_category_filter_applies_before_pagination(tmp_path: Path) -> N
     assert all("论文/研究" in item["topic_tags"] for item in [*page_one["items"], *page_two["items"]])
 
 
+def test_ai_models_category_excludes_course_and_benchmark_only_items(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_enrichment(conn, "item-openai", "OpenAI 模型发布", ["模型发布", "OpenAI"])
+    _insert_enrichment(conn, "item-claude", "Transformer 实践课程", ["模型发布", "教程/实践"])
+    _insert_enrichment(conn, "item-x", "模型评测讨论", ["评测/基准", "开源/仓库"])
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES
+          ('run-1', 'item-claude', 9.9, 2, '{}'),
+          ('run-1', 'item-x', 9.5, 3, '{}')
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"category": "ai-models"}).json()["data"]
+    curated = client.get("/api/v1/curated", params={"category": "ai-models"}).json()["data"]
+    all_curated = client.get("/api/v1/curated").json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-openai"]
+    assert [item["id"] for item in curated["items"]] == ["item-openai"]
+    assert [item["id"] for item in all_curated["items"]] == ["item-openai", "item-claude", "item-x"]
+
+
+def test_product_category_uses_product_semantics_not_model_or_multimodal_only(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_enrichment(conn, "item-openai", "纯模型多模态条目", ["模型发布", "多模态", "MCP/工具"])
+    _insert_enrichment(conn, "item-claude", "真实产品更新", ["产品更新", "模型发布"])
+    _insert_enrichment(conn, "item-x", "泛开源仓库", ["开源/仓库", "端侧"])
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES
+          ('run-1', 'item-claude', 9.9, 2, '{}'),
+          ('run-1', 'item-x', 9.5, 3, '{}')
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"category": "ai-products"}).json()["data"]
+    curated = client.get("/api/v1/curated", params={"category": "ai-products"}).json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-claude"]
+    assert [item["id"] for item in curated["items"]] == ["item-claude"]
+
+
+def test_tip_category_excludes_repo_and_edge_only_items(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_enrichment(conn, "item-openai", "泛开源端侧条目", ["开源/仓库", "端侧"])
+    _insert_enrichment(conn, "item-claude", "Transformer 实践课程", ["模型发布", "教程/实践"])
+    _insert_enrichment(conn, "item-x", "部署工程实践", ["部署/工程", "大佬观点"])
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES
+          ('run-1', 'item-claude', 9.9, 2, '{}'),
+          ('run-1', 'item-x', 9.5, 3, '{}')
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"category": "tip"}).json()["data"]
+    curated = client.get("/api/v1/curated", params={"category": "tip"}).json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-claude", "item-x"]
+    assert [item["id"] for item in curated["items"]] == ["item-claude", "item-x"]
+
+
 def test_timeline_exposes_latest_curated_metadata_for_all_feed(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 

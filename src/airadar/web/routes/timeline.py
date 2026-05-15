@@ -3,29 +3,17 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 
 from ..envelope import ok
-from .common import _visible_reason_from_payload, conn_from_request, fts_phrase_query, item_summary, json_loads
+from .common import (
+    CATEGORY_TAGS,
+    _visible_reason_from_payload,
+    conn_from_request,
+    fts_phrase_query,
+    item_summary,
+    json_loads,
+    matches_category,
+)
 
 router = APIRouter()
-
-CATEGORY_TAGS = {
-    "ai-models": {"模型发布", "评测/基准", "推理"},
-    "ai-products": {"产品更新", "MCP/工具", "多模态"},
-    "industry": {"行业动态", "安全/对齐", "现象/趋势"},
-    "paper": {"论文/研究"},
-    "tip": {"教程/实践", "开源/仓库", "端侧"},
-}
-
-
-def _matches_category(item: dict[str, object], category: str | None) -> bool:
-    if not category:
-        return True
-    wanted = CATEGORY_TAGS.get(category)
-    if not wanted:
-        return True
-    tags = item.get("topic_tags")
-    if not isinstance(tags, list):
-        return False
-    return any(isinstance(tag, str) and tag in wanted for tag in tags)
 
 
 @router.get("/timeline")
@@ -153,7 +141,7 @@ def timeline(
                 if visible_reason:
                     item["reasoning"] = visible_reason
                     item["why_recommend"] = visible_reason
-            if _matches_category(item, normalized_category):
+            if matches_category(item, normalized_category):
                 items.append(item)
         if normalized_category:
             total = len(items)

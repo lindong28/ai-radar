@@ -87,6 +87,20 @@ def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
     assert "=== PIPELINE DONE (failed=1) ===" in log_text
 
 
+def test_pipeline_script_skips_when_another_pipeline_is_running(tmp_path: Path) -> None:
+    script, env = _copy_pipeline_fixture(tmp_path)
+    lock_dir = tmp_path / ".pipeline.lock"
+    lock_dir.mkdir()
+    (lock_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    result = subprocess.run([str(script)], cwd="/", env=env, text=True, capture_output=True, timeout=30)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (tmp_path / "run-calls.log").exists()
+    log_text = next((tmp_path / "logs").glob("pipeline-*.log")).read_text(encoding="utf-8")
+    assert f"=== pipeline SKIP: already running pid={os.getpid()} ===" in log_text
+
+
 def test_pipeline_deploy_cron_entry_uses_absolute_fifteen_minute_schedule() -> None:
     cron_file = REPO_ROOT / "deploy" / "cron" / "ai-radar-pipeline"
     assert cron_file.exists(), "deploy/cron/ai-radar-pipeline should exist"

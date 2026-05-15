@@ -70,11 +70,11 @@ const CATEGORY_LABELS = {
 };
 
 const CATEGORY_TAGS = {
-  model: ["模型发布", "评测/基准", "推理"],
-  product: ["产品更新", "MCP/工具", "多模态"],
+  model: ["模型发布"],
+  product: ["产品更新", "MCP/工具"],
   industry: ["行业动态", "安全/对齐", "现象/趋势"],
   paper: ["论文/研究"],
-  practice: ["教程/实践", "开源/仓库", "端侧"],
+  practice: ["教程/实践", "部署/工程", "大佬观点"],
 };
 
 const CATEGORY_URL_VALUES = {
@@ -134,7 +134,7 @@ function updateHiddenFeedInputs(category, dateValue = "", channel = "all") {
   if (dateInput) dateInput.value = dateValue || currentParams().get("date") || "";
 }
 
-function feedUrl(path, { q = "", category = "all", channel = "all", date = "", page = "1" } = {}) {
+function feedUrl(path, { q = "", category = "all", channel = "all", date = "", page = "" } = {}) {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
   if (CATEGORY_URL_VALUES[category]) params.set("category", CATEGORY_URL_VALUES[category]);
@@ -151,10 +151,19 @@ function updateFeedUrl(path, { q = "", category = "all", channel = "all", date =
   else history.replaceState({}, "", next);
 }
 
+function normalizeFeedUrl(path, params) {
+  const next = feedUrl(path, params);
+  if (`${location.pathname}${location.search}` !== next) {
+    history.replaceState({}, "", next);
+  }
+}
+
 function itemMatchesCategory(item, category) {
   if (!category || category === "all") return true;
   const tags = Array.isArray(item.topic_tags) ? item.topic_tags : [];
   const wanted = CATEGORY_TAGS[category] || [];
+  if (category === "model" && tags.includes("教程/实践")) return false;
+  if (category === "product" && tags.includes("模型发布") && !tags.includes("产品更新")) return false;
   return tags.some((tag) => wanted.includes(tag));
 }
 
@@ -294,8 +303,9 @@ function itemHref(item) {
 function articleMedia(item) {
   const assets = Array.isArray(item.media_assets) ? item.media_assets.filter((asset) => asset?.type === "image" && asset.url) : [];
   if (!assets.length) return "";
+  const label = `打开原文：${itemTitleText(item) || "查看媒体"}`;
   const images = assets.slice(0, 4).map((asset) => `
-    <a class="article-media-link" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">
+    <a class="article-media-link" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
       <img class="article-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer">
     </a>`).join("");
   return `<div class="article-media article-media-count-${Math.min(assets.length, 4)}">${images}</div>`;
@@ -329,7 +339,7 @@ function itemCard(item, showScore, options = {}) {
     ? `<a class="item-title" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(itemTitle)}</a>`
     : "";
   const media = compact ? "" : articleMedia(item);
-  return `<article class="item-row timeline-card${isX ? " x-card" : ""}${compact ? " compact-card" : ""}${options.clampSummary ? " clamped-card" : ""}" data-source-id="${esc(item.source_id)}" data-published-date="${esc(itemDateBucket(item))}">
+  return `<article class="item-row timeline-card${isX ? " x-card" : ""}${compact ? " compact-card" : ""}${options.clampSummary ? " clamped-card" : ""}" data-source-id="${esc(item.source_id)}" data-published-date="${esc(itemDateBucket(item))}" data-published-at="${esc(isoDateTime(itemTime(item)))}">
     <div class="card-topline">
       ${sourceLine(item)}
       ${showScore ? scorePill(item) : ""}
@@ -342,6 +352,23 @@ function itemCard(item, showScore, options = {}) {
     ${reason ? '<hr class="timeline-divider">' : ""}
     ${reason}
   </article>`;
+}
+
+function itemTimestamp(item) {
+  const value = new Date(itemTime(item)).getTime();
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function compareByTimeDesc(a, b) {
+  return itemTimestamp(b) - itemTimestamp(a)
+    || String(b.fetched_at || "").localeCompare(String(a.fetched_at || ""))
+    || String(b.id || "").localeCompare(String(a.id || ""));
+}
+
+function compareByScoreDesc(a, b) {
+  return itemDateBucket(b).localeCompare(itemDateBucket(a))
+    || Number(b.weighted_score || 0) - Number(a.weighted_score || 0)
+    || compareByTimeDesc(a, b);
 }
 
 function renderTimeline(container, items, options = {}) {
@@ -357,14 +384,8 @@ function renderTimeline(container, items, options = {}) {
     return;
   }
   let lastDate = "";
-  const sortByScore = options.sortByScore ?? showScore;
-  const renderedItems = sortByScore
-    ? [...items].sort((a, b) => (
-      itemDateBucket(b).localeCompare(itemDateBucket(a))
-      || Number(b.weighted_score || 0) - Number(a.weighted_score || 0)
-      || String(b.id || "").localeCompare(String(a.id || ""))
-    ))
-    : items;
+  const sortByScore = options.sortByScore === true;
+  const renderedItems = [...items].sort(sortByScore ? compareByScoreDesc : compareByTimeDesc);
   container.innerHTML = renderedItems.map((item) => {
     const day = dateKey(itemTime(item));
     const bucket = itemDateBucket(item);
@@ -387,11 +408,25 @@ function initNavigation() {
   const toggle = document.querySelector(".app-hamburger");
   const close = document.querySelector(".sidebar-close");
   if (!sidebar || !toggle || toggle.dataset.bound === "true") return;
+  const mobileQuery = window.matchMedia("(max-width: 760px)");
+  const setSidebarInteractivity = (open) => {
+    const hiddenDrawer = mobileQuery.matches && !open;
+    sidebar.toggleAttribute("inert", hiddenDrawer);
+    if (hiddenDrawer) sidebar.setAttribute("aria-hidden", "true");
+    else sidebar.removeAttribute("aria-hidden");
+  };
   const setOpen = (open) => {
     document.body.classList.toggle("sidebar-open", open);
     toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    setSidebarInteractivity(open);
+    if (open) close?.focus();
+    else if (sidebar.contains(document.activeElement)) toggle.focus();
   };
   toggle.dataset.bound = "true";
+  setSidebarInteractivity(document.body.classList.contains("sidebar-open"));
+  mobileQuery.addEventListener?.("change", () => {
+    setSidebarInteractivity(document.body.classList.contains("sidebar-open"));
+  });
   toggle.addEventListener("click", () => {
     setOpen(!document.body.classList.contains("sidebar-open"));
   });
@@ -483,6 +518,19 @@ function renderTimelineLoading(container) {
   </div>`;
 }
 
+function renderTimelineError(container, error, retry) {
+  if (!container) return;
+  const message = error instanceof Error && error.message ? error.message : "请求失败";
+  container.innerHTML = `<div class="empty-state feed-error" role="alert">
+    <h2>加载失败</h2>
+    <p>${esc(message)}。请稍后重试。</p>
+    <div class="empty-actions">
+      <button type="button" data-retry-feed>重新加载</button>
+    </div>
+  </div>`;
+  container.querySelector("[data-retry-feed]")?.addEventListener("click", retry);
+}
+
 export async function initTimeline() {
   initNavigation();
   const list = document.querySelector("#list");
@@ -501,6 +549,12 @@ export async function initTimeline() {
     load({ page: 1, mode: "push" });
   });
   search.value = searchFromUrl();
+  normalizeFeedUrl("/all", {
+    q: search.value.trim(),
+    category: activeCategory,
+    channel: activeChannel,
+    page: currentPage > 1 ? String(currentPage) : "",
+  });
 
   function renderView(rawItems, meta = {}) {
     visibleItems = rawItems;
@@ -533,14 +587,26 @@ export async function initTimeline() {
     if (updateUrl) updateFeedUrl("/all", { q, category: activeCategory, channel: activeChannel, page: urlPage }, mode);
     renderTimelineLoading(list);
     if (pagination) pagination.hidden = true;
-    const data = await api(queryPath("/api/v1/timeline", {
-      limit: 40,
-      page,
-      q,
-      channel: CHANNEL_URL_VALUES[activeChannel] || "",
-      category: CATEGORY_URL_VALUES[activeCategory] || "",
-    }));
-    renderView(data.items, data);
+    try {
+      const data = await api(queryPath("/api/v1/timeline", {
+        limit: 40,
+        page,
+        q,
+        channel: CHANNEL_URL_VALUES[activeChannel] || "",
+        category: CATEGORY_URL_VALUES[activeCategory] || "",
+      }));
+      const total = Number(data.total || 0);
+      const limit = Number(data.limit || 40);
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      if (total > 0 && !data.items.length && page > totalPages) {
+        await load({ page: totalPages, mode: "replace" });
+        return;
+      }
+      renderView(data.items, data);
+    } catch (error) {
+      if (pagination) pagination.hidden = true;
+      renderTimelineError(list, error, () => load({ page, mode: "replace" }));
+    }
   }
 
   async function runSearch() {
@@ -563,6 +629,12 @@ export async function initTimeline() {
     activeCategory = categoryFromUrl();
     activeChannel = channelFromUrl();
     search.value = searchFromUrl();
+    normalizeFeedUrl("/all", {
+      q: search.value.trim(),
+      category: activeCategory,
+      channel: activeChannel,
+      page: pageFromUrl() > 1 ? String(pageFromUrl()) : "",
+    });
     load({ page: pageFromUrl(), updateUrl: false });
   });
   rememberListScroll(list);
@@ -581,14 +653,16 @@ export async function initCurated() {
   const syncCategoryControls = bindCategoryControls((category) => {
     activeCategory = category;
     updateFeedUrl("/", { q: search.value.trim(), category: activeCategory }, "push");
-    renderView();
+    void load(search.value.trim());
   });
   search.value = searchFromUrl();
+  normalizeFeedUrl("/", { q: search.value.trim(), category: activeCategory });
 
   function renderView(q = "") {
     syncCategoryControls(activeCategory);
     renderTimeline(list, currentItems.filter((item) => itemMatchesCategory(item, activeCategory)), {
       showScore: true,
+      sortByScore: false,
       emptyTitle: q ? "没有匹配条目" : activeCategory === "all" ? "暂无精选条目" : `${CATEGORY_LABELS[activeCategory]}分类暂无精选`,
       emptyBody: q ? "清空搜索后可回到默认列表。" : "可以切换到全部继续浏览精选内容。",
     });
@@ -596,9 +670,16 @@ export async function initCurated() {
 
   async function load(q = "") {
     renderTimelineLoading(list);
-    const data = await api(queryPath("/api/v1/curated", { q }));
-    currentItems = data.items;
-    renderView(q);
+    try {
+      const data = await api(queryPath("/api/v1/curated", {
+        q,
+        category: CATEGORY_URL_VALUES[activeCategory] || "",
+      }));
+      currentItems = data.items;
+      renderView(q);
+    } catch (error) {
+      renderTimelineError(list, error, () => load(q));
+    }
   }
 
   async function runSearch() {

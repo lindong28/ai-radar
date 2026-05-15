@@ -5,7 +5,7 @@ from datetime import date as date_cls
 from fastapi import APIRouter, HTTPException, Request
 
 from ..envelope import ok
-from .common import conn_from_request, fts_phrase_query, item_summary, json_loads
+from .common import CATEGORY_TAGS, conn_from_request, fts_phrase_query, item_summary, json_loads, matches_category
 
 router = APIRouter()
 
@@ -25,9 +25,14 @@ def _normalized_date(value: str | None) -> str | None:
 
 @router.get("/curated")
 def curated(
-    request: Request, run_id: str | None = None, date: str | None = None, q: str | None = None
+    request: Request,
+    run_id: str | None = None,
+    date: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
 ) -> dict[str, object]:
     selected_date = _normalized_date(date)
+    normalized_category = category if category in CATEGORY_TAGS else None
     with conn_from_request(request) as conn:
         if run_id:
             run = conn.execute("SELECT * FROM curation_runs WHERE id=?", (run_id,)).fetchone()
@@ -58,7 +63,7 @@ def curated(
             JOIN sources s ON s.id=i.source_id
             {where}
             ORDER BY date(datetime(i.published_at, '+08:00')) DESC,
-                     c.weighted_score DESC, c.rank ASC, i.published_at DESC, i.fetched_at DESC, i.id DESC
+                     i.published_at DESC, i.fetched_at DESC, i.id DESC
             """,
             params,
         ).fetchall()
@@ -71,7 +76,8 @@ def curated(
             item["reason"] = json_loads(row["reason_json"], {})
             scores = item["reason"].get("scores", {})
             item["scores"] = scores
-            items.append(item)
+            if matches_category(item, normalized_category):
+                items.append(item)
         response_date = selected_date or str(run["created_at"])[:10]
     return ok(
         {
