@@ -21,3 +21,8 @@ __pycache__/
 
 # Env
 .env
+
+# Deploy (actual configs contain secrets / local paths)
+# deploy/cloudflared/config.yml
+# deploy/launchd/*.plist
+

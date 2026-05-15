@@ -21,7 +21,6 @@ from .web.app import serve
 
 def _load_runtime_env() -> None:
     load_dotenv(Path.cwd() / ".env", override=False)
-    load_dotenv(Path.home() / ".claude" / ".env", override=False)
 
 
 def _load_item_ids(path: str) -> list[str]:
