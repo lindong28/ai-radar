@@ -12,8 +12,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-AI_RADAR_ROOT = PROJECT_ROOT / "apps" / "ai-radar"
+AI_RADAR_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _free_port() -> int:
@@ -45,7 +44,7 @@ def base_url() -> Generator[str, None, None]:
     url = f"http://127.0.0.1:{port}"
     process = subprocess.Popen(
         [str(AI_RADAR_ROOT / "run.sh"), "serve", "--port", str(port)],
-        cwd=PROJECT_ROOT,
+        cwd=AI_RADAR_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

@@ -53,6 +53,52 @@ DEEPSEEK_API_KEY=sk-xxx
 
 访问 `http://localhost:8000` 查看站点。
 
+## 自动化调度
+
+`pipeline.sh` 会按顺序执行 `fetch → prefilter → score → enrich → curate`，每个阶段只处理尚未完成对应评估的新条目；单个阶段失败时会记录 `FAIL` 并继续执行后续阶段，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
+
+cron 和 launchd 不会继承交互式 shell 中临时 `export` 的 API Key。启用自动调度前，先确认项目根目录 `.env` 或 `~/.claude/.env` 中包含流水线需要的 LLM API Key；`./run.sh` 会在每个阶段启动时读取这两个位置。
+
+```bash
+cp .env.example .env
+# 编辑 .env，至少填入一个可用的 LLM API Key
+```
+
+如果你有多个项目共用同一组 API Key，也可以统一写在 `~/.claude/.env`。当同一个变量同时存在于项目根目录 `.env` 和 `~/.claude/.env` 时，项目根目录 `.env` 的优先级更高；已经由外层进程显式传入的环境变量仍保持最高优先级。
+
+如果只在当前终端里 `export DEEPSEEK_API_KEY=...`，手动运行通常可用，但机器重启、重新登录或由 cron/launchd 触发时可能拿不到这些变量。
+
+手动运行一次：
+
+```bash
+./pipeline.sh
+```
+
+安装 cron 调度后，每 15 分钟自动运行一次：
+
+```bash
+chmod +x pipeline.sh
+(crontab -l 2>/dev/null; sed '/^#/d; /^$/d' deploy/cron/ai-radar-pipeline) | crontab -
+crontab -l | grep ai-radar
+```
+
+上面的命令会保留已有 crontab 条目。不要直接运行 `crontab deploy/cron/ai-radar-pipeline`，除非你确认当前用户没有其他 crontab 任务。
+
+cron 条目格式：
+
+```cron
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+*/15 * * * * /Users/lindong/research/ai-radar/pipeline.sh >/dev/null 2>&1
+```
+
+macOS 也可以使用 launchd 每 15 分钟调度一次。cron 和 launchd 二选一即可，不要同时启用同一个 pipeline：
+
+```bash
+cp deploy/launchd/ai-radar-pipeline.plist.example ~/Library/LaunchAgents/ai-radar-pipeline.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/ai-radar-pipeline.plist
+launchctl print "gui/$(id -u)/live.aiplanet.ai-radar.pipeline"
+```
+
 ## Web 页面
 
 | 页面 | URL | 说明 |

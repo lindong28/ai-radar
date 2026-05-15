@@ -9,7 +9,7 @@ from .heuristics import heuristic_prefilter
 
 
 class DeepSeekV32Prefilter:
-    model_id = "deepseek-v3.2"
+    model_id = "deepseek-v4-flash"
 
     def smoke_test(self) -> str:
         return "ok" if os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY") else "ok (offline fallback)"

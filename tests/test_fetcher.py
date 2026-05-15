@@ -6,6 +6,7 @@ from pathlib import Path
 
 from airadar.db import migrate
 from airadar.fetcher.dedup import FetchedItem, content_hash, upsert_item
+from airadar.fetcher.runner import default_sources_path
 from airadar.fetcher.rss import parse_feed
 from airadar.sources.loader import SourceConfig
 from airadar.sources.sync import sync_to_db
@@ -24,6 +25,10 @@ RSS_BYTES = b"""<?xml version="1.0" encoding="UTF-8"?>
   </channel>
 </rss>
 """
+
+
+def test_default_sources_path_points_to_repo_data_file() -> None:
+    assert default_sources_path() == Path(__file__).resolve().parents[1] / "data" / "sources.toml"
 
 
 def test_parse_feed_extracts_entry_fields() -> None:

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from time import monotonic
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 from . import db
 from .curator.select import curate
@@ -19,8 +19,24 @@ from .scorer.runner import run_scoring
 from .web.app import serve
 
 
-def _load_runtime_env() -> None:
-    load_dotenv(Path.cwd() / ".env", override=False)
+def _load_runtime_env(
+    *,
+    project_env: Path | None = None,
+    shared_env: Path | None = None,
+) -> None:
+    project_env = project_env or db.PROJECT_ROOT / ".env"
+    shared_env = shared_env or Path.home() / ".claude" / ".env"
+
+    values: dict[str, str] = {}
+    for env_path in (shared_env, project_env):
+        if not env_path.exists():
+            continue
+        for key, value in dotenv_values(env_path).items():
+            if value is not None:
+                values[key] = value
+
+    for key, value in values.items():
+        os.environ.setdefault(key, value)
 
 
 def _load_item_ids(path: str) -> list[str]:

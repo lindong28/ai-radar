@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>live.aiplanet.ai-radar.serve</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd /path/to/ai-radar &amp;&amp; PYTHONPATH=/path/to/ai-radar/src /opt/homebrew/bin/uv run python -m airadar.cli serve --host 127.0.0.1 --port 8000</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/ai-radar</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/ai-radar-serve.log</string>
+  <key>StandardErrorPath</key><string>/tmp/ai-radar-serve.err</string>
+</dict>
+</plist>

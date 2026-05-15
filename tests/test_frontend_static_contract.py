@@ -220,6 +220,8 @@ def test_feed_text_metrics_match_aihot_baseline() -> None:
     assert "font-size: 14px;" in css
     assert "font-weight: 400;" in css
     assert "line-height: 23.8px;" in css
+    assert ".clamped-card.x-card .item-title {" in css
+    assert "-webkit-line-clamp: 4;" in css
     assert ".summary {" in css
     assert "display: flow-root;" in css
     assert "margin: 6px 0 0;" in css

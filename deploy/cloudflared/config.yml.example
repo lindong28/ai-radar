@@ -1,0 +1,10 @@
+# Cloudflare Tunnel configuration template.
+# Copy to config.yml and fill in your tunnel UUID.
+tunnel: <YOUR_TUNNEL_UUID>
+credentials-file: <YOUR_HOME>/.cloudflared/<YOUR_TUNNEL_UUID>.json
+protocol: quic
+
+ingress:
+  - hostname: <YOUR_DOMAIN>
+    service: http://localhost:8000
+  - service: http_status:404

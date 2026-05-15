@@ -38,7 +38,7 @@ class FetchSummary:
 
 
 def default_sources_path() -> Path:
-    return db.PROJECT_ROOT / "apps" / "ai-radar" / "data" / "sources.toml"
+    return db.PROJECT_ROOT / "data" / "sources.toml"
 
 
 def reload_sources(conn: sqlite3.Connection, path: Path | None = None) -> list[SourceConfig]:

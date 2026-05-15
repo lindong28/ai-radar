@@ -940,6 +940,13 @@ button,
   line-height: 23.8px;
 }
 
+.clamped-card.x-card .item-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
 .summary {
   display: flow-root;
   margin: 6px 0 0;

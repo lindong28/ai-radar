@@ -93,6 +93,12 @@ def chat_json(
                 "response_format": {"type": "json_object"},
                 "temperature": temperature,
             }
+            if provider == "deepseek" and (
+                model.startswith("deepseek-v4") or model in {"deepseek-chat", "deepseek-reasoner"}
+            ):
+                request["extra_body"] = {
+                    "thinking": {"type": os.environ.get("AI_RADAR_DEEPSEEK_THINKING", "disabled")}
+                }
             if max_tokens is not None:
                 request["max_tokens"] = max_tokens
             completion = client.chat.completions.create(**request)

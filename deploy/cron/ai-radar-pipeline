@@ -1,0 +1,3 @@
+# Run the AI Radar incremental pipeline every 15 minutes.
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+*/15 * * * * /Users/lindong/research/ai-radar/pipeline.sh >/dev/null 2>&1

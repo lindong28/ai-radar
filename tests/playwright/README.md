@@ -5,10 +5,10 @@ This suite maps local user-facing checks from `plans/ai-radar-aihot-parity-20260
 Run from the repository root:
 
 ```bash
-./apps/ai-radar/tests/run_user_verify.sh
+./tests/run_user_verify.sh
 ```
 
-The fixture in `conftest.py` starts `./apps/ai-radar/run.sh serve` on a free local port, opens Chromium, and runs the checks against the real local `apps/ai-radar/data/radar.db`.
+The fixture in `conftest.py` starts `./run.sh serve` on a free local port, opens Chromium, and runs the checks against the real local `data/radar.db`.
 
 Coverage by file:
 
