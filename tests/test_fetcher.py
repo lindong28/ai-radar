@@ -77,3 +77,48 @@ def test_upsert_item_deduplicates_by_source_and_content_hash(tmp_path: Path) -> 
     assert upsert_item(conn, item) is True
     assert upsert_item(conn, item) is False
     assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+def test_upsert_item_deduplicates_by_source_and_url_when_title_changes(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    sync_to_db(
+        [
+            SourceConfig(
+                slug="hn_ai", name="Hacker News AI/LLM", url="https://hnrss.org/newest?q=AI", tier="T2", enabled=True, meta={}
+            )
+        ],
+        conn,
+    )
+    first = FetchedItem(
+        source_id="hn_ai",
+        url="https://x.com/example/status/1",
+        title="AI psychosis discussion",
+        author=None,
+        published_at="2026-05-08T01:02:03Z",
+        fetched_at="2026-05-08T01:03:00Z",
+        content_text="Original Hacker News title and metadata.",
+        content_html=None,
+        extra={"guid": "1"},
+    )
+    updated = FetchedItem(
+        source_id="hn_ai",
+        url="https://x.com/example/status/1",
+        title="Updated AI psychosis title",
+        author=None,
+        published_at="2026-05-08T01:02:03Z",
+        fetched_at="2026-05-08T01:04:00Z",
+        content_text="Updated Hacker News title and metadata.",
+        content_html=None,
+        extra={"guid": "2"},
+    )
+
+    assert upsert_item(conn, first) is True
+    assert upsert_item(conn, updated) is False
+
+    rows = conn.execute("SELECT url, title, content_text FROM items").fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "https://x.com/example/status/1"
+    assert rows[0][1] == "Updated AI psychosis title"
+    assert rows[0][2] == "Updated Hacker News title and metadata."

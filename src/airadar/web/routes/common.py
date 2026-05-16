@@ -40,8 +40,99 @@ CATEGORY_TAGS = {
     "ai-products": {"产品更新", "MCP/工具"},
     "industry": {"行业动态", "安全/对齐", "现象/趋势"},
     "paper": {"论文/研究"},
-    "tip": {"教程/实践", "部署/工程", "大佬观点"},
+    "tip": {"教程/实践", "部署/工程"},
 }
+
+
+def _latest_enrich_tag_exists_clause(item_alias: str, eval_alias: str, tag_alias: str, condition: str) -> str:
+    return f"""
+    EXISTS (
+      SELECT 1
+      FROM item_evaluations {eval_alias}
+      JOIN json_each(json_extract({eval_alias}.output_json, '$.tags')) {tag_alias}
+      WHERE {eval_alias}.item_id={item_alias}.id
+        AND {eval_alias}.stage='enrich'
+        AND {eval_alias}.error IS NULL
+        AND {eval_alias}.id = (
+          SELECT MAX(latest_enrich.id)
+          FROM item_evaluations latest_enrich
+          WHERE latest_enrich.item_id={item_alias}.id
+            AND latest_enrich.stage='enrich'
+            AND latest_enrich.error IS NULL
+        )
+        AND {condition}
+    )
+    """
+
+
+def category_filter_clause(category: str | None, item_alias: str = "i") -> tuple[str, list[object]]:
+    if not category:
+        return "", []
+    wanted = sorted(CATEGORY_TAGS.get(category) or [])
+    if not wanted:
+        return "", []
+    placeholders = ", ".join("?" for _ in wanted)
+    clauses = [
+        _latest_enrich_tag_exists_clause(
+            item_alias,
+            "category_enrich",
+            "category_tag",
+            f"category_tag.value IN ({placeholders})",
+        )
+    ]
+    params: list[object] = list(wanted)
+    if category == "ai-models":
+        clauses.append(
+            f"NOT {_latest_enrich_tag_exists_clause(item_alias, 'model_exclude_enrich', 'model_exclude_tag', 'model_exclude_tag.value = ?')}"
+        )
+        params.append("教程/实践")
+    elif category == "ai-products":
+        has_model = _latest_enrich_tag_exists_clause(
+            item_alias, "product_model_enrich", "product_model_tag", "product_model_tag.value = ?"
+        )
+        has_product = _latest_enrich_tag_exists_clause(
+            item_alias, "product_update_enrich", "product_update_tag", "product_update_tag.value = ?"
+        )
+        clauses.append(f"NOT ({has_model} AND NOT {has_product})")
+        params.extend(["模型发布", "产品更新"])
+    elif category == "tip":
+        has_tutorial = _latest_enrich_tag_exists_clause(
+            item_alias, "tip_tutorial_enrich", "tip_tutorial_tag", "tip_tutorial_tag.value = ?"
+        )
+        broad_news = ["安全/对齐", "现象/趋势", "行业动态"]
+        broad_placeholders = ", ".join("?" for _ in broad_news)
+        has_broad_news = _latest_enrich_tag_exists_clause(
+            item_alias,
+            "tip_broad_enrich",
+            "tip_broad_tag",
+            f"tip_broad_tag.value IN ({broad_placeholders})",
+        )
+        clauses.append(f"NOT (NOT {has_tutorial} AND {has_broad_news})")
+        params.extend(["教程/实践", *broad_news])
+    return f"({' AND '.join(clauses)})", params
+
+
+def deduped_item_clause(item_alias: str = "i") -> str:
+    return f"""
+    NOT EXISTS (
+      SELECT 1
+      FROM items duplicate_item
+      WHERE duplicate_item.source_id = {item_alias}.source_id
+        AND lower(rtrim(duplicate_item.url, '/')) = lower(rtrim({item_alias}.url, '/'))
+        AND (
+          duplicate_item.published_at > {item_alias}.published_at
+          OR (
+            duplicate_item.published_at = {item_alias}.published_at
+            AND duplicate_item.fetched_at > {item_alias}.fetched_at
+          )
+          OR (
+            duplicate_item.published_at = {item_alias}.published_at
+            AND duplicate_item.fetched_at = {item_alias}.fetched_at
+            AND duplicate_item.id > {item_alias}.id
+          )
+        )
+    )
+    """
 
 
 def matches_category(item: dict[str, Any], category: str | None) -> bool:
@@ -56,6 +147,12 @@ def matches_category(item: dict[str, Any], category: str | None) -> bool:
     if category == "ai-models" and "教程/实践" in tags:
         return False
     if category == "ai-products" and "模型发布" in tags and "产品更新" not in tags:
+        return False
+    if (
+        category == "tip"
+        and "教程/实践" not in tags
+        and any(tag in {"安全/对齐", "现象/趋势", "行业动态"} for tag in tags)
+    ):
         return False
     return any(isinstance(tag, str) and tag in wanted for tag in tags)
 
@@ -303,7 +400,10 @@ def related_discussions(conn: sqlite3.Connection | None, row: sqlite3.Row) -> li
 
 
 def item_summary(
-    row: sqlite3.Row, preview_query: str | None = None, conn: sqlite3.Connection | None = None
+    row: sqlite3.Row,
+    preview_query: str | None = None,
+    conn: sqlite3.Connection | None = None,
+    include_related: bool = True,
 ) -> dict[str, Any]:
     preview = content_preview(row, preview_query)
     row_keys = row.keys()
@@ -340,7 +440,7 @@ def item_summary(
         "enriched_tags": enriched_tags,
         "topic_tags": enriched_tags,
         "reasoning": enrichment.why_recommend if enrichment else None,
-        "related_discussions": related_discussions(conn, row),
+        "related_discussions": related_discussions(conn, row) if include_related else [],
         "media_assets": _visible_media_assets(row),
     }
     fallback_reason = None

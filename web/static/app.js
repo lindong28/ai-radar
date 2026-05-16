@@ -74,7 +74,7 @@ const CATEGORY_TAGS = {
   product: ["产品更新", "MCP/工具"],
   industry: ["行业动态", "安全/对齐", "现象/趋势"],
   paper: ["论文/研究"],
-  practice: ["教程/实践", "部署/工程", "大佬观点"],
+  practice: ["教程/实践", "部署/工程"],
 };
 
 const CATEGORY_URL_VALUES = {
@@ -164,6 +164,9 @@ function itemMatchesCategory(item, category) {
   const wanted = CATEGORY_TAGS[category] || [];
   if (category === "model" && tags.includes("教程/实践")) return false;
   if (category === "product" && tags.includes("模型发布") && !tags.includes("产品更新")) return false;
+  if (category === "practice" && !tags.includes("教程/实践") && tags.some((tag) => ["安全/对齐", "现象/趋势", "行业动态"].includes(tag))) {
+    return false;
+  }
   return tags.some((tag) => wanted.includes(tag));
 }
 
@@ -555,6 +558,8 @@ export async function initTimeline() {
     channel: activeChannel,
     page: currentPage > 1 ? String(currentPage) : "",
   });
+  syncCategoryControls(activeCategory, activeChannel);
+  syncChannelControls(activeChannel, activeCategory);
 
   function renderView(rawItems, meta = {}) {
     visibleItems = rawItems;
@@ -585,6 +590,8 @@ export async function initTimeline() {
     const q = search.value.trim();
     const urlPage = page > 1 ? String(page) : "";
     if (updateUrl) updateFeedUrl("/all", { q, category: activeCategory, channel: activeChannel, page: urlPage }, mode);
+    syncCategoryControls(activeCategory, activeChannel);
+    syncChannelControls(activeChannel, activeCategory);
     renderTimelineLoading(list);
     if (pagination) pagination.hidden = true;
     try {

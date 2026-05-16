@@ -189,6 +189,16 @@ def test_home_product_and_tip_categories_use_semantic_filters(page: Page, base_u
             "topic_tags": ["部署/工程"],
             "enriched_tags": ["部署/工程"],
         },
+        {
+            **_timeline_payload_item("opinion", "行业观点新闻", "2026-05-15T05:00:00Z"),
+            "topic_tags": ["大佬观点", "行业动态"],
+            "enriched_tags": ["大佬观点", "行业动态"],
+        },
+        {
+            **_timeline_payload_item("deploy-news", "部署行业新闻", "2026-05-15T04:00:00Z"),
+            "topic_tags": ["部署/工程", "行业动态"],
+            "enriched_tags": ["部署/工程", "行业动态"],
+        },
     ]
     page.route(
         "**/api/v1/curated*",

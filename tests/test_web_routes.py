@@ -282,15 +282,47 @@ def test_product_category_uses_product_semantics_not_model_or_multimodal_only(tm
 def test_tip_category_excludes_repo_and_edge_only_items(tmp_path: Path) -> None:
     db_path = _seed_db(tmp_path)
     conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (
+          'item-opinion', 'openai_blog', 'https://example.com/opinion', 'Opinion news', 'Ada',
+          '2026-05-08T07:00:00Z', '2026-05-08T07:02:00Z',
+          'This is industry opinion without a concrete tutorial or deployment practice.',
+          NULL, 'h-opinion', '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (
+          'item-deploy-news', 'openai_blog', 'https://example.com/deploy-news', 'Deploy industry news', 'Ada',
+          '2026-05-08T06:00:00Z', '2026-05-08T06:02:00Z',
+          'This is broad infrastructure industry news, not a concrete deployment practice.',
+          NULL, 'h-deploy-news', '{}'
+        )
+        """
+    )
     _insert_enrichment(conn, "item-openai", "泛开源端侧条目", ["开源/仓库", "端侧"])
     _insert_enrichment(conn, "item-claude", "Transformer 实践课程", ["模型发布", "教程/实践"])
     _insert_enrichment(conn, "item-x", "部署工程实践", ["部署/工程", "大佬观点"])
+    _insert_enrichment(conn, "item-opinion", "纯观点行业新闻", ["大佬观点", "行业动态"])
+    _insert_enrichment(conn, "item-deploy-news", "部署行业新闻", ["部署/工程", "行业动态"])
     conn.execute(
         """
         INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
         VALUES
           ('run-1', 'item-claude', 9.9, 2, '{}'),
-          ('run-1', 'item-x', 9.5, 3, '{}')
+          ('run-1', 'item-x', 9.5, 3, '{}'),
+          ('run-1', 'item-opinion', 9.1, 4, '{}'),
+          ('run-1', 'item-deploy-news', 9.0, 5, '{}')
         """
     )
     conn.commit()
@@ -302,6 +334,44 @@ def test_tip_category_excludes_repo_and_edge_only_items(tmp_path: Path) -> None:
 
     assert [item["id"] for item in timeline["items"]] == ["item-claude", "item-x"]
     assert [item["id"] for item in curated["items"]] == ["item-claude", "item-x"]
+
+
+def test_timeline_and_curated_deduplicate_same_source_url(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (
+          'item-claude-dup', 'openai_blog', 'https://example.com/claude', 'Claude Notes Updated', 'Ben',
+          '2026-05-08T09:30:00Z', '2026-05-08T09:32:00Z',
+          'Anthropic published updated engineering notes for model users.',
+          NULL, 'h-claude-dup', '{}'
+        )
+        """
+    )
+    _insert_enrichment(conn, "item-claude", "Claude 研究笔记", ["论文/研究", "Anthropic"])
+    _insert_enrichment(conn, "item-claude-dup", "Claude 研究笔记更新", ["论文/研究", "Anthropic"])
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES
+          ('run-1', 'item-claude', 8.0, 2, '{}'),
+          ('run-1', 'item-claude-dup', 8.1, 3, '{}')
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"category": "paper"}).json()["data"]
+    curated = client.get("/api/v1/curated", params={"category": "paper"}).json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-claude-dup"]
+    assert [item["id"] for item in curated["items"]] == ["item-claude-dup"]
 
 
 def test_timeline_exposes_latest_curated_metadata_for_all_feed(tmp_path: Path) -> None:

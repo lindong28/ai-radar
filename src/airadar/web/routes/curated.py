@@ -5,7 +5,16 @@ from datetime import date as date_cls
 from fastapi import APIRouter, HTTPException, Request
 
 from ..envelope import ok
-from .common import CATEGORY_TAGS, conn_from_request, fts_phrase_query, item_summary, json_loads, matches_category
+from .common import (
+    CATEGORY_TAGS,
+    category_filter_clause,
+    conn_from_request,
+    deduped_item_clause,
+    fts_phrase_query,
+    item_summary,
+    json_loads,
+    matches_category,
+)
 
 router = APIRouter()
 
@@ -45,12 +54,17 @@ def curated(
         search_query = fts_phrase_query(q)
         where = "WHERE c.run_id=?"
         params: list[object] = [run["id"]]
+        where += f" AND {deduped_item_clause('i')}"
         if selected_date:
             where += " AND date(datetime(i.published_at, '+08:00')) = ?"
             params.append(selected_date)
         if search_query:
             where += " AND i.id IN (SELECT item_id FROM items_fts WHERE items_fts MATCH ?)"
             params.append(search_query)
+        category_clause, category_params = category_filter_clause(normalized_category, "i")
+        if category_clause:
+            where += f" AND {category_clause}"
+            params.extend(category_params)
         rows = conn.execute(
             f"""
             SELECT i.*, s.name AS source_name, s.tier,

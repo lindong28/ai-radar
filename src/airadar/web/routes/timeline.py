@@ -6,7 +6,9 @@ from ..envelope import ok
 from .common import (
     CATEGORY_TAGS,
     _visible_reason_from_payload,
+    category_filter_clause,
     conn_from_request,
+    deduped_item_clause,
     fts_phrase_query,
     item_summary,
     json_loads,
@@ -55,6 +57,12 @@ def timeline(
         where_clauses.append("COALESCE(s.kind, 'feed') != 'x'")
     elif channel == "firstParty":
         where_clauses.append("COALESCE(s.kind, 'feed') != 'x' AND s.tier = 'T1'")
+    normalized_category = category if category in CATEGORY_TAGS else None
+    where_clauses.append(deduped_item_clause("i"))
+    category_clause, category_params = category_filter_clause(normalized_category, "i")
+    if category_clause:
+        where_clauses.append(category_clause)
+        params.extend(category_params)
     preview_query = q if search_query else None
     with conn_from_request(request) as conn:
         has_prefilter = bool(conn.execute("SELECT 1 FROM item_evaluations WHERE stage='prefilter' LIMIT 1").fetchone())
@@ -99,10 +107,8 @@ def timeline(
                 """
             )
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        normalized_category = category if category in CATEGORY_TAGS else None
         offset = 0 if cursor else (page - 1) * limit
-        query_params = [*params] if normalized_category else [*params, limit + 1, offset]
-        limit_clause = "" if normalized_category else "LIMIT ? OFFSET ?"
+        query_params = [*params, limit + 1, offset]
         rows = conn.execute(
             f"""
             SELECT i.*, s.name AS source_name, s.tier,
@@ -126,13 +132,13 @@ def timeline(
               AND c.run_id = (SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1)
             {where}
             ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
-            {limit_clause}
+            LIMIT ? OFFSET ?
             """,
             query_params,
         ).fetchall()
         items = []
         for row in rows:
-            item = item_summary(row, preview_query, conn)
+            item = item_summary(row, preview_query, conn, include_related=False)
             if row["rank"] is not None:
                 item["rank"] = row["rank"]
                 item["weighted_score"] = row["curated_weighted_score"]
@@ -143,30 +149,20 @@ def timeline(
                     item["why_recommend"] = visible_reason
             if matches_category(item, normalized_category):
                 items.append(item)
-        if normalized_category:
-            total = len(items)
-            page_items = items[offset : offset + limit]
-            next_cursor = (
-                f"{page_items[-1]['published_at']}|{page_items[-1]['fetched_at']}|{page_items[-1]['id']}"
-                if len(items) > offset + limit and page_items
-                else None
-            )
-            items = page_items
-        else:
-            total = conn.execute(
-                f"""
-                SELECT COUNT(*)
-                FROM items i
-                JOIN sources s ON s.id=i.source_id
-                {where}
-                """,
-                params,
-            ).fetchone()[0]
-            page_rows = rows[:limit]
-            next_cursor = (
-                f"{page_rows[-1]['published_at']}|{page_rows[-1]['fetched_at']}|{page_rows[-1]['id']}"
-                if len(rows) > limit and page_rows
-                else None
-            )
-            items = items[:limit]
+        total = conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM items i
+            JOIN sources s ON s.id=i.source_id
+            {where}
+            """,
+            params,
+        ).fetchone()[0]
+        page_rows = rows[:limit]
+        next_cursor = (
+            f"{page_rows[-1]['published_at']}|{page_rows[-1]['fetched_at']}|{page_rows[-1]['id']}"
+            if len(rows) > limit and page_rows
+            else None
+        )
+        items = items[:limit]
     return ok({"items": items, "next_cursor": next_cursor, "total": total, "page": 1 if cursor else page, "limit": limit})
