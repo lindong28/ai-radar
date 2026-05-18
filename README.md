@@ -9,7 +9,7 @@ AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS 信源抓取 A
 需要 Python 3.12+ 和 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-git clone https://github.com/AIPlanetLive/ai-radar.git
+git clone https://github.com/lindong28/ai-radar.git
 cd ai-radar
 uv sync
 ```
