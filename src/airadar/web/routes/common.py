@@ -287,7 +287,11 @@ def latest_enrichment(conn: sqlite3.Connection | None, item_id: str) -> EnrichOu
     ).fetchone()
     if row is None:
         return None
-    parsed = json_loads(row["output_json"], None)
+    return parse_enrichment(row["output_json"])
+
+
+def parse_enrichment(value: str | None) -> EnrichOutput | None:
+    parsed = json_loads(value, None)
     if parsed is None:
         return None
     try:
@@ -404,10 +408,12 @@ def item_summary(
     preview_query: str | None = None,
     conn: sqlite3.Connection | None = None,
     include_related: bool = True,
+    enrichment: EnrichOutput | None = None,
+    enrichment_loaded: bool = False,
 ) -> dict[str, Any]:
     preview = content_preview(row, preview_query)
     row_keys = row.keys()
-    enrichment = latest_enrichment(conn, row["id"])
+    enrichment = enrichment if enrichment is not None or enrichment_loaded else latest_enrichment(conn, row["id"])
     enriched_tags = (
         topic_tags(
             enrichment.tags,

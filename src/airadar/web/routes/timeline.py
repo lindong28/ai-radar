@@ -13,6 +13,7 @@ from .common import (
     item_summary,
     json_loads,
     matches_category,
+    parse_enrichment,
 )
 
 router = APIRouter()
@@ -116,6 +117,7 @@ def timeline(
                    s.homepage_url AS source_homepage_url,
                    s.icon_url AS source_icon_url,
                    e.numeric_json,
+                   enrich_eval.output_json AS enrich_output_json,
                    c.weighted_score AS curated_weighted_score,
                    c.rank,
                    c.reason_json
@@ -128,6 +130,13 @@ def timeline(
                 AND latest.stage='scoring'
                 AND latest.error IS NULL
             )
+            LEFT JOIN item_evaluations enrich_eval ON enrich_eval.id = (
+              SELECT MAX(latest_enrich.id)
+              FROM item_evaluations latest_enrich
+              WHERE latest_enrich.item_id=i.id
+                AND latest_enrich.stage='enrich'
+                AND latest_enrich.error IS NULL
+            )
             LEFT JOIN curated_items c ON c.item_id = i.id
               AND c.run_id = (SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1)
             {where}
@@ -138,7 +147,15 @@ def timeline(
         ).fetchall()
         items = []
         for row in rows:
-            item = item_summary(row, preview_query, conn, include_related=False)
+            enrichment = parse_enrichment(row["enrich_output_json"])
+            item = item_summary(
+                row,
+                preview_query,
+                conn,
+                include_related=False,
+                enrichment=enrichment,
+                enrichment_loaded=True,
+            )
             if row["rank"] is not None:
                 item["rank"] = row["rank"]
                 item["weighted_score"] = row["curated_weighted_score"]
@@ -149,15 +166,6 @@ def timeline(
                     item["why_recommend"] = visible_reason
             if matches_category(item, normalized_category):
                 items.append(item)
-        total = conn.execute(
-            f"""
-            SELECT COUNT(*)
-            FROM items i
-            JOIN sources s ON s.id=i.source_id
-            {where}
-            """,
-            params,
-        ).fetchone()[0]
         page_rows = rows[:limit]
         next_cursor = (
             f"{page_rows[-1]['published_at']}|{page_rows[-1]['fetched_at']}|{page_rows[-1]['id']}"
@@ -165,4 +173,6 @@ def timeline(
             else None
         )
         items = items[:limit]
-    return ok({"items": items, "next_cursor": next_cursor, "total": total, "page": 1 if cursor else page, "limit": limit})
+        response_page = 1 if cursor else page
+        total = response_page * limit + 1 if len(rows) > limit else (response_page - 1) * limit + len(items)
+    return ok({"items": items, "next_cursor": next_cursor, "total": total, "page": response_page, "limit": limit})

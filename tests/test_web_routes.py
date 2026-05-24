@@ -5,9 +5,12 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from airadar.db import migrate
-from airadar.web.app import create_app
 from fastapi.testclient import TestClient
+
+from airadar.db import migrate
+from airadar.enrich.schema import EnrichOutput
+from airadar.web.app import create_app
+from airadar.web.routes import common as route_common
 
 
 def _seed_db(tmp_path: Path) -> Path:
@@ -148,6 +151,66 @@ def _insert_enrichment(conn: sqlite3.Connection, item_id: str, title: str, tags:
     )
 
 
+def test_perf_migration_adds_timeline_indexes(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+
+    index_names = {row[1] for row in conn.execute("PRAGMA index_list('items')").fetchall()}
+
+    assert "idx_items_source_url_norm" in index_names
+    assert "idx_items_published_fetched_id" in index_names
+
+
+def test_item_summary_uses_preloaded_enrichment_without_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT i.*, s.name AS source_name, s.tier,
+               s.kind AS source_kind,
+               s.homepage_url AS source_homepage_url,
+               s.icon_url AS source_icon_url
+        FROM items i
+        JOIN sources s ON s.id=i.source_id
+        WHERE i.id='item-openai'
+        """
+    ).fetchone()
+    enrichment = EnrichOutput(
+        title_zh="OpenAI API 产品更新",
+        summary_zh="这是一段用于验证预加载 enrichment 路径的中文摘要，长度足够满足结构化校验要求。",
+        why_recommend="这是一段用于验证预加载 enrichment 路径的中文推荐理由。",
+        tags=["产品更新", "MCP/工具"],
+    )
+
+    def fail_latest_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("preloaded enrichment should skip latest_enrichment lookup")
+
+    monkeypatch.setattr(route_common, "latest_enrichment", fail_latest_lookup)
+
+    item = route_common.item_summary(row, conn=conn, include_related=False, enrichment=enrichment)
+
+    assert item["title_zh"] == "OpenAI API 产品更新"
+    assert item["summary_zh"] == enrichment.summary_zh
+    assert item["why_recommend"] == enrichment.why_recommend
+    assert "产品更新" in item["topic_tags"]
+    assert item["related_discussions"] == []
+
+
+def test_timeline_total_uses_limit_plus_one_estimate(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    page_one = client.get("/api/v1/timeline", params={"limit": 1, "page": 1}).json()["data"]
+    last_page = client.get("/api/v1/timeline", params={"limit": 1, "page": 3}).json()["data"]
+    single_page = client.get("/api/v1/timeline", params={"limit": 50, "page": 1}).json()["data"]
+    empty_page = client.get("/api/v1/timeline", params={"q": "xyzzyqwertynonexistent", "limit": 50}).json()["data"]
+
+    assert page_one["total"] == 2
+    assert last_page["total"] == 3
+    assert single_page["total"] == 3
+    assert empty_page["total"] == 0
+
+
 def test_static_clean_routes_and_curated_redirect(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 
@@ -194,7 +257,7 @@ def test_timeline_supports_channel_filters_and_url_page_state(tmp_path: Path) ->
 
     assert page_one["page"] == 1
     assert page_one["limit"] == 1
-    assert page_one["total"] == 3
+    assert page_one["total"] == 2
     assert [item["id"] for item in page_one["items"]] == ["item-openai"]
     assert page_two["page"] == 2
     assert [item["id"] for item in page_two["items"]] == ["item-claude"]
