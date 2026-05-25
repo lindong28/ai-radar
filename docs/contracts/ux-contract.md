@@ -3,8 +3,8 @@
 > 当前 product 对用户承诺的可观察行为。仅装 user-observable 内容；实现细节、路线图、未发现 issue 不在这里。
 >
 > 协议：`~/.claude/references/ux-test-protocol.md` §2。
-> 配对 ledger：[`ux_issues.md`](./ux_issues.md)。
-> 相关：[VISION.md](./VISION.md) / [PRD_v0.md](./PRD_v0.md)。
+> 配对 ledger：[`ux-issues.md`](../issues/ux-issues.md)。
+> 相关：[VISION.md](../prd/VISION.md) / [PRD_v0.md](../prd/PRD_v0.md)。
 
 ---
 

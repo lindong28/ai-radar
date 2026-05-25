@@ -59,14 +59,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 cron 和 launchd 不会继承交互式 shell 中临时 `export` 的 API Key。启用自动调度前，先确认项目根目录 `.env` 或 `~/.claude/.env` 中包含流水线需要的 LLM API Key；`./run.sh` 会在每个阶段启动时读取这两个位置。
 
-```bash
-cp .env.example .env
-# 编辑 .env，至少填入一个可用的 LLM API Key
-```
-
-如果你有多个项目共用同一组 API Key，也可以统一写在 `~/.claude/.env`。当同一个变量同时存在于项目根目录 `.env` 和 `~/.claude/.env` 时，项目根目录 `.env` 的优先级更高；已经由外层进程显式传入的环境变量仍保持最高优先级。
-
-如果只在当前终端里 `export DEEPSEEK_API_KEY=...`，手动运行通常可用，但机器重启、重新登录或由 cron/launchd 触发时可能拿不到这些变量。
+确保项目根目录 `.env` 中已配置 API Key（见快速开始第 2 步）。cron/launchd 不会继承交互式 shell 中临时 `export` 的变量，必须写入 `.env` 文件。
 
 手动运行一次：
 
@@ -88,7 +81,7 @@ cron 条目格式：
 
 ```cron
 PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
-*/15 * * * * /Users/lindong/research/ai-radar/pipeline.sh >/dev/null 2>&1
+*/15 * * * * /path/to/ai-radar/pipeline.sh >/dev/null 2>&1
 ```
 
 macOS 也可以使用 launchd 每 15 分钟调度一次。cron 和 launchd 二选一即可，不要同时启用同一个 pipeline：

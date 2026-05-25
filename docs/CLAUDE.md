@@ -31,14 +31,14 @@
 | [VISION.md](prd/VISION.md) | 产品愿景与阶段路线图（v0.1 草案）；§4 核心原则 BINDING |
 | [PRD_v0.md](prd/PRD_v0.md) | v0 MVP 实施 PRD：数据流、schema、接口契约、验收标准 |
 
-### docs/contract/ [Developer]
+### docs/contracts/ [Developer]
 
 产品行为契约——用户可观察行为的 hard spec。
 
 | 文件 | 说明 |
 |---|---|
-| [ux-contract.md](contract/ux-contract.md) | AI Radar 对用户承诺的可观察行为：Personas、Surfaces、Journeys、Features、Quality Bar |
-| [aihot-parity-contract.md](contract/aihot-parity-contract.md) | 与 AIHOT 的跨产品对比预期：Source Pool / Feed Reading / Algorithm Soundness Parity |
+| [ux-contract.md](contracts/ux-contract.md) | AI Radar 对用户承诺的可观察行为：Personas、Surfaces、Journeys、Features、Quality Bar |
+| [aihot-parity-contract.md](contracts/aihot-parity-contract.md) | 与 AIHOT 的跨产品对比预期：Source Pool / Feed Reading / Algorithm Soundness Parity |
 
 ### docs/issues/ [Agent]
 
@@ -46,6 +46,7 @@
 
 | 文件 | 说明 |
 |---|---|
+| [README.md](issues/README.md) | Domain 索引 |
 | [ux-issues.md](issues/ux-issues.md) | 端到端测试发现的产品 UX 问题（contract 在实际产品中被 broken） |
 | [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时）；append-only queue |
 
@@ -91,7 +92,7 @@
 
 | 类型 | 路径 | 创建时机 |
 |---|---|---|
-| contracts/ux-test-patterns.md | `docs/contract/ux-test-patterns.md` | 测试中发现值得长期留意的 pattern 时 |
+| contracts/ux-test-patterns.md | `docs/contracts/ux-test-patterns.md` | 测试中发现值得长期留意的 pattern 时 |
 | references/ | `docs/references/` | 主文档需要引用操作层面的详细定义时 |
 
 ---
@@ -103,8 +104,8 @@
 | 场景 | 读什么 |
 |---|---|
 | 新 session 第一次接触项目 | 本文件（索引）-> architecture.md（系统结构）-> 按需深入 |
-| 设计新功能或架构变更前 | architecture.md（模块定位）+ prd/（需求边界）+ contract/（行为承诺） |
-| 执行产品测试 / UX 测试前 | contract/ux-contract.md + contract/aihot-parity-contract.md |
+| 设计新功能或架构变更前 | architecture.md（模块定位）+ prd/（需求边界）+ contracts/（行为承诺） |
+| 执行产品测试 / UX 测试前 | contracts/ux-contract.md + contracts/aihot-parity-contract.md |
 | 规划"接下来做什么" | issues/（待解决问题） |
 | 遇到报错或"感觉有坑"时 | experiences/（按文件名选 topic） |
 | 做新的架构或 API 设计决策前 | adr/README.md（索引）-> 相关 ADR |
@@ -113,7 +114,7 @@
 
 | 场景 | 写什么 |
 |---|---|
-| 产品的用户可感知行为变化 | contract/ux-contract.md + CHANGELOG.md |
+| 产品的用户可感知行为变化 | contracts/ux-contract.md + CHANGELOG.md |
 | 做了非平凡的设计决策 | adr/（新建 ADR 文件 + 更新 README.md 索引） |
 | 花了非平凡时间解决一个问题 | experiences/（按 topic 写入对应文件 + 更新 README.md 索引） |
 | 发现值得跟踪但不属于当前任务的问题 | issues/ 对应 domain 文件 |

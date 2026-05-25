@@ -86,7 +86,8 @@ web/static/             # 前端静态文件（根目录 web/，非 src 内）
 ├── about.html          #   关于页
 ├── item.html           #   单条详情页
 ├── app.js              #   前端 JS
-└── style.css           #   样式
+├── style.css           #   样式
+└── daily-overrides-20260514c.css  #  日报页样式覆盖
 ```
 
 ## Layers
@@ -216,6 +217,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是纯静态 H
 | `/all` | `all.html` | 全量时间线 |
 | `/daily` | `daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
 | `/about` | `about.html` | 关于页 |
+| `/item.html` | `item.html` | 单条详情页（StaticFiles 隐式提供） |
 
 ### 分类系统
 

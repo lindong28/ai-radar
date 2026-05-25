@@ -3,7 +3,6 @@
 > 状态：v0.1 草案 (2026-05-07)
 > 维护者：lindong
 > 前置文档：[VISION.md](VISION.md) — 范围只读，§4 BINDING 原则在本 PRD 中仍然有效
-> 上游 handoff：[../../plans/ai-radar-v0-mvp-handoff-20260507.md](../../plans/ai-radar-v0-mvp-handoff-20260507.md)
 
 ---
 
