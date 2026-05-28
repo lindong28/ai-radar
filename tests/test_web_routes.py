@@ -211,6 +211,15 @@ def test_timeline_total_uses_limit_plus_one_estimate(tmp_path: Path) -> None:
     assert empty_page["total"] == 0
 
 
+def test_timeline_exposes_default_score_for_unscored_items(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    items = client.get("/api/v1/timeline", params={"limit": 3}).json()["data"]["items"]
+
+    unscored = next(item for item in items if item["id"] == "item-claude")
+    assert unscored["weighted_score"] == 0
+
+
 def test_static_clean_routes_and_curated_redirect(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 

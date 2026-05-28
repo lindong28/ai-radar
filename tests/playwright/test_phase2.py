@@ -83,7 +83,7 @@ def test_v07_v08_v09_v11_cards_links_and_score_gating(
         if path == "/":
             assert page.locator(".timeline-card .score-pill").count() == cards.count()
         else:
-            assert page.locator(".timeline-card .score-pill").count() >= 1
+            assert page.locator(".timeline-card .score-pill").count() == cards.count()
             assert page.locator(".timeline-card .hot-pill", has_text="精选").count() >= 1
 
         for index in range(10):
@@ -155,7 +155,7 @@ def test_v10d_all_page_preserves_aihot_media_score_and_selected_reason(page: Pag
 
     assert page.locator(".timeline-card").count() >= 30
     assert page.locator(".timeline-card .article-media-img").count() >= 1
-    assert page.locator(".timeline-card .score-pill").count() >= 1
+    assert page.locator(".timeline-card .score-pill").count() == page.locator(".timeline-card").count()
     assert page.locator(".timeline-card .hot-pill", has_text="精选").count() >= 1
     selected_reason_count = page.locator(".timeline-card").evaluate_all(
         """cards => cards.filter(card =>

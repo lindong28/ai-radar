@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-05-28
+
+- Fixed `/all` timeline entries without scoring data so every visible card renders a numeric score pill.
+- Fixed the About page repository link to point at `lindong28/ai-radar`.
+
 ## 2026-05-24
 
 - Improved `/api/v1/timeline` and `/all` load performance by adding SQLite indexes, preloading enrichment data in the timeline query, and replacing the exact count query with a pagination-safe estimate.

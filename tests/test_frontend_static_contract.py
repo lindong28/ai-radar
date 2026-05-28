@@ -48,7 +48,8 @@ def test_about_page_declares_contact_disabled_source_notice_and_scoring_legend()
 
     assert "来源（信源池）" in html
     assert "停用源仅停止继续抓取" in html
-    assert "https://github.com/AIPlanetLive/ai-radar" in html
+    assert "https://github.com/lindong28/ai-radar" in html
+    assert "https://github.com/AIPlanetLive/ai-radar" not in html
     assert "https://x.com/lindong28" in html
     assert "评分说明" in html
     for token in ["relevance", "density", "recency", "authority", "engineering", "权重", "6.5"]:

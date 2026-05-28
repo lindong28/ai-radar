@@ -164,6 +164,7 @@ def timeline(
                 if visible_reason:
                     item["reasoning"] = visible_reason
                     item["why_recommend"] = visible_reason
+            item.setdefault("weighted_score", 0.0)
             if matches_category(item, normalized_category):
                 items.append(item)
         page_rows = rows[:limit]
