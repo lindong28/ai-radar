@@ -153,6 +153,9 @@ def _curate(args: argparse.Namespace) -> int:
             freshness_quota=args.freshness_quota,
             freshness_floor=args.freshness_floor,
         )
+        from .curator.precompute import precompute_curated_summaries
+
+        precompute_curated_summaries(conn, run.id)
     print(f"curate run_id={run.id} selected={len(run.output_curated_ids)} threshold={run.threshold}")
     return 0
 
