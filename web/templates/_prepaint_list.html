@@ -1,0 +1,46 @@
+      {% set ns = namespace(last_date="") %}
+      {% for item in prepaint_items %}
+        {% if item.date_label and item.date_label != ns.last_date %}
+          <div class="timeline-date date-group"><time datetime="{{ item.date_bucket }}" title="{{ item.date_bucket }}">{{ item.date_label }}</time></div>
+          {% set ns.last_date = item.date_label %}
+        {% endif %}
+        <div class="timeline-entry">
+          <div class="timeline-time"><time datetime="{{ item.iso_datetime }}" title="{{ item.date_bucket }}">{{ item.time_label }}</time><span></span></div>
+          <article class="item-row timeline-card{% if item.is_x %} x-card{% endif %}{% if item.clamp_summary %} clamped-card{% endif %}" data-source-id="{{ item.source_id }}" data-published-date="{{ item.date_bucket }}" data-published-at="{{ item.iso_datetime }}">
+            <div class="card-topline">
+              <div class="source-line">
+                <a class="source-link" href="{{ item.source_homepage_url }}" target="_blank" rel="noopener noreferrer">
+                  <span class="source-icon">
+                    {% if item.source_icon_url %}
+                      <img class="source-avatar" src="{{ item.source_icon_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+                    {% endif %}
+                    <span class="source-initial">{{ item.source_initial }}</span>
+                  </span>
+                  <span class="source-name">{{ item.source_name }}</span>
+                </a>
+              </div>
+              {% if item.score is not none %}
+                <div class="score-stack {{ item.score_tier }}" title="LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明">
+                  {% if item.selected %}<span class="hot-pill">精选</span>{% endif %}
+                  <span class="score-pill {{ item.score_tier }}" title="LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明">{{ item.score }}</span>
+                </div>
+              {% endif %}
+            </div>
+            {% if item.title %}
+              <a class="item-title" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+            {% endif %}
+            {% if item.summary %}
+              <p class="summary">{{ item.summary }}</p>
+            {% endif %}
+            <div class="tags">
+              {% for tag in item.tags %}
+                <span class="tag">{{ tag }}</span>
+              {% endfor %}
+            </div>
+            {% if item.reasoning %}
+              <hr class="timeline-divider">
+              <div class="reason">推荐理由：{{ item.reasoning }}</div>
+            {% endif %}
+          </article>
+        </div>
+      {% endfor %}

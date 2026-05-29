@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import sqlite3
 import subprocess
@@ -45,6 +46,7 @@ def base_url() -> Generator[str, None, None]:
     process = subprocess.Popen(
         [str(AI_RADAR_ROOT / "run.sh"), "serve", "--port", str(port)],
         cwd=AI_RADAR_ROOT,
+        env={**os.environ, "TZ": "Asia/Shanghai"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -88,7 +90,14 @@ def historical_date() -> str:
             """
             SELECT date(datetime(i.published_at, '+08:00')) AS day, COUNT(*) AS count
             FROM curated_items c
+            JOIN curation_runs r ON r.id = c.run_id
             JOIN items i ON i.id = c.item_id
+            WHERE r.id = (
+                SELECT id
+                FROM curation_runs
+                ORDER BY created_at DESC
+                LIMIT 1
+            )
             GROUP BY day
             HAVING count > 0
             ORDER BY day DESC

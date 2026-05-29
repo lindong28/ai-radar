@@ -7,6 +7,14 @@
 
 ---
 
+## 2026-05-28 19:20 [expansion] ux-contract 未明确 `/` 和 `/all` 首屏应 SSR 预载且不显示 loading spinner
+
+- Discovered: SSR preload plan production verification for `https://aiplanet.live/` after comparing the existing CSR loading behavior with AIHOT-style inline/preloaded content.
+- Description: 当前实现已让 `/`、`/all` 和三个常见 deep link 在生产环境首屏直出 `.item-row`，Playwright gate 结果为 spinner 0、initial API 0，FCP median 均低于 1.5s。但 ux-contract 还没有把"主 feed 首屏应在 HTML/preload 阶段可见，不依赖初始 API fetch，也不出现可感知 loading spinner"作为行为契约写死。
+- Recommendation: 在对应 Feed Reading / Initial Load contract 中补充：`/` 与 `/all` 的首屏内容必须通过 SSR preload 或等价机制在 HTML 到达后即可渲染；生产验证以 spinner 出现次数、首个 `.item-row` 时间、initial `/api/v1/*` 请求数为指标。
+
+---
+
 ## 2026-05-18 22:30 [drift] aihot-parity-contract §SourceParity-AboutSurfaceReflection 假设 AIHOT 通过 /about 暴露 source pool，实际 AIHOT /about 是个人介绍页 + 公众号 QR
 
 - Discovered: 2026-05-18-r1 / s3-parity-auditor / Layer 1 跑测时对照 AIHOT `/about`

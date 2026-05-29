@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Radar · 全部 AI 动态</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="modulepreload" href="/app.js?v=20260528-ssr1">
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" rel="stylesheet"></noscript>
+    <link rel="stylesheet" href="/style.css?v=20260515-ux5">
+  </head>
+  <body>
+    <aside id="app-sidebar" class="sidebar" aria-label="主导航">
+      <button type="button" class="sidebar-close" aria-label="关闭导航">×</button>
+      <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
+      <div class="divider"></div>
+      <nav class="side-nav">
+        <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
+        <a class="side-link side-link-active" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
+        <a class="side-link" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
+        <a class="side-link" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span></a>
+      </nav>
+    </aside>
+    <main class="app-main">
+      <div class="app-mobile-bar">
+        <button type="button" class="app-hamburger" aria-label="打开导航" aria-expanded="false" aria-controls="app-sidebar">≡</button>
+        <a class="app-mobile-brand" aria-label="AI Radar 首页" href="/"><span class="app-mobile-brand-text">AI RADAR</span></a>
+        <span class="app-mobile-bar-spacer" aria-hidden="true"></span>
+      </div>
+      <section class="card page-header">
+        <div>
+          <h1>全部 AI 动态</h1>
+          <p class="page-subtitle">按时间倒序的全量信息流</p>
+        </div>
+        <div class="feed-toolbar-row">
+          <div class="feed-segments">
+            <div class="seg-list" data-channel-filter aria-label="信息来源">
+              <a class="seg-item seg-item-active" href="/all?page=1" data-channel="all" aria-pressed="true">全部</a>
+              <a class="seg-item" href="/all?channel=firstParty&page=1" data-channel="firstParty" aria-pressed="false">一手信源</a>
+              <a class="seg-item" href="/all?channel=news&page=1" data-channel="news" aria-pressed="false">资讯</a>
+              <a class="seg-item" href="/all?channel=x&page=1" data-channel="x" aria-pressed="false">推文</a>
+            </div>
+            <div class="seg-list" data-category-filter aria-label="内容分类">
+              <a class="seg-item seg-item-active" href="/all?page=1" data-category="all" aria-pressed="true">全部</a>
+              <a class="seg-item" href="/all?category=ai-models&page=1" data-category="model" aria-pressed="false">模型</a>
+              <a class="seg-item" href="/all?category=ai-products&page=1" data-category="product" aria-pressed="false">产品</a>
+              <a class="seg-item" href="/all?category=industry&page=1" data-category="industry" aria-pressed="false">行业</a>
+              <a class="seg-item" href="/all?category=paper&page=1" data-category="paper" aria-pressed="false">论文</a>
+              <a class="seg-item" href="/all?category=tip&page=1" data-category="practice" aria-pressed="false">技巧</a>
+            </div>
+          </div>
+          <form class="feed-filter" action="/all" method="get">
+            <input id="category-param" type="hidden" name="category" value="">
+            <input id="channel-param" type="hidden" name="channel" value="">
+            <input id="search" type="search" name="q" placeholder="搜索标题/摘要…">
+            <button class="filter-submit" type="submit">搜索</button>
+          </form>
+        </div>
+      </section>
+      <section id="list" class="timeline" aria-live="polite">
+{% include "_prepaint_list.html" %}
+      </section>
+      <nav id="pagination" class="pagination" aria-label="分页"></nav>
+    </main>
+    <script id="__PRELOAD__" type="application/json">
+      {{ preload | tojson | safe }}
+    </script>
+    <script type="module" async>
+      import { initTimeline } from "/app.js?v=20260528-ssr1";
+      initTimeline();
+    </script>
+  </body>
+</html>

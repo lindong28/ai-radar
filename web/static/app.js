@@ -7,6 +7,16 @@ async function api(path) {
   return payload.data;
 }
 
+function readPreload() {
+  const el = document.querySelector("#__PRELOAD__");
+  if (!el) return null;
+  try {
+    return JSON.parse(el.textContent || "null");
+  } catch {
+    return null;
+  }
+}
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -650,7 +660,13 @@ export async function initTimeline() {
     load({ page: pageFromUrl(), updateUrl: false });
   });
   rememberListScroll(list);
-  await load({ page: currentPage, updateUrl: false });
+  const preload = readPreload();
+  if (preload && Array.isArray(preload.items)) {
+    currentPage = Number(preload.page || currentPage);
+    renderView(preload.items, preload);
+  } else {
+    await load({ page: currentPage, updateUrl: false });
+  }
   restoreListScroll();
 }
 
@@ -705,7 +721,13 @@ export async function initCurated() {
     runSearch();
   });
   rememberListScroll(list);
-  await load(search.value.trim());
+  const preload = readPreload();
+  if (preload && Array.isArray(preload.items)) {
+    currentItems = preload.items;
+    renderView(search.value.trim());
+  } else {
+    await load(search.value.trim());
+  }
   restoreListScroll();
 }
 

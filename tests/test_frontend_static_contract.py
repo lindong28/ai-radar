@@ -143,6 +143,19 @@ def test_app_js_supports_all_page_channel_pagination_and_full_card_affordances()
     assert "compact: true" not in js
 
 
+def test_app_js_uses_preload_for_initial_curated_and_timeline_render() -> None:
+    js = _read("app.js")
+
+    assert "function readPreload()" in js
+    assert 'document.querySelector("#__PRELOAD__")' in js
+    assert "const preload = readPreload();" in js
+    assert "currentItems = preload.items;" in js
+    assert "renderView(search.value.trim());" in js
+    assert "renderView(preload.items, preload);" in js
+    assert "await load(search.value.trim());" in js
+    assert "await load({ page: currentPage, updateUrl: false });" in js
+
+
 def test_feed_css_declares_timeline_loading_state() -> None:
     css = _read("style.css")
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,12 @@ from airadar.db import migrate
 from airadar.enrich.schema import EnrichOutput
 from airadar.web.app import create_app
 from airadar.web.routes import common as route_common
+
+
+def _extract_preload(html: str) -> dict[str, object]:
+    match = re.search(r'<script id="__PRELOAD__" type="application/json">\s*(.*?)\s*</script>', html, re.S)
+    assert match, "SSR preload script not found"
+    return json.loads(match.group(1))
 
 
 def _seed_db(tmp_path: Path) -> Path:
@@ -151,6 +158,15 @@ def _insert_enrichment(conn: sqlite3.Connection, item_id: str, title: str, tags:
     )
 
 
+def _seed_db_with_model_enrichment(tmp_path: Path) -> Path:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_enrichment(conn, "item-openai", "OpenAI API 模型发布", ["模型发布", "OpenAI"])
+    conn.commit()
+    conn.close()
+    return db_path
+
+
 def test_perf_migration_adds_timeline_indexes(tmp_path: Path) -> None:
     db_path = _seed_db(tmp_path)
     conn = sqlite3.connect(db_path)
@@ -231,6 +247,62 @@ def test_static_clean_routes_and_curated_redirect(tmp_path: Path) -> None:
     redirect = client.get("/curated.html", follow_redirects=False)
     assert redirect.status_code == 308
     assert redirect.headers["location"] == "/"
+
+
+def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    home = client.get("/")
+    all_page = client.get("/all")
+    curated_api = client.get("/api/v1/curated")
+    timeline_api = client.get("/api/v1/timeline", params={"limit": 40})
+
+    assert home.status_code == 200
+    assert all_page.status_code == 200
+    home_preload = _extract_preload(home.text)
+    all_preload = _extract_preload(all_page.text)
+    assert len(home_preload["items"]) >= 1
+    assert len(all_preload["items"]) >= 1
+    assert home_preload["count"] == len(home_preload["items"])
+    assert all_preload["limit"] == 40
+    assert [item["id"] for item in home_preload["items"]] == [
+        item["id"] for item in curated_api.json()["data"]["items"]
+    ]
+    assert [item["id"] for item in all_preload["items"]] == [
+        item["id"] for item in timeline_api.json()["data"]["items"]
+    ]
+    for html in [home.text, all_page.text]:
+        article_pos = html.index('<article class="item-row timeline-card')
+        preload_pos = html.index('id="__PRELOAD__"')
+        module_preload_pos = html.index('rel="modulepreload"')
+        module_pos = html.index('type="module"')
+        font_preload_pos = html.index('rel="preload" as="style"')
+        assert module_preload_pos < preload_pos
+        assert article_pos < preload_pos
+        assert font_preload_pos < preload_pos
+        assert preload_pos < module_pos
+
+
+@pytest.mark.parametrize(
+    ("page_url", "api_url"),
+    [
+        ("/?q=OpenAI", "/api/v1/curated?q=OpenAI"),
+        ("/?category=ai-models", "/api/v1/curated?category=ai-models"),
+        ("/all?channel=news", "/api/v1/timeline?channel=news"),
+    ],
+)
+def test_deep_links_render_matching_ssr_preload(tmp_path: Path, page_url: str, api_url: str) -> None:
+    client = TestClient(create_app(_seed_db_with_model_enrichment(tmp_path)))
+
+    response = client.get(page_url)
+    api_response = client.get(api_url)
+
+    assert response.status_code == 200
+    assert api_response.status_code == 200
+    preload = _extract_preload(response.text)
+    api_data = api_response.json()["data"]
+    assert len(preload["items"]) >= 1
+    assert [item["id"] for item in preload["items"]] == [item["id"] for item in api_data["items"]]
 
 
 def test_fts_backfill_keeps_one_row_per_item(tmp_path: Path) -> None:

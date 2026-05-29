@@ -81,6 +81,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260528-ssr-preload/](plans/20260528-ssr-preload/) | SSR preload 首屏加载优化（/ 和 /all 无可感知 spinner） |
 | [20260524-timeline-perf/](plans/20260524-timeline-perf/) | Timeline API 性能优化（/all TTFB 14s -> <1s） |
 | [20260515-pipeline-scheduler/](plans/20260515-pipeline-scheduler/) | 自动化增量数据抓取流水线（pipeline.sh + cron 15min 调度） |
 

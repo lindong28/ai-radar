@@ -3,8 +3,10 @@
 tunnel: <YOUR_TUNNEL_UUID>
 credentials-file: <YOUR_HOME>/.cloudflared/<YOUR_TUNNEL_UUID>.json
 protocol: quic
+region: us
+edge-ip-version: "4"
 
 ingress:
   - hostname: <YOUR_DOMAIN>
-    service: http://localhost:8000
+    service: http://127.0.0.1:8000
   - service: http_status:404

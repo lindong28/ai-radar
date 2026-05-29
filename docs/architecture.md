@@ -6,7 +6,7 @@
 
 AI Radar 是一个 AI 信息流聚合站点。从 RSS 信源抓取内容，经 LLM 多阶段处理（筛选、评分、翻译富化、精选），以时间线和日报形式通过 Web 展示。
 
-技术栈：Python 3.12+ / FastAPI / SQLite (WAL) / Jinja2 静态页面 / 多 LLM Provider（DeepSeek、GLM、OpenAI）。包管理使用 uv。
+技术栈：Python 3.12+ / FastAPI / SQLite (WAL) / Jinja2 页面模板 / 多 LLM Provider（DeepSeek、GLM、OpenAI）。包管理使用 uv。
 
 ## Modules
 
@@ -80,14 +80,18 @@ src/airadar/
 └── admin/              # 管理命令（预留）
 
 web/static/             # 前端静态文件（根目录 web/，非 src 内）
-├── index.html          #   精选首页
-├── all.html            #   全量时间线
+├── index.html          #   精选首页旧静态文件（deprecated，保留作回滚）
+├── all.html            #   全量时间线旧静态文件（deprecated，保留作回滚）
 ├── daily.html          #   日报页
 ├── about.html          #   关于页
 ├── item.html           #   单条详情页
 ├── app.js              #   前端 JS
 ├── style.css           #   样式
 └── daily-overrides-20260514c.css  #  日报页样式覆盖
+
+web/templates/          # Jinja2 SSR 页面模板
+├── index.html          #   精选首页 SSR + preload
+└── all.html            #   全量时间线 SSR + preload
 ```
 
 ## Layers
@@ -195,7 +199,7 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 
 ## Web Layer
 
-FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是纯静态 HTML + JS，通过 API 获取数据。
+FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS：`/` 和 `/all` 使用 Jinja2 SSR 预载首屏数据，后续交互继续通过 API 获取数据；`/daily`、`/about` 和 `/item.html` 仍由静态文件提供。
 
 ### API 端点
 
@@ -211,13 +215,31 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是纯静态 H
 
 ### 页面路由
 
-| URL | 静态文件 | 说明 |
+| URL | 渲染方式 | 说明 |
 |---|---|---|
-| `/` | `index.html` | 精选首页 |
-| `/all` | `all.html` | 全量时间线 |
-| `/daily` | `daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
-| `/about` | `about.html` | 关于页 |
-| `/item.html` | `item.html` | 单条详情页（StaticFiles 隐式提供） |
+| `/` | `web/templates/index.html` | 精选首页，Jinja2 SSR，内联 `/api/v1/curated` 形状的 preload JSON |
+| `/all` | `web/templates/all.html` | 全量时间线，Jinja2 SSR，内联 `/api/v1/timeline` 形状的 preload JSON |
+| `/daily` | `web/static/daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
+| `/about` | `web/static/about.html` | 关于页 |
+| `/item.html` | `web/static/item.html` | 单条详情页（StaticFiles 隐式提供） |
+
+### SSR preload contract
+
+新增首屏数据页面时，模板需要在页面 module script 前放置 JSON preload slot：
+
+```html
+<link rel="modulepreload" href="/app.js?v=...">
+<section id="list" class="timeline" aria-live="polite">
+  {% include "_prepaint_list.html" %}
+</section>
+<script id="__PRELOAD__" type="application/json">
+  {{ preload | tojson | safe }}
+</script>
+```
+
+`_prepaint_list.html` 服务端直出前 12 条首屏 `.item-row`，让浏览器解析到 feed 区域时立即有内容；`web/static/app.js` 的页面初始化函数随后调用 `readPreload()` 做权威渲染和交互绑定。preload 存在且 `items` 为数组时不显示 `正在加载` spinner；无 preload 时保留原 CSR fetch fallback，保证 `web/static/{index,all}.html` 仍可作为回滚文件使用。
+
+SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"` 加载，避免远端字体 CSS 抵消 preload 收益。`/`、`/all` 的动态路由定义必须在 `app.mount("/", StaticFiles(...))` 之前。
 
 ### 分类系统
 
@@ -270,7 +292,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | openai | LLM API 客户端（OpenAI SDK 兼容接口） |
 | trafilatura | HTML 正文提取 |
 | json-repair | 容错 JSON 解析（LLM 输出修复） |
-| Jinja2 | 模板渲染（eval 报告） |
+| Jinja2 | 页面 SSR preload 与 eval 报告模板渲染 |
 | python-dotenv | 环境变量加载（.env 文件） |
 
 ## Key Files for Common Tasks
@@ -285,4 +307,4 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | 添加新 API 端点 | `web/routes/` 下新建路由文件 + `web/app.py` 注册 |
 | 修改数据库 schema | `migrations/` 下新建 SQL 文件 |
 | 修改标签词表 | `topics.py`（CONTROLLED_VOCABULARY） |
-| 前端页面修改 | `web/static/`（根目录 web/ 下，非 src 内） |
+| 前端页面修改 | `web/templates/`（`/`、`/all` SSR 首屏）+ `web/static/`（JS/CSS 与静态页面） |

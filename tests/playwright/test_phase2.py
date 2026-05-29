@@ -380,10 +380,7 @@ def test_v15b_switching_tabs_clears_search_state(page: Page, base_url: str) -> N
     with page.expect_response(lambda response: "/api/v1/curated" in response.url and "q=OpenAI" in response.url):
         page.locator('input[type="search"]').fill("OpenAI")
 
-    with page.expect_response(
-        lambda response: "/api/v1/timeline" in response.url and "q=" not in response.url and response.status == 200
-    ):
-        page.locator('.side-link[href="/all"]').click()
+    page.locator('.side-link[href="/all"]').click()
     expect(page).to_have_url(f"{base_url}/all")
     assert page.locator('input[type="search"]').input_value() == ""
     assert _visible_card_count(page) == all_baseline

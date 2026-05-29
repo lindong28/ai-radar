@@ -3,8 +3,27 @@ from __future__ import annotations
 import json
 import re
 import time
+from urllib.parse import urlparse
 
 from playwright.sync_api import Page, expect
+
+
+PRELOAD_RE = re.compile(
+    r'\s*<script id="__PRELOAD__" type="application/json">\s*.*?\s*</script>',
+    re.S,
+)
+
+
+def _strip_ssr_preload(page: Page) -> None:
+    def strip_document_preload(route):
+        parsed = urlparse(route.request.url)
+        if route.request.resource_type == "document" and parsed.path in {"/", "/all"}:
+            response = route.fetch()
+            route.fulfill(response=response, body=PRELOAD_RE.sub("", response.text()))
+            return
+        route.fallback()
+
+    page.route("**/*", strip_document_preload)
 
 
 def _timeline_payload_item(item_id: str, title: str, published_at: str) -> dict[str, object]:
@@ -45,6 +64,7 @@ def _curated_payload(items: list[dict[str, object]]) -> dict[str, object]:
 
 
 def test_feed_pages_show_loading_state_while_fetching(page: Page, base_url: str) -> None:
+    _strip_ssr_preload(page)
     for path, endpoint in [("/", "/api/v1/curated"), ("/all", "/api/v1/timeline")]:
         route_pattern = f"**{endpoint}*"
 
@@ -63,6 +83,7 @@ def test_feed_pages_show_loading_state_while_fetching(page: Page, base_url: str)
 
 
 def test_feed_pages_show_error_state_when_fetch_fails(page: Page, base_url: str) -> None:
+    _strip_ssr_preload(page)
     for path, endpoint in [("/", "/api/v1/curated"), ("/all", "/api/v1/timeline")]:
         route_pattern = f"**{endpoint}*"
 
@@ -127,6 +148,8 @@ def test_v20_feed_pages_have_url_backed_search_forms(page: Page, base_url: str) 
 
 
 def test_all_page_out_of_range_page_clamps_to_last_result_page(page: Page, base_url: str) -> None:
+    _strip_ssr_preload(page)
+
     def timeline_response(route):
         if "page=9999" in route.request.url:
             payload = {"success": True, "data": {"items": [], "page": 9999, "limit": 40, "total": 41}}
@@ -163,6 +186,7 @@ def test_invalid_category_deeplinks_are_normalized(page: Page, base_url: str) ->
 
 
 def test_home_product_and_tip_categories_use_semantic_filters(page: Page, base_url: str) -> None:
+    _strip_ssr_preload(page)
     items = [
         {
             **_timeline_payload_item("model-only", "纯模型多模态条目", "2026-05-15T10:00:00Z"),
@@ -209,11 +233,13 @@ def test_home_product_and_tip_categories_use_semantic_filters(page: Page, base_u
     expect(page.locator(".timeline-card .item-title")).to_have_text("真实产品更新")
 
     page.goto(f"{base_url}/?category=tip", wait_until="domcontentloaded")
+    expect(page.locator(".timeline-card").first).to_be_visible()
     titles = page.locator(".timeline-card .item-title").all_inner_texts()
     assert titles == ["Transformer 实践课程", "部署工程实践"]
 
 
 def test_home_search_request_keeps_active_category(page: Page, base_url: str) -> None:
+    _strip_ssr_preload(page)
     seen_urls: list[str] = []
     items = [
         {
@@ -239,6 +265,7 @@ def test_home_search_request_keeps_active_category(page: Page, base_url: str) ->
 
 
 def test_home_category_sorts_by_visible_time_and_excludes_inference_only_items(page: Page, base_url: str) -> None:
+    _strip_ssr_preload(page)
     payload = _curated_payload(
         [
                 {
