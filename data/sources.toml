@@ -359,6 +359,26 @@ homepage_url = "https://news.ycombinator.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=news.ycombinator.com&sz=64"
 
 [[source]]
+slug = "wx_guizang"
+name = "歸藏的AI工具箱"
+url = "http://localhost:4000/feeds/MP_WXS_3540975510.rss"
+tier = "T2"
+enabled = true
+kind = "wechat"
+homepage_url = "https://mp.weixin.qq.com/"
+icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
+
+[[source]]
+slug = "wx_crossing"
+name = "十字路口Crossing"
+url = "http://localhost:4000/feeds/MP_WXS_3010319264.rss"
+tier = "T2"
+enabled = true
+kind = "wechat"
+homepage_url = "https://mp.weixin.qq.com/"
+icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
+
+[[source]]
 slug = "lobsters_ai"
 name = "lobste.rs AI tag"
 url = "https://lobste.rs/t/ai.rss"

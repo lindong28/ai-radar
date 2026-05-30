@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+
 from airadar.curator.dedup import deduplicate_candidates
 from airadar.curator.score import ScoredCandidate, weighted_score
 from airadar.curator.select import curate

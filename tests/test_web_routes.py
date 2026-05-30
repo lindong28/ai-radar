@@ -213,6 +213,42 @@ def test_item_summary_uses_preloaded_enrichment_without_lookup(tmp_path: Path, m
     assert item["related_discussions"] == []
 
 
+def test_item_summary_suppresses_wechat_preview_and_full_text(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE sources SET kind='wechat' WHERE id='openai_blog'")
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT i.*, s.name AS source_name, s.tier,
+               s.kind AS source_kind,
+               s.homepage_url AS source_homepage_url,
+               s.icon_url AS source_icon_url
+        FROM items i
+        JOIN sources s ON s.id=i.source_id
+        WHERE i.id='item-openai'
+        """
+    ).fetchone()
+    enrichment = EnrichOutput(
+        title_zh="OpenAI API 产品更新",
+        summary_zh="这是一段用于验证微信公众号摘要仍然可以展示的中文摘要。",
+        why_recommend="这是一段用于验证微信公众号推荐理由仍然可以展示的中文推荐理由。",
+        tags=["产品更新", "MCP/工具"],
+    )
+
+    enriched = route_common.item_summary(row, conn=conn, include_related=False, enrichment=enrichment)
+    bare = route_common.item_summary(row, conn=conn, include_related=False, enrichment_loaded=True)
+
+    assert enriched["source_kind"] == "wechat"
+    assert enriched["content_preview"] is None
+    assert enriched["summary_zh"] == enrichment.summary_zh
+    assert "content_text" not in enriched
+    assert bare["content_preview"] is None
+    assert bare["summary_zh"] is None
+    assert "content_text" not in bare
+
+
 def test_timeline_total_uses_limit_plus_one_estimate(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 

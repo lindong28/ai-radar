@@ -25,6 +25,7 @@ src/airadar/
 ├── fetcher/            # 内容抓取
 │   ├── runner.py       #   fetch_all 主流程
 │   ├── rss.py          #   RSS/Atom 解析（feedparser）
+│   ├── wechat.py       #   微信公众号原文抓取（Playwright + BeautifulSoup）
 │   ├── content.py      #   HTML -> 纯文本（trafilatura）
 │   ├── http_client.py  #   HTTP 请求 + 条件请求（ETag/Last-Modified）
 │   ├── dedup.py        #   content_hash 去重 + upsert
@@ -161,6 +162,8 @@ data/sources.toml
    └──────────┘                  └─────────────────────┘
 ```
 
+`kind="wechat"` 源的 URL 指向本地 WeWe RSS per-feed URL。fetch 阶段先用 WeWe RSS 发现新文章链接，再只对尚未入库的 `mp.weixin.qq.com/s/...` 原文用 Playwright 抓全文；抓取失败时降级保留 RSS 裸条目，后续 Web 层仍只公开中文摘要与原文回链。
+
 每个阶段只处理尚未完成对应评估的新条目。`pipeline.sh` 按顺序调度全部阶段。
 
 ## Database
@@ -291,6 +294,9 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | httpx | HTTP 客户端（信源抓取） |
 | openai | LLM API 客户端（OpenAI SDK 兼容接口） |
 | trafilatura | HTML 正文提取 |
+| beautifulsoup4 | 微信公众号 HTML 解析 |
+| Playwright + Chromium | 微信公众号原文抓取浏览器运行时 |
+| WeWe RSS | 微信公众号发现层，将已订阅公众号暴露为 RSS/Atom |
 | json-repair | 容错 JSON 解析（LLM 输出修复） |
 | Jinja2 | 页面 SSR preload 与 eval 报告模板渲染 |
 | python-dotenv | 环境变量加载（.env 文件） |
@@ -299,7 +305,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 
 | 任务 | 关键文件 |
 |---|---|
-| 添加新信源 | `data/sources.toml` |
+| 添加新信源 | `data/sources.toml`；wechat 源需先在 WeWe dashboard 订阅公众号，再把 per-feed URL 写入 sources |
 | 修改 LLM prompt | `prefilter/prompts.py`, `scorer/prompts.py`, `enrich/prompts.py` |
 | 添加新 LLM provider | `provider/base.py`（Protocol）+ 新实现文件 + 对应 runner 的 `_provider_from_env` |
 | 修改评分权重 | `curator/weights.py`（DEFAULT_WEIGHTS） |

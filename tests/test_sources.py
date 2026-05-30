@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+
 from airadar.db import migrate
 from airadar.sources.loader import SourceConfig, load_sources
 from airadar.sources.sync import load_enabled_sources_from_db, sync_to_db

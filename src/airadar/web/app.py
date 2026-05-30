@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -185,7 +186,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/", include_in_schema=False)
     def index_page(request: Request, category: str | None = None, q: str | None = None) -> HTMLResponse:
         payload = curated.curated(request, category=category, q=q)
-        return templates.TemplateResponse(request, "index.html", _preload_context(payload["data"], timeline_page=False))
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            _preload_context(cast(dict[str, object], payload["data"]), timeline_page=False),
+        )
 
     @app.get("/all", include_in_schema=False)
     def all_page(
@@ -206,7 +211,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             category=category,
             q=q,
         )
-        return templates.TemplateResponse(request, "all.html", _preload_context(payload["data"], timeline_page=True))
+        return templates.TemplateResponse(
+            request,
+            "all.html",
+            _preload_context(cast(dict[str, object], payload["data"]), timeline_page=True),
+        )
 
 
     @app.get("/daily", include_in_schema=False)

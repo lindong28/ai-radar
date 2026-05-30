@@ -13,7 +13,10 @@ def item_detail(request: Request, item_id: str) -> dict[str, object]:
     with conn_from_request(request) as conn:
         row = conn.execute(
             """
-            SELECT i.*, s.name AS source_name, s.tier
+            SELECT i.*, s.name AS source_name, s.tier,
+                   s.kind AS source_kind,
+                   s.homepage_url AS source_homepage_url,
+                   s.icon_url AS source_icon_url
             FROM items i
             JOIN sources s ON s.id=i.source_id
             WHERE i.id=?
@@ -32,7 +35,6 @@ def item_detail(request: Request, item_id: str) -> dict[str, object]:
             (item_id,),
         ).fetchall()
         item = item_summary(row, conn=conn)
-        item["content_text"] = row["content_text"]
     evaluations = [
         {
             "id": evaluation["id"],

@@ -22,6 +22,22 @@
 |---|---|---|
 | [architecture.md](architecture.md) | Mutable snapshot | 系统模块结构、分层、数据流、数据库设计、Web 层、关键抽象 |
 
+### docs/operations/ [User]
+
+运维入口——系统在跑什么、怎么管理、怎么验证。
+
+| 文件 | 说明 |
+|---|---|
+| [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 |
+
+### docs/references/ [Developer]
+
+操作参考——主文档需要引用但不适合放入 README 的细节步骤。
+
+| 文件 | 说明 |
+|---|---|
+| [wechat-sources.md](references/wechat-sources.md) | 如何通过 WeWe RSS 添加微信公众号源 |
+
 ### docs/prd/ [Developer]
 
 产品需求定义。只读参考——不在日常开发中修改，变更走 ADR 或新版 PRD。
@@ -94,7 +110,6 @@
 | 类型 | 路径 | 创建时机 |
 |---|---|---|
 | contracts/ux-test-patterns.md | `docs/contracts/ux-test-patterns.md` | 测试中发现值得长期留意的 pattern 时 |
-| references/ | `docs/references/` | 主文档需要引用操作层面的详细定义时 |
 
 ---
 
@@ -110,6 +125,7 @@
 | 规划"接下来做什么" | issues/（待解决问题） |
 | 遇到报错或"感觉有坑"时 | experiences/（按文件名选 topic） |
 | 做新的架构或 API 设计决策前 | adr/README.md（索引）-> 相关 ADR |
+| 想知道"系统在跑什么 / 谁拉起的 / 怎么自启" | operations/services.md（服务清单总览） |
 
 ### 何时写 docs/
 
@@ -119,5 +135,6 @@
 | 做了非平凡的设计决策 | adr/（新建 ADR 文件 + 更新 README.md 索引） |
 | 花了非平凡时间解决一个问题 | experiences/（按 topic 写入对应文件 + 更新 README.md 索引） |
 | 发现值得跟踪但不属于当前任务的问题 | issues/ 对应 domain 文件 |
+| 新增/移除长期运行的服务，或自启机制变化 | operations/services.md（更新清单 + 验证步骤） |
 | 长任务完成后提升 task 产物 | 按提升路径分流到对应文档 |
 | docs/ 下新增、重命名或删除文档 | 本文件（更新索引） |

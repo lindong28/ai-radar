@@ -6,8 +6,9 @@ from pathlib import Path
 
 from airadar.db import migrate
 from airadar.fetcher.dedup import FetchedItem, content_hash, upsert_item
-from airadar.fetcher.runner import default_sources_path
+from airadar.fetcher.http_client import fetch_feed
 from airadar.fetcher.rss import parse_feed
+from airadar.fetcher.runner import default_sources_path
 from airadar.sources.loader import SourceConfig
 from airadar.sources.sync import sync_to_db
 
@@ -44,6 +45,69 @@ def test_parse_feed_extracts_entry_fields() -> None:
     assert entries[0].author == "Ada"
     assert entries[0].published_at == "2026-05-08T01:02:03Z"
     assert "LLM benchmark" in entries[0].content_text
+
+
+def test_fetch_feed_bypasses_proxy_for_loopback_urls(monkeypatch) -> None:  # noqa: ANN001
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        content = RSS_BYTES
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url: str, **kwargs: object) -> FakeResponse:
+        calls.append({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("airadar.fetcher.http_client.httpx.get", fake_get)
+    source = SourceConfig(
+        slug="local_wewe",
+        name="Local WeWe",
+        url="http://localhost:4000/feeds/MP_WXS_3540975510.rss",
+        tier="T2",
+        enabled=True,
+        meta={},
+        kind="wechat",
+    )
+
+    response = fetch_feed(source, sqlite3.connect(":memory:"))
+
+    assert response.status_code == 200
+    assert calls[0]["trust_env"] is False
+
+
+def test_fetch_feed_keeps_environment_proxy_for_external_urls(monkeypatch) -> None:  # noqa: ANN001
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        content = RSS_BYTES
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url: str, **kwargs: object) -> FakeResponse:
+        calls.append({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("airadar.fetcher.http_client.httpx.get", fake_get)
+    source = SourceConfig(
+        slug="external",
+        name="External",
+        url="https://example.com/feed.xml",
+        tier="T2",
+        enabled=True,
+        meta={},
+    )
+
+    response = fetch_feed(source, sqlite3.connect(":memory:"))
+
+    assert response.status_code == 200
+    assert calls[0]["trust_env"] is True
 
 
 def test_content_hash_normalizes_case_and_whitespace() -> None:

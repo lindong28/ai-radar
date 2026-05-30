@@ -127,8 +127,8 @@ def _evaluate_item(
             "recency": result.recency,
             "authority": result.authority,
             "engineering": result.engineering,
-            "reasoning": result.reasoning,
-            "topics": list(result.topics),
+            "reasoning": result.reasoning[:200],
+            "topics": list(result.topics)[:4],
             "raw": result.raw,
         }
     try:

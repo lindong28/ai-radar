@@ -411,8 +411,9 @@ def item_summary(
     enrichment: EnrichOutput | None = None,
     enrichment_loaded: bool = False,
 ) -> dict[str, Any]:
-    preview = content_preview(row, preview_query)
     row_keys = row.keys()
+    source_kind = row["source_kind"] if "source_kind" in row_keys else "feed"
+    preview = None if source_kind == "wechat" else content_preview(row, preview_query)
     enrichment = enrichment if enrichment is not None or enrichment_loaded else latest_enrichment(conn, row["id"])
     enriched_tags = (
         topic_tags(
@@ -430,7 +431,7 @@ def item_summary(
         "id": row["id"],
         "source_id": row["source_id"],
         "source_name": row["source_name"],
-        "source_kind": row["source_kind"] if "source_kind" in row_keys else "feed",
+        "source_kind": source_kind,
         "source_homepage_url": row["source_homepage_url"] if "source_homepage_url" in row_keys else None,
         "source_icon_url": row["source_icon_url"] if "source_icon_url" in row_keys else None,
         "tier": row["tier"],

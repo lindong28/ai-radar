@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 
@@ -18,6 +19,11 @@ class FeedResponse:
     not_modified: bool = False
 
 
+def _is_loopback_url(url: str) -> bool:
+    host = urlparse(url).hostname
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
 def fetch_feed(source: SourceConfig, conn: sqlite3.Connection, timeout: float = 30.0) -> FeedResponse:
     headers = {
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
@@ -30,7 +36,13 @@ def fetch_feed(source: SourceConfig, conn: sqlite3.Connection, timeout: float = 
     if last_modified:
         headers["If-Modified-Since"] = str(last_modified)
 
-    response = httpx.get(source.url, timeout=timeout, follow_redirects=True, headers=headers)
+    response = httpx.get(
+        source.url,
+        timeout=timeout,
+        follow_redirects=True,
+        headers=headers,
+        trust_env=not _is_loopback_url(source.url),
+    )
     if response.status_code == 304:
         return FeedResponse(status_code=304, body=b"", not_modified=True)
     response.raise_for_status()

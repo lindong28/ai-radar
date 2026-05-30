@@ -6,10 +6,11 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from airadar.curator.precompute import precompute_curated_summaries
 from airadar.db import migrate
 from airadar.web.app import create_app
-from fastapi.testclient import TestClient
 
 
 def _seed_db(tmp_path: Path, item_count: int = 5) -> Path:

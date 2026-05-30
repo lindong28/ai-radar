@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+
 from airadar.db import migrate
 from airadar.fetcher.dedup import FetchedItem, upsert_item
 from airadar.provider.base import ProviderItem, ScoringResult
@@ -27,6 +28,25 @@ class FakeScorer:
             authority=5.0,
             engineering=9.0,
             reasoning=f"Useful engineering signal for {item.source_id}.",
+            raw={"provider_item_id": item.id},
+        )
+
+    def smoke_test(self) -> str:
+        return "ok"
+
+
+class VerboseFakeScorer:
+    model_id = "verbose-fake-scorer"
+
+    def score_5d(self, item: ProviderItem) -> ScoringResult:
+        return ScoringResult(
+            relevance=8.0,
+            density=7.0,
+            recency=6.0,
+            authority=5.0,
+            engineering=9.0,
+            reasoning="x" * 240,
+            topics=("a", "b", "c", "d", "e"),
             raw={"provider_item_id": item.id},
         )
 
@@ -140,6 +160,22 @@ def test_run_scoring_writes_numeric_evaluations(tmp_path: Path) -> None:
     numeric = json.loads(row[2])
     assert numeric["engineering"] == 9.0
     assert row[3] is None
+
+
+def test_run_scoring_clamps_provider_text_to_schema_limits(tmp_path: Path) -> None:
+    conn = _db(tmp_path)
+
+    summary = run_scoring(conn, provider=VerboseFakeScorer(), since="24h", ruleset_version="score.r1")
+
+    assert summary.processed == 1
+    assert summary.errors == 0
+    numeric_json, error = conn.execute(
+        "SELECT numeric_json, error FROM item_evaluations WHERE stage='scoring'"
+    ).fetchone()
+    numeric = json.loads(numeric_json)
+    assert len(numeric["reasoning"]) == 200
+    assert numeric["topics"] == ["a", "b", "c", "d"]
+    assert error is None
 
 
 def test_run_scoring_records_out_of_range_errors(monkeypatch, tmp_path: Path) -> None:

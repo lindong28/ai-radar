@@ -4,9 +4,10 @@ import json
 import sqlite3
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from airadar.db import migrate
 from airadar.web.app import create_app
-from fastapi.testclient import TestClient
 
 
 def _seed_db(tmp_path: Path) -> Path:

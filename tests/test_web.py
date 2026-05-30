@@ -5,9 +5,10 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+
 from airadar.db import migrate
 from airadar.web.app import create_app
-from fastapi.testclient import TestClient
 
 
 def _seed_db(tmp_path: Path) -> Path:
@@ -108,6 +109,40 @@ def test_web_errors_and_cors_are_read_only(tmp_path: Path) -> None:
         headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"},
     )
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_item_detail_suppresses_wechat_full_text(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO sources (id,name,url,tier,kind,enabled,meta_json,synced_at)
+        VALUES ('wx','WeChat Source','http://localhost:4000/feeds/MP.rss','T2','wechat',1,'{}','2026-05-08T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (
+          'wechat-item','wx','https://mp.weixin.qq.com/s/seed','Seed WeChat Article',NULL,
+          '2026-05-08T00:00:00Z','2026-05-08T01:00:00Z',
+          'full copied article body must stay internal',NULL,'h-wechat','{}'
+        )
+        """
+    )
+    conn.commit()
+
+    client = TestClient(create_app(db_path))
+
+    payload = client.get("/api/v1/items/wechat-item").json()["data"]["item"]
+
+    assert payload["source_kind"] == "wechat"
+    assert payload["content_preview"] is None
+    assert "content_text" not in payload
 
 
 def test_static_pages_are_served(tmp_path: Path) -> None:

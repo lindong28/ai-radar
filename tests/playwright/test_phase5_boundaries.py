@@ -7,7 +7,6 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import Page, expect
 
-
 PRELOAD_RE = re.compile(
     r'\s*<script id="__PRELOAD__" type="application/json">\s*.*?\s*</script>',
     re.S,

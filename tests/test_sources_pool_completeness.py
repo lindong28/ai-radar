@@ -9,6 +9,7 @@ slips through without the two new fields.
 from __future__ import annotations
 
 import pytest
+
 from airadar.db import PROJECT_ROOT
 from airadar.sources.loader import SourceConfig, load_sources
 

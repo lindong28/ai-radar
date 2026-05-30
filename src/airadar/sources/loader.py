@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 VALID_TIERS = {"T1", "T1.5", "T2"}
-VALID_KINDS = {"feed", "x"}
+VALID_KINDS = {"feed", "x", "wechat"}
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_]*[a-z0-9]$")
 
 

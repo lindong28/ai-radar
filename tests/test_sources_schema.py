@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from airadar.sources.loader import SourceConfig, load_sources
 
 
@@ -50,6 +51,24 @@ def test_kind_x_is_accepted(tmp_path: Path) -> None:
     assert source.kind == "x"
     assert source.homepage_url == "https://x.com/example"
     assert source.icon_url == "https://abs.twimg.com/favicons/twitter.ico"
+
+
+def test_kind_wechat_is_accepted(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "wx_guizang"',
+            'name = "歸藏的 AI 工具箱"',
+            'url = "http://localhost:4000/feeds/guizang.rss"',
+            'tier = "T2"',
+            'kind = "wechat"',
+            'homepage_url = "https://mp.weixin.qq.com/"',
+        ],
+    )
+    source = load_sources(path)[0]
+    assert source.kind == "wechat"
+    assert source.homepage_url == "https://mp.weixin.qq.com/"
 
 
 def test_invalid_kind_rejected(tmp_path: Path) -> None:

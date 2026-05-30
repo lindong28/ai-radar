@@ -16,6 +16,8 @@ dependencies = [
     "trafilatura>=1.12.0",
     "json-repair>=0.30.0",
     "pytest-asyncio>=1.3.0",
+    "playwright>=1.40.0",
+    "beautifulsoup4>=4.12.0",
 ]
 
 [dependency-groups]
@@ -24,7 +26,6 @@ dev = [
     "pytest-cov>=5.0.0",
     "ruff>=0.12.0",
     "mypy>=1.0.0",
-    "playwright>=1.40.0",
 ]
 
 [tool.ruff]
@@ -45,6 +46,9 @@ strict_optional = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = [
+    "integration: tests that hit external services",
+]
 
 [tool.pyright]
 extraPaths = ["src"]

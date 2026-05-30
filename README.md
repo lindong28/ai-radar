@@ -1,6 +1,6 @@
 # AI Radar
 
-AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS 信源抓取 AI 相关内容，经过 LLM 筛选、评分、翻译后，以时间线形式呈现精选内容。
+AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS、X 和微信公众号信源抓取 AI 相关内容，经过 LLM 筛选、评分、翻译后，以时间线形式呈现精选内容。
 
 ## 快速开始
 
@@ -12,6 +12,7 @@ AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS 信源抓取 A
 git clone https://github.com/lindong28/ai-radar.git
 cd ai-radar
 uv sync
+uv run playwright install chromium  # 仅启用微信公众号抓取时需要
 ```
 
 ### 2. 配置环境变量
@@ -38,7 +39,7 @@ DEEPSEEK_API_KEY=sk-xxx
 ### 4. 运行数据处理流水线
 
 ```bash
-./run.sh fetch       # 从 RSS 信源抓取内容
+./run.sh fetch       # 从 RSS/X/微信公众号信源抓取内容
 ./run.sh prefilter   # LLM 筛选 AI 相关内容
 ./run.sh score       # 五维评分
 ./run.sh enrich      # LLM 生成中文标题和摘要
@@ -104,12 +105,12 @@ launchctl print "gui/$(id -u)/live.aiplanet.ai-radar.pipeline"
 ## 数据流水线
 
 ```
-RSS 信源 → fetch → prefilter → score → enrich → curate → web 展示
+RSS / X / WeWe RSS 微信公众号源 → fetch → prefilter → score → enrich → curate → web 展示
 ```
 
 各阶段说明：
 
-- **fetch** — 从 `data/sources.toml` 中配置的 RSS/X 信源抓取内容
+- **fetch** — 从 `data/sources.toml` 中配置的 RSS/X/微信公众号信源抓取内容
 - **prefilter** — 使用 LLM 或规则引擎过滤 AI 相关内容
 - **score** — 五维评分（relevance、density、recency、authority、engineering）
 - **enrich** — LLM 生成中文标题和摘要
@@ -119,7 +120,11 @@ RSS 信源 → fetch → prefilter → score → enrich → curate → web 展�
 
 ### 信源
 
-信源池配置在 `data/sources.toml`，每个信源包含 slug、名称、RSS URL、优先级层级（T1/T1.5/T2）等字段。
+信源池配置在 `data/sources.toml`，每个信源包含 slug、名称、URL、优先级层级（T1/T1.5/T2）等字段。`kind` 支持：
+
+- `feed`：普通 RSS/Atom 信源
+- `x`：X/Twitter 导出的 RSS 信源，前端允许展示完整 thread
+- `wechat`：微信公众号源，URL 指向 WeWe RSS per-feed URL；新增公众号前需先在 WeWe dashboard 订阅，详见 `docs/references/wechat-sources.md` 和 `deploy/wewe-rss/RUNBOOK.md`
 
 ### LLM Provider
 
@@ -166,6 +171,10 @@ cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 ```bash
 uv run uvicorn airadar.web.app:app --host 0.0.0.0 --port 8000
 ```
+
+### 完整服务清单
+
+部署涉及的所有长期运行服务（serve / tunnel / pipeline / WeWe RSS）以及各自的自启机制、状态验证、相关 instructions 位置，见 [`docs/operations/services.md`](docs/operations/services.md)。
 
 ## 致谢
 

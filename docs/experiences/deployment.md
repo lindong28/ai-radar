@@ -19,3 +19,15 @@
 - Problem: `/` 和 `/all` 已经改成 SSR preload 后，本地 origin TTFB 大多只有 7-43ms，但 `https://aiplanet.live/` 仍出现 2-6s TTFB spikes 和偶发 Playwright timeout。应用层 spinner/API 都已经消失，瓶颈在 Cloudflare Tunnel adapter 层。
 - Solution: Homebrew 管理的 `cloudflared` 要先升级到当前版本；本次从 2026.2.0 升到 2026.5.2。生产 tunnel config 中 `aiplanet.live` origin 应显式使用 `http://127.0.0.1:8000`，并设置 `region: us`、`edge-ip-version: "4"`，让连接落在 `lax/sjc` 这类 US IPv4 edge，避免自动路径注册到 HKG 等远端 edge。
 - Applies when: 通过 `live.aiplanet.ai-radar.tunnel` 暴露本地 FastAPI 服务，且生产 FCP/TTFB 明显慢于 `127.0.0.1:8000` origin。先看 `/tmp/ai-radar-tunnel.err` 的 registered tunnel locations，再跑生产和本地 TTFB 对照。
+
+## 2026-05-29 WeWe RSS 需要区分容器出站代理和本机 loopback 抓取
+
+- Problem: WeWe 容器访问微信读书时需要走主机代理 `host.docker.internal:59527`，但 ai-radar 从宿主机抓取 `http://localhost:4000/feeds/...` 时如果继承 shell 的 `HTTP_PROXY`，httpx 会把 loopback 请求也送到代理，导致 `RemoteProtocolError: Server disconnected without sending a response`。
+- Solution: `deploy/wewe-rss/.env` 只把容器内的 `WEWE_HTTP_PROXY` / `WEWE_HTTPS_PROXY` 指向 `http://host.docker.internal:59527`；ai-radar 的 fetcher 对 `localhost` / `127.0.0.1` / `::1` URL 设置 `trust_env=False`，绕过宿主机代理。
+- Applies when: 新增本地桥接服务（WeWe RSS、mock feed、dev server）作为 ai-radar source URL，且开发 shell 配了 `HTTP_PROXY` / `HTTPS_PROXY`。
+
+## 2026-05-29 本地 docker compose 桥接服务也要进 launchd
+
+- Problem: WeWe RSS 通过 `docker compose up -d` 启动，容器有 `restart: unless-stopped`，但这只保证**容器进程**崩了自重启。Docker daemon（OrbStack）退出 / 系统重启 / 用户没把 OrbStack 设为开机自启 → 容器静默缺席，pipeline 跑到 `kind="wechat"` 源时只是 loopback 不可达，没有报警；现象是公众号源停更但 ai-radar 服务本身一切正常。
+- Solution: 加 `deploy/launchd/ai-radar-wewe.plist`，与 `serve` / `tunnel` 一致：bash -lc 包装 `docker compose up`（**前台**，不加 `-d`，让 launchd 监督前台进程），`KeepAlive=true`，`ThrottleInterval=30`（给 OrbStack 启动留时间，避免 daemon 没就绪时 launchd 紧密重试刷日志）。RUNBOOK.md 同步加"Keeping It Running"小节，明确"OrbStack 必须设为开机自启"这层依赖。
+- Applies when: 任何"本地 docker compose 桥接服务"打算长期运行而非临时手动启停时——单靠 `restart: unless-stopped` 解决不了 Docker daemon 缺席的情形，必须有外层守护或者显式声明 Docker daemon 自启依赖。

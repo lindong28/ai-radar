@@ -39,7 +39,7 @@ def _minutes(value: str) -> int:
 
 def _ensure_multiple_date_groups(page: Page) -> list[list[str]]:
     groups = _grouped_times(page)
-    for _ in range(5):
+    for _ in range(12):
         if len(groups) >= 2:
             return groups
         more = page.locator("#more")

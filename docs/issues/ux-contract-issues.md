@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-05-29 [expansion] ux-contract 未约定图片加载行为（图床可达性 / 不阻塞首屏 / 懒加载），与 AIHOT 实现存在 parity gap
+
+- Discovered: 对比 `https://aihot.virxact.com/all` 加载机制的讨论收尾。AIHOT 首屏初次加载发起 26 个 `/api/img-proxy?u=<encoded-image-url>` 请求代理外部图床（主要是 X `pbs.twimg.com` 头像），并行下载且不阻塞 HTML 首屏渲染。AI Planet 现状是 `app.js` 渲染卡片时直接引用原始外部图床 URL（X `pbs.twimg.com`、各家 OG image 等），无服务端代理、无懒加载属性。
+- Description: 现行 `ux-contract.md` Feed Reading 段只约束文本/标签/分数的首屏可见性，对图片只字未提。实际后果至少三条：(a) X 图床在国内网络不稳定，图片偶发失败/超时但 contract 未声明"图片失败不应影响阅读"或"图片必须可达"；(b) 大量并行图片请求与文本首屏共享 HTTP 连接预算，理论上可能拖累 `.item-row` 渲染（已通过 SSR prepaint 缓解但未量化）；(c) Off-screen 图片随 HTML 一并加载，浪费首屏带宽。AIHOT 通过 `/api/img-proxy` 同源代理把图床可达性收敛到自家 CF/服务器，并隐式启用浏览器 connection coalescing。
+- Recommendation: 三选一或组合：
+  - (a) **快胜**：现有 `<img>` 加 `loading="lazy" decoding="async"`，约束 contract："首屏外可视区域的图片不应在初次 HTML 加载阶段下载完成；图片失败不应影响 `.item-row` 文本可读性。" 工作量极低，立刻可做。
+  - (b) **中期**：实现 `/api/img-proxy?u=<url>` 同源代理 + 服务端缓存（参照 AIHOT 命名约定保持 parity），契约约束图片源可达性 SLO（如 p95 < 500ms）。涉及缓存层与带宽成本，需要单独 plan 评估。
+  - (c) **观测先行**：在做 (a)/(b) 之前，加一次 Playwright 性能 probe 测量当前生产 X 图床失败率与首屏阻塞情况，用数据决定优先级。
+  推荐顺序：(c) probe → (a) 快胜立刻做 → (b) 视 probe 结果决定是否独立 plan。
+
+---
+
 ## 2026-05-18 22:30 [drift] aihot-parity-contract §SourceParity-AboutSurfaceReflection 假设 AIHOT 通过 /about 暴露 source pool，实际 AIHOT /about 是个人介绍页 + 公众号 QR
 
 - Discovered: 2026-05-18-r1 / s3-parity-auditor / Layer 1 跑测时对照 AIHOT `/about`
@@ -42,6 +54,14 @@
   - (a) 实现回到契约："超范围 page = 空列表 + 分页器可回退 + URL 保留"；
   - (b) 契约跟实现："超范围 page = clamp 到 max page，URL 同步改写为 max；带 filter 且总页数 1 时剥掉 page 参数。"
   目前的混合行为让深链复用 / monitoring / 用户预期都不稳定。
+
+---
+
+## 2026-05-29 07:15 [expansion] ux-contract 未覆盖 wechat（微信公众号）源类型及其"未 enrich 时抑制正文预览"的展示规则
+
+- Discovered: execute-plan 实施 `20260528-wechat-oa-ingestion`（新增 `kind="wechat"` 源）后的 supervisor 收尾核查。
+- Description: 新增 wechat 源（首批 歸藏的AI工具箱 / 十字路口Crossing）归入"资讯"频道（`kind != "x"`），在 `/` 与 `/all` 同普通 feed 源一并展示。但有一处 wechat 特有的展示规则未写入 ux-contract：出于合规（不公开转载公众号正文），wechat item 在 web 层**抑制 `content_preview`**——未 enrich 的 wechat 卡片正文区为空（仅中文标题 + 回链 mp.weixin），enrich 后才显示 `summary_zh`；而普通 feed 源未 enrich 时仍显示 `content_preview`（正文前 320 字）。当前 ux-contract（§TL-2 信源类型筛选只列 一手信源/资讯/推文；卡片展示默认有 preview/摘要）未反映这点，下游 test-ux 可能把"未 enrich 的 wechat 卡片无正文预览"误判为 bug。
+- Recommendation: 在 ux-contract 补充 wechat 源的展示契约：(a) wechat 源归入"资讯"类型（feed/x/wechat 三类信源）；(b) 卡片正文：enrich 后显示中文摘要，未 enrich 时仅标题 + 回链（正文不对外公开，合规要求）；(c) 点击标题回链到 `mp.weixin.qq.com` 原文。
 
 ---
 
