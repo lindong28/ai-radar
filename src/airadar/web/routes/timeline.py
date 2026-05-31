@@ -9,11 +9,11 @@ from .common import (
     category_filter_clause,
     conn_from_request,
     deduped_item_clause,
-    fts_phrase_query,
     item_summary,
     json_loads,
     matches_category,
     parse_enrichment,
+    search_id_subquery,
 )
 
 router = APIRouter()
@@ -31,10 +31,10 @@ def timeline(
 ) -> dict[str, object]:
     params: list[object] = []
     where_clauses: list[str] = []
-    search_query = fts_phrase_query(q)
-    if search_query:
-        where_clauses.append("i.id IN (SELECT item_id FROM items_fts WHERE items_fts MATCH ?)")
-        params.append(search_query)
+    search_subquery, search_params = search_id_subquery(q)
+    if search_subquery:
+        where_clauses.append(f"i.id IN ({search_subquery})")
+        params.extend(search_params)
     elif cursor:
         cursor_parts = cursor.split("|", 2)
         if len(cursor_parts) == 3:
@@ -64,7 +64,7 @@ def timeline(
     if category_clause:
         where_clauses.append(category_clause)
         params.extend(category_params)
-    preview_query = q if search_query else None
+    preview_query = q if search_subquery else None
     with conn_from_request(request) as conn:
         has_prefilter = bool(conn.execute("SELECT 1 FROM item_evaluations WHERE stage='prefilter' LIMIT 1").fetchone())
         if has_prefilter:

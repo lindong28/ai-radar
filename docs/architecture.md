@@ -179,7 +179,7 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 | `item_evaluations` | LLM 评估结果，stage 区分阶段 | `id` (INTEGER, 自增) |
 | `curation_runs` | 精选运行记录 | `id` (TEXT, 时间戳+随机) |
 | `curated_items` | 精选条目（关联 run） | `(run_id, item_id)` |
-| `items_fts` | FTS5 全文搜索虚拟表（trigram 分词） | -- |
+| `items_fts` | FTS5 搜索虚拟表（trigram 分词），列为 `item_id/title/content_text/source_name/author/title_zh` | -- |
 | `feedback` | 用户反馈（预留） | `id` (INTEGER, 自增) |
 | `airadar_migrations` | 迁移记录 | `id` (TEXT) |
 
@@ -189,6 +189,8 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 - **多阶段评估**：`item_evaluations` 通过 `stage` 字段区分 prefilter / scoring / enrich，共用同一张表。每条记录保存完整的 input/output/numeric JSON
 - **Ruleset 版本**：格式 `YYYY-MM-DD.rN`，用于跟踪 prompt 和规则的变更。同一条目可以有不同 ruleset 版本的评估记录
 - **信源层级**：T1（官方一手源，乘数 1.25）/ T1.5（高质量聚合，乘数 1.0）/ T2（社区源，乘数 0.75）
+- **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。
+- **短查询兜底**：timeline 和 curated 共用 `search_id_subquery()`。3 字及以上使用 `items_fts MATCH`；1-2 字只在标题、来源名、作者和中文标题上用 escaped LIKE，避免对正文做短词全表扫。
 
 ### 索引
 
@@ -210,8 +212,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 | 端点 | 方法 | 用途 |
 |---|---|---|
-| `/api/v1/timeline` | GET | 全量时间线，支持 cursor 分页、channel 过滤（x/news/firstParty）、category 过滤、FTS 搜索 |
-| `/api/v1/curated` | GET | 精选内容，支持 run_id、date、category、搜索 |
+| `/api/v1/timeline` | GET | 全量时间线，支持 cursor 分页、channel 过滤（x/news/firstParty）、category 过滤、混合 FTS/LIKE 搜索 |
+| `/api/v1/curated` | GET | 精选内容，支持 run_id、date、category、混合 FTS/LIKE 搜索 |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/sources` | GET | 信源列表 |
 | `/api/v1/healthz` | GET | 健康检查（条目数、运行数、ruleset 版本） |

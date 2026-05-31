@@ -14,10 +14,10 @@ from .common import (
     category_filter_clause,
     conn_from_request,
     deduped_item_clause,
-    fts_phrase_query,
     item_summary,
     json_loads,
     matches_category,
+    search_id_subquery,
 )
 
 router = APIRouter()
@@ -69,14 +69,11 @@ def _load_precomputed(
     if not rows:
         return None
 
-    search_query = fts_phrase_query(q)
+    search_subquery, search_params = search_id_subquery(q)
     matching_ids: set[str] | None = None
-    if search_query:
-        fts_rows = conn.execute(
-            "SELECT item_id FROM items_fts WHERE items_fts MATCH ?",
-            (search_query,),
-        ).fetchall()
-        matching_ids = {r["item_id"] for r in fts_rows}
+    if search_subquery:
+        search_rows = conn.execute(search_subquery, search_params).fetchall()
+        matching_ids = {r[0] for r in search_rows}
 
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -87,7 +84,7 @@ def _load_precomputed(
             continue
         if not matches_category(item, category):
             continue
-        if search_query and q:
+        if search_subquery and q:
             ct = conn.execute(
                 "SELECT content_text FROM items WHERE id=?", (item["id"],)
             ).fetchone()
@@ -109,16 +106,16 @@ def _compute_items(
     normalized_category: str | None,
     q: str | None,
 ) -> list[dict[str, Any]]:
-    search_query = fts_phrase_query(q)
+    search_subquery, search_params = search_id_subquery(q)
     where = "WHERE c.run_id=?"
     params: list[object] = [run["id"]]
     where += f" AND {deduped_item_clause('i')}"
     if selected_date:
         where += " AND date(datetime(i.published_at, '+08:00')) = ?"
         params.append(selected_date)
-    if search_query:
-        where += " AND i.id IN (SELECT item_id FROM items_fts WHERE items_fts MATCH ?)"
-        params.append(search_query)
+    if search_subquery:
+        where += f" AND i.id IN ({search_subquery})"
+        params.extend(search_params)
     category_clause, category_params = category_filter_clause(normalized_category, "i")
     if category_clause:
         where += f" AND {category_clause}"
@@ -139,7 +136,7 @@ def _compute_items(
         """,
         params,
     ).fetchall()
-    preview_query = q if search_query else None
+    preview_query = q if search_subquery else None
     items: list[dict[str, Any]] = []
     for row in rows:
         item = item_summary(row, preview_query, conn)

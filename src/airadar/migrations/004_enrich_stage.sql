@@ -1,7 +1,7 @@
 -- Phase 3: add the enrich evaluation stage.
--- This repo intentionally runs migrations idempotently without a migration
--- ledger, so this script rebuilds item_evaluations on every migrate() call
--- and only clears old evaluation/curation rows the first time 004 is applied.
+-- db.py skips this entire file after airadar_migrations records 004_enrich_stage.
+-- On cold databases this file still rebuilds item_evaluations once, so it must
+-- recreate the enrich_ai_fts trigger after the RENAME below.
 
 CREATE TABLE IF NOT EXISTS airadar_migrations (
   id TEXT PRIMARY KEY,
@@ -66,14 +66,13 @@ ALTER TABLE item_evaluations_new RENAME TO item_evaluations;
 CREATE INDEX IF NOT EXISTS idx_evaluations_item_stage_ruleset
 ON item_evaluations(item_id, stage, ruleset_version);
 
-UPDATE items_fts
-SET reasoning = ''
-WHERE (SELECT should_apply FROM _airadar_migration_004_apply) = 1;
-
-CREATE TRIGGER IF NOT EXISTS evals_ai_fts AFTER INSERT ON item_evaluations
-WHEN new.stage = 'scoring' AND new.numeric_json IS NOT NULL BEGIN
+-- Keep this enrich_ai_fts block byte-identical in 003 and 004.
+-- It keeps the title_zh FTS snapshot current after successful enrich evaluations.
+-- Failed enrich rows are ignored so retries with errors cannot erase a good title_zh.
+CREATE TRIGGER IF NOT EXISTS enrich_ai_fts AFTER INSERT ON item_evaluations
+WHEN new.stage = 'enrich' AND new.error IS NULL AND new.output_json IS NOT NULL BEGIN
   UPDATE items_fts
-  SET reasoning = COALESCE(json_extract(new.numeric_json, '$.reasoning'), '')
+  SET title_zh = COALESCE(json_extract(new.output_json, '$.title_zh'), '')
   WHERE item_id = new.item_id;
 END;
 

@@ -254,6 +254,29 @@ def fts_phrase_query(value: str | None) -> str | None:
     return f'"{query}"'
 
 
+def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
+    qs = (q or "").strip()
+    if not qs:
+        return None, []
+    if len(qs) >= 3:
+        return "SELECT item_id FROM items_fts WHERE items_fts MATCH ?", [fts_phrase_query(qs) or ""]
+
+    like = "%" + qs.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    subquery = (
+        "SELECT i2.id FROM items i2 "
+        "JOIN sources s2 ON s2.id = i2.source_id "
+        "LEFT JOIN item_evaluations e2 ON e2.id = ("
+        "  SELECT MAX(le.id) FROM item_evaluations le "
+        "  WHERE le.item_id = i2.id AND le.stage = 'enrich' AND le.error IS NULL"
+        ") "
+        "WHERE i2.title LIKE ? ESCAPE '\\' "
+        "OR i2.author LIKE ? ESCAPE '\\' "
+        "OR s2.name LIKE ? ESCAPE '\\' "
+        "OR COALESCE(json_extract(e2.output_json, '$.title_zh'), '') LIKE ? ESCAPE '\\'"
+    )
+    return subquery, [like, like, like, like]
+
+
 def content_preview(row: sqlite3.Row, preview_query: str | None = None) -> str | None:
     if "content_text" not in row.keys() or not row["content_text"]:
         return None

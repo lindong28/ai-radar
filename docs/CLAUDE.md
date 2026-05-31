@@ -65,6 +65,7 @@
 | [README.md](issues/README.md) | Domain 索引 |
 | [ux-issues.md](issues/ux-issues.md) | 端到端测试发现的产品 UX 问题（contract 在实际产品中被 broken） |
 | [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时）；append-only queue |
+| [general.md](issues/general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
 
 ### docs/adr/ [Developer]
 
@@ -97,6 +98,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260529-timeline-search-source-author/](plans/20260529-timeline-search-source-author/) | Timeline/curated 搜索覆盖来源名、作者和中文标题 |
 | [20260528-ssr-preload/](plans/20260528-ssr-preload/) | SSR preload 首屏加载优化（/ 和 /all 无可感知 spinner） |
 | [20260524-timeline-perf/](plans/20260524-timeline-perf/) | Timeline API 性能优化（/all TTFB 14s -> <1s） |
 | [20260515-pipeline-scheduler/](plans/20260515-pipeline-scheduler/) | 自动化增量数据抓取流水线（pipeline.sh + cron 15min 调度） |

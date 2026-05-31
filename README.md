@@ -56,42 +56,19 @@ DEEPSEEK_API_KEY=sk-xxx
 
 ## 自动化调度
 
-`pipeline.sh` 会按顺序执行 `fetch → prefilter → score → enrich → curate`，每个阶段只处理尚未完成对应评估的新条目；单个阶段失败时会记录 `FAIL` 并继续执行后续阶段，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。脚本会用 `.pipeline.lock` 跳过重叠运行，避免某次 pipeline 超过 15 分钟时下一次 cron/launchd 同时写数据库。
+`pipeline.sh` 按顺序执行 `fetch → prefilter → score → enrich → curate`，每个阶段只处理尚未评估的新条目。单阶段失败会记录 `FAIL` 后继续，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`，`.pipeline.lock` 跳过重叠运行。
 
-cron 和 launchd 不会继承交互式 shell 中临时 `export` 的 API Key。启用自动调度前，先确认项目根目录 `.env` 或 `~/.claude/.env` 中包含流水线需要的 LLM API Key；`./run.sh` 会在每个阶段启动时读取这两个位置。
+默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 
-确保项目根目录 `.env` 中已配置 API Key（见快速开始第 2 步）。cron/launchd 不会继承交互式 shell 中临时 `export` 的变量，必须写入 `.env` 文件。
-
-手动运行一次：
+cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调度前确认 `.env`（项目根目录或 `~/.claude/.env`）已配 LLM API Key。
 
 ```bash
-./pipeline.sh
+./pipeline.sh             # 手动跑一次
+./install.sh pipeline     # 注册到 user crontab，每 15 分钟一次
+crontab deploy/cron/ai-radar-pipeline  # 手动加载 cron 条目
 ```
 
-安装 cron 调度后，每 15 分钟自动运行一次：
-
-```bash
-chmod +x pipeline.sh
-(crontab -l 2>/dev/null; sed '/^#/d; /^$/d' deploy/cron/ai-radar-pipeline) | crontab -
-crontab -l | grep ai-radar
-```
-
-上面的命令会保留已有 crontab 条目。不要直接运行 `crontab deploy/cron/ai-radar-pipeline`，除非你确认当前用户没有其他 crontab 任务。
-
-cron 条目格式：
-
-```cron
-PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
-*/15 * * * * /path/to/ai-radar/pipeline.sh >/dev/null 2>&1
-```
-
-macOS 也可以使用 launchd 每 15 分钟调度一次。cron 和 launchd 二选一即可，不要同时启用同一个 pipeline：
-
-```bash
-cp deploy/launchd/ai-radar-pipeline.plist.example ~/Library/LaunchAgents/ai-radar-pipeline.plist
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/ai-radar-pipeline.plist
-launchctl print "gui/$(id -u)/live.aiplanet.ai-radar.pipeline"
-```
+调度方式详情、`launchctl bootstrap` launchd 备选模板见 §服务 + [docs/operations/services.md](docs/operations/services.md)。
 
 ## Web 页面
 
@@ -144,18 +121,32 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 ./test.sh
 ```
 
-## 部署
+## 服务
 
-### macOS (launchd)
+下表只列**长期在后台运行**的服务（一次性 CLI 不在此列）。
 
-复制模板并根据实际情况修改路径：
+| 服务 | Supervisor | 作用 |
+|---|---|---|
+| `serve` | launchd | FastAPI web server on :8000 |
+| `tunnel` | launchd | Cloudflare tunnel 到 aiplanet.live |
+| `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate |
+| `wewe` | launchd（包装 docker compose） | WeWe RSS 桥接 :4000（微信公众号 ingestion） |
+
+### 部署 / 移除 / 查状态
 
 ```bash
-cp deploy/launchd/ai-radar-serve.plist.example ~/Library/LaunchAgents/ai-radar-serve.plist
-cp deploy/launchd/ai-radar-tunnel.plist.example ~/Library/LaunchAgents/ai-radar-tunnel.plist
-# 编辑 plist 文件中的路径
-launchctl load ~/Library/LaunchAgents/ai-radar-serve.plist
+./install.sh   [service]   # 部署 + 启动；不带 service 则全部
+./status.sh    [service]   # 只读面板；不修改任何状态
+./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
+
+服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `wewe`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+
+完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`wewe` 微信源 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)。
+
+## 部署
+
+`./install.sh` 覆盖服务的注册与启动（见上）。此外需要一次性的配置：
 
 ### Cloudflare Tunnel
 
@@ -166,15 +157,11 @@ cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 
 ### Docker / 其他平台
 
-项目是标准 FastAPI 应用，可直接用 uvicorn 启动：
+项目本身是标准 FastAPI 应用，可不走 launchd 直接起：
 
 ```bash
 uv run uvicorn airadar.web.app:app --host 0.0.0.0 --port 8000
 ```
-
-### 完整服务清单
-
-部署涉及的所有长期运行服务（serve / tunnel / pipeline / WeWe RSS）以及各自的自启机制、状态验证、相关 instructions 位置，见 [`docs/operations/services.md`](docs/operations/services.md)。
 
 ## 致谢
 

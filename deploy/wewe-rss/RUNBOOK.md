@@ -21,36 +21,25 @@ The service is bound to `127.0.0.1:4000`.
 
 ## Keeping It Running
 
-The plain `docker compose up -d` start above is fine for first-time bring-up, but it does NOT survive a Docker daemon restart, an OrbStack restart, or a macOS reboot in the same way that `live.aiplanet.ai-radar.serve` and `live.aiplanet.ai-radar.tunnel` do. There are two dependencies to satisfy:
+The plain `docker compose up -d` above is fine for first-time bring-up, but it does NOT survive a Docker daemon restart, an OrbStack restart, or a macOS reboot. WeWe needs launchd supervision like `serve` and `tunnel`. Two dependencies:
 
 1. **Docker daemon must auto-start at login**. OrbStack: open OrbStack → Settings → General → enable "Start at login". Docker Desktop: Preferences → General → "Start Docker Desktop when you log in". Without this, the launchd job below has nothing to talk to.
-2. **WeWe RSS itself should be supervised by launchd**, matching the other ai-radar services so the same `launchctl` muscle memory works (`launchctl print gui/$UID/live.aiplanet.ai-radar.wewe`, `launchctl kickstart -k …`).
+2. **WeWe RSS itself supervised by launchd** — install / uninstall / status use the unified `./install.sh` family at the repo root (see `docs/operations/services.md` for the full service inventory).
 
-Install once:
-
-```bash
-cp deploy/launchd/ai-radar-wewe.plist.example deploy/launchd/ai-radar-wewe.plist
-# Edit the two /path/to/ai-radar occurrences to your absolute repo path.
-launchctl bootstrap gui/$UID deploy/launchd/ai-radar-wewe.plist
-launchctl enable gui/$UID/live.aiplanet.ai-radar.wewe
-launchctl kickstart -k gui/$UID/live.aiplanet.ai-radar.wewe
-```
-
-Verify:
+Install / verify / remove:
 
 ```bash
-launchctl print gui/$UID/live.aiplanet.ai-radar.wewe | rg 'state = |last exit'
-docker ps --filter name=ai-radar-wewe-rss
-curl -sf http://127.0.0.1:4000/ -o /dev/null && echo up
-tail -n 20 /tmp/ai-radar-wewe.err
+./install.sh wewe       # bootstrap launchd + start container; idempotent
+./status.sh wewe        # read-only: launchd state, container Up/down, log path
+./uninstall.sh wewe     # bootout launchd + docker compose down; data volume kept
 ```
 
-Notes:
+Design notes (for reference when debugging the supervision layer):
 
-- The plist runs `docker compose up` (foreground, no `-d`) so launchd can supervise the process directly. `KeepAlive=true` plus `ThrottleInterval=30` means launchd restarts the docker compose process on crash and waits 30 s between retries — enough for OrbStack to come up after login without spamming retries.
-- `docker compose up` writes container logs to stdout, which launchd redirects to `/tmp/ai-radar-wewe.log` and `/tmp/ai-radar-wewe.err`. The container's own `restart: unless-stopped` policy still handles crashes *inside* the container; launchd handles the docker-daemon-not-running case.
-- To uninstall: `launchctl bootout gui/$UID/live.aiplanet.ai-radar.wewe`.
-- Health monitoring beyond "process alive" (e.g. periodic `curl /` check, alert if WeWe stops appearing in pipeline ingestion) is not in scope here — track that separately if it becomes a recurring failure mode.
+- The plist runs `docker compose up` (foreground, no `-d`) so launchd supervises the process directly. `KeepAlive=true` + `ThrottleInterval=30` restarts the docker compose process on crash with 30 s between retries — enough for OrbStack to come up after login without spamming retries.
+- `docker compose up` writes container logs to stdout; launchd redirects to `/tmp/ai-radar-wewe.log` and `/tmp/ai-radar-wewe.err`. The container's own `restart: unless-stopped` still handles in-container crashes; launchd handles the docker-daemon-not-running case.
+- `uninstall.sh wewe` runs `docker compose down` after `launchctl bootout` because `restart: unless-stopped` would otherwise keep the container alive after launchd lets go.
+- Health monitoring beyond "process alive" (periodic `curl /` check, alert when WeWe stops appearing in pipeline ingestion) is not in scope here — track separately if it becomes a recurring failure mode.
 
 ## Required Environment
 

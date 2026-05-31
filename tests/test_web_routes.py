@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +15,7 @@ from airadar.web.app import create_app
 from airadar.web.routes import common as route_common
 
 
-def _extract_preload(html: str) -> dict[str, object]:
+def _extract_preload(html: str) -> dict[str, Any]:
     match = re.search(r'<script id="__PRELOAD__" type="application/json">\s*(.*?)\s*</script>', html, re.S)
     assert match, "SSR preload script not found"
     return json.loads(match.group(1))
@@ -155,6 +156,68 @@ def _insert_enrichment(conn: sqlite3.Connection, item_id: str, title: str, tags:
         VALUES (?, 'enrich', 'test.r1', 'fake', '{}', ?, '{}', 1, 0, '2026-05-08T10:07:00Z', NULL)
         """,
         (item_id, json.dumps(payload)),
+    )
+
+
+def _insert_source(conn: sqlite3.Connection, source_id: str, name: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO sources (
+          id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, synced_at
+        )
+        VALUES (?, ?, ?, 'T1', 1, 'feed', ?, 'https://example.com/source.ico', '{}', '2026-05-08T00:00:00Z')
+        """,
+        (source_id, name, f"https://example.com/{source_id}.xml", f"https://example.com/{source_id}/"),
+    )
+
+
+def _insert_item(
+    conn: sqlite3.Connection,
+    item_id: str,
+    source_id: str,
+    title: str,
+    author: str,
+    content_text: str,
+    published_at: str = "2026-05-08T07:30:00Z",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, '{}')
+        """,
+        (
+            item_id,
+            source_id,
+            f"https://example.com/{item_id}",
+            title,
+            author,
+            published_at,
+            published_at,
+            content_text,
+            f"h-{item_id}",
+        ),
+    )
+
+
+def _curated_summary(item_id: str, source_id: str, source_name: str, title: str, author: str) -> str:
+    return json.dumps(
+        {
+            "id": item_id,
+            "source_id": source_id,
+            "source_name": source_name,
+            "source_kind": "feed",
+            "title": title,
+            "author": author,
+            "published_at": "2026-05-08T07:30:00Z",
+            "fetched_at": "2026-05-08T07:30:00Z",
+            "topic_tags": [],
+            "weighted_score": 8.0,
+            "rank": 2,
+            "scores": {},
+        }
     )
 
 
@@ -349,10 +412,71 @@ def test_fts_backfill_keeps_one_row_per_item(tmp_path: Path) -> None:
 
     items_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     fts_count = conn.execute("SELECT COUNT(*) FROM items_fts").fetchone()[0]
-    reasoning_count = conn.execute("SELECT COUNT(*) FROM items_fts WHERE reasoning != ''").fetchone()[0]
+    fts_columns = [row[1] for row in conn.execute("PRAGMA table_info('items_fts')").fetchall()]
 
     assert fts_count == items_count
-    assert reasoning_count == 1
+    assert fts_columns == ["item_id", "title", "content_text", "source_name", "author", "title_zh"]
+
+
+def test_fts_triggers_sync_source_author_and_title_zh(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    _insert_source(conn, "guizang_feed", "歸藏社")
+    _insert_item(
+        conn,
+        "item-guizang",
+        "guizang_feed",
+        "Short field update",
+        "元亨",
+        "English body intentionally avoids the short Chinese source token.",
+    )
+    _insert_enrichment(conn, "item-guizang", "歸藏模型快讯", ["模型发布"])
+    conn.execute(
+        """
+        INSERT INTO item_evaluations (
+          item_id, stage, ruleset_version, model_id, input_json, output_json,
+          numeric_json, latency_ms, cost_usd, evaluated_at, error
+        )
+        VALUES (
+          'item-guizang', 'enrich', 'test.r1', 'fake', '{}',
+          '{"title_zh":"失败标题","summary_zh":"失败摘要"}', '{}', 1, 0,
+          '2026-05-08T10:08:00Z', 'provider failed'
+        )
+        """
+    )
+    conn.execute("UPDATE items SET title='Short field update v2', author='青衫' WHERE id='item-guizang'")
+    conn.execute("UPDATE sources SET name='歸藏实验室' WHERE id='guizang_feed'")
+    row = conn.execute(
+        """
+        SELECT source_name, author, title, title_zh
+        FROM items_fts
+        WHERE item_id='item-guizang'
+        """
+    ).fetchone()
+
+    assert dict(row) == {
+        "source_name": "歸藏实验室",
+        "author": "青衫",
+        "title": "Short field update v2",
+        "title_zh": "歸藏模型快讯",
+    }
+
+
+def test_search_id_subquery_switches_between_fts_like_and_noop() -> None:
+    assert route_common.search_id_subquery(None) == (None, [])
+    assert route_common.search_id_subquery("   ") == (None, [])
+
+    fts_sql, fts_params = route_common.search_id_subquery("Ada")
+    assert fts_sql == "SELECT item_id FROM items_fts WHERE items_fts MATCH ?"
+    assert fts_params == ['"Ada"']
+
+    like_sql, like_params = route_common.search_id_subquery("%_")
+    assert like_sql is not None
+    assert like_sql.count("LIKE ? ESCAPE '\\'") == 4
+    assert "content_text LIKE" not in like_sql
+    assert like_params == [r"%\%\_%", r"%\%\_%", r"%\%\_%", r"%\%\_%"]
 
 
 def test_timeline_search_uses_fts_and_filters_results(tmp_path: Path) -> None:
@@ -362,8 +486,112 @@ def test_timeline_search_uses_fts_and_filters_results(tmp_path: Path) -> None:
     assert response.status_code == 200
     data = response.json()["data"]
 
-    assert [item["id"] for item in data["items"]] == ["item-openai"]
-    assert data["total"] == 1
+    assert [item["id"] for item in data["items"]] == ["item-openai", "item-claude"]
+    assert data["total"] == 2
+
+
+def test_timeline_search_matches_source_author_and_chinese_title(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_db_with_model_enrichment(tmp_path)))
+
+    source = client.get("/api/v1/timeline", params={"q": "OpenAI Blog"}).json()["data"]
+    author = client.get("/api/v1/timeline", params={"q": "Ada"}).json()["data"]
+    chinese_title = client.get("/api/v1/timeline", params={"q": "模型发布"}).json()["data"]
+
+    assert [item["id"] for item in source["items"]] == ["item-openai", "item-claude"]
+    assert [item["id"] for item in author["items"]] == ["item-openai"]
+    assert "Ada" not in author["items"][0]["source_name"]
+    assert "Ada" not in author["items"][0]["title"]
+    assert [item["id"] for item in chinese_title["items"]] == ["item-openai"]
+
+
+def test_short_search_uses_like_for_timeline_and_curated_precomputed(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source(conn, "guizang_feed", "歸藏社")
+    _insert_item(
+        conn,
+        "item-guizang",
+        "guizang_feed",
+        "Short source item",
+        "元亨",
+        "The short Chinese source token appears only in the source name.",
+    )
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json, summary_json)
+        VALUES ('run-1', 'item-guizang', 8.0, 2, '{}', ?)
+        """,
+        (_curated_summary("item-guizang", "guizang_feed", "歸藏社", "Short source item", "元亨"),),
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"q": "歸藏"}).json()["data"]
+    curated = client.get("/api/v1/curated", params={"q": "歸藏"}).json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-guizang"]
+    assert [item["id"] for item in curated["items"]] == ["item-guizang"]
+
+
+def test_short_search_uses_like_for_curated_compute_fallback(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source(conn, "short_author_feed", "Short Author Feed")
+    _insert_item(
+        conn,
+        "item-short-author",
+        "short_author_feed",
+        "Short author item",
+        "李雷",
+        "The short Chinese author token appears only in the author field.",
+    )
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES ('run-1', 'item-short-author', 8.0, 2, '{}')
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    curated = client.get("/api/v1/curated", params={"q": "李雷"}).json()["data"]
+
+    assert [item["id"] for item in curated["items"]] == ["item-short-author"]
+
+
+def test_short_search_escapes_like_wildcards(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source(conn, "wildcard_feed", "Wildcard Feed")
+    _insert_item(
+        conn,
+        "item-percent",
+        "wildcard_feed",
+        "Literal 100% update",
+        "Percent Author",
+        "Plain text without wildcard characters.",
+        "2026-05-08T07:40:00Z",
+    )
+    _insert_item(
+        conn,
+        "item-underscore",
+        "wildcard_feed",
+        "Literal under_score update",
+        "Underscore Author",
+        "Plain text without wildcard characters.",
+        "2026-05-08T07:35:00Z",
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    percent = client.get("/api/v1/timeline", params={"q": "%"}).json()["data"]
+    underscore = client.get("/api/v1/timeline", params={"q": "_"}).json()["data"]
+
+    assert [item["id"] for item in percent["items"]] == ["item-percent"]
+    assert [item["id"] for item in underscore["items"]] == ["item-underscore"]
 
 
 def test_timeline_supports_channel_filters_and_url_page_state(tmp_path: Path) -> None:
@@ -617,9 +845,11 @@ def test_curated_search_uses_fts_and_filters_results(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 
     match = client.get("/api/v1/curated?q=OpenAI").json()["data"]
+    source_match = client.get("/api/v1/curated", params={"q": "OpenAI Blog"}).json()["data"]
     no_match = client.get("/api/v1/curated?q=xyzzyqwertynonexistent").json()["data"]
 
     assert [item["id"] for item in match["items"]] == ["item-openai"]
+    assert [item["id"] for item in source_match["items"]] == ["item-openai"]
     assert no_match["items"] == []
 
 
