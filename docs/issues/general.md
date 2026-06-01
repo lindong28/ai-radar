@@ -27,6 +27,7 @@
   - 不打算调 WeWe cron（动了风险大于收益）。
   - 潜在改进：加一个 daily 检查脚本——如果 `MAX(articles.created_at)` 距今超 24 小时，发个本地通知。
   - 与 nitter 脆点同族：缺乏对 ingestion 链路的主动健康监控。
+  - **实证复发 (2026-06-01)**：WeRead token 于 ~2026-05-29 14:07 失效，wewe 每 2h cron 静默报 `Error: 暂无可用读书账号！`，**3 天无人察觉**（正是本盲区），歸藏+十字路口 sync_time 一起冻结、ai-radar 侧文章停在 05-28。**关键坑**：dash 里把账号「启用」(status 0→1) 看似可恢复，但 token 实际已过期——一旦触发同步（手动 `GET /feeds/<id>.rss?update=true` 或 2h cron），WeRead 返回 `401 Token 失效（WeReadError401, -2041）`，wewe 立即「账号登录失效，已禁用」把 status 打回 0。**真正恢复必须重扫二维码**（`http://localhost:4000/dash/accounts`，需用户微信扫码），仅 toggle 状态无效。→ 监控应同时覆盖"token 失效/账号被自动禁用"，不只是"长时间没新文章"。
 
 ---
 
