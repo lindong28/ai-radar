@@ -361,7 +361,7 @@ icon_url = "https://www.google.com/s2/favicons?domain=news.ycombinator.com&sz=64
 [[source]]
 slug = "wx_guizang"
 name = "歸藏的AI工具箱"
-url = "http://localhost:4000/feeds/MP_WXS_3540975510.rss"
+url = "http://localhost:4000/feeds/MP_WXS_3540975510.rss?limit=200"
 tier = "T2"
 enabled = true
 kind = "wechat"
@@ -371,7 +371,7 @@ icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
 [[source]]
 slug = "wx_crossing"
 name = "十字路口Crossing"
-url = "http://localhost:4000/feeds/MP_WXS_3010319264.rss"
+url = "http://localhost:4000/feeds/MP_WXS_3010319264.rss?limit=200"
 tier = "T2"
 enabled = true
 kind = "wechat"

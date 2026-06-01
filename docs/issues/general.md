@@ -96,3 +96,41 @@
   - 体系化「发现机制」：定期跑的检查，对比每源「库内文章数 vs 各 stage 已处理数 vs timeline/搜索可见数」，覆盖率显著低于同类源均值即告警。
   - 与 nitter 单点 + wewe 2h 盲区 issue 同族——都属「缺 ingestion 链路主动健康监控」，可一并设计统一的 pipeline 健康面板 / daily 检查脚本。
   - 长期事项（用户 2026-05-30 决定先记录；短期先做通用 verify 原则改进——让 plan 的 L2/L3 verify 要求端到端用户视角的覆盖率/一致性检查）。
+
+---
+
+## [open] install.sh 的 docker 就绪检查无法从 "OrbStack 已开但 VM 停" 恢复
+
+- Type: improvement
+- Priority: low
+- Discovered: 2026-06-01 `/custom:supervise` 委派 codex 跑 `./install.sh wewe` 时，OrbStack GUI 进程在跑但其 VM 因 idle 被自动关机，`docker info` 不可达
+- Description: `deploy/lib/services.sh` 的 `ensure_docker_daemon` 只做 `open -a OrbStack` + 轮询 `docker info`。但 OrbStack 可能"app 在跑、VM 已 idle 关机"——此时 `open -a` 不会重启 VM，docker 始终不可达，`./install.sh wewe` 会按设计中止。Codex 手动 `orbctl start` 才恢复。
+- Notes:
+  - Fix 方向：`ensure_docker_daemon` 在 `open -a OrbStack` 后、轮询前，若 `command -v orbctl` 存在则补一句 `orbctl start`（幂等，VM 已跑时无副作用）。
+  - 影响面：任何在 OrbStack VM 处于 idle-stopped 时跑 `./install.sh wewe` 的人/agent 都会撞上，需手动 orbctl start。
+
+---
+
+## [open] pipeline stage `--since` 解析会把 ISO `T...Z` 时间戳 lower-case 后解析失败
+
+- Type: bug
+- Priority: low
+- Discovered: 2026-06-01 全量 WeChat RSS backfill 时，为避免 `score --since 24h` churn 非 WeChat backlog，尝试运行 `score --since 2026-06-01T10:43:04Z`。
+- Description: `scorer/runner.py::_parse_since` 先对整个输入执行 `value.strip().lower()`，之后只替换大写 `"Z"`。因此标准 UTC ISO 字符串 `2026-06-01T10:43:04Z` 会变成 `2026-06-01t10:43:04z`，`datetime.fromisoformat(...)` 抛 `ValueError: Invalid isoformat string`。同样的 `_parse_since` 写法也存在于 prefilter/enrich runner，显式 ISO `T...Z` 窗口都可能中招。
+- Notes:
+  - Immediate workaround: 用空格和显式 offset，例如 `--since '2026-06-01 10:43:04+00:00'`；本次 backfill 用该形式成功完成 `score processed=131 errors=0`。
+  - Fix direction: 只对相对单位后缀做 case-insensitive 处理，或在 lower-case 前先标准化 `Z/z` 与 `T/t`；补 CLI/parser regression test 覆盖 `24h`、`7d`、`2026-06-01T10:43:04Z`、`2026-06-01 10:43:04+00:00`。
+
+---
+
+## [open] OrbStack VM idle 自动关机 → wewe 容器随之停 → WeChat 摄取频繁中断
+
+- Type: bug
+- Priority: medium
+- Discovered: 2026-06-01 一个 session 内观察到 3 次：每次起好 wewe（`./install.sh wewe` / orbctl start）后几十分钟内 OrbStack 又把 VM idle 关机，`ai-radar-wewe-rss` 容器随之停，`127.0.0.1:4000` 不可达。
+- Description: wewe（WeChat 摄取桥）跑在 OrbStack 的 docker VM 里。OrbStack 默认会在 VM idle 一段时间后自动关机；VM 一停容器就停，wewe launchd 的 KeepAlive 也救不回来（docker daemon 不可达，`docker compose up` 直接失败）。直接后果：**WeChat 公众号→本地的摄取并非持续**——OrbStack 一 idle 关机，wechat 链路就断，直到下次有人/agent 手动 `orbctl start`。这是用户问"微信文章在持续摄取吗"的真实答案：不持续。
+- Notes:
+  - 与 [install.sh docker 就绪检查] 和 [WeChat 2h 盲区] 同族，但根因不同：那两条是"起不来/没告警"，这条是"起来后被 OrbStack idle 关机反复打死"。
+  - Fix 方向（需用户拍资源取舍）：(a) 关掉 OrbStack 的 VM idle 自动关机（VM 常驻，wewe 稳定，但常占资源/电）；(b) 加一个 launchd/cron 周期 `orbctl start`（幂等）兜底，VM 被关后很快拉回；(c) 接受间歇 + 加"wewe 长时间不可达"告警。
+  - 临时：2026-06-01 已 `orbctl start` 恢复，wewe :4000=200。
+  - Action (2026-06-01, 用户选"关 idle 自动关机")：`orb config set power.pause_in_sleep false` + `orb stop/start` 应用；wewe 已恢复。**但有效性未验证**——VM 当时是 "Stopped"（非 paused），pause_in_sleep 是否就是根因尚不确定，只能等下个 idle/sleep 周期观察是否还停。若仍复发：根因另在，需上 fallback (b)/(a)——周期 `orbctl start` keep-alive 或 caffeinate/pmset 阻止 Mac 睡眠（Mac 整机睡时 VM 无论如何跑不了）。
