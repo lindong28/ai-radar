@@ -110,6 +110,20 @@ def test_heuristic_score_is_item_specific() -> None:
 
 
 def _db(tmp_path: Path) -> sqlite3.Connection:
+    conn = _db_with_sources(tmp_path)
+    item_id = _seed_item_with_dates(
+        conn,
+        "LLM benchmark",
+        "A practical LLM benchmark with API details.",
+        published_at=_recent_iso(30),
+        fetched_at=_recent_iso(29),
+    )
+    _insert_prefilter_eval(conn, item_id)
+    conn.commit()
+    return conn
+
+
+def _db_with_sources(tmp_path: Path) -> sqlite3.Connection:
     db_path = tmp_path / "radar.db"
     migrate(db_path)
     conn = sqlite3.connect(db_path)
@@ -121,17 +135,26 @@ def _db(tmp_path: Path) -> sqlite3.Connection:
         ],
         conn,
     )
+    return conn
+
+
+def _seed_item_with_dates(
+    conn: sqlite3.Connection, title: str, content: str, *, published_at: str, fetched_at: str
+) -> str:
     item = FetchedItem(
         source_id="example",
-        url="https://example.com/llm",
-        title="LLM benchmark",
+        url=f"https://example.com/{title.replace(' ', '-').lower()}",
+        title=title,
         author="Ada",
-        published_at=_recent_iso(30),
-        fetched_at=_recent_iso(29),
-        content_text="A practical LLM benchmark with API details.",
+        published_at=published_at,
+        fetched_at=fetched_at,
+        content_text=content,
     )
     upsert_item(conn, item)
-    item_id = conn.execute("SELECT id FROM items").fetchone()[0]
+    return conn.execute("SELECT id FROM items WHERE title=?", (title,)).fetchone()[0]
+
+
+def _insert_prefilter_eval(conn: sqlite3.Connection, item_id: str) -> None:
     conn.execute(
         """
         INSERT INTO item_evaluations (
@@ -142,8 +165,6 @@ def _db(tmp_path: Path) -> sqlite3.Connection:
         """,
         (item_id, json.dumps({"is_ai_related": True, "confidence": 0.9}), _recent_iso(28)),
     )
-    conn.commit()
-    return conn
 
 
 def test_run_scoring_writes_numeric_evaluations(tmp_path: Path) -> None:
@@ -160,6 +181,35 @@ def test_run_scoring_writes_numeric_evaluations(tmp_path: Path) -> None:
     numeric = json.loads(row[2])
     assert numeric["engineering"] == 9.0
     assert row[3] is None
+
+
+def test_run_scoring_includes_recently_fetched_backfill_regardless_of_old_published(tmp_path: Path) -> None:
+    conn = _db_with_sources(tmp_path)
+    recent_fetch = _recent_iso(5)
+    old_published = (datetime.now(UTC) - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_fetch = (datetime.now(UTC) - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    backfill_id = _seed_item_with_dates(
+        conn,
+        "Old LLM archive fetched today",
+        "A stale LLM archive item.",
+        published_at=old_published,
+        fetched_at=recent_fetch,
+    )
+    stale_fetch_id = _seed_item_with_dates(
+        conn,
+        "Recently published LLM archive fetched last month",
+        "A recently published LLM item from an old fetch window.",
+        published_at=_recent_iso(30),
+        fetched_at=old_fetch,
+    )
+    _insert_prefilter_eval(conn, backfill_id)
+    _insert_prefilter_eval(conn, stale_fetch_id)
+    conn.commit()
+
+    summary = run_scoring(conn, provider=FakeScorer(), since="1d", ruleset_version="score.r1")
+
+    assert summary.processed == 1
+    assert conn.execute("SELECT item_id FROM item_evaluations WHERE stage='scoring'").fetchall() == [(backfill_id,)]
 
 
 def test_run_scoring_clamps_provider_text_to_schema_limits(tmp_path: Path) -> None:

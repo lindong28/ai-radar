@@ -7,6 +7,14 @@
 
 ---
 
+## 2026-06-01 [expansion] ux-contract 未明确搜来源名时的排序承诺
+
+- Discovered: 中文/微信公众号源搜索可用性修复（#6）落地后，产品实现已在搜索态将 source name / author 命中的条目排在内容命中之前，并在同名来源之间用 source_id 轮转，避免高产同名源淹没低产公众号源。
+- Description: `ux-contract.md` HP-4 已承诺"搜源名返回该源内容"，但未定义首屏排序语义。没有排序契约时，未来重构可能回退到纯时间序，导致 `歸藏` 这类同名 X + 微信公众号场景再次让公众号在首屏外。
+- Recommendation: 在搜索契约中补充：有 `q` 时，source name / author 命中优先于 title/content-only 命中；同一命中层内按来源轮转保证每个命中来源首条在 page1 可见；无 `q` 时保留原时间/日期排序。
+
+---
+
 ## 2026-05-28 19:20 [expansion] ux-contract 未明确 `/` 和 `/all` 首屏应 SSR 预载且不显示 loading spinner
 
 - Discovered: SSR preload plan production verification for `https://aiplanet.live/` after comparing the existing CSR loading behavior with AIHOT-style inline/preloaded content.

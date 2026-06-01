@@ -71,7 +71,7 @@ def _candidate_rows(
     force: bool,
 ) -> list[sqlite3.Row | tuple[Any, ...]]:
     cutoff = _parse_since(since).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    params: list[Any] = [cutoff, cutoff]
+    params: list[Any] = [cutoff]
     skip_existing = (
         ""
         if force
@@ -89,7 +89,6 @@ def _candidate_rows(
       FROM items i
       JOIN sources s ON s.id=i.source_id
       WHERE i.fetched_at >= ?
-        AND i.published_at >= ?
         AND EXISTS (
           SELECT 1 FROM item_evaluations pre
           WHERE pre.item_id=i.id

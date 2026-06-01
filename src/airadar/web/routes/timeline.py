@@ -14,6 +14,7 @@ from .common import (
     matches_category,
     parse_enrichment,
     search_id_subquery,
+    source_match_expression,
 )
 
 router = APIRouter()
@@ -109,13 +110,30 @@ def timeline(
             )
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         offset = 0 if cursor else (page - 1) * limit
-        query_params = [*params, limit + 1, offset]
+        search_select = ""
+        order_by = "ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC"
+        search_sort_params: list[object] = []
+        if search_subquery:
+            source_match_sql, search_sort_params = source_match_expression(q, source_alias="s", item_alias="i")
+            search_select = f"""
+                   {source_match_sql} AS is_source_match,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY i.source_id
+                     ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
+                   ) AS intra_source_rank,
+            """
+            order_by = (
+                "ORDER BY is_source_match DESC, intra_source_rank ASC, "
+                "i.published_at DESC, i.fetched_at DESC, i.id DESC"
+            )
+        query_params = [*search_sort_params, *params, limit + 1, offset]
         rows = conn.execute(
             f"""
             SELECT i.*, s.name AS source_name, s.tier,
                    s.kind AS source_kind,
                    s.homepage_url AS source_homepage_url,
                    s.icon_url AS source_icon_url,
+                   {search_select}
                    e.numeric_json,
                    enrich_eval.output_json AS enrich_output_json,
                    c.weighted_score AS curated_weighted_score,
@@ -140,7 +158,7 @@ def timeline(
             LEFT JOIN curated_items c ON c.item_id = i.id
               AND c.run_id = (SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1)
             {where}
-            ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
+            {order_by}
             LIMIT ? OFFSET ?
             """,
             query_params,

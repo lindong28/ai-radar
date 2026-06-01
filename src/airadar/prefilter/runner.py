@@ -84,8 +84,8 @@ def _candidate_rows(
         item_filter = f"i.id IN ({','.join('?' for _ in item_ids)})"
         params.extend(item_ids)
     else:
-        item_filter = "i.fetched_at >= ? AND i.published_at >= ?"
-        params.extend([cutoff, cutoff])
+        item_filter = "i.fetched_at >= ?"
+        params.append(cutoff)
     skip_existing = (
         ""
         if force

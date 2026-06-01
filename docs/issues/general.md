@@ -43,7 +43,7 @@
 
 ---
 
-## [open] prefilter 的 `--since 24h` 用 published_at 过滤，永久排除新接入源的历史导入文章
+## [resolved] prefilter 的 `--since 24h` 用 published_at 过滤，永久排除新接入源的历史导入文章
 
 - Type: bug
 - Priority: high
@@ -54,10 +54,12 @@
   - 影响面不限 wechat——任何"导入历史存量"的新源（backfill 场景）都被排除。
   - 立即缓解：对现有未 prefilter 的 item 跑 `prefilter --force` 或 `--item-id-file`（绕过 since），触发后续 score/enrich/curate。
   - 系统修方向：backfill 场景按 fetched_at 窗口而非 published_at（新 fetch 的历史文章应被处理一次），或新源首次导入开一次性全量 prefilter。
+  - 核实补充 (2026-05-31)：同一 `published_at >= cutoff` 过滤也存在于 `scorer/runner.py:91-92`，故仅修 prefilter 不够——backfill item 即便过了 prefilter 仍会卡在 score 阶段。`enrich/runner.py:96` 只用 `fetched_at`（无此 bug，是正确范式，可作修复参照）。当前生产数据：wx_crossing 10 篇仅 1 prefilter、wx_guizang 10 篇仅 1，wechat 整体 2/20（10%）vs feed 72% / x 81%；18 篇未处理文章均有完整正文（2.7k–16k 字），是真实可见性损失。
+  - Resolution (2026-06-01): `prefilter/runner.py` 与 `scorer/runner.py` 候选窗口改为 `fetched_at`-only，并对 18 篇 WeChat 存量 id 执行 prefilter→score→enrich→curate backfill。L2 V1 结果：`wx_crossing|10|10|10|9|1|0`、`wx_guizang|10|10|10|8|2|0`（total|prefiltered|ai_related|visible|score_below_6_5|unexplained_unprefiltered），零 unexplained 缺席；不可见项均由最新 score < 6.5 解释。
 
 ---
 
-## [open] 搜索不做简繁归一化，搜简体匹配不到繁体源
+## [resolved] 搜索不做简繁归一化，搜简体匹配不到繁体源
 
 - Type: improvement
 - Priority: medium
@@ -66,10 +68,11 @@
 - Notes:
   - Fix 方向：搜索时把 query 做简繁双向扩展（如 `MATCH '"归藏" OR "歸藏"'`），或索引+query 统一归一化（需引入 opencc 类简繁转换）。query 层扩展不动索引、相对有界，但要引依赖。
   - 用户 2026-05-30 明确要求先记录、之后再处理。
+  - Resolution (2026-06-01): 引入 pure-Python `opencc-python-reimplemented`，query 层生成原文+s2t+t2s 去重变体；FTS5 使用 phrase OR，短 query LIKE 与 source-match ranking 共用同一变体集合。L2 V4：`q=归藏&limit=50` 返回 `wx_guizang` 8 条，等于动态可见 expected=8，位置 `1,3,5,7,9,11,13,15`。
 
 ---
 
-## [open] 搜来源名结果被同名/同词的高产源按时间淹没，无来源匹配优先排序
+## [resolved] 搜来源名结果被同名/同词的高产源按时间淹没，无来源匹配优先排序
 
 - Type: improvement
 - Priority: medium
@@ -79,6 +82,7 @@
   - 叠加上面 prefilter backfill bug 后果更重：wx_guizang 9/10 篇本就因未 prefilter 缺席，仅存 1 篇又被淹没。
   - ux-contract HP-4 写了"搜源名返回该源内容"的承诺，但未定义结果排序（时间 vs 相关性 vs 来源优先）——建议在 ux-contract-issues 记一条 contract 定义缺失。
   - Fix 方向：source_name 精确/前缀匹配条目加 rank 提权；或搜源名时按"来源匹配 > 内容匹配"分层排序。
+  - Resolution (2026-06-01): `/api/v1/timeline` 与 `/api/v1/curated` 搜索态增加 `is_source_match`（source name/author LIKE，复用简繁变体）与 `ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY published_at DESC, fetched_at DESC, id DESC)` 来源轮转；无 q 时保留原时间/日期排序。L2 V3：`q=歸藏&limit=50` page1 同时包含 `op7418_x` 与 `wx_guizang`，`wx_guizang` 首条位置 1，之后位置 `3,5,7,9,11,13,15`。
 
 ---
 

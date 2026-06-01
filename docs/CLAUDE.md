@@ -98,6 +98,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260531-wechat-search-usability/](plans/20260531-wechat-search-usability/) | 中文/微信公众号源搜索可用性修复（backfill 可见性、来源优先、多源轮转、简繁互通） |
 | [20260529-timeline-search-source-author/](plans/20260529-timeline-search-source-author/) | Timeline/curated 搜索覆盖来源名、作者和中文标题 |
 | [20260528-ssr-preload/](plans/20260528-ssr-preload/) | SSR preload 首屏加载优化（/ 和 /all 无可感知 spinner） |
 | [20260524-timeline-perf/](plans/20260524-timeline-perf/) | Timeline API 性能优化（/all TTFB 14s -> <1s） |

@@ -104,22 +104,30 @@ def test_run_prefilter_skips_existing_ruleset_evaluation(tmp_path: Path) -> None
     assert conn.execute("SELECT COUNT(*) FROM item_evaluations").fetchone()[0] == 1
 
 
-def test_run_prefilter_since_requires_recent_published_at_not_only_recent_fetch(tmp_path: Path) -> None:
+def test_run_prefilter_includes_recently_fetched_backfill_regardless_of_old_published(tmp_path: Path) -> None:
     conn = _db(tmp_path)
+    old_fetch = (datetime.now(UTC) - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     recent_fetch = _recent_iso(5)
     old_published = (datetime.now(UTC) - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    _seed_item_with_dates(
+    backfill_id = _seed_item_with_dates(
         conn,
         "Old LLM archive fetched today",
         "A stale LLM archive item.",
         published_at=old_published,
         fetched_at=recent_fetch,
     )
+    _seed_item_with_dates(
+        conn,
+        "Recently published LLM archive fetched last month",
+        "A recently published LLM item from an old fetch window.",
+        published_at=_recent_iso(30),
+        fetched_at=old_fetch,
+    )
 
     summary = run_prefilter(conn, provider=FakePrefilter(), since="1d", ruleset_version="test.r1")
 
-    assert summary.processed == 0
-    assert conn.execute("SELECT COUNT(*) FROM item_evaluations").fetchone()[0] == 0
+    assert summary.processed == 1
+    assert conn.execute("SELECT item_id FROM item_evaluations").fetchall() == [(backfill_id,)]
 
 
 def test_run_prefilter_records_parse_errors(monkeypatch, tmp_path: Path) -> None:

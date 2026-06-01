@@ -171,6 +171,18 @@ def _insert_source(conn: sqlite3.Connection, source_id: str, name: str) -> None:
     )
 
 
+def _insert_source_with_kind(conn: sqlite3.Connection, source_id: str, name: str, kind: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO sources (
+          id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, synced_at
+        )
+        VALUES (?, ?, ?, 'T1', 1, ?, ?, 'https://example.com/source.ico', '{}', '2026-05-08T00:00:00Z')
+        """,
+        (source_id, name, f"https://example.com/{source_id}.xml", kind, f"https://example.com/{source_id}/"),
+    )
+
+
 def _insert_item(
     conn: sqlite3.Connection,
     item_id: str,
@@ -200,6 +212,100 @@ def _insert_item(
             f"h-{item_id}",
         ),
     )
+
+
+def _seed_source_search_ranking_db(tmp_path: Path, *, curated: bool = False) -> Path:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source_with_kind(conn, "x_shared", "Shared Lab", "x")
+    _insert_source_with_kind(conn, "wx_shared", "Shared Lab WeChat", "wechat")
+    _insert_source_with_kind(conn, "other_feed", "Other Feed", "feed")
+    rows = [
+        (
+            "item-content-newer",
+            "other_feed",
+            "Body-only update",
+            "Other",
+            "Shared Lab appears only in this body text.",
+            "2026-05-08T10:30:00Z",
+        ),
+        (
+            "item-x-1",
+            "x_shared",
+            "Source match one",
+            "Reporter",
+            "This text does not need the query token.",
+            "2026-05-08T10:20:00Z",
+        ),
+        (
+            "item-x-2",
+            "x_shared",
+            "Source match two",
+            "Reporter",
+            "This text does not need the query token.",
+            "2026-05-08T10:10:00Z",
+        ),
+        (
+            "item-x-3",
+            "x_shared",
+            "Source match three",
+            "Reporter",
+            "This text does not need the query token.",
+            "2026-05-08T10:00:00Z",
+        ),
+        (
+            "item-wx-1",
+            "wx_shared",
+            "WeChat source match",
+            "Editor",
+            "This text does not need the query token.",
+            "2026-05-08T09:00:00Z",
+        ),
+    ]
+    for item_id, source_id, title, author, content_text, published_at in rows:
+        _insert_item(conn, item_id, source_id, title, author, content_text, published_at)
+    if curated:
+        conn.execute(
+            """
+            INSERT INTO curation_runs (
+              id, ruleset_version, weights_json, threshold, input_eval_ids, output_curated_ids, created_at
+            )
+            VALUES ('run-1', 'test.r1', '{}', 6.5, '[]', '[]', '2026-05-08T11:00:00Z')
+            """
+        )
+        source_names = {
+            "x_shared": "Shared Lab",
+            "wx_shared": "Shared Lab WeChat",
+            "other_feed": "Other Feed",
+        }
+        for rank, (item_id, source_id, title, author, _content_text, published_at) in enumerate(rows, start=1):
+            summary = json.dumps(
+                {
+                    "id": item_id,
+                    "source_id": source_id,
+                    "source_name": source_names[source_id],
+                    "source_kind": "feed",
+                    "title": title,
+                    "author": author,
+                    "published_at": published_at,
+                    "fetched_at": published_at,
+                    "topic_tags": [],
+                    "weighted_score": 8.0,
+                    "rank": rank,
+                    "scores": {},
+                }
+            )
+            conn.execute(
+                """
+                INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json, summary_json)
+                VALUES ('run-1', ?, 8.0, ?, '{}', ?)
+                """,
+                (item_id, rank, summary),
+            )
+    conn.commit()
+    conn.close()
+    return db_path
 
 
 def _curated_summary(item_id: str, source_id: str, source_name: str, title: str, author: str) -> str:
@@ -479,6 +585,32 @@ def test_search_id_subquery_switches_between_fts_like_and_noop() -> None:
     assert like_params == [r"%\%\_%", r"%\%\_%", r"%\%\_%", r"%\%\_%"]
 
 
+def test_expand_st_variants_uses_opencc_bidirectionally() -> None:
+    assert route_common.expand_st_variants("归藏") == ["归藏", "歸藏"]
+    assert route_common.expand_st_variants("歸藏") == ["歸藏", "归藏"]
+    assert route_common.expand_st_variants("openai") == ["openai"]
+
+
+def test_search_id_subquery_expands_simplified_traditional_variants() -> None:
+    fts_sql, fts_params = route_common.search_id_subquery("归藏工具")
+    assert fts_sql == "SELECT item_id FROM items_fts WHERE items_fts MATCH ?"
+    assert fts_params == ['"归藏工具" OR "歸藏工具"']
+
+    like_sql, like_params = route_common.search_id_subquery("归藏")
+    assert like_sql is not None
+    assert like_sql.count("LIKE ? ESCAPE '\\'") == 8
+    assert like_params == ["%归藏%", "%归藏%", "%归藏%", "%归藏%", "%歸藏%", "%歸藏%", "%歸藏%", "%歸藏%"]
+
+
+def test_source_match_expression_reuses_like_escape() -> None:
+    sql, params = route_common.source_match_expression(r"100%_AI", source_alias="src", item_alias="it")
+
+    assert sql == (
+        "CASE WHEN (src.name LIKE ? ESCAPE '\\' OR it.author LIKE ? ESCAPE '\\') THEN 1 ELSE 0 END"
+    )
+    assert params == [r"%100\%\_AI%", r"%100\%\_AI%"]
+
+
 def test_timeline_search_uses_fts_and_filters_results(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 
@@ -488,6 +620,29 @@ def test_timeline_search_uses_fts_and_filters_results(tmp_path: Path) -> None:
 
     assert [item["id"] for item in data["items"]] == ["item-openai", "item-claude"]
     assert data["total"] == 2
+
+
+def test_timeline_search_prioritizes_source_matches_and_rotates_sources(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_source_search_ranking_db(tmp_path)))
+
+    search = client.get("/api/v1/timeline", params={"q": "Shared Lab", "limit": 5}).json()["data"]
+    no_query = client.get("/api/v1/timeline", params={"limit": 5}).json()["data"]
+
+    assert [item["id"] for item in search["items"]] == [
+        "item-x-1",
+        "item-wx-1",
+        "item-x-2",
+        "item-x-3",
+        "item-content-newer",
+    ]
+    assert "wx_shared" in {item["source_id"] for item in search["items"][:3]}
+    assert [item["id"] for item in no_query["items"]] == [
+        "item-content-newer",
+        "item-x-1",
+        "item-x-2",
+        "item-x-3",
+        "item-wx-1",
+    ]
 
 
 def test_timeline_search_matches_source_author_and_chinese_title(tmp_path: Path) -> None:
@@ -532,6 +687,69 @@ def test_short_search_uses_like_for_timeline_and_curated_precomputed(tmp_path: P
 
     assert [item["id"] for item in timeline["items"]] == ["item-guizang"]
     assert [item["id"] for item in curated["items"]] == ["item-guizang"]
+
+
+def test_simplified_short_search_matches_traditional_source_name(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source(conn, "guizang_feed", "歸藏社")
+    _insert_item(
+        conn,
+        "item-guizang",
+        "guizang_feed",
+        "Short source item",
+        "元亨",
+        "The simplified query should match the traditional source name.",
+    )
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json, summary_json)
+        VALUES ('run-1', 'item-guizang', 8.0, 2, '{}', ?)
+        """,
+        (_curated_summary("item-guizang", "guizang_feed", "歸藏社", "Short source item", "元亨"),),
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"q": "归藏"}).json()["data"]
+    curated = client.get("/api/v1/curated", params={"q": "归藏"}).json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-guizang"]
+    assert [item["id"] for item in curated["items"]] == ["item-guizang"]
+
+
+def test_simplified_query_marks_traditional_source_as_source_match_for_ranking(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source_with_kind(conn, "wx_guizang", "歸藏工具箱", "wechat")
+    _insert_source_with_kind(conn, "other_feed", "Other Feed", "feed")
+    _insert_item(
+        conn,
+        "item-content-newer",
+        "other_feed",
+        "归藏 body-only title match",
+        "Other",
+        "The source does not match.",
+        "2026-05-08T10:30:00Z",
+    )
+    _insert_item(
+        conn,
+        "item-guizang",
+        "wx_guizang",
+        "Traditional source item",
+        "元亨",
+        "The title intentionally avoids the simplified query token.",
+        "2026-05-08T09:00:00Z",
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"q": "归藏", "limit": 2}).json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-guizang", "item-content-newer"]
 
 
 def test_short_search_uses_like_for_curated_compute_fallback(tmp_path: Path) -> None:
@@ -851,6 +1069,28 @@ def test_curated_search_uses_fts_and_filters_results(tmp_path: Path) -> None:
     assert [item["id"] for item in match["items"]] == ["item-openai"]
     assert [item["id"] for item in source_match["items"]] == ["item-openai"]
     assert no_match["items"] == []
+
+
+def test_curated_search_prioritizes_source_matches_and_rotates_sources_for_precomputed_items(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_source_search_ranking_db(tmp_path, curated=True)))
+
+    search = client.get("/api/v1/curated", params={"q": "Shared Lab"}).json()["data"]
+    no_query = client.get("/api/v1/curated").json()["data"]
+
+    assert [item["id"] for item in search["items"]] == [
+        "item-x-1",
+        "item-wx-1",
+        "item-x-2",
+        "item-x-3",
+        "item-content-newer",
+    ]
+    assert [item["id"] for item in no_query["items"]] == [
+        "item-content-newer",
+        "item-x-1",
+        "item-x-2",
+        "item-x-3",
+        "item-wx-1",
+    ]
 
 
 def test_curated_api_exposes_related_discussions_for_cross_source_links(tmp_path: Path) -> None:

@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import Request
+from opencc import OpenCC
 
 from ...curator.score import weighted_score
 from ...curator.weights import DEFAULT_WEIGHTS
@@ -254,14 +256,54 @@ def fts_phrase_query(value: str | None) -> str | None:
     return f'"{query}"'
 
 
+def expand_st_variants(q: str | None) -> list[str]:
+    query = (q or "").strip()
+    if not query:
+        return []
+    variants = [
+        query,
+        _opencc_converter("s2t").convert(query),
+        _opencc_converter("t2s").convert(query),
+    ]
+    return list(dict.fromkeys(variant for variant in variants if variant))
+
+
+@lru_cache(maxsize=2)
+def _opencc_converter(config: str) -> OpenCC:
+    return OpenCC(config)
+
+
+def escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def like_patterns_for_query(q: str | None) -> list[str]:
+    return [f"%{escape_like(variant)}%" for variant in expand_st_variants(q)]
+
+
+def source_match_expression(q: str | None, *, source_alias: str = "s", item_alias: str = "i") -> tuple[str, list[object]]:
+    patterns = like_patterns_for_query(q)
+    if not patterns:
+        return "0", []
+    clauses: list[str] = []
+    params: list[object] = []
+    for pattern in patterns:
+        clauses.append(f"{source_alias}.name LIKE ? ESCAPE '\\'")
+        params.append(pattern)
+        clauses.append(f"{item_alias}.author LIKE ? ESCAPE '\\'")
+        params.append(pattern)
+    return f"CASE WHEN ({' OR '.join(clauses)}) THEN 1 ELSE 0 END", params
+
+
 def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
     qs = (q or "").strip()
     if not qs:
         return None, []
     if len(qs) >= 3:
-        return "SELECT item_id FROM items_fts WHERE items_fts MATCH ?", [fts_phrase_query(qs) or ""]
+        fts_query = " OR ".join(phrase for variant in expand_st_variants(qs) if (phrase := fts_phrase_query(variant)))
+        return "SELECT item_id FROM items_fts WHERE items_fts MATCH ?", [fts_query]
 
-    like = "%" + qs.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    like_patterns = like_patterns_for_query(qs)
     subquery = (
         "SELECT i2.id FROM items i2 "
         "JOIN sources s2 ON s2.id = i2.source_id "
@@ -269,12 +311,19 @@ def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
         "  SELECT MAX(le.id) FROM item_evaluations le "
         "  WHERE le.item_id = i2.id AND le.stage = 'enrich' AND le.error IS NULL"
         ") "
-        "WHERE i2.title LIKE ? ESCAPE '\\' "
-        "OR i2.author LIKE ? ESCAPE '\\' "
-        "OR s2.name LIKE ? ESCAPE '\\' "
-        "OR COALESCE(json_extract(e2.output_json, '$.title_zh'), '') LIKE ? ESCAPE '\\'"
+        "WHERE "
+        + " OR ".join(
+            [
+                "i2.title LIKE ? ESCAPE '\\'",
+                "i2.author LIKE ? ESCAPE '\\'",
+                "s2.name LIKE ? ESCAPE '\\'",
+                "COALESCE(json_extract(e2.output_json, '$.title_zh'), '') LIKE ? ESCAPE '\\'",
+            ]
+            * len(like_patterns)
+        )
     )
-    return subquery, [like, like, like, like]
+    params = [pattern for pattern in like_patterns for _ in range(4)]
+    return subquery, params
 
 
 def content_preview(row: sqlite3.Row, preview_query: str | None = None) -> str | None:
