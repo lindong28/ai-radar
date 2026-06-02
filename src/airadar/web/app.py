@@ -26,6 +26,7 @@ PRELOAD_ITEM_KEYS = {
     "source_kind",
     "source_homepage_url",
     "source_icon_url",
+    "author_avatar_url",
     "tier",
     "url",
     "title",
@@ -45,6 +46,7 @@ PRELOAD_ITEM_KEYS = {
 }
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 PREPAINT_ITEM_LIMIT = 12
+WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601"
 
 
 def _uvicorn_log_config() -> dict[str, object]:
@@ -101,6 +103,18 @@ def _score_tier(score: int) -> str:
     return "score-muted"
 
 
+def _display_source_name(raw_item: dict[str, object], source_kind: str, source_name: str) -> str:
+    if source_kind == "wechat":
+        return str(raw_item.get("author") or source_name or raw_item.get("source_id") or "")
+    return source_name
+
+
+def _display_source_icon_url(raw_item: dict[str, object], source_kind: str) -> str:
+    if source_kind == "wechat":
+        return str(raw_item.get("author_avatar_url") or WECHAT_FALLBACK_ICON)
+    return str(raw_item.get("source_icon_url") or "")
+
+
 def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, object]]:
     if not isinstance(items, list):
         return []
@@ -111,6 +125,8 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
             continue
         source_kind = str(raw_item.get("source_kind") or "")
         source_name = str(raw_item.get("source_name") or raw_item.get("source_id") or "")
+        display_source_name = _display_source_name(raw_item, source_kind, source_name)
+        display_source_icon_url = _display_source_icon_url(raw_item, source_kind)
         title = str(
             raw_item.get("title_zh")
             or raw_item.get("title")
@@ -136,10 +152,10 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
         prepaint.append(
             {
                 "source_id": raw_item.get("source_id") or "",
-                "source_name": source_name,
+                "source_name": display_source_name,
                 "source_homepage_url": raw_item.get("source_homepage_url") or raw_item.get("url") or "#",
-                "source_icon_url": raw_item.get("source_icon_url") or "",
-                "source_initial": (source_name or "?").strip()[:1].upper() or "?",
+                "source_icon_url": display_source_icon_url,
+                "source_initial": (display_source_name or "?").strip()[:1].upper() or "?",
                 "is_x": source_kind == "x",
                 "title": title,
                 "url": str(raw_item.get("url") or "#").split("#", 1)[0],

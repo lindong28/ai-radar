@@ -12,7 +12,7 @@
                 <a class="source-link" href="{{ item.source_homepage_url }}" target="_blank" rel="noopener noreferrer">
                   <span class="source-icon">
                     {% if item.source_icon_url %}
-                      <img class="source-avatar" src="{{ item.source_icon_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+                      <img class="source-avatar" src="{{ item.source_icon_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">
                     {% endif %}
                     <span class="source-initial">{{ item.source_initial }}</span>
                   </span>

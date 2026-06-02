@@ -108,6 +108,15 @@ def test_app_js_supports_url_state_score_tiers_and_card_dividers() -> None:
     assert "<img" in js
 
 
+def test_app_js_uses_wechat_author_name_and_avatar_fallback() -> None:
+    js = _read("app.js")
+
+    assert 'const WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601";' in js
+    assert 'if (item.source_kind === "wechat") return item.author || item.source_name || item.source_id;' in js
+    assert 'if (item.source_kind === "wechat") return item.author_avatar_url || WECHAT_FALLBACK_ICON;' in js
+    assert 'item.source_kind !== "wechat"' in js
+
+
 def test_app_js_uses_title_and_media_as_natural_external_targets() -> None:
     js = _read("app.js")
 
@@ -171,6 +180,8 @@ def test_app_js_supports_aihot_style_daily_report() -> None:
     assert "daily-section" in js
     assert "daily-section-articles daily-article-list" in js
     assert "daily-article-source daily-article-meta" in js
+    assert "daily-source-avatar" in js
+    assert "sourceDisplayName(item) || \"来源\"" in js
     assert "daily-article-title" in js
     assert '<h3 class="daily-article-title">' in js
     assert "dailyDateFromPath" in js

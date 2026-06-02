@@ -32,19 +32,38 @@ def _execute_migration_idempotent(conn: sqlite3.Connection, sql: str) -> None:
     """Run a migration script statement-by-statement, treating sqlite
     "duplicate column name" errors as idempotent no-ops so ALTER TABLE ADD
     COLUMN is safe to re-run on already-migrated databases."""
-    if "CREATE TRIGGER" in sql.upper():
-        conn.executescript(sql)
-        return
-    for raw_stmt in sql.split(";"):
+    pending: list[str] = []
+    in_trigger = False
+    for line in sql.splitlines(keepends=True):
+        pending.append(line)
+        raw_stmt = "".join(pending)
+        effective_stmt = "\n".join(
+            part for part in raw_stmt.splitlines() if not part.strip().startswith("--")
+        ).lstrip()
+        if not in_trigger and effective_stmt.upper().startswith("CREATE TRIGGER"):
+            in_trigger = True
+        if in_trigger:
+            if line.strip().upper() != "END;":
+                continue
+            in_trigger = False
+        elif not sqlite3.complete_statement(raw_stmt):
+            continue
+        pending.clear()
         stmt = raw_stmt.strip()
         if not stmt:
             continue
         try:
             conn.execute(stmt)
         except sqlite3.OperationalError as exc:
-            if "duplicate column name" in str(exc).lower():
+            message = str(exc).lower()
+            if "duplicate column name" in message:
+                continue
+            if "already exists" in message and stmt.lstrip().upper().startswith("CREATE "):
                 continue
             raise
+    tail = "".join(pending).strip()
+    if tail:
+        conn.execute(tail)
 
 
 def _migration_already_applied(conn: sqlite3.Connection, migration_name: str) -> bool:

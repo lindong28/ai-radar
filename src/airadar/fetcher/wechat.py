@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
+from html import unescape
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -24,12 +26,46 @@ from .content import clean_content
 logger = logging.getLogger(__name__)
 
 ArticleResult = dict[str, Any]
+ROUND_HEAD_IMG_RE = re.compile(r"round_head_img\s*[=:]\s*(['\"])(.*?)\1", re.S)
+MMBIZ_HTTP_PREFIX = "http://mmbiz.qpic.cn"
+MMBIZ_HTTPS_PREFIX = "https://mmbiz.qpic.cn"
 
 
 def _text_or_default(node: Tag | None, fallback: str) -> str:
     if node is None:
         return fallback
     return node.get_text(strip=True) or fallback
+
+
+def _decode_js_string(value: str) -> str:
+    normalized = value.replace("\\'", "'")
+    try:
+        decoded = json.loads(f'"{normalized}"')
+    except json.JSONDecodeError:
+        decoded = value.replace("\\/", "/").replace('\\"', '"').replace("\\'", "'")
+    return unescape(str(decoded).strip())
+
+
+def normalize_wechat_avatar_url(value: object) -> str | None:
+    url = str(value or "").strip()
+    if not url:
+        return None
+    if url.startswith("//"):
+        url = f"https:{url}"
+    if url.startswith(MMBIZ_HTTP_PREFIX):
+        url = f"{MMBIZ_HTTPS_PREFIX}{url[len(MMBIZ_HTTP_PREFIX):]}"
+    if url.startswith(("https://", "http://")):
+        return url
+    return None
+
+
+def extract_round_head_img(html: str) -> str | None:
+    for match in ROUND_HEAD_IMG_RE.finditer(html):
+        value = _decode_js_string(match.group(2))
+        normalized = normalize_wechat_avatar_url(value)
+        if normalized:
+            return normalized
+    return None
 
 
 def parse_article_html(html: str, url: str) -> ArticleResult:
@@ -54,6 +90,7 @@ def parse_article_html(html: str, url: str) -> ArticleResult:
         "title": title,
         "author": author,
         "publish_time": publish_time,
+        "author_avatar_url": extract_round_head_img(html),
         "content_html": content_html,
         "content_text": clean_content(content_html, fallback=title),
         "error": None,

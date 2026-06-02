@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from airadar.fetcher.wechat import parse_article_html, scrape_article
+from airadar.fetcher.wechat import extract_round_head_img, parse_article_html, scrape_article
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "wechat"
 SEED_CASES = [
@@ -40,6 +40,43 @@ def test_parse_article_html_extracts_wechat_seed_fixtures(
     assert "<script" not in article["content_html"]
     assert "<style" not in article["content_html"]
     assert all(feature in article["content_text"] for feature in features)
+
+
+def test_parse_article_html_extracts_round_head_img_avatar() -> None:
+    html = """
+    <html>
+      <head><script>var round_head_img = "https:\\/\\/mmbiz.qpic.cn\\/mmbiz_png\\/avatar\\/0?wx_fmt=png&amp;tp=webp";</script></head>
+      <body>
+        <h1 id="activity-name">Seed Title</h1>
+        <span id="js_author_name">歸藏的 AI 工具箱</span>
+        <em id="publish_time">2026年06月01日</em>
+        <div id="js_content">Full article body</div>
+      </body>
+    </html>
+    """
+
+    article = parse_article_html(html, "https://mp.weixin.qq.com/s/seed")
+
+    assert article["author_avatar_url"] == "https://mmbiz.qpic.cn/mmbiz_png/avatar/0?wx_fmt=png&tp=webp"
+
+
+def test_extract_round_head_img_supports_protocol_relative_urls() -> None:
+    html = "<script>window.round_head_img='//mmbiz.qpic.cn/mmbiz_jpg/avatar/0';</script>"
+
+    assert extract_round_head_img(html) == "https://mmbiz.qpic.cn/mmbiz_jpg/avatar/0"
+
+
+def test_extract_round_head_img_upgrades_mmbiz_http_urls_to_https() -> None:
+    html = "<script>var round_head_img='http://mmbiz.qpic.cn/mmbiz_png/avatar/0?wx_fmt=png';</script>"
+
+    assert extract_round_head_img(html) == "https://mmbiz.qpic.cn/mmbiz_png/avatar/0?wx_fmt=png"
+
+
+def test_extract_round_head_img_supports_object_property_colon_syntax() -> None:
+    # 某些公众号文章页（如「歸藏的AI工具箱」）用 JS 对象属性冒号形式，而非等号赋值
+    html = "<script>window.__mp={round_head_img: 'http://mmbiz.qpic.cn/mmbiz_png/guizang/0?wx_fmt=png'};</script>"
+
+    assert extract_round_head_img(html) == "https://mmbiz.qpic.cn/mmbiz_png/guizang/0?wx_fmt=png"
 
 
 @pytest.mark.integration

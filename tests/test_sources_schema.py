@@ -118,3 +118,37 @@ def test_dataclass_supports_new_fields_directly() -> None:
     assert source.homepage_url == "https://x.com/example"
     assert source.icon_url == "https://abs.twimg.com/favicons/twitter.ico"
     assert source.enabled is True
+
+
+def test_url_expands_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_MP2RSS_URL", "https://mp2rss.example/feed/secret.xml")
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "wx_mp2rss"',
+            'name = "WeChat collection"',
+            'url = "${TEST_MP2RSS_URL}"',
+            'tier = "T2"',
+            'kind = "wechat"',
+        ],
+    )
+    source = load_sources(path)[0]
+    assert source.url == "https://mp2rss.example/feed/secret.xml"
+
+
+def test_url_unset_env_var_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TEST_MP2RSS_URL", raising=False)
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "wx_mp2rss"',
+            'name = "WeChat collection"',
+            'url = "${TEST_MP2RSS_URL}"',
+            'tier = "T2"',
+            'kind = "wechat"',
+        ],
+    )
+    with pytest.raises(ValueError, match="unset env var"):
+        load_sources(path)

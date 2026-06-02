@@ -52,6 +52,31 @@ def test_migrate_creates_expected_tables_and_is_idempotent(tmp_path: Path) -> No
     }.issubset(table_names)
 
 
+def test_migrate_upgrades_cached_wechat_avatar_urls_to_https(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO wechat_account_avatars (account, avatar_url, checked_at, updated_at)
+            VALUES (
+              '数字生命卡兹克',
+              'http://mmbiz.qpic.cn/mmbiz_png/avatar/0?wx_fmt=png',
+              '2026-06-01T00:00:00Z',
+              '2026-06-01T00:00:00Z'
+            )
+            """
+        )
+
+    migrate(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        avatar_url = conn.execute(
+            "SELECT avatar_url FROM wechat_account_avatars WHERE account='数字生命卡兹克'"
+        ).fetchone()[0]
+    assert avatar_url == "https://mmbiz.qpic.cn/mmbiz_png/avatar/0?wx_fmt=png"
+
+
 def test_migrate_upgrades_applied_004_database_fts_schema_and_trigger(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"
     migrate(db_path)

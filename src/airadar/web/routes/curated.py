@@ -80,6 +80,7 @@ def _load_precomputed(
         rows = conn.execute(
             f"""
             SELECT c.item_id, c.summary_json, i.content_text,
+                   wa.avatar_url AS author_avatar_url,
                    {source_match_sql} AS is_source_match,
                    ROW_NUMBER() OVER (
                      PARTITION BY i.source_id
@@ -88,6 +89,10 @@ def _load_precomputed(
             FROM curated_items c
             JOIN items i ON i.id=c.item_id
             JOIN sources s ON s.id=i.source_id
+            LEFT JOIN wechat_account_avatars wa
+              ON COALESCE(s.kind, 'feed')='wechat'
+             AND wa.account=i.author
+             AND wa.avatar_url IS NOT NULL
             {where}
             ORDER BY is_source_match DESC, intra_source_rank ASC,
                      i.published_at DESC, i.fetched_at DESC, i.id DESC
@@ -96,9 +101,14 @@ def _load_precomputed(
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT c.item_id, c.summary_json, i.content_text "
+            "SELECT c.item_id, c.summary_json, i.content_text, wa.avatar_url AS author_avatar_url "
             "FROM curated_items c "
             "JOIN items i ON i.id=c.item_id "
+            "JOIN sources s ON s.id=i.source_id "
+            "LEFT JOIN wechat_account_avatars wa "
+            "  ON COALESCE(s.kind, 'feed')='wechat' "
+            " AND wa.account=i.author "
+            " AND wa.avatar_url IS NOT NULL "
             "WHERE c.run_id=? AND c.summary_json IS NOT NULL ORDER BY c.rank",
             (run_id,),
         ).fetchall()
@@ -106,6 +116,8 @@ def _load_precomputed(
     items: list[dict[str, Any]] = []
     for row in rows:
         item: dict[str, Any] = json.loads(row["summary_json"])
+        if row["author_avatar_url"]:
+            item["author_avatar_url"] = row["author_avatar_url"]
         if selected_date and _shanghai_date(item.get("published_at", "")) != selected_date:
             continue
         if not matches_category(item, category):
@@ -169,11 +181,16 @@ def _compute_items(
                s.kind AS source_kind,
                s.homepage_url AS source_homepage_url,
                s.icon_url AS source_icon_url,
+               wa.avatar_url AS author_avatar_url,
                {search_select}
                c.weighted_score, c.rank, c.reason_json
         FROM curated_items c
         JOIN items i ON i.id=c.item_id
         JOIN sources s ON s.id=i.source_id
+        LEFT JOIN wechat_account_avatars wa
+          ON COALESCE(s.kind, 'feed')='wechat'
+         AND wa.account=i.author
+         AND wa.avatar_url IS NOT NULL
         {where}
         {order_by}
         """,

@@ -685,6 +685,15 @@ button,
   overflow-wrap: anywhere;
 }
 
+.daily-source-avatar {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  object-fit: cover;
+}
+
 .role-tag {
   color: var(--green);
 }

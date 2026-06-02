@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from airadar.db import migrate
 from airadar.enrich.schema import EnrichOutput
-from airadar.web.app import create_app
+from airadar.web.app import WECHAT_FALLBACK_ICON, _prepaint_items, create_app
 from airadar.web.routes import common as route_common
 
 
@@ -416,6 +416,142 @@ def test_item_summary_suppresses_wechat_preview_and_full_text(tmp_path: Path) ->
     assert bare["content_preview"] is None
     assert bare["summary_zh"] is None
     assert "content_text" not in bare
+
+
+def test_timeline_api_includes_wechat_author_avatar_cache(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source_with_kind(conn, "wx_mp2rss", "微信公众号（Mp2RSS 合集）", "wechat")
+    _insert_item(
+        conn,
+        "item-wechat",
+        "wx_mp2rss",
+        "WeChat Article",
+        "歸藏的AI工具箱",
+        "RSS summary body",
+    )
+    conn.execute(
+        """
+        INSERT INTO wechat_account_avatars (account, avatar_url, checked_at, updated_at)
+        VALUES ('歸藏的AI工具箱', 'https://mmbiz.qpic.cn/guizang.png', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    item = client.get("/api/v1/timeline", params={"limit": 1}).json()["data"]["items"][0]
+
+    assert item["source_kind"] == "wechat"
+    assert item["source_name"] == "微信公众号（Mp2RSS 合集）"
+    assert item["author"] == "歸藏的AI工具箱"
+    assert item["author_avatar_url"] == "https://mmbiz.qpic.cn/guizang.png"
+
+
+def test_precomputed_curated_api_hydrates_wechat_author_avatar_cache(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source_with_kind(conn, "wx_mp2rss", "微信公众号（Mp2RSS 合集）", "wechat")
+    _insert_item(
+        conn,
+        "item-wechat",
+        "wx_mp2rss",
+        "WeChat Article",
+        "数字生命卡兹克",
+        "RSS summary body",
+    )
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json, summary_json)
+        VALUES ('run-1', 'item-wechat', 8.1, 2, '{}', ?)
+        """,
+        (
+            _curated_summary(
+                "item-wechat",
+                "wx_mp2rss",
+                "微信公众号（Mp2RSS 合集）",
+                "WeChat Article",
+                "数字生命卡兹克",
+            ),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO wechat_account_avatars (account, avatar_url, checked_at, updated_at)
+        VALUES ('数字生命卡兹克', 'https://mmbiz.qpic.cn/kazike.png', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    items = client.get("/api/v1/curated").json()["data"]["items"]
+    wechat = next(item for item in items if item["id"] == "item-wechat")
+
+    assert wechat["author_avatar_url"] == "https://mmbiz.qpic.cn/kazike.png"
+
+
+def test_prepaint_uses_wechat_author_name_and_avatar_without_rss_suffix() -> None:
+    [wechat, feed] = _prepaint_items(
+        [
+            {
+                "id": "item-wechat",
+                "source_id": "wx_mp2rss",
+                "source_name": "微信公众号（Mp2RSS 合集）",
+                "source_kind": "wechat",
+                "source_icon_url": "https://example.com/collection.png",
+                "author": "歸藏的AI工具箱",
+                "author_avatar_url": "https://mmbiz.qpic.cn/guizang.png",
+                "url": "https://mp.weixin.qq.com/s/seed",
+                "title": "WeChat Article",
+                "summary_zh": "摘要",
+                "published_at": "2026-06-01T00:00:00Z",
+            },
+            {
+                "id": "item-feed",
+                "source_id": "openai_blog",
+                "source_name": "OpenAI Blog",
+                "source_kind": "feed",
+                "source_icon_url": "https://example.com/openai.png",
+                "author": "Ada",
+                "url": "https://example.com/post",
+                "title": "Feed Article",
+                "content_preview": "Preview",
+                "published_at": "2026-06-01T00:00:00Z",
+            },
+        ],
+        timeline_page=True,
+    )
+
+    assert wechat["source_name"] == "歸藏的AI工具箱"
+    assert wechat["source_icon_url"] == "https://mmbiz.qpic.cn/guizang.png"
+    assert wechat["source_initial"] == "歸"
+    assert "RSS" not in wechat["source_name"]
+    assert feed["source_name"] == "OpenAI Blog"
+    assert feed["source_icon_url"] == "https://example.com/openai.png"
+
+
+def test_prepaint_uses_generic_wechat_icon_when_author_avatar_missing() -> None:
+    [item] = _prepaint_items(
+        [
+            {
+                "id": "item-wechat",
+                "source_id": "wx_mp2rss",
+                "source_name": "微信公众号（Mp2RSS 合集）",
+                "source_kind": "wechat",
+                "author": "数字生命卡兹克",
+                "url": "https://mp.weixin.qq.com/s/seed",
+                "title": "WeChat Article",
+                "summary_zh": "摘要",
+                "published_at": "2026-06-01T00:00:00Z",
+            }
+        ],
+        timeline_page=True,
+    )
+
+    assert item["source_name"] == "数字生命卡兹克"
+    assert item["source_icon_url"] == WECHAT_FALLBACK_ICON
 
 
 def test_timeline_total_uses_limit_plus_one_estimate(tmp_path: Path) -> None:

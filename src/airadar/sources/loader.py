@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -45,6 +46,11 @@ def _validate_source(raw: dict[str, Any]) -> SourceConfig:
 
     if not SLUG_RE.match(slug):
         raise ValueError(f"invalid source slug: {slug}")
+    url = os.path.expandvars(url)
+    if "${" in url:
+        raise ValueError(
+            f"source url for {slug} references an unset env var: {raw['url']!r}"
+        )
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"invalid source url for {slug}: {url}")

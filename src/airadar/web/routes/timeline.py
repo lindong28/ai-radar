@@ -133,6 +133,7 @@ def timeline(
                    s.kind AS source_kind,
                    s.homepage_url AS source_homepage_url,
                    s.icon_url AS source_icon_url,
+                   wa.avatar_url AS author_avatar_url,
                    {search_select}
                    e.numeric_json,
                    enrich_eval.output_json AS enrich_output_json,
@@ -141,6 +142,10 @@ def timeline(
                    c.reason_json
             FROM items i
             JOIN sources s ON s.id=i.source_id
+            LEFT JOIN wechat_account_avatars wa
+              ON COALESCE(s.kind, 'feed')='wechat'
+             AND wa.account=i.author
+             AND wa.avatar_url IS NOT NULL
             LEFT JOIN item_evaluations e ON e.id = (
               SELECT MAX(latest.id)
               FROM item_evaluations latest

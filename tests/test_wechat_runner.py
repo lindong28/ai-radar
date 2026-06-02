@@ -46,16 +46,53 @@ def _conn(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _cache_avatar(conn: sqlite3.Connection, account: str, avatar_url: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO wechat_account_avatars (account, avatar_url, checked_at, updated_at)
+        VALUES (?, ?, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')
+        """,
+        (account, avatar_url),
+    )
+
+
 def test_enrich_wechat_bodies_skips_already_stored_urls(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     item = _item()
     stored = replace(item, content_text="Stored full body with guizang-social-card-skill")
     assert upsert_item(conn, stored) is True
+    _cache_avatar(conn, "RSS Author", "https://mmbiz.qpic.cn/avatar.png")
 
     with patch("airadar.fetcher.runner.scrape_article", side_effect=AssertionError("should not scrape")):
         enriched = _enrich_wechat_bodies(conn, [item])
 
     assert enriched == [replace(item, content_text=stored.content_text, content_html=stored.content_html)]
+
+
+def test_enrich_wechat_bodies_caches_avatar_for_stored_body_once_per_account(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    first = _item("https://mp.weixin.qq.com/s/first")
+    second = _item("https://mp.weixin.qq.com/s/second")
+    assert upsert_item(conn, replace(first, content_text="Stored first full body")) is True
+    assert upsert_item(conn, replace(second, content_text="Stored second full body")) is True
+
+    with patch(
+        "airadar.fetcher.runner.scrape_article",
+        return_value={
+            "success": True,
+            "author_avatar_url": "http://mmbiz.qpic.cn/rss-author.png",
+            "content_html": "<div id='js_content'>Scraped body</div>",
+            "content_text": "Scraped body",
+        },
+    ) as scrape:
+        enriched = _enrich_wechat_bodies(conn, [first, second])
+
+    scrape.assert_called_once_with(first.url)
+    avatar = conn.execute(
+        "SELECT avatar_url FROM wechat_account_avatars WHERE account='RSS Author'"
+    ).fetchone()[0]
+    assert avatar == "https://mmbiz.qpic.cn/rss-author.png"
+    assert [item.content_text for item in enriched] == ["Stored first full body", "Stored second full body"]
 
 
 def test_enrich_wechat_bodies_recovers_existing_degraded_item(tmp_path: Path) -> None:
@@ -88,6 +125,7 @@ def test_enrich_wechat_bodies_replaces_body_but_preserves_rss_metadata(tmp_path:
             "title": "Scraped Title",
             "author": "Scraped Author",
             "publish_time": "2026年05月28日",
+            "author_avatar_url": "https://mmbiz.qpic.cn/scraped-author.png",
             "content_html": "<div id='js_content'>Full article body</div>",
             "content_text": "Full article body with 28 个版式骨架",
         },
@@ -101,6 +139,10 @@ def test_enrich_wechat_bodies_replaces_body_but_preserves_rss_metadata(tmp_path:
     assert enriched[0].published_at == item.published_at
     assert enriched[0].content_text == "Full article body with 28 个版式骨架"
     assert enriched[0].content_html == "<div id='js_content'>Full article body</div>"
+    avatar = conn.execute(
+        "SELECT avatar_url FROM wechat_account_avatars WHERE account='RSS Author'"
+    ).fetchone()[0]
+    assert avatar == "https://mmbiz.qpic.cn/scraped-author.png"
 
 
 def test_enrich_wechat_bodies_degrades_to_rss_item_on_scrape_failure(tmp_path: Path) -> None:
@@ -142,6 +184,35 @@ def test_fetch_source_enriches_wechat_items_before_upsert(tmp_path: Path) -> Non
         "Full article body with guizang-social-card-skill",
         "<div id='js_content'>Full article body</div>",
     )
+
+
+def test_fetch_source_backfills_wechat_avatar_when_feed_not_modified(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    item = _item()
+    assert upsert_item(conn, replace(item, content_text="Stored full body")) is True
+
+    with (
+        patch("airadar.fetcher.runner.fetch_feed", return_value=FeedResponse(status_code=304, body=b"", not_modified=True)),
+        patch(
+            "airadar.fetcher.runner.scrape_article",
+            return_value={
+                "success": True,
+                "author_avatar_url": "https://mmbiz.qpic.cn/not-modified-avatar.png",
+                "content_html": "<div id='js_content'>Full article body</div>",
+                "content_text": "Full article body",
+            },
+        ) as scrape,
+    ):
+        summary = fetch_source(conn, _source())
+
+    assert summary.error is None
+    assert summary.fetched == 0
+    assert summary.inserted == 0
+    scrape.assert_called_once_with(item.url)
+    avatar = conn.execute(
+        "SELECT avatar_url FROM wechat_account_avatars WHERE account='RSS Author'"
+    ).fetchone()[0]
+    assert avatar == "https://mmbiz.qpic.cn/not-modified-avatar.png"
 
 
 def test_fetch_source_preserves_existing_full_text_when_repeat_fetch_degrades(tmp_path: Path) -> None:

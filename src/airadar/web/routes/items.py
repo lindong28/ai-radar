@@ -16,9 +16,14 @@ def item_detail(request: Request, item_id: str) -> dict[str, object]:
             SELECT i.*, s.name AS source_name, s.tier,
                    s.kind AS source_kind,
                    s.homepage_url AS source_homepage_url,
-                   s.icon_url AS source_icon_url
+                   s.icon_url AS source_icon_url,
+                   wa.avatar_url AS author_avatar_url
             FROM items i
             JOIN sources s ON s.id=i.source_id
+            LEFT JOIN wechat_account_avatars wa
+              ON COALESCE(s.kind, 'feed')='wechat'
+             AND wa.account=i.author
+             AND wa.avatar_url IS NOT NULL
             WHERE i.id=?
             """,
             (item_id,),

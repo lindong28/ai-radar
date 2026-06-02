@@ -358,12 +358,27 @@ enabled = true
 homepage_url = "https://news.ycombinator.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=news.ycombinator.com&sz=64"
 
+# 微信公众号经 Mp2RSS 托管合集接入（替代自建 WeWe，根除本地 Docker + 微信读书扫码维护）。
+# 真实 feed URL 含专属密钥，存于 ~/.claude/.env 的 MP2RSS_FEED_URL（已 gitignore，不入库）；
+# loader 经 os.path.expandvars 展开下面的占位符。
+[[source]]
+slug = "wx_mp2rss"
+name = "微信公众号（Mp2RSS 合集）"
+url = "${MP2RSS_FEED_URL}"
+tier = "T2"
+enabled = true
+kind = "wechat"
+homepage_url = "https://mp.weixin.qq.com/"
+icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
+
+# 以下两个 WeWe 源已停用：wx_crossing 在 Mp2RSS 无法订阅；wx_guizang 由上方 Mp2RSS 合集取代。
+# 暂保留（disabled）作回滚锚点，正式迁移确认后再删除。
 [[source]]
 slug = "wx_guizang"
 name = "歸藏的AI工具箱"
 url = "http://localhost:4000/feeds/MP_WXS_3540975510.rss?limit=200"
 tier = "T2"
-enabled = true
+enabled = false
 kind = "wechat"
 homepage_url = "https://mp.weixin.qq.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
@@ -373,7 +388,7 @@ slug = "wx_crossing"
 name = "十字路口Crossing"
 url = "http://localhost:4000/feeds/MP_WXS_3010319264.rss?limit=200"
 tier = "T2"
-enabled = true
+enabled = false
 kind = "wechat"
 homepage_url = "https://mp.weixin.qq.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"

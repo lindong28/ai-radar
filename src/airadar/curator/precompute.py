@@ -14,10 +14,15 @@ def precompute_curated_summaries(conn: sqlite3.Connection, run_id: str) -> int:
                s.kind AS source_kind,
                s.homepage_url AS source_homepage_url,
                s.icon_url AS source_icon_url,
+               wa.avatar_url AS author_avatar_url,
                c.weighted_score, c.rank, c.reason_json
         FROM curated_items c
         JOIN items i ON i.id=c.item_id
         JOIN sources s ON s.id=i.source_id
+        LEFT JOIN wechat_account_avatars wa
+          ON COALESCE(s.kind, 'feed')='wechat'
+         AND wa.account=i.author
+         AND wa.avatar_url IS NOT NULL
         WHERE c.run_id=?
         ORDER BY c.rank
         """,

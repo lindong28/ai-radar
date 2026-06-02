@@ -118,6 +118,7 @@ const CHANNEL_URL_VALUES = {
 };
 
 const CHANNEL_FROM_URL = Object.fromEntries(Object.entries(CHANNEL_URL_VALUES).map(([key, value]) => [value, key]));
+const WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601";
 
 function currentParams() {
   return new URLSearchParams(location.search);
@@ -264,7 +265,7 @@ function scoreTierClass(score) {
 }
 
 function sourceInitial(item) {
-  return String(item.source_name || item.source_id || "?").trim().slice(0, 1).toUpperCase() || "?";
+  return String(sourceDisplayName(item) || "?").trim().slice(0, 1).toUpperCase() || "?";
 }
 
 function safeCssUrl(value) {
@@ -277,6 +278,7 @@ function xHandleFromUrl(value) {
 }
 
 function sourceAvatarUrl(item) {
+  if (item.source_kind === "wechat") return item.author_avatar_url || WECHAT_FALLBACK_ICON;
   if (item.source_kind === "x") {
     const handle = xHandleFromUrl(item.source_homepage_url) || xHandleFromUrl(item.url);
     if (handle) return `https://unavatar.io/x/${encodeURIComponent(handle)}`;
@@ -286,6 +288,7 @@ function sourceAvatarUrl(item) {
 
 function sourceDisplayName(item) {
   if (item.source_kind === "x") return item.source_name || item.source_id;
+  if (item.source_kind === "wechat") return item.author || item.source_name || item.source_id;
   const name = item.source_name || item.source_id;
   const suffixes = {
     openai_blog: "官网动态（RSS）",
@@ -303,7 +306,7 @@ function sourceLine(item) {
   const homepage = item.source_homepage_url || item.url || "#";
   const icon = safeCssUrl(sourceAvatarUrl(item));
   const img = icon ? `<img class="source-avatar" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
-  const author = item.author ? `<span class="source-author">${esc(item.author)}</span>` : "";
+  const author = item.author && item.source_kind !== "wechat" ? `<span class="source-author">${esc(item.author)}</span>` : "";
   return `<div class="source-line">
     <a class="source-link" href="${esc(homepage)}" target="_blank" rel="noopener noreferrer">
       <span class="source-icon">${img}<span class="source-initial">${esc(sourceInitial(item))}</span></span>
@@ -831,17 +834,17 @@ function dailySectionKey(item) {
 
 function dailySourceMeta(item) {
   const sourceType = item.source_kind === "x" ? (item.tier === "T1" ? "官方·X" : "X") : (item.tier === "T1" ? "官方" : "综合资讯");
-  const source = item.source_name || item.source_id || "来源";
-  const author = item.author ? `：${item.author}` : "";
+  const source = sourceDisplayName(item) || "来源";
+  const author = item.author && item.source_kind !== "wechat" ? `：${item.author}` : "";
   return `${sourceType} · ${source}${author}`;
 }
 
 function dailySourceParts(item) {
   const role = item.source_kind === "x" ? (item.tier === "T1" ? "官方·X" : "X") : (item.tier === "T1" ? "官方" : "综合资讯");
-  const source = item.source_name || item.source_id || "来源";
+  const source = sourceDisplayName(item) || "来源";
   const author = item.author ? ` (${item.author.startsWith("@") ? item.author : `@${item.author}`})` : "";
   const label = item.source_kind === "x" ? `X：${source}${author}` : `${source}`;
-  return { role, label };
+  return { role, label, avatar: sourceAvatarUrl(item) };
 }
 
 function renderDailyReport(container, items, activeDate) {
@@ -863,9 +866,10 @@ function renderDailyReport(container, items, activeDate) {
       const articles = sectionItems.map((item) => {
         const title = itemTitleText(item);
         const source = dailySourceParts(item);
+        const avatar = source.avatar ? `<img class="daily-source-avatar" src="${esc(safeCssUrl(source.avatar))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true">` : "";
         return `<article class="daily-article" data-published-date="${esc(itemDateBucket(item))}">
           <h3 class="daily-article-title"><a href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(title)}</a></h3>
-          <div class="daily-article-source daily-article-meta"><span class="role-tag">${esc(source.role)}</span><span>${esc(source.label)}</span></div>
+          <div class="daily-article-source daily-article-meta"><span class="role-tag">${esc(source.role)}</span>${avatar}<span>${esc(source.label)}</span></div>
           <p class="daily-article-summary">${esc(excerpt(item))}</p>
         </article>`;
       }).join("");

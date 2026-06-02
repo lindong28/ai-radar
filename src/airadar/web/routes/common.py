@@ -506,6 +506,7 @@ def item_summary(
         "source_kind": source_kind,
         "source_homepage_url": row["source_homepage_url"] if "source_homepage_url" in row_keys else None,
         "source_icon_url": row["source_icon_url"] if "source_icon_url" in row_keys else None,
+        "author_avatar_url": row["author_avatar_url"] if "author_avatar_url" in row_keys else None,
         "tier": row["tier"],
         "url": row["url"],
         "title": row["title"],
