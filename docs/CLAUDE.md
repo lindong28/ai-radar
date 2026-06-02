@@ -30,6 +30,7 @@
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 |
 | [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access 配置 runbook |
+| [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、真名头像 backfill、迁移留尾记录 |
 
 ### docs/references/ [Developer]
 
@@ -37,7 +38,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| [wechat-sources.md](references/wechat-sources.md) | 如何通过 WeWe RSS 添加微信公众号源 |
+| [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源添加流程（已停用，微信摄取现走 Mp2RSS，见 operations/wechat-ingestion.md） |
 
 ### docs/prd/ [Developer]
 

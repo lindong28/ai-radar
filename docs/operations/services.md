@@ -9,7 +9,7 @@
 | `live.aiplanet.ai-radar.serve` | launchd, KeepAlive=true | 已加载 | `./install.sh serve` / `./uninstall.sh serve` / `./status.sh serve` | [deploy/launchd/ai-radar-serve.plist.example](../../deploy/launchd/ai-radar-serve.plist.example) |
 | `live.aiplanet.ai-radar.tunnel` | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
 | ai-radar pipeline (15min) | cron (`*/15 * * * *`) | 在 user crontab | `./install.sh pipeline` / `./uninstall.sh pipeline` / `./status.sh pipeline` | [deploy/cron/ai-radar-pipeline](../../deploy/cron/ai-radar-pipeline) · launchd 替代模板见 [ai-radar-pipeline.plist.example](../../deploy/launchd/ai-radar-pipeline.plist.example) |
-| `live.aiplanet.ai-radar.wewe` (WeWe RSS docker bridge) | launchd, KeepAlive=true, ThrottleInterval=30 | 已加载 | `./install.sh wewe` / `./uninstall.sh wewe` / `./status.sh wewe` | [deploy/launchd/ai-radar-wewe.plist.example](../../deploy/launchd/ai-radar-wewe.plist.example) · [deploy/wewe-rss/RUNBOOK.md §Keeping It Running](../../deploy/wewe-rss/RUNBOOK.md#keeping-it-running) |
+| `live.aiplanet.ai-radar.wewe` (WeWe RSS docker bridge) | launchd, KeepAlive=true, ThrottleInterval=30 | 已停用（微信摄取迁移到 Mp2RSS，仅回滚锚点保留） | `./install.sh wewe` / `./uninstall.sh wewe` / `./status.sh wewe` | [deploy/launchd/ai-radar-wewe.plist.example](../../deploy/launchd/ai-radar-wewe.plist.example) · [deploy/wewe-rss/RUNBOOK.md §Keeping It Running](../../deploy/wewe-rss/RUNBOOK.md#keeping-it-running) |
 | `live.aiplanet.ai-radar.alert` | launchd, StartInterval=300, RunAtLoad=true | 待 `AI_RADAR_FEISHU_WEBHOOK` 配置后加载 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
 
 不带服务名时，`./install.sh` / `./uninstall.sh` / `./status.sh` 对全部 5 个服务生效。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
@@ -64,5 +64,6 @@ pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再
 - [README.md §服务](../../README.md#服务) — 用户视角的脚本入口表
 - [docs/operations/monitoring-alerting.md](monitoring-alerting.md) — `/admin` dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access 配置
 - [docs/experiences/deployment.md](../experiences/deployment.md) — 历史踩坑（env 不继承、cron/launchd 共存、tunnel region、docker compose 守护）
-- [docs/references/wechat-sources.md](../references/wechat-sources.md) — 微信公众号源添加流程
-- [deploy/wewe-rss/RUNBOOK.md](../../deploy/wewe-rss/RUNBOOK.md) — WeWe RSS 详细运维手册
+- [docs/operations/wechat-ingestion.md](wechat-ingestion.md) — 微信公众号摄取（Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、头像 backfill、迁移留尾记录）
+- [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 微信源添加流程（已停用，仅回滚参考）
+- [deploy/wewe-rss/RUNBOOK.md](../../deploy/wewe-rss/RUNBOOK.md) — 旧 WeWe RSS 详细运维手册（已停用）

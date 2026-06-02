@@ -83,7 +83,7 @@ crontab deploy/cron/ai-radar-pipeline  # 手动加载 cron 条目
 ## 数据流水线
 
 ```
-RSS / X / WeWe RSS 微信公众号源 → fetch → prefilter → score → enrich → curate → web 展示
+RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich → curate → web 展示
 ```
 
 各阶段说明：
@@ -102,7 +102,7 @@ RSS / X / WeWe RSS 微信公众号源 → fetch → prefilter → score → enri
 
 - `feed`：普通 RSS/Atom 信源
 - `x`：X/Twitter 导出的 RSS 信源，前端允许展示完整 thread
-- `wechat`：微信公众号源，URL 指向 WeWe RSS per-feed URL；新增公众号前需先在 WeWe dashboard 订阅，详见 `docs/references/wechat-sources.md` 和 `deploy/wewe-rss/RUNBOOK.md`
+- `wechat`：微信公众号源，通过托管的 [Mp2RSS](https://mp2rss.com/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开，未设置时启动报错）。文章卡片按 author 显示真实公众号名与头像。配置和运维记录见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
 
 ### LLM Provider
 
@@ -131,7 +131,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 | `serve` | launchd | FastAPI web server on :8000 |
 | `tunnel` | launchd | Cloudflare tunnel 到 aiplanet.live |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate |
-| `wewe` | launchd（包装 docker compose） | WeWe RSS 桥接 :4000（微信公众号 ingestion） |
+| `wewe` | launchd（包装 docker compose） | WeWe RSS 桥接 :4000（已被 Mp2RSS 取代，仅作回滚锚点保留；新部署无需启用） |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`，按 A1-A4 规则发送飞书告警 |
 
 ### 部署 / 移除 / 查状态
@@ -144,7 +144,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `wewe` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
 
-完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。`wewe` 微信源 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)。
+完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、运维记录）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接的 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)（已停用，仅回滚时参考）。
 
 ## 部署
 
