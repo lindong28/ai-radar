@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-02
+
+- Added the `/admin` operations dashboard for user traffic, ingestion, pipeline health, and active alert status.
+- Added the `alert` background service, which runs `admin alert-check` every five minutes and sends A1-A4 monitoring alerts through a Feishu custom-bot webhook.
+- Documented the monitoring runbook, including Cloudflare Access setup for `/admin*` and `/api/v1/admin*`, Feishu webhook setup, and daily service verification commands.
+
 ## 2026-06-01
 
 - Fixed Chinese-source search so recently fetched backfill articles are evaluated and visible even when their original publish date is older than the pipeline window.

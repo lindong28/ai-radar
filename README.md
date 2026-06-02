@@ -78,6 +78,7 @@ crontab deploy/cron/ai-radar-pipeline  # 手动加载 cron 条目
 | 全部 AI 动态 | `/all` | 完整时间线，最新优先 |
 | AI 日报 | `/daily` | 每日精选归档，支持 `?date=YYYY-MM-DD` |
 | 关于 | `/about` | 项目介绍和信源池 |
+| 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
 
 ## 数据流水线
 
@@ -131,6 +132,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 | `tunnel` | launchd | Cloudflare tunnel 到 aiplanet.live |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate |
 | `wewe` | launchd（包装 docker compose） | WeWe RSS 桥接 :4000（微信公众号 ingestion） |
+| `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`，按 A1-A4 规则发送飞书告警 |
 
 ### 部署 / 移除 / 查状态
 
@@ -140,9 +142,9 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `wewe`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `wewe` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
 
-完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`wewe` 微信源 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)。
+完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。`wewe` 微信源 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)。
 
 ## 部署
 
@@ -154,6 +156,10 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 # 编辑 config.yml 填入 tunnel UUID 和域名
 ```
+
+### 运维监控
+
+公网 `/admin` 需要 Cloudflare Access application + policy；飞书告警需要配置 `AI_RADAR_FEISHU_WEBHOOK`。具体步骤见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
 
 ### Docker / 其他平台
 

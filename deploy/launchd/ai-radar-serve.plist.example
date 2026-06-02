@@ -12,7 +12,7 @@
   <key>WorkingDirectory</key><string>/path/to/ai-radar</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/ai-radar-serve.log</string>
-  <key>StandardErrorPath</key><string>/tmp/ai-radar-serve.err</string>
+  <key>StandardOutPath</key><string>/path/to/ai-radar/logs/serve-access.log</string>
+  <key>StandardErrorPath</key><string>/path/to/ai-radar/logs/serve-access.err.log</string>
 </dict>
 </plist>

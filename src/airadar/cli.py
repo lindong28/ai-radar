@@ -9,6 +9,7 @@ from time import monotonic
 from dotenv import dotenv_values
 
 from . import db
+from .admin.alerts import collect_alert_signals, run_alert_state_machine
 from .curator.select import curate
 from .curator.weights import load_weights
 from .enrich.runner import run_enrich
@@ -188,6 +189,22 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _format_alert_send_status(raw: object) -> str | None:
+    if not isinstance(raw, dict):
+        return None
+    rule_id = raw.get("rule_id")
+    notification_type = raw.get("type")
+    send_result = raw.get("send_result")
+    if not rule_id or not notification_type or not isinstance(send_result, dict):
+        return None
+    if send_result.get("skipped"):
+        return f"send {rule_id} {notification_type} skipped reason={send_result.get('reason')}"
+    status_code = send_result.get("status_code")
+    if status_code is not None:
+        return f"send {rule_id} {notification_type} sent status_code={status_code}"
+    return f"send {rule_id} {notification_type} sent"
+
+
 def _admin(args: argparse.Namespace) -> int:
     if args.admin_command == "db" and args.db_command == "migrate":
         db.migrate()
@@ -206,6 +223,28 @@ def _admin(args: argparse.Namespace) -> int:
                 return 0
     if args.admin_command == "curate":
         return _curate(args)
+    if args.admin_command == "alert-check":
+        signals = collect_alert_signals()
+        result = run_alert_state_machine(signals, state_path=args.state_path)
+        ruleset = result.get("ruleset", [])
+        if not isinstance(ruleset, list):
+            ruleset = []
+        print(f"alert-check ruleset={{{','.join(str(rule) for rule in ruleset)}}} sent={result.get('sent_count', 0)}")
+        sent = result.get("sent", [])
+        if isinstance(sent, list):
+            for raw_sent in sent:
+                line = _format_alert_send_status(raw_sent)
+                if line:
+                    print(line)
+        results = result.get("results", [])
+        if not isinstance(results, list):
+            results = []
+        for raw in results:
+            if not isinstance(raw, dict):
+                continue
+            status = "firing" if raw.get("firing") else "ok"
+            print(f"{raw.get('rule_id')} {status} {raw.get('title')} - {raw.get('detail')}")
+        return 0
     return _not_implemented("admin")
 
 
@@ -272,6 +311,8 @@ def build_parser() -> argparse.ArgumentParser:
     admin_curate.add_argument("--freshness-quota", type=int, default=36)
     admin_curate.add_argument("--freshness-floor", type=float, default=4.0)
     admin_subparsers.add_parser("rerun-eval")
+    alert_check = admin_subparsers.add_parser("alert-check")
+    alert_check.add_argument("--state-path", default=str(db.PROJECT_ROOT / "data" / "alert-state.json"))
 
     return parser
 

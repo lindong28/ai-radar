@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from uvicorn.config import LOGGING_CONFIG
 
 from .. import db
 from .cors import configure_cors
-from .routes import curated, health, items, sources, timeline
+from .routes import admin, curated, health, items, sources, timeline
 
 STATIC_DIR = db.PROJECT_ROOT / "web" / "static"
 TEMPLATES_DIR = db.PROJECT_ROOT / "web" / "templates"
@@ -43,6 +45,18 @@ PRELOAD_ITEM_KEYS = {
 }
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 PREPAINT_ITEM_LIMIT = 12
+
+
+def _uvicorn_log_config() -> dict[str, object]:
+    config = deepcopy(LOGGING_CONFIG)
+    formatters = config.setdefault("formatters", {})
+    access_formatter = formatters.setdefault("access", {})
+    if isinstance(access_formatter, dict):
+        access_formatter["fmt"] = (
+            '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+        )
+        access_formatter["datefmt"] = "%Y-%m-%dT%H:%M:%S%z"
+    return config
 
 
 def _compact_preload(data: dict[str, object]) -> dict[str, object]:
@@ -182,6 +196,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.include_router(curated.router, prefix=api_prefix)
     app.include_router(items.router, prefix=api_prefix)
     app.include_router(sources.router, prefix=api_prefix)
+    app.include_router(admin.router, prefix=api_prefix)
 
     @app.get("/", include_in_schema=False)
     def index_page(request: Request, category: str | None = None, q: str | None = None) -> HTMLResponse:
@@ -217,6 +232,19 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             _preload_context(cast(dict[str, object], payload["data"]), timeline_page=True),
         )
 
+    @app.get("/admin", include_in_schema=False)
+    def admin_page(request: Request) -> HTMLResponse:
+        admin.require_admin_access(request)
+        return templates.TemplateResponse(
+            request,
+            "admin.html",
+            {"metrics": admin.collect_admin_metrics(request)},
+        )
+
+    @app.head("/admin", include_in_schema=False)
+    def admin_head(request: Request) -> Response:
+        admin.require_admin_access(request)
+        return Response(status_code=204)
 
     @app.get("/daily", include_in_schema=False)
     def daily_page() -> FileResponse:
@@ -242,4 +270,4 @@ app = create_app()
 
 
 def serve(port: int = 8000, host: str = "127.0.0.1") -> None:
-    uvicorn.run(create_app(), host=host, port=port)
+    uvicorn.run(create_app(), host=host, port=port, log_config=_uvicorn_log_config())

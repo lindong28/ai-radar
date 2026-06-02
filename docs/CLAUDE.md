@@ -29,6 +29,7 @@
 | 文件 | 说明 |
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 |
+| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access 配置 runbook |
 
 ### docs/references/ [Developer]
 
@@ -98,6 +99,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260601-monitoring-alerting/](plans/20260601-monitoring-alerting/) | 运维监控 dashboard + A1-A4 飞书告警 MVP |
 | [20260531-wechat-search-usability/](plans/20260531-wechat-search-usability/) | 中文/微信公众号源搜索可用性修复（backfill 可见性、来源优先、多源轮转、简繁互通） |
 | [20260529-timeline-search-source-author/](plans/20260529-timeline-search-source-author/) | Timeline/curated 搜索覆盖来源名、作者和中文标题 |
 | [20260528-ssr-preload/](plans/20260528-ssr-preload/) | SSR preload 首屏加载优化（/ 和 /all 无可感知 spinner） |

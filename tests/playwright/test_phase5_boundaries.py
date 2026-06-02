@@ -117,12 +117,17 @@ def test_v15a_search_without_results_shows_empty_state(page: Page, base_url: str
 
 
 def test_v18_unknown_tab_paths_return_404(page: Page, base_url: str) -> None:
-    for path in ["/feedback", "/login", "/admin", "/publish"]:
+    for path in ["/feedback", "/login", "/publish"]:
         response = page.goto(f"{base_url}{path}", wait_until="domcontentloaded")
         assert response is not None
         assert response.status == 404
         assert page.url == f"{base_url}{path}"
         expect(page.locator("body")).to_contain_text("404")
+
+    admin_response = page.goto(f"{base_url}/admin", wait_until="domcontentloaded")
+    assert admin_response is not None
+    assert admin_response.status == 200
+    expect(page.locator("h1")).to_contain_text("运维监控")
 
 
 def test_v19_empty_daily_date_shows_placeholder(page: Page, base_url: str) -> None:

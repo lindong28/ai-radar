@@ -101,7 +101,7 @@ def test_web_errors_and_cors_are_read_only(tmp_path: Path) -> None:
 
     assert client.post("/api/v1/timeline").status_code == 405
     assert client.get("/api/v1/items/notexist").status_code == 404
-    for path in ["/admin", "/api/admin", "/api/v1/admin", "/api/v1/sources/add"]:
+    for path in ["/api/admin", "/api/v1/admin", "/api/v1/sources/add"]:
         assert client.get(path).status_code == 404
 
     response = client.options(

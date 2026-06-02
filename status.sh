@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read-only service status panel. Never modifies state.
 # Usage: ./status.sh              # all services
-#        ./status.sh <service>    # serve | tunnel | pipeline | wewe
+#        ./status.sh <service>    # serve | tunnel | pipeline | wewe | alert
 
 set -uo pipefail  # no -e: status must report failures, not abort on them
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,8 +43,9 @@ status_launchd_service() {
       fi
       printf " | log /tmp/ai-radar-wewe.err"
       ;;
-    serve)  printf " | log /tmp/ai-radar-serve.err" ;;
+    serve)  printf " | log logs/serve-access.log" ;;
     tunnel) printf " | log /tmp/ai-radar-tunnel.err" ;;
+    alert)  printf " | log logs/alert-check.log" ;;
   esac
   echo
 }
@@ -69,7 +70,7 @@ status_pipeline() {
 
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
-    serve|tunnel|wewe) status_launchd_service "$slug" ;;
+    serve|tunnel|wewe|alert) status_launchd_service "$slug" ;;
     pipeline)          status_pipeline ;;
   esac
 done

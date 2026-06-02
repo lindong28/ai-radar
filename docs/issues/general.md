@@ -4,6 +4,19 @@
 
 ---
 
+## [open] `/admin` origin local-bypass 依赖 cloudflared 暴露公网 `client.host`
+
+- Type: security_note
+- Priority: high
+- Discovered: 2026-06-02 monitoring-alerting supervisor review
+- Description: `/admin` 与 `/api/v1/admin/*` 的 origin guard 允许 `127.0.0.1` / `::1` / `localhost` 本地 bypass。当前不是活跃漏洞：公网无凭证 `curl` 已验证为 403，TASK-001 探针也观察到 tunnel 请求在 FastAPI/access log 中呈现真实公网 IP（非 loopback）。但该安全性依赖 cloudflared 当前 forwarded/client.host 行为；如果未来 cloudflared 改为通过本地 socket 转发，并让 FastAPI 看到 `client.host=127.0.0.1`，公网请求会被当成本地请求放行。
+- Notes:
+  - 与 monitoring-alerting MVP 中“origin 只检查 `Cf-Access-Jwt-Assertion` 存在性、不验签”的 TODO 同属 admin origin 鉴权增强。
+  - Fix 方向：生产环境删除 local-bypass，或把 bypass 挂到显式 dev env；同时完成 Cloudflare Access JWT 验签，必要时增加 origin-only secret/token 或可信 forwarded 头处理。
+  - Cloudflare Access 边缘 application+policy 配好后仍是公网真实闸，但 origin 不应长期依赖未完全证实的 `client.host` 机制。
+
+---
+
 ## [open] 22 个 X 源全部走 nitter.net 单 instance，无 fallback
 
 - Type: improvement

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Radar · 运维监控</title>
+    <link rel="stylesheet" href="/style.css?v=20260515-ux5">
+    <style>
+      body {
+        background: #f6f7f9;
+        color: #18202a;
+      }
+      .admin-shell {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 28px 20px 48px;
+      }
+      .admin-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-end;
+        margin-bottom: 24px;
+      }
+      .admin-header h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+      }
+      .admin-meta {
+        margin: 0;
+        color: #667085;
+        font-size: 14px;
+      }
+      .admin-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .admin-panel {
+        background: #fff;
+        border: 1px solid #d7dce3;
+        border-radius: 8px;
+        padding: 18px;
+      }
+      .admin-panel h2 {
+        margin: 0 0 14px;
+        font-size: 18px;
+      }
+      .metric-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .metric {
+        border: 1px solid #e3e7ed;
+        border-radius: 6px;
+        padding: 10px;
+        min-width: 0;
+      }
+      .metric-label {
+        display: block;
+        color: #667085;
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      .metric-value {
+        display: block;
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      .admin-list {
+        margin: 0;
+        padding-left: 18px;
+        color: #344054;
+      }
+      .admin-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      .admin-table th,
+      .admin-table td {
+        border-bottom: 1px solid #e3e7ed;
+        padding: 8px 6px;
+        text-align: left;
+      }
+      .admin-table th {
+        color: #667085;
+        font-weight: 600;
+      }
+      .status-ok {
+        color: #0f766e;
+        font-weight: 700;
+      }
+      .status-warn {
+        color: #b45309;
+        font-weight: 700;
+      }
+      @media (max-width: 860px) {
+        .admin-grid,
+        .metric-row {
+          grid-template-columns: 1fr;
+        }
+        .admin-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    {% set users = metrics.users %}
+    {% set ingestion = metrics.ingestion %}
+    {% set stages = metrics.pipeline.stages %}
+    {% set latest_fetch = ingestion.latest_fetch %}
+    <main class="admin-shell">
+      <header class="admin-header">
+        <div>
+          <h1>运维监控</h1>
+          <p class="admin-meta">时间窗口：{{ metrics.window.today_start }} 至 {{ metrics.window.today_end }} · {{ metrics.timezone }}</p>
+        </div>
+        <a href="/">返回首页</a>
+      </header>
+
+      <section class="admin-grid" aria-label="AI Radar 运维指标">
+        <article class="admin-panel">
+          <h2>用户量</h2>
+          <div class="metric-row">
+            <div class="metric"><span class="metric-label">PV（过滤后）</span><span class="metric-value">{{ users.pv }}</span></div>
+            <div class="metric"><span class="metric-label">UV 近似</span><span class="metric-value">{{ users.uv }}</span></div>
+            <div class="metric"><span class="metric-label">过滤 IP 差额</span><span class="metric-value">{{ users.filtered_ip_count }}</span></div>
+          </div>
+          <ul class="admin-list">
+            {% for path, count in users.top_pages[:5] %}
+            <li>{{ path }} · {{ count }}</li>
+            {% else %}
+            <li>暂无访问日志</li>
+            {% endfor %}
+          </ul>
+        </article>
+
+        <article class="admin-panel">
+          <h2>文章摄取</h2>
+          <div class="metric-row">
+            <div class="metric"><span class="metric-label">今日 items 增量</span><span class="metric-value">{{ ingestion.items_today }}</span></div>
+            <div class="metric"><span class="metric-label">最近一轮 inserted</span><span class="metric-value">{{ latest_fetch.inserted }}</span></div>
+            <div class="metric"><span class="metric-label">失败源数</span><span class="metric-value">{{ latest_fetch.failed }}</span></div>
+          </div>
+          <ul class="admin-list">
+            {% for source_id in latest_fetch.failed_sources[:5] %}
+            <li class="status-warn">{{ source_id }}</li>
+            {% else %}
+            <li class="status-ok">最近一轮无失败源</li>
+            {% endfor %}
+          </ul>
+        </article>
+
+        <article class="admin-panel">
+          <h2>Pipeline 阶段健康</h2>
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>阶段</th>
+                <th>处理量</th>
+                <th>错误率</th>
+                <th>P95 ms</th>
+                <th>成本</th>
+                <th>最近状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for stage in ["fetch", "prefilter", "scoring", "enrich", "curate"] %}
+              {% set row = stages[stage] %}
+              <tr>
+                <td>{{ stage }}</td>
+                <td>{{ row.processed }}</td>
+                <td>{{ "%.1f%%"|format(row.error_rate * 100) }}</td>
+                <td>{{ row.p95_latency_ms if row.p95_latency_ms is not none else "—" }}</td>
+                <td>{{ "%.4f"|format(row.cost_usd) }}</td>
+                <td>{{ row.latest_run_status or "—" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </article>
+
+        <article class="admin-panel">
+          <h2>当前告警</h2>
+          {% if metrics.alerts.firing %}
+          <ul class="admin-list">
+            {% for alert in metrics.alerts.firing %}
+            <li class="status-warn">{{ alert }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="status-ok">当前无 firing 告警</p>
+          {% endif %}
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
