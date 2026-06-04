@@ -15,9 +15,9 @@ from .curator.weights import load_weights
 from .enrich.runner import run_enrich
 from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
 from .fetcher.runner import fetch_all, reload_sources
+from .interpret.runner import run_interpret
 from .prefilter.runner import run_prefilter
 from .scorer.runner import run_scoring
-from .web.app import serve
 
 
 def _load_runtime_env(
@@ -161,6 +161,23 @@ def _curate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _interpret(args: argparse.Namespace) -> int:
+    db.migrate()
+    with db.get_conn() as conn:
+        summary = run_interpret(
+            conn,
+            backfill=args.backfill,
+            limit=args.limit,
+            assistant_root=args.assistant_root,
+            user=args.user,
+        )
+    if summary.skipped:
+        print(f"interpret skipped=true message={summary.message}")
+    else:
+        print(f"interpret processed={summary.processed} errors={summary.errors}")
+    return 0
+
+
 def _eval(args: argparse.Namespace) -> int:
     db.migrate()
     aihot_markdown = Path(args.aihot_markdown) if args.aihot_markdown else DEFAULT_AIHOT_MARKDOWN
@@ -185,6 +202,8 @@ def _eval(args: argparse.Namespace) -> int:
 
 
 def _serve(args: argparse.Namespace) -> int:
+    from .web.app import serve
+
     serve(port=args.port, host=args.host)
     return 0
 
@@ -282,6 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
     curate_parser.add_argument("--freshness-quota", type=int, default=36)
     curate_parser.add_argument("--freshness-floor", type=float, default=4.0)
 
+    interpret_parser = subparsers.add_parser("interpret")
+    interpret_parser.add_argument("--backfill", action="store_true")
+    interpret_parser.add_argument("--limit", type=int)
+    interpret_parser.add_argument("--assistant-root")
+    interpret_parser.add_argument("--user", default="dong_lin")
+
     eval_parser = subparsers.add_parser("eval")
     eval_parser.add_argument("--date")
     eval_parser.add_argument("--aihot-markdown")
@@ -331,6 +356,8 @@ def main() -> None:
         raise SystemExit(_enrich(args))
     if args.command == "curate":
         raise SystemExit(_curate(args))
+    if args.command == "interpret":
+        raise SystemExit(_interpret(args))
     if args.command == "eval":
         raise SystemExit(_eval(args))
     if args.command == "serve":

@@ -63,6 +63,7 @@ run_stage prefilter --since 24h
 run_stage score --since 24h
 run_stage enrich --since 24h
 run_stage curate
+run_stage interpret
 
 find "$LOG_DIR" -name 'pipeline-*.log' -mtime +7 -delete
 

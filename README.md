@@ -44,6 +44,7 @@ DEEPSEEK_API_KEY=sk-xxx
 ./run.sh score       # 五维评分
 ./run.sh enrich      # LLM 生成中文标题和摘要
 ./run.sh curate      # 精选高价值内容
+./run.sh interpret   # 微信文章解读 + ai-assistant 知识库回写
 ```
 
 ### 5. 启动 Web 服务
@@ -56,7 +57,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 ## 自动化调度
 
-`pipeline.sh` 按顺序执行 `fetch → prefilter → score → enrich → curate`，每个阶段只处理尚未评估的新条目。单阶段失败会记录 `FAIL` 后继续，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`，`.pipeline.lock` 跳过重叠运行。
+`pipeline.sh` 按顺序执行 `fetch → prefilter → score → enrich → curate → interpret`，每个阶段只处理尚未评估的新条目。单阶段失败会记录 `FAIL` 后继续，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`，`.pipeline.lock` 跳过重叠运行。
 
 默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 
@@ -76,6 +77,7 @@ crontab deploy/cron/ai-radar-pipeline  # 手动加载 cron 条目
 |------|-----|------|
 | 精选 | `/` | 高评分精选内容，按日期分组 |
 | 全部 AI 动态 | `/all` | 完整时间线，最新优先 |
+| 微信文章解读 | `/wechat` | 已订阅微信公众号文章的结构化总结；详情页为 `/wechat/<slug>` |
 | AI 日报 | `/daily` | 每日精选归档，支持 `?date=YYYY-MM-DD` |
 | 关于 | `/about` | 项目介绍和信源池 |
 | 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
@@ -83,7 +85,7 @@ crontab deploy/cron/ai-radar-pipeline  # 手动加载 cron 条目
 ## 数据流水线
 
 ```
-RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich → curate → web 展示
+RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich → curate → interpret → web 展示 / ai-assistant KB
 ```
 
 各阶段说明：
@@ -93,6 +95,7 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 - **score** — 五维评分（relevance、density、recency、authority、engineering）
 - **enrich** — LLM 生成中文标题和摘要
 - **curate** — 按阈值精选高价值内容（默认阈值 6.5）
+- **interpret** — 对已启用微信公众号文章调用 ai-assistant `summarize-article` 逻辑，保存独立网站解读数据，并把值得阅读的文章回写 ai-assistant 知识库
 
 ## 配置
 
@@ -103,6 +106,10 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 - `feed`：普通 RSS/Atom 信源
 - `x`：X/Twitter 导出的 RSS 信源，前端允许展示完整 thread
 - `wechat`：微信公众号源，通过托管的 [Mp2RSS](https://mp2rss.com/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开，未设置时启动报错）。文章卡片按 author 显示真实公众号名与头像。配置和运维记录见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
+
+### 微信文章解读
+
+`interpret` 阶段只处理启用的微信公众号源（当前 `wx_mp2rss`）。它通过 `AI_ASSISTANT_ROOT`（默认 `/Users/lindong/research/ai-assistant`）零拷贝调用 ai-assistant 的 `agents/summary-agent/summarize.sh` / `run.sh`，将 `save_decision=1` 的文章展示到 `/wechat` 并回写 ai-assistant 知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
 
 ### LLM Provider
 
@@ -130,7 +137,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 |---|---|---|
 | `serve` | launchd | FastAPI web server on :8000 |
 | `tunnel` | launchd | Cloudflare tunnel 到 aiplanet.live |
-| `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate |
+| `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
 | `wewe` | launchd（包装 docker compose） | WeWe RSS 桥接 :4000（已被 Mp2RSS 取代，仅作回滚锚点保留；新部署无需启用） |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`，按 A1-A4 规则发送飞书告警 |
 
@@ -144,7 +151,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `wewe` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
 
-完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、运维记录）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接的 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)（已停用，仅回滚时参考）。
+完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接的 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)（已停用，仅回滚时参考）。
 
 ## 部署
 

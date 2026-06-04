@@ -26,14 +26,16 @@ sources loader 用 `os.path.expandvars` 展开占位符（`src/airadar/sources/l
 
 cron / launchd 不继承交互式 shell 的 `export`，自动调度前确认 `.env` 已落该变量（与 LLM API Key 同处理，见 README §自动化调度）。
 
-## 已停用的旧源
+## 已移除的旧源
 
-以下两个 WeWe 源已 `enabled = false`，暂留作回滚锚点，正式迁移确认后再删除：
+以下两个 WeWe 源已在 2026-06-02 从 `data/sources.toml` 移除，并在生产 DB 中删除其历史 item 及直接子表记录。删除前备份为 `data/radar.db.bak-20260602-180557`，备份 gate 已确认文件存在、size>0、`PRAGMA integrity_check=ok`、items 计数与源库一致。
 
 | slug | 公众号 | 停用原因 |
 |---|---|---|
 | `wx_guizang` | 歸藏的AI工具箱 | 由 Mp2RSS 合集取代 |
 | `wx_crossing` | 十字路口Crossing | Mp2RSS 无法订阅 |
+
+删除范围：`items` 144 条、`item_evaluations` 433 条、`curated_items` 7 条、`feedback` 0 条；`items_fts` 由 trigger 自动清理。`curation_runs` 保留，历史 run 的去规范化 id blob 可能残留旧 id，仅作审计记录；`wechat_account_avatars` 保留，因为头像仍可被 Mp2RSS 文章复用。
 
 ## 真实公众号名 + 头像显示
 
@@ -43,6 +45,40 @@ cron / launchd 不继承交互式 shell 的 `export`，自动调度前确认 `.e
 - **缓存表**：`wechat_account_avatars`（account → avatar_url），migration `007_wechat_account_avatars.sql` 建表。命中缓存的 account 不再重复抓取；负缓存（抓不到头像）有 TTL，到期重试。
 - **URL 归一化**：头像 URL 统一 http → https（`mmbiz.qpic.cn`），避免 https 站点的 mixed-content 拦截。migration `008_wechat_avatar_https.sql` 回填存量，抓取侧 `normalize_wechat_avatar_url` 保证新写入也归一。
 - **展示**：timeline / curated / items 路由 + SSR prepaint + client `app.js` 均 `LEFT JOIN wechat_account_avatars` 按 author 取头像；无头像时 fallback 到 `/wechat-icon.svg`。
+
+## 微信文章解读与知识库回写
+
+`interpret` 是 pipeline 最后一个阶段：`fetch → prefilter → score → enrich → curate → interpret`。它只处理启用的微信公众号源 item：
+
+```sql
+SELECT COUNT(*)
+FROM items i
+JOIN sources s ON s.id=i.source_id
+WHERE s.kind='wechat' AND s.enabled=1;
+```
+
+运行方式：
+
+```bash
+./run.sh interpret            # 增量，跳过已有 wechat_interpretations 行
+./run.sh interpret --backfill # 回填启用源全集；已处理行仍跳过
+```
+
+跨 repo 依赖：
+
+- 默认 `AI_ASSISTANT_ROOT=/Users/lindong/research/ai-assistant`，可用环境变量覆盖。
+- preflight 要求 `agents/summary-agent/summarize.sh` 和 `agents/summary-agent/run.sh` 存在且可执行；缺失时打印 `skip interpret...` 并 exit 0，不阻断前置 pipeline。
+- `summarize.sh --input <tmpfile> --user dong_lin` 负责生成 `<batch_dir>/<slug>_summary.md` 与 meta；`run.sh --save-from-batch ...` 负责写 ai-assistant KB、index 和 embedding。
+- `run.sh --check-url <url> --user dong_lin` 命中时不重新调用 LLM，直接读取 KB 中已有 summary 填充 `wechat_interpretations`。
+
+数据约定：
+
+- `wechat_interpretations.save_decision=1` 是 `/wechat` 展示与 KB 回写的唯一闸门。
+- `summary_md`、`abstract`、`tags_json` 在 `radar.db` 内保留独立网站副本；Web 请求不读取 ai-assistant 文件系统。
+- `save_decision=0` 的文章只落库为已处理记录，不展示、不写 KB，避免每轮重复消耗 LLM。
+- cron 内不 git commit/push ai-assistant data 子模块；本地 KB 文件和 embedding 立即可被 `search-knowledgebase` 使用，提交子模块留给人工低频处理。
+
+详情页 `/wechat/<slug>` 使用 `markdown-it-py==4.0.0` 渲染 markdown，并用 `nh3==0.3.1` sanitize。LLM 生成的 `summary_md` 一律视为不可信 HTML 输入。
 
 ## 运维记录
 
@@ -61,7 +97,7 @@ cron / launchd 不继承交互式 shell 的 `export`，自动调度前确认 `.e
 ```bash
 # 占位符已展开（不应再看到字面 ${MP2RSS_FEED_URL}）
 ./run.sh admin sources reload && sqlite3 data/radar.db \
-  "SELECT slug, enabled, substr(url,1,40) FROM sources WHERE kind='wechat';"
+  "SELECT id, enabled, substr(url,1,40) FROM sources WHERE kind='wechat';"
 
 # Mp2RSS feed 联通性 + 新文章入库
 ./run.sh fetch --sources data/sources.toml | tail -5
@@ -75,9 +111,23 @@ sqlite3 data/radar.db \
 
 `substr(avatar_url,1,8)` 应为 `https://`；若出现 `http://` 说明归一化漏掉，检查 `normalize_wechat_avatar_url`。
 
+```bash
+# 解读覆盖与展示数量
+sqlite3 data/radar.db \
+  "SELECT COUNT(*) FROM items i JOIN sources s ON s.id=i.source_id WHERE s.kind='wechat' AND s.enabled=1;"
+sqlite3 data/radar.db \
+  "SELECT save_decision, kb_synced, COUNT(*) FROM wechat_interpretations GROUP BY save_decision, kb_synced;"
+curl -s http://localhost:8000/api/v1/wechat | jq '.data.total'
+
+# KB 去重/可检索前置检查
+cd /Users/lindong/research/ai-assistant
+./agents/summary-agent/run.sh --check-url '<wechat-url>' --user dong_lin
+```
+
 ## 相关参考
 
 - [README.md §信源](../../README.md#信源) — 用户视角的 `wechat` kind 说明
+- [README.md §微信文章解读](../../README.md#微信文章解读) — `/wechat` 与 ai-assistant KB 回写说明
 - [docs/operations/services.md](services.md) — 服务清单（含已停用的 `wewe`）
 - [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 添加流程（已停用，仅回滚参考）
 - [deploy/wewe-rss/RUNBOOK.md](../../deploy/wewe-rss/RUNBOOK.md) — 旧 WeWe RSS 桥接运维手册（已停用）

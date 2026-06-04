@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import unquote
+
 from playwright.sync_api import Page, expect
 
 
@@ -58,7 +60,7 @@ def _ensure_multiple_date_groups(page: Page) -> list[list[str]]:
 
 def test_v03_v04_v06_navigation_and_search_inputs(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/")
-    assert page.locator(".side-link").all_inner_texts() == ["精选", "全部 AI 动态", "AI 日报", "关于"]
+    assert page.locator(".side-link").all_inner_texts() == ["精选", "全部 AI 动态", "微信文章解读", "AI 日报", "关于"]
     body = page.locator(".side-nav").inner_text()
     for forbidden in ["公众号", "Agent", "反馈", "登录"]:
         assert forbidden not in body
@@ -239,6 +241,24 @@ def test_v10f_all_page_pagination_is_a_natural_click_target(page: Page, base_url
     expect(page).to_have_url(f"{base_url}/all?page=2")
     expect(page.locator('.pagination-link[aria-current="page"]')).to_have_text("2")
     expect(page.locator(".timeline-card").first).to_be_visible()
+
+
+def test_wechat_card_body_click_opens_detail_and_back_preserves_page(page: Page, base_url: str) -> None:
+    _goto(page, base_url, "/wechat?page=2", cards=True)
+
+    first_card = page.locator(".wechat-card").first
+    detail_url = first_card.get_attribute("data-detail-url") or ""
+    assert detail_url.startswith("/wechat/")
+    assert "page=2" in detail_url
+
+    first_card.locator(".summary").click()
+    expect(page.locator(".detail-back")).to_be_visible()
+    assert unquote(page.url) == f"{base_url}{detail_url}"
+    expect(page.locator(".detail-back")).to_have_attribute("href", "/wechat?page=2")
+
+    page.locator(".detail-back").click()
+    expect(page).to_have_url(f"{base_url}/wechat?page=2")
+    expect(page.locator(".wechat-card").first).to_be_visible()
 
 
 def test_v10g_mobile_all_page_keeps_scan_reading_density(page: Page, base_url: str) -> None:

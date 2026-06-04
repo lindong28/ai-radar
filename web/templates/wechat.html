@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AI Radar · 全部 AI 动态</title>
+    <title>AI Radar · 微信文章解读</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="modulepreload" href="/app.js?v=20260602-wechat-uxfix1">
@@ -18,8 +18,8 @@
       <div class="divider"></div>
       <nav class="side-nav">
         <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
-        <a class="side-link side-link-active" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
-        <a class="side-link" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
+        <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
+        <a class="side-link side-link-active" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
         <a class="side-link" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
         <a class="side-link" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span></a>
       </nav>
@@ -32,36 +32,45 @@
       </div>
       <section class="card page-header">
         <div>
-          <h1>全部 AI 动态</h1>
-          <p class="page-subtitle">按时间倒序的全量信息流</p>
-        </div>
-        <div class="feed-toolbar-row">
-          <div class="feed-segments">
-            <div class="seg-list" data-channel-filter aria-label="信息来源">
-              <a class="seg-item seg-item-active" href="/all?page=1" data-channel="all" aria-pressed="true">全部</a>
-              <a class="seg-item" href="/all?channel=firstParty&page=1" data-channel="firstParty" aria-pressed="false">一手信源</a>
-              <a class="seg-item" href="/all?channel=news&page=1" data-channel="news" aria-pressed="false">资讯</a>
-              <a class="seg-item" href="/all?channel=x&page=1" data-channel="x" aria-pressed="false">推文</a>
-            </div>
-            <div class="seg-list" data-category-filter aria-label="内容分类">
-              <a class="seg-item seg-item-active" href="/all?page=1" data-category="all" aria-pressed="true">全部</a>
-              <a class="seg-item" href="/all?category=ai-models&page=1" data-category="model" aria-pressed="false">模型</a>
-              <a class="seg-item" href="/all?category=ai-products&page=1" data-category="product" aria-pressed="false">产品</a>
-              <a class="seg-item" href="/all?category=industry&page=1" data-category="industry" aria-pressed="false">行业</a>
-              <a class="seg-item" href="/all?category=paper&page=1" data-category="paper" aria-pressed="false">论文</a>
-              <a class="seg-item" href="/all?category=tip&page=1" data-category="practice" aria-pressed="false">技巧</a>
-            </div>
-          </div>
-          <form class="feed-filter" action="/all" method="get">
-            <input id="category-param" type="hidden" name="category" value="">
-            <input id="channel-param" type="hidden" name="channel" value="">
-            <input id="search" type="search" name="q" placeholder="搜索标题/摘要…">
-            <button class="filter-submit" type="submit">搜索</button>
-          </form>
+          <h1>微信文章解读</h1>
+          <p class="page-subtitle">来自已订阅公众号的结构化总结</p>
         </div>
       </section>
-      <section id="list" class="timeline" aria-live="polite">
-{% include "_prepaint_list.html" %}
+      <section id="list" class="timeline wechat-timeline" aria-live="polite">
+        {% set ns = namespace(last_date="") %}
+        {% for item in items %}
+          {% set day = item.published_at[:10] %}
+          {% if day and day != ns.last_date %}
+            <div class="timeline-date date-group"><time datetime="{{ day }}" title="{{ day }}">{{ item.published_at[5:7] | int }}月{{ item.published_at[8:10] | int }}日</time></div>
+            {% set ns.last_date = day %}
+          {% endif %}
+          <div class="timeline-entry">
+            <div class="timeline-time"><time datetime="{{ item.published_at }}" title="{{ item.published_at }}">{{ item.published_at[11:16] }}</time><span></span></div>
+            <article class="item-row timeline-card wechat-card" data-detail-url="{{ item.detail_url }}" role="link" tabindex="0">
+              <div class="card-topline">
+                <div class="source-line">
+                  <a class="source-link" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">
+                    <span class="source-icon">
+                      {% if item.avatar_url %}
+                        <img class="source-avatar" src="{{ item.avatar_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">
+                      {% endif %}
+                      <span class="source-initial">{{ (item.author or "?")[:1] }}</span>
+                    </span>
+                    <span class="source-name">{{ item.author }}</span>
+                  </a>
+                </div>
+                {% if item.recommendation %}<span class="hot-pill">{{ item.recommendation }}</span>{% endif %}
+              </div>
+              <a class="item-title" href="{{ item.detail_url }}">{{ item.title }}</a>
+              <p class="summary">{{ item.abstract }}</p>
+              <div class="tags">
+                {% for tag in item.tags %}
+                  <span class="tag">{{ tag }}</span>
+                {% endfor %}
+              </div>
+            </article>
+          </div>
+        {% endfor %}
       </section>
       <nav id="pagination" class="pagination" aria-label="分页"></nav>
     </main>
@@ -69,8 +78,8 @@
       {{ preload | tojson | safe }}
     </script>
     <script type="module" async>
-      import { initTimeline } from "/app.js?v=20260602-wechat-uxfix1";
-      initTimeline();
+      import { initWechat } from "/app.js?v=20260602-wechat-uxfix1";
+      initWechat();
     </script>
   </body>
 </html>

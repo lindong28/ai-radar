@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from airadar.web.app import create_app
 def _seed_admin_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "radar.db"
     migrate(db_path)
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO sources (id,name,url,tier,enabled,meta_json,synced_at) VALUES ('s','Source','https://example.com/feed','T1',1,'{}','2026-06-01T00:00:00Z')"
@@ -23,9 +25,10 @@ def _seed_admin_db(tmp_path: Path) -> Path:
           content_text, content_html, content_hash, extra_json
         )
         VALUES ('item-1', 's', 'https://example.com/1', 'Item 1', NULL,
-          '2026-06-01T16:30:00Z', '2026-06-01T16:30:00Z',
+          ?, ?,
           'content', NULL, 'hash-1', '{}')
-        """
+        """,
+        (now, now),
     )
     conn.execute(
         """
@@ -33,8 +36,9 @@ def _seed_admin_db(tmp_path: Path) -> Path:
           item_id, stage, ruleset_version, model_id, input_json, output_json,
           numeric_json, latency_ms, cost_usd, evaluated_at, error
         )
-        VALUES ('item-1', 'scoring', 'test.r1', 'fake', '{}', '{}', '{}', 1000, 0.01, '2026-06-01T16:40:00Z', NULL)
-        """
+        VALUES ('item-1', 'scoring', 'test.r1', 'fake', '{}', '{}', '{}', 1000, 0.01, ?, NULL)
+        """,
+        (now,),
     )
     conn.commit()
     return db_path

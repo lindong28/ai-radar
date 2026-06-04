@@ -371,28 +371,6 @@ kind = "wechat"
 homepage_url = "https://mp.weixin.qq.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
 
-# 以下两个 WeWe 源已停用：wx_crossing 在 Mp2RSS 无法订阅；wx_guizang 由上方 Mp2RSS 合集取代。
-# 暂保留（disabled）作回滚锚点，正式迁移确认后再删除。
-[[source]]
-slug = "wx_guizang"
-name = "歸藏的AI工具箱"
-url = "http://localhost:4000/feeds/MP_WXS_3540975510.rss?limit=200"
-tier = "T2"
-enabled = false
-kind = "wechat"
-homepage_url = "https://mp.weixin.qq.com/"
-icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
-
-[[source]]
-slug = "wx_crossing"
-name = "十字路口Crossing"
-url = "http://localhost:4000/feeds/MP_WXS_3010319264.rss?limit=200"
-tier = "T2"
-enabled = false
-kind = "wechat"
-homepage_url = "https://mp.weixin.qq.com/"
-icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
-
 [[source]]
 slug = "lobsters_ai"
 name = "lobste.rs AI tag"

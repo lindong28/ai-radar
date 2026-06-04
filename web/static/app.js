@@ -424,6 +424,69 @@ function renderTimeline(container, items, options = {}) {
   }).join("");
 }
 
+function wechatCard(item) {
+  const tags = Array.isArray(item.tags) ? item.tags.slice(0, 5) : [];
+  const avatar = safeCssUrl(item.avatar_url || WECHAT_FALLBACK_ICON);
+  const img = avatar ? `<img class="source-avatar" src="${esc(avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
+  const source = item.author || "微信公众号";
+  const recommendation = item.recommendation ? `<span class="hot-pill">${esc(item.recommendation)}</span>` : "";
+  const detailUrl = item.detail_url || `/wechat/${item.slug}`;
+  return `<article class="item-row timeline-card wechat-card" data-detail-url="${esc(detailUrl)}" role="link" tabindex="0">
+    <div class="card-topline">
+      <div class="source-line">
+        <a class="source-link" href="${esc(item.url || "#")}" target="_blank" rel="noopener noreferrer">
+          <span class="source-icon">${img}<span class="source-initial">${esc(source.slice(0, 1) || "?")}</span></span>
+          <span class="source-name">${esc(source)}</span>
+        </a>
+      </div>
+      ${recommendation}
+    </div>
+    <a class="item-title" href="${esc(detailUrl)}">${esc(item.title || "")}</a>
+    <p class="summary">${esc(item.abstract || "")}</p>
+    <div class="tags">${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>
+  </article>`;
+}
+
+function renderWechatTimeline(container, items) {
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = `<div class="empty-state">
+      <h2>暂无微信文章解读</h2>
+      <p>完成下一轮解读后会在这里显示。</p>
+    </div>`;
+    return;
+  }
+  let lastDate = "";
+  container.innerHTML = [...items].sort(compareByTimeDesc).map((item) => {
+    const when = item.published_at || "";
+    const day = dateKey(when);
+    const bucket = dateBucket(when);
+    const dateLabel = day === lastDate ? "" : `<div class="timeline-date date-group"><time datetime="${esc(bucket)}" title="${esc(bucket)}">${esc(day)}</time></div>`;
+    lastDate = day;
+    return `${dateLabel}<div class="timeline-entry">
+      <div class="timeline-time"><time datetime="${esc(isoDateTime(when))}" title="${esc(bucket)}">${esc(timeKey(when))}</time><span></span></div>
+      ${wechatCard(item)}
+    </div>`;
+  }).join("");
+}
+
+function renderWechatPagination(root, { page = 1, total = 0, limit = 50 } = {}) {
+  if (!root) return;
+  const totalPages = Math.ceil(Number(total || 0) / Number(limit || 1));
+  if (totalPages <= 1) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  const current = Math.min(Math.max(Number(page || 1), 1), totalPages);
+  const links = [];
+  if (current > 1) links.push(`<a class="pagination-link" href="/wechat?page=${current - 1}" data-page="${current - 1}" rel="prev">‹ 上一页</a>`);
+  links.push(`<span class="pagination-link pagination-link-active" aria-current="page">${current}</span>`);
+  if (current < totalPages) links.push(`<a class="pagination-link" href="/wechat?page=${current + 1}" data-page="${current + 1}" rel="next">下一页 ›</a>`);
+  root.hidden = false;
+  root.innerHTML = links.join("");
+}
+
 function initNavigation() {
   const sidebar = document.querySelector(".sidebar");
   const toggle = document.querySelector(".app-hamburger");
@@ -459,6 +522,10 @@ function initNavigation() {
   });
 }
 
+export function initNavigationOnly() {
+  initNavigation();
+}
+
 function queryPath(path, params) {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -476,6 +543,30 @@ function rememberListScroll(list) {
   list.addEventListener("click", (event) => {
     const link = event.target.closest("a.item-title");
     if (link) sessionStorage.setItem(listScrollKey(), String(window.scrollY));
+  });
+}
+
+function navigateWechatCard(card) {
+  const detailUrl = card?.dataset?.detailUrl;
+  if (!detailUrl) return;
+  sessionStorage.setItem(listScrollKey(), String(window.scrollY));
+  window.location.href = detailUrl;
+}
+
+function bindWechatCardNavigation(list) {
+  if (!list || list.dataset.wechatCardNavBound === "true") return;
+  list.dataset.wechatCardNavBound = "true";
+  list.addEventListener("click", (event) => {
+    const card = event.target.closest(".wechat-card[data-detail-url]");
+    if (!card || !list.contains(card) || event.target.closest("a, button")) return;
+    navigateWechatCard(card);
+  });
+  list.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const card = event.target.closest(".wechat-card[data-detail-url]");
+    if (!card || event.target !== card) return;
+    event.preventDefault();
+    navigateWechatCard(card);
   });
 }
 
@@ -550,6 +641,53 @@ function renderTimelineError(container, error, retry) {
     </div>
   </div>`;
   container.querySelector("[data-retry-feed]")?.addEventListener("click", retry);
+}
+
+export async function initWechat() {
+  initNavigation();
+  const list = document.querySelector("#list");
+  const pagination = document.querySelector("#pagination");
+  let currentPage = pageFromUrl();
+
+  function renderView(data) {
+    renderWechatTimeline(list, Array.isArray(data.items) ? data.items : []);
+    renderWechatPagination(pagination, data);
+  }
+
+  async function load(page = pageFromUrl(), mode = "replace") {
+    currentPage = page;
+    renderTimelineLoading(list);
+    if (pagination) pagination.hidden = true;
+    try {
+      const data = await api(queryPath("/api/v1/wechat", { page, limit: 50 }));
+      currentPage = Number(data.page || page);
+      updateFeedUrl("/wechat", { page: currentPage > 1 ? String(currentPage) : "" }, mode);
+      renderView(data);
+    } catch (error) {
+      renderTimelineError(list, error, () => load(page, "replace"));
+    }
+  }
+
+  pagination?.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-page]");
+    if (!link) return;
+    event.preventDefault();
+    load(Number(link.dataset.page || "1"), "push");
+  });
+  window.addEventListener("popstate", () => load(pageFromUrl(), "replace"));
+  bindWechatCardNavigation(list);
+  rememberListScroll(list);
+  const preload = readPreload();
+  if (preload && Array.isArray(preload.items)) {
+    currentPage = Number(preload.page || currentPage);
+    if (currentPage !== pageFromUrl()) {
+      updateFeedUrl("/wechat", { page: currentPage > 1 ? String(currentPage) : "" }, "replace");
+    }
+    renderView(preload);
+  } else {
+    await load(currentPage, "replace");
+  }
+  restoreListScroll();
 }
 
 export async function initTimeline() {

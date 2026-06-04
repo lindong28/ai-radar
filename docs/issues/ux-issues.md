@@ -9,4 +9,7 @@
 
 ## Issues
 
-（暂无。bootstrap 阶段不预填 issue——issue 由 test-ux 跑测时发现并落入，或由 owner 直接补入。）
+- [cancelled] 微信文章解读：解读内容质量验收（用户 2026-06-02 决定不验）
+  - 背景：create-ux-contract 时 de-scoped（功能流程 + 视觉交互优先）。execute-ux-contract round 1 的机制/功能/视觉验收（WX-1~9）全过后，用户决定**不再单独验内容质量**——渲染正确即足够；解读忠实/有用、"值得读"判定合理性、标签语义交由 summarizer（ai-assistant summarize-article）上游保证。
+  - 原计划（不再执行）：抽样 `/wechat` 详情对照原文微信文章判断忠实/有用 + 值得读判定是否合理 + 标签语义。
+  - 机制验收记录：`plans/20260602-2034-ux-contract-ux-test/`（TS-001~008 PASS，TS-009 不可自然到达）。

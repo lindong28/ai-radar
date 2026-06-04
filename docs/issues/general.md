@@ -4,6 +4,20 @@
 
 ---
 
+## [open] interpret 回填无法并发——复用的 ai-assistant KB 写入器非并发安全
+
+- Type: improvement
+- Priority: low
+- Discovered: 2026-06-02 wechat-article-interpretation plan 执行中（TASK-008 回填提速评估，supervisor 调查）
+- Description: `interpret` stage 的回填（`./run.sh interpret --backfill`）逐篇串行处理（`src/airadar/interpret/runner.py` 的 `for row in rows:`）——163 篇 × DeepSeek 总结约 60–90s/篇 ≈ 2–3 小时。每篇耗时主要在 summarize（DeepSeek）调用，该步骤独立、本身可并发；但每篇的 **save 回 KB** 步骤（`ai-assistant run.sh --save-from-batch` → `embedding --add`）写两个**全局共享、顺序必须一致**的文件：`index.json`（元数据事实来源）与 `vectors.npy`（约 1.8MB numpy embedding 数组，顺序与 index.json 严格对应），且 `--add` 是**整文件读-改-写**。并发 save 会互相覆盖 → index 与 vectors 错位 / 丢更新 / 损坏。由于对 ai-assistant 是**零拷贝复用**（本特性硬约束，不 fork 不改其代码），其 KB 写入器不是并发安全的，因此整条回填只能串行。
+- Notes:
+  - 影响面有限：这是**一次性**回填（plan D9 已把它移出热循环）；稳态下 cron `interpret` 每轮只增量处理新增的几篇，串行永远够用——并发改造对日常运行零长期收益，只对将来"大批量重处理"场景有意义。
+  - 安全的提速形态（若未来确需）：summarize 阶段开 N 个 worker 并行（各写独立 batch 目录，无共享态），save 阶段串行排队（加锁 / 单消费者），可把大批回填 wall-clock 压到约 summarize_total/N + save_total。
+  - 真正的上游修复在 **ai-assistant 侧**：让 KB 写入器并发安全（`index.json` + `vectors.npy` 的加锁 / 原子追加，且保持二者顺序一致），之后 ai-radar 的 runner 才能安全并发。在那之前，ai-radar 侧任何并发都会绕过这个不变量、引入 KB 损坏风险。
+  - 用户 2026-06-02 知情决策：本次回填保持**串行跑完**（已近六成、健康、剩约 1h），不为这次一次性操作做并发改造。
+
+---
+
 ## [open] `/admin` origin local-bypass 依赖 cloudflared 暴露公网 `client.host`
 
 - Type: security_note

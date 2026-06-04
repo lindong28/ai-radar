@@ -100,10 +100,14 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260602-wechat-article-interpretation/](plans/20260602-wechat-article-interpretation/) | 微信文章解读 tab、ai-assistant summarize 复用、KB 回写与旧 WeWe 源移除 |
+| [20260602-2034-ux-contract-ux-test/](plans/20260602-2034-ux-contract-ux-test/) | 微信解读功能的 UX 契约测试与修复（侧栏入口、列表/分页、详情渲染） |
 | [20260601-monitoring-alerting/](plans/20260601-monitoring-alerting/) | 运维监控 dashboard + A1-A4 飞书告警 MVP |
 | [20260531-wechat-search-usability/](plans/20260531-wechat-search-usability/) | 中文/微信公众号源搜索可用性修复（backfill 可见性、来源优先、多源轮转、简繁互通） |
 | [20260529-timeline-search-source-author/](plans/20260529-timeline-search-source-author/) | Timeline/curated 搜索覆盖来源名、作者和中文标题 |
 | [20260528-ssr-preload/](plans/20260528-ssr-preload/) | SSR preload 首屏加载优化（/ 和 /all 无可感知 spinner） |
+| [20260528-wechat-oa-ingestion/](plans/20260528-wechat-oa-ingestion/) | 微信公众号信源接入（Playwright 抓全文，后迁移 Mp2RSS） |
+| [20260528-0640-ux-contract-ux-test/](plans/20260528-0640-ux-contract-ux-test/) | UX 契约建立 + 测试修复（关于页 GitHub 链接、时间线无分数条目） |
 | [20260524-timeline-perf/](plans/20260524-timeline-perf/) | Timeline API 性能优化（/all TTFB 14s -> <1s） |
 | [20260515-pipeline-scheduler/](plans/20260515-pipeline-scheduler/) | 自动化增量数据抓取流水线（pipeline.sh + cron 15min 调度） |
 

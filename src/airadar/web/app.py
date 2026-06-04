@@ -16,6 +16,7 @@ from uvicorn.config import LOGGING_CONFIG
 from .. import db
 from .cors import configure_cors
 from .routes import admin, curated, health, items, sources, timeline
+from .routes import wechat as wechat_routes
 
 STATIC_DIR = db.PROJECT_ROOT / "web" / "static"
 TEMPLATES_DIR = db.PROJECT_ROOT / "web" / "templates"
@@ -183,6 +184,10 @@ def _preload_context(data: dict[str, object], *, timeline_page: bool) -> dict[st
     }
 
 
+def _wechat_back_href(page: int | None) -> str:
+    return f"/wechat?page={page}" if page and page > 1 else "/wechat"
+
+
 def create_app(db_path: str | Path | None = None) -> FastAPI:
     db.migrate(db_path)
     app = FastAPI(title="AI Radar", version="0.1.0")
@@ -196,6 +201,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> HTMLResponse | JSONResponse:
         if exc.status_code != 404 or request.url.path.startswith("/api/"):
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        if request.url.path.startswith("/wechat/"):
+            page_raw = request.query_params.get("page")
+            try:
+                page = int(page_raw) if page_raw else None
+            except ValueError:
+                page = None
+            return templates.TemplateResponse(
+                request,
+                "wechat_404.html",
+                {"back_href": _wechat_back_href(page)},
+                status_code=404,
+            )
         return HTMLResponse(
             """
             <!doctype html>
@@ -213,6 +230,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.include_router(items.router, prefix=api_prefix)
     app.include_router(sources.router, prefix=api_prefix)
     app.include_router(admin.router, prefix=api_prefix)
+    app.include_router(wechat_routes.router, prefix=api_prefix)
 
     @app.get("/", include_in_schema=False)
     def index_page(request: Request, category: str | None = None, q: str | None = None) -> HTMLResponse:
@@ -248,6 +266,26 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             _preload_context(cast(dict[str, object], payload["data"]), timeline_page=True),
         )
 
+    @app.get("/wechat", include_in_schema=False)
+    def wechat_page(request: Request, page: int = 1, limit: int = 50) -> HTMLResponse:
+        with db.get_conn(request.app.state.db_path) as conn:
+            data = wechat_routes.list_wechat_items(conn, page=page, limit=limit)
+        return templates.TemplateResponse(
+            request,
+            "wechat.html",
+            {"preload": data, "items": data["items"]},
+        )
+
+    @app.get("/wechat/{slug}", include_in_schema=False)
+    def wechat_detail_page(request: Request, slug: str, page: int | None = None) -> HTMLResponse:
+        with db.get_conn(request.app.state.db_path) as conn:
+            item = wechat_routes.get_wechat_detail(conn, slug)
+        return templates.TemplateResponse(
+            request,
+            "wechat_detail.html",
+            {"item": item, "back_href": _wechat_back_href(page)},
+        )
+
     @app.get("/admin", include_in_schema=False)
     def admin_page(request: Request) -> HTMLResponse:
         admin.require_admin_access(request)
@@ -277,6 +315,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/curated.html", include_in_schema=False)
     def curated_redirect() -> RedirectResponse:
         return RedirectResponse(url="/", status_code=308)
+
+    @app.get("/curated", include_in_schema=False)
+    def curated_alias(request: Request, category: str | None = None, q: str | None = None) -> HTMLResponse:
+        return index_page(request, category=category, q=q)
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

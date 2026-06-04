@@ -56,6 +56,7 @@ def test_pipeline_script_runs_stages_in_order_and_logs_success(tmp_path: Path) -
         "score --since 24h",
         "enrich --since 24h",
         "curate",
+        "interpret",
     ]
     logs = sorted((tmp_path / "logs").glob("pipeline-*.log"))
     assert len(logs) == 1
@@ -78,11 +79,13 @@ def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
         "score --since 24h",
         "enrich --since 24h",
         "curate",
+        "interpret",
     ]
     log_text = next((tmp_path / "logs").glob("pipeline-*.log")).read_text(encoding="utf-8")
     assert "=== prefilter FAIL (exit 42) ===" in log_text
     assert "=== score START ===" in log_text
     assert "=== curate OK ===" in log_text
+    assert "=== interpret OK ===" in log_text
     assert "=== PIPELINE DONE (failed=1) ===" in log_text
 
 

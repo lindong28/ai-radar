@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AI Radar · 精选</title>
+    <title>{{ item.title }} · 微信文章解读 · AI Radar</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="modulepreload" href="/app.js?v=20260602-wechat-uxfix1">
@@ -17,50 +17,48 @@
       <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
       <div class="divider"></div>
       <nav class="side-nav">
-        <a class="side-link side-link-active" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
+        <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
         <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
-        <a class="side-link" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
+        <a class="side-link side-link-active" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
         <a class="side-link" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
         <a class="side-link" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span></a>
       </nav>
     </aside>
-    <main class="app-main">
+    <main class="app-main wechat-detail-main">
       <div class="app-mobile-bar">
         <button type="button" class="app-hamburger" aria-label="打开导航" aria-expanded="false" aria-controls="app-sidebar">≡</button>
         <a class="app-mobile-brand" aria-label="AI Radar 首页" href="/"><span class="app-mobile-brand-text">AI RADAR</span></a>
         <span class="app-mobile-bar-spacer" aria-hidden="true"></span>
       </div>
-      <section class="card page-header">
-        <div>
-          <h1>精选</h1>
-          <p id="run-meta" class="page-subtitle">AI 自动挑选的高价值内容</p>
-        </div>
-        <div class="feed-toolbar-row">
-          <div class="seg-list" data-category-filter aria-label="内容分类">
-            <a class="seg-item seg-item-active" href="/?page=1" data-category="all" aria-pressed="true">全部</a>
-            <a class="seg-item" href="/?category=ai-models&page=1" data-category="model" aria-pressed="false">模型</a>
-            <a class="seg-item" href="/?category=ai-products&page=1" data-category="product" aria-pressed="false">产品</a>
-            <a class="seg-item" href="/?category=industry&page=1" data-category="industry" aria-pressed="false">行业</a>
-            <a class="seg-item" href="/?category=paper&page=1" data-category="paper" aria-pressed="false">论文</a>
-            <a class="seg-item" href="/?category=tip&page=1" data-category="practice" aria-pressed="false">技巧</a>
+      <article class="card wechat-detail">
+        <a class="detail-back" href="{{ back_href }}">‹ 返回列表</a>
+        <header class="wechat-detail-header">
+          <div class="source-line">
+            <a class="source-link" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">
+              <span class="source-icon">
+                {% if item.avatar_url %}
+                  <img class="source-avatar" src="{{ item.avatar_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+                {% endif %}
+                <span class="source-initial">{{ (item.author or "?")[:1] }}</span>
+              </span>
+              <span class="source-name">{{ item.author }}</span>
+            </a>
           </div>
-          <form class="feed-filter" action="/" method="get">
-            <input id="category-param" type="hidden" name="category" value="">
-            <input id="search" type="search" name="q" placeholder="搜索标题/摘要…">
-            <button class="filter-submit" type="submit">搜索</button>
-          </form>
+          <h1>{{ item.title }}</h1>
+          <div class="wechat-detail-meta">
+            <time datetime="{{ item.published_at }}">{{ item.published_at[:10] }}</time>
+            {% if item.recommendation %}<span>{{ item.recommendation }}</span>{% endif %}
+          </div>
+          <div class="tags">
+            {% for tag in item.tags %}
+              <span class="tag">{{ tag }}</span>
+            {% endfor %}
+          </div>
+        </header>
+        <div class="summary-body markdown-body">
+          {{ item.summary_html | safe }}
         </div>
-      </section>
-      <section id="list" class="timeline" aria-live="polite">
-{% include "_prepaint_list.html" %}
-      </section>
+      </article>
     </main>
-    <script id="__PRELOAD__" type="application/json">
-      {{ preload | tojson | safe }}
-    </script>
-    <script type="module" async>
-      import { initCurated } from "/app.js?v=20260602-wechat-uxfix1";
-      initCurated();
-    </script>
   </body>
 </html>
