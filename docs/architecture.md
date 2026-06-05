@@ -230,7 +230,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 | 端点 | 方法 | 用途 |
 |---|---|---|
-| `/api/v1/timeline` | GET | 全量时间线，支持 cursor 分页、channel 过滤（x/news/firstParty）、category 过滤、混合 FTS/LIKE 搜索 |
+| `/api/v1/timeline` | GET | 全量时间线，支持页码分页（返回真实总数 COUNT）、channel 过滤（x/news/firstParty）、category 过滤、混合 FTS/LIKE 搜索 |
 | `/api/v1/curated` | GET | 精选内容，支持 run_id、date、category、混合 FTS/LIKE 搜索 |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url |
@@ -278,6 +278,14 @@ SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"
 | `industry` | 行业动态、安全/对齐、现象/趋势 |
 | `paper` | 论文/研究 |
 | `tip` | 教程/实践、部署/工程 |
+
+### Timeline 计数与分页
+
+`/all` 和 `/wechat` 用数字页码分页（首末页固定、当前页相邻页、… 省略），共用 `web/static/app.js` 的一套分页组件。这要求 API 返回真实总数以定位末页。
+
+`/api/v1/timeline` 返回真实总数 COUNT（非 ADR-004 时期的前向估算），并把越界页 clamp 到真实末页。计数与 rows 查询是**两套独立 SQL**：rows 用 EXISTS-per-row 子句判定每条 item 的最新 prefilter/scoring 评估，计数用 `latest_prefilter` / `latest_scoring` CTE + JOIN 的集合公式（`_count_timeline_items_with_prefilter()`），避免 per-row 子查询随数据量退化——改 timeline 过滤逻辑时两处需同步。
+
+计数走进程内 LRU 缓存（`_cached_timeline_total()`，上限 64），key = 过滤签名 + 数据版本（`_timeline_data_version()`：最新 curation_run id/ruleset、items 行数与 max rowid、max eval id），pipeline/curation 落新数据时自动失效；search/cursor 路径不缓存直接算。FastAPI lifespan 启动时 prewarm 默认视图计数。CTE 计数依赖 migration `010` 的 `item_evaluations(stage,error,item_id,id DESC)` 索引。决策与性能数据见 ADR-005。
 
 ## Key Abstractions
 

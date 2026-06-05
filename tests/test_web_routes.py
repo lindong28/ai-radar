@@ -341,9 +341,11 @@ def test_perf_migration_adds_timeline_indexes(tmp_path: Path) -> None:
     conn = sqlite3.connect(db_path)
 
     index_names = {row[1] for row in conn.execute("PRAGMA index_list('items')").fetchall()}
+    evaluation_index_names = {row[1] for row in conn.execute("PRAGMA index_list('item_evaluations')").fetchall()}
 
     assert "idx_items_source_url_norm" in index_names
     assert "idx_items_published_fetched_id" in index_names
+    assert "idx_evaluations_stage_error_item_id" in evaluation_index_names
 
 
 def test_item_summary_uses_preloaded_enrichment_without_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -554,18 +556,45 @@ def test_prepaint_uses_generic_wechat_icon_when_author_avatar_missing() -> None:
     assert item["source_icon_url"] == WECHAT_FALLBACK_ICON
 
 
-def test_timeline_total_uses_limit_plus_one_estimate(tmp_path: Path) -> None:
+def test_timeline_total_uses_real_count_and_clamps_out_of_range_page(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 
     page_one = client.get("/api/v1/timeline", params={"limit": 1, "page": 1}).json()["data"]
-    last_page = client.get("/api/v1/timeline", params={"limit": 1, "page": 3}).json()["data"]
+    out_of_range = client.get("/api/v1/timeline", params={"limit": 1, "page": 999}).json()["data"]
     single_page = client.get("/api/v1/timeline", params={"limit": 50, "page": 1}).json()["data"]
     empty_page = client.get("/api/v1/timeline", params={"q": "xyzzyqwertynonexistent", "limit": 50}).json()["data"]
 
-    assert page_one["total"] == 2
-    assert last_page["total"] == 3
+    assert page_one["total"] == 3
+    assert out_of_range["total"] == 3
+    assert out_of_range["page"] == 3
+    assert [item["id"] for item in out_of_range["items"]] == ["item-x"]
     assert single_page["total"] == 3
     assert empty_page["total"] == 0
+
+
+def test_timeline_total_cache_invalidates_when_items_change(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    first = client.get("/api/v1/timeline", params={"limit": 50}).json()["data"]
+    assert first["total"] == 3
+
+    conn = sqlite3.connect(db_path)
+    _insert_item(
+        conn,
+        "item-new",
+        "openai_blog",
+        "Newer model update",
+        "Ada",
+        "A new AI model update",
+        "2026-05-08T11:00:00Z",
+    )
+    conn.commit()
+    conn.close()
+
+    second = client.get("/api/v1/timeline", params={"limit": 50}).json()["data"]
+    assert second["total"] == 4
+    assert second["items"][0]["id"] == "item-new"
 
 
 def test_timeline_exposes_default_score_for_unscored_items(tmp_path: Path) -> None:
@@ -956,7 +985,7 @@ def test_timeline_supports_channel_filters_and_url_page_state(tmp_path: Path) ->
 
     assert page_one["page"] == 1
     assert page_one["limit"] == 1
-    assert page_one["total"] == 2
+    assert page_one["total"] == 3
     assert [item["id"] for item in page_one["items"]] == ["item-openai"]
     assert page_two["page"] == 2
     assert [item["id"] for item in page_two["items"]] == ["item-claude"]

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
+from collections import OrderedDict
+from threading import Lock
+from typing import Any
+
 from fastapi import APIRouter, Query, Request
 
 from ..envelope import ok
@@ -18,6 +23,166 @@ from .common import (
 )
 
 router = APIRouter()
+
+_TIMELINE_TOTAL_CACHE_MAX = 64
+_TIMELINE_TOTAL_CACHE: OrderedDict[tuple[Any, ...], int] = OrderedDict()
+_TIMELINE_TOTAL_CACHE_LOCK = Lock()
+_PREFILTER_SCORING_CLAUSE = """
+EXISTS (
+  SELECT 1 FROM item_evaluations pre
+  WHERE pre.item_id=i.id
+    AND pre.stage='prefilter'
+    AND pre.error IS NULL
+    AND pre.id = (
+      SELECT MAX(latest.id)
+      FROM item_evaluations latest
+      WHERE latest.item_id=i.id
+        AND latest.stage='prefilter'
+    )
+    AND json_extract(pre.numeric_json, '$.is_ai_related') = 1
+)
+AND (
+  NOT EXISTS (
+    SELECT 1 FROM item_evaluations scored_any
+    WHERE scored_any.item_id=i.id
+      AND scored_any.stage='scoring'
+      AND scored_any.error IS NULL
+  )
+  OR EXISTS (
+    SELECT 1 FROM item_evaluations scored
+    WHERE scored.item_id=i.id
+      AND scored.stage='scoring'
+      AND scored.error IS NULL
+      AND scored.id = (
+        SELECT MAX(latest_score.id)
+        FROM item_evaluations latest_score
+        WHERE latest_score.item_id=i.id
+          AND latest_score.stage='scoring'
+          AND latest_score.error IS NULL
+      )
+      AND json_extract(scored.numeric_json, '$.relevance') >= 6.5
+  )
+)
+"""
+
+
+def _timeline_data_version(conn: sqlite3.Connection) -> tuple[Any, ...]:
+    db_info = conn.execute("PRAGMA database_list").fetchone()
+    row = conn.execute(
+        """
+        SELECT
+          COALESCE((SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1), '') AS latest_run_id,
+          COALESCE((SELECT ruleset_version FROM curation_runs ORDER BY created_at DESC LIMIT 1), '') AS latest_ruleset,
+          COALESCE((SELECT created_at FROM curation_runs ORDER BY created_at DESC LIMIT 1), '') AS latest_run_created_at,
+          COALESCE((SELECT MAX(rowid) FROM items), 0) AS max_item_rowid,
+          COALESCE((SELECT COUNT(*) FROM items), 0) AS item_count,
+          COALESCE((SELECT MAX(id) FROM item_evaluations), 0) AS max_eval_id
+        """
+    ).fetchone()
+    return (db_info["file"] if db_info is not None else "", *tuple(row))
+
+
+def _count_timeline_items(conn: sqlite3.Connection, where: str, params: tuple[object, ...]) -> int:
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM items i
+        JOIN sources s ON s.id=i.source_id
+        {where}
+        """,
+        params,
+    ).fetchone()
+    return int(row[0] if row is not None else 0)
+
+
+def _append_where_condition(where: str, condition: str) -> str:
+    return f"{where} AND ({condition})" if where else f"WHERE ({condition})"
+
+
+def _count_timeline_items_with_prefilter(
+    conn: sqlite3.Connection,
+    where: str,
+    params: tuple[object, ...],
+) -> int:
+    filtered_where = _append_where_condition(where, "scored.id IS NULL OR json_extract(scored.numeric_json, '$.relevance') >= 6.5")
+    row = conn.execute(
+        f"""
+        WITH latest_prefilter AS (
+          SELECT item_id, MAX(id) AS id
+          FROM item_evaluations
+          WHERE stage='prefilter'
+          GROUP BY item_id
+        ), latest_scoring AS (
+          SELECT item_id, MAX(id) AS id
+          FROM item_evaluations
+          WHERE stage='scoring' AND error IS NULL
+          GROUP BY item_id
+        )
+        SELECT COUNT(*)
+        FROM items i
+        JOIN sources s ON s.id=i.source_id
+        JOIN latest_prefilter lp ON lp.item_id=i.id
+        JOIN item_evaluations pre
+          ON pre.id=lp.id
+         AND pre.error IS NULL
+         AND json_extract(pre.numeric_json, '$.is_ai_related') = 1
+        LEFT JOIN latest_scoring ls ON ls.item_id=i.id
+        LEFT JOIN item_evaluations scored ON scored.id=ls.id
+        {filtered_where}
+        """,
+        params,
+    ).fetchone()
+    return int(row[0] if row is not None else 0)
+
+
+def _cached_timeline_total(
+    conn: sqlite3.Connection,
+    where: str,
+    params: tuple[object, ...],
+    signature: tuple[object, ...],
+    *,
+    cacheable: bool,
+    use_prefilter_count: bool,
+) -> int:
+    count_fn = _count_timeline_items_with_prefilter if use_prefilter_count else _count_timeline_items
+    if not cacheable:
+        return count_fn(conn, where, params)
+
+    key = (*signature, _timeline_data_version(conn))
+    with _TIMELINE_TOTAL_CACHE_LOCK:
+        cached = _TIMELINE_TOTAL_CACHE.get(key)
+        if cached is not None:
+            _TIMELINE_TOTAL_CACHE.move_to_end(key)
+            return cached
+
+    total = count_fn(conn, where, params)
+    with _TIMELINE_TOTAL_CACHE_LOCK:
+        _TIMELINE_TOTAL_CACHE[key] = total
+        _TIMELINE_TOTAL_CACHE.move_to_end(key)
+        while len(_TIMELINE_TOTAL_CACHE) > _TIMELINE_TOTAL_CACHE_MAX:
+            _TIMELINE_TOTAL_CACHE.popitem(last=False)
+    return total
+
+
+def prewarm_timeline_total_cache(db_path: object) -> None:
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    try:
+        has_prefilter = bool(conn.execute("SELECT 1 FROM item_evaluations WHERE stage='prefilter' LIMIT 1").fetchone())
+        where = f"WHERE {deduped_item_clause('i')}"
+        _cached_timeline_total(
+            conn,
+            where,
+            (),
+            ("", "", False, False, has_prefilter),
+            cacheable=True,
+            use_prefilter_count=has_prefilter,
+        )
+    finally:
+        conn.close()
 
 
 @router.get("/timeline")
@@ -68,46 +233,9 @@ def timeline(
     preview_query = q if search_subquery else None
     with conn_from_request(request) as conn:
         has_prefilter = bool(conn.execute("SELECT 1 FROM item_evaluations WHERE stage='prefilter' LIMIT 1").fetchone())
+        count_where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         if has_prefilter:
-            where_clauses.append(
-                """
-                EXISTS (
-                  SELECT 1 FROM item_evaluations pre
-                  WHERE pre.item_id=i.id
-                    AND pre.stage='prefilter'
-                    AND pre.error IS NULL
-                    AND pre.id = (
-                      SELECT MAX(latest.id)
-                      FROM item_evaluations latest
-                      WHERE latest.item_id=i.id
-                        AND latest.stage='prefilter'
-                    )
-                    AND json_extract(pre.numeric_json, '$.is_ai_related') = 1
-                )
-                AND (
-                  NOT EXISTS (
-                    SELECT 1 FROM item_evaluations scored_any
-                    WHERE scored_any.item_id=i.id
-                      AND scored_any.stage='scoring'
-                      AND scored_any.error IS NULL
-                  )
-                  OR EXISTS (
-                    SELECT 1 FROM item_evaluations scored
-                    WHERE scored.item_id=i.id
-                      AND scored.stage='scoring'
-                      AND scored.error IS NULL
-                      AND scored.id = (
-                        SELECT MAX(latest_score.id)
-                        FROM item_evaluations latest_score
-                        WHERE latest_score.item_id=i.id
-                          AND latest_score.stage='scoring'
-                          AND latest_score.error IS NULL
-                      )
-                      AND json_extract(scored.numeric_json, '$.relevance') >= 6.5
-                  )
-                )
-                """
-            )
+            where_clauses.append(_PREFILTER_SCORING_CLAUSE)
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         offset = 0 if cursor else (page - 1) * limit
         search_select = ""
@@ -126,6 +254,22 @@ def timeline(
                 "ORDER BY is_source_match DESC, intra_source_rank ASC, "
                 "i.published_at DESC, i.fetched_at DESC, i.id DESC"
             )
+        total = _cached_timeline_total(
+            conn,
+            count_where,
+            tuple(params),
+            (
+                channel or "",
+                normalized_category or "",
+                bool(search_subquery),
+                bool(cursor),
+                has_prefilter,
+            ),
+            cacheable=not search_subquery and not cursor,
+            use_prefilter_count=has_prefilter,
+        )
+        response_page = 1 if cursor else min(max(page, 1), max(1, (total + limit - 1) // limit))
+        offset = 0 if cursor else (response_page - 1) * limit
         query_params = [*search_sort_params, *params, limit + 1, offset]
         rows = conn.execute(
             f"""
@@ -197,6 +341,4 @@ def timeline(
             else None
         )
         items = items[:limit]
-        response_page = 1 if cursor else page
-        total = response_page * limit + 1 if len(rows) > limit else (response_page - 1) * limit + len(items)
     return ok({"items": items, "next_cursor": next_cursor, "total": total, "page": response_page, "limit": limit})

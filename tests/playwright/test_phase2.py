@@ -1,14 +1,33 @@
 from __future__ import annotations
 
-from urllib.parse import unquote
+import json
+import re
+from urllib.parse import parse_qs, unquote, urlparse
 
 from playwright.sync_api import Page, expect
+
+PRELOAD_RE = re.compile(
+    r'\s*<script id="__PRELOAD__" type="application/json">\s*.*?\s*</script>',
+    re.S,
+)
 
 
 def _goto(page: Page, base_url: str, path: str, cards: bool = False) -> None:
     page.goto(f"{base_url}{path}", wait_until="domcontentloaded")
     if cards:
         expect(page.locator(".timeline-card").first).to_be_visible(timeout=10_000)
+
+
+def _strip_wechat_preload(page: Page) -> None:
+    def strip_document_preload(route):
+        parsed = urlparse(route.request.url)
+        if route.request.resource_type == "document" and parsed.path == "/wechat":
+            response = route.fetch()
+            route.fulfill(response=response, body=PRELOAD_RE.sub("", response.text()))
+            return
+        route.fallback()
+
+    page.route("**/*", strip_document_preload)
 
 
 def _visible_card_count(page: Page) -> int:
@@ -259,6 +278,57 @@ def test_wechat_card_body_click_opens_detail_and_back_preserves_page(page: Page,
     page.locator(".detail-back").click()
     expect(page).to_have_url(f"{base_url}/wechat?page=2")
     expect(page.locator(".wechat-card").first).to_be_visible()
+
+
+def test_wechat_pagination_renders_numeric_direct_links_and_arrow_boundaries(page: Page, base_url: str) -> None:
+    _strip_wechat_preload(page)
+
+    def wechat_response(route):
+        parsed = urlparse(route.request.url)
+        params = parse_qs(parsed.query)
+        requested_page = int(params.get("page", ["1"])[0])
+        page_number = min(max(requested_page, 1), 4)
+        item = {
+            "slug": f"wechat-page-{page_number}",
+            "title": f"WeChat page {page_number}",
+            "abstract": "Deterministic Playwright pagination item.",
+            "tags": ["Agent"],
+            "author": "AI Planet",
+            "avatar_url": "",
+            "published_at": f"2026-06-0{page_number}T10:00:00Z",
+            "url": f"https://example.com/wechat-page-{page_number}",
+            "detail_url": f"/wechat/wechat-page-{page_number}?page={page_number}",
+            "recommendation": "值得一看",
+        }
+        payload = {
+            "success": True,
+            "data": {"items": [item], "total": 200, "page": page_number, "limit": 50},
+        }
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    page.route("**/api/v1/wechat*", wechat_response)
+    page.goto(f"{base_url}/wechat", wait_until="domcontentloaded")
+
+    expect(page.locator(".wechat-card").first).to_be_visible(timeout=10_000)
+    numeric_texts = page.locator("#pagination .pagination-link").evaluate_all(
+        "els => els.map(el => el.textContent.trim()).filter(text => /^\\d+$/.test(text))"
+    )
+    assert numeric_texts == ["1", "2", "3", "4"]
+    assert page.locator('#pagination .pagination-link[rel="prev"]').count() == 0
+
+    with page.expect_response(lambda response: "/api/v1/wechat" in response.url and "page=3" in response.url):
+        page.locator('#pagination .pagination-link[data-page="3"]').click()
+
+    expect(page).to_have_url(f"{base_url}/wechat?page=3")
+    expect(page.locator(".wechat-card .item-title")).to_have_text("WeChat page 3")
+    expect(page.locator('.pagination-link[aria-current="page"]')).to_have_text("3")
+
+    with page.expect_response(lambda response: "/api/v1/wechat" in response.url and "page=4" in response.url):
+        page.locator('#pagination .pagination-link[data-page="4"]').filter(has_text=re.compile(r"^4$")).click()
+
+    expect(page).to_have_url(f"{base_url}/wechat?page=4")
+    expect(page.locator(".wechat-card .item-title")).to_have_text("WeChat page 4")
+    assert page.locator('#pagination .pagination-link[rel="next"]').count() == 0
 
 
 def test_v10g_mobile_all_page_keeps_scan_reading_density(page: Page, base_url: str) -> None:

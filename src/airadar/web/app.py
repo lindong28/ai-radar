@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -190,7 +192,13 @@ def _wechat_back_href(page: int | None) -> str:
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
     db.migrate(db_path)
-    app = FastAPI(title="AI Radar", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        timeline.prewarm_timeline_total_cache(app.state.db_path)
+        yield
+
+    app = FastAPI(title="AI Radar", version="0.1.0", lifespan=lifespan)
     app.state.db_path = str(db.resolve_db_path(db_path))
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
     templates.env.policies["json.dumps_kwargs"] = {"ensure_ascii": False}

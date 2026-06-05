@@ -470,23 +470,6 @@ function renderWechatTimeline(container, items) {
   }).join("");
 }
 
-function renderWechatPagination(root, { page = 1, total = 0, limit = 50 } = {}) {
-  if (!root) return;
-  const totalPages = Math.ceil(Number(total || 0) / Number(limit || 1));
-  if (totalPages <= 1) {
-    root.hidden = true;
-    root.innerHTML = "";
-    return;
-  }
-  const current = Math.min(Math.max(Number(page || 1), 1), totalPages);
-  const links = [];
-  if (current > 1) links.push(`<a class="pagination-link" href="/wechat?page=${current - 1}" data-page="${current - 1}" rel="prev">‹ 上一页</a>`);
-  links.push(`<span class="pagination-link pagination-link-active" aria-current="page">${current}</span>`);
-  if (current < totalPages) links.push(`<a class="pagination-link" href="/wechat?page=${current + 1}" data-page="${current + 1}" rel="next">下一页 ›</a>`);
-  root.hidden = false;
-  root.innerHTML = links.join("");
-}
-
 function initNavigation() {
   const sidebar = document.querySelector(".sidebar");
   const toggle = document.querySelector(".app-hamburger");
@@ -576,15 +559,60 @@ function restoreListScroll() {
   requestAnimationFrame(() => window.scrollTo(0, Number(value)));
 }
 
-function paginationPages(current, totalPages) {
-  const pages = new Set([1, totalPages, current - 1, current, current + 1]);
-  return [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
+export function paginationPages(current, totalPages) {
+  const safeTotal = Math.max(0, Math.floor(Number(totalPages || 0)));
+  if (safeTotal <= 0) return [];
+  const safeCurrent = Math.min(Math.max(Math.floor(Number(current || 1)), 1), safeTotal);
+  const pages = new Set([1, safeTotal]);
+  const endOverflow = Math.max(0, safeCurrent + 2 - safeTotal);
+  const start = safeCurrent - 2 - endOverflow;
+  const end = safeCurrent + 2 - endOverflow;
+  for (let page = start; page <= end; page += 1) {
+    pages.add(page);
+  }
+  return [...pages].filter((page) => page >= 1 && page <= safeTotal).sort((a, b) => a - b);
 }
 
-function paginationLink(label, page, { q, category, channel, current = false, rel = "" }) {
+export function paginationSequence(current, totalPages) {
+  const sequence = [];
+  let last = 0;
+  for (const value of paginationPages(current, totalPages)) {
+    if (last && value - last > 1) sequence.push("...");
+    sequence.push(value);
+    last = value;
+  }
+  return sequence;
+}
+
+export function paginationState({ page = 1, total = 0, limit = 1 } = {}) {
+  const safeLimit = Math.max(1, Number(limit || 1));
+  const safeTotal = Math.max(0, Number(total || 0));
+  const totalPages = Math.max(1, Math.ceil(safeTotal / safeLimit));
+  if (totalPages <= 1) {
+    return {
+      hidden: true,
+      current: 1,
+      totalPages,
+      hasPrev: false,
+      hasNext: false,
+      sequence: [],
+    };
+  }
+  const current = Math.min(Math.max(Math.floor(Number(page || 1)), 1), totalPages);
+  return {
+    hidden: false,
+    current,
+    totalPages,
+    hasPrev: current > 1,
+    hasNext: current < totalPages,
+    sequence: paginationSequence(current, totalPages),
+  };
+}
+
+function paginationLink(label, page, { href, current = false, rel = "" }) {
   const attrs = [
     `class="pagination-link${current ? " pagination-link-active" : ""}"`,
-    `href="${esc(feedUrl("/all", { q, category, channel, page: String(page) }))}"`,
+    `href="${esc(href)}"`,
     `data-page="${esc(page)}"`,
   ];
   if (current) attrs.push('aria-current="page"');
@@ -592,26 +620,45 @@ function paginationLink(label, page, { q, category, channel, current = false, re
   return `<a ${attrs.join(" ")}>${esc(label)}</a>`;
 }
 
-function renderPagination(root, { page, total, limit, q = "", category = "all", channel = "all" }) {
+function renderPaginationControls(root, stateArgs, urlForPage) {
   if (!root) return;
-  const totalPages = Math.ceil(Number(total || 0) / Number(limit || 1));
-  if (totalPages <= 1) {
+  const state = paginationState(stateArgs);
+  if (state.hidden) {
     root.hidden = true;
     root.innerHTML = "";
     return;
   }
-  const current = Math.min(Math.max(Number(page || 1), 1), totalPages);
   const parts = [];
-  if (current > 1) parts.push(paginationLink("‹ 上一页", current - 1, { q, category, channel, rel: "prev" }));
-  let last = 0;
-  for (const value of paginationPages(current, totalPages)) {
-    if (last && value - last > 1) parts.push('<span class="pagination-gap">…</span>');
-    parts.push(paginationLink(String(value), value, { q, category, channel, current: value === current }));
-    last = value;
+  if (state.hasPrev) {
+    parts.push(paginationLink("‹ 上一页", state.current - 1, { href: urlForPage(state.current - 1), rel: "prev" }));
   }
-  if (current < totalPages) parts.push(paginationLink("下一页 ›", current + 1, { q, category, channel, rel: "next" }));
+  for (const value of state.sequence) {
+    if (value === "...") {
+      parts.push('<span class="pagination-gap">…</span>');
+      continue;
+    }
+    parts.push(
+      paginationLink(String(value), value, {
+        href: urlForPage(value),
+        current: value === state.current,
+      })
+    );
+  }
+  if (state.hasNext) {
+    parts.push(paginationLink("下一页 ›", state.current + 1, { href: urlForPage(state.current + 1), rel: "next" }));
+  }
   root.hidden = false;
   root.innerHTML = parts.join("");
+}
+
+function renderWechatPagination(root, { page = 1, total = 0, limit = 50 } = {}) {
+  renderPaginationControls(root, { page, total, limit }, (value) => `/wechat?page=${value}`);
+}
+
+function renderPagination(root, { page, total, limit, q = "", category = "all", channel = "all" }) {
+  renderPaginationControls(root, { page, total, limit }, (value) =>
+    feedUrl("/all", { q, category, channel, page: String(value) })
+  );
 }
 
 function debounceInput(input, callback) {
@@ -707,6 +754,17 @@ export async function initTimeline() {
     activeChannel = channel;
     load({ page: 1, mode: "push" });
   });
+  function timelineUrlParams(page = currentPage) {
+    return {
+      q: search.value.trim(),
+      category: activeCategory,
+      channel: activeChannel,
+      page: page > 1 ? String(page) : "",
+    };
+  }
+  function syncTimelineUrl(page = currentPage, mode = "replace") {
+    updateFeedUrl("/all", timelineUrlParams(page), mode);
+  }
   search.value = searchFromUrl();
   normalizeFeedUrl("/all", {
     q: search.value.trim(),
@@ -744,8 +802,7 @@ export async function initTimeline() {
   async function load({ page = pageFromUrl(), mode = "replace", updateUrl = true } = {}) {
     currentPage = page;
     const q = search.value.trim();
-    const urlPage = page > 1 ? String(page) : "";
-    if (updateUrl) updateFeedUrl("/all", { q, category: activeCategory, channel: activeChannel, page: urlPage }, mode);
+    if (updateUrl) syncTimelineUrl(page, mode);
     syncCategoryControls(activeCategory, activeChannel);
     syncChannelControls(activeChannel, activeCategory);
     renderTimelineLoading(list);
@@ -758,6 +815,11 @@ export async function initTimeline() {
         channel: CHANNEL_URL_VALUES[activeChannel] || "",
         category: CATEGORY_URL_VALUES[activeCategory] || "",
       }));
+      const responsePage = Number(data.page || page);
+      currentPage = responsePage;
+      if (responsePage !== page || pageFromUrl() !== responsePage) {
+        syncTimelineUrl(responsePage, "replace");
+      }
       const total = Number(data.total || 0);
       const limit = Number(data.limit || 40);
       const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -804,6 +866,9 @@ export async function initTimeline() {
   const preload = readPreload();
   if (preload && Array.isArray(preload.items)) {
     currentPage = Number(preload.page || currentPage);
+    if (currentPage !== pageFromUrl()) {
+      syncTimelineUrl(currentPage, "replace");
+    }
     renderView(preload.items, preload);
   } else {
     await load({ page: currentPage, updateUrl: false });

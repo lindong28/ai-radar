@@ -80,6 +80,7 @@
 | [002-deepseek-v4-flash-prefilter.md](adr/002-deepseek-v4-flash-prefilter.md) | Prefilter 模型选用 deepseek-v4-flash 并禁用 thinking |
 | [003-dual-dotenv-loader.md](adr/003-dual-dotenv-loader.md) | Runtime env loader 读取双层 .env 文件 |
 | [004-n-plus-one-optimization-scope.md](adr/004-n-plus-one-optimization-scope.md) | N+1 优化仅限 timeline 路由 |
+| [005-timeline-exact-count-with-cached-cte.md](adr/005-timeline-exact-count-with-cached-cte.md) | Timeline 真实总数计数 + CTE 公式 + 进程内 LRU 缓存 |
 
 ### docs/experiences/ [Agent]
 
