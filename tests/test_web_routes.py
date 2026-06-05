@@ -336,6 +336,33 @@ def _seed_db_with_model_enrichment(tmp_path: Path) -> Path:
     return db_path
 
 
+def _seed_large_curated_archive_db(tmp_path: Path, item_count: int = 45) -> Path:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    for idx in range(2, item_count + 1):
+        item_id = f"item-archive-{idx:02d}"
+        published_at = f"2026-05-07T{23 - (idx % 20):02d}:{idx % 60:02d}:00Z"
+        _insert_item(
+            conn,
+            item_id,
+            "openai_blog",
+            f"Archive item {idx}",
+            "Ada",
+            f"Archive body {idx}",
+            published_at,
+        )
+        conn.execute(
+            """
+            INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+            VALUES ('run-1', ?, 7.5, ?, '{}')
+            """,
+            (item_id, idx),
+        )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
 def test_perf_migration_adds_timeline_indexes(tmp_path: Path) -> None:
     db_path = _seed_db(tmp_path)
     conn = sqlite3.connect(db_path)
@@ -651,6 +678,23 @@ def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
         assert article_pos < preload_pos
         assert font_preload_pos < preload_pos
         assert preload_pos < module_pos
+
+
+def test_home_page_ssr_preload_is_curated_page_aware(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_large_curated_archive_db(tmp_path)))
+
+    response = client.get("/?page=2")
+    api_response = client.get("/api/v1/curated", params={"page": 2})
+
+    assert response.status_code == 200
+    assert api_response.status_code == 200
+    preload = _extract_preload(response.text)
+    api_data = api_response.json()["data"]
+    assert preload["page"] == 2
+    assert preload["limit"] == 40
+    assert preload["total"] == api_data["total"] > 40
+    assert [item["id"] for item in preload["items"]] == [item["id"] for item in api_data["items"]]
+    assert 'id="pagination"' in response.text
 
 
 @pytest.mark.parametrize(

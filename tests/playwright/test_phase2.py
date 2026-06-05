@@ -34,6 +34,14 @@ def _visible_card_count(page: Page) -> int:
     return page.locator(".timeline-card").count()
 
 
+def _api_total(page: Page, base_url: str, path: str) -> int:
+    response = page.request.get(f"{base_url}{path}")
+    assert response.ok
+    payload = response.json()
+    assert payload["success"] is True
+    return int(payload["data"]["total"])
+
+
 def _grouped_times(page: Page) -> list[list[str]]:
     return page.evaluate(
         """() => {
@@ -448,11 +456,13 @@ def test_v12_date_groups_are_descending(page: Page, base_url: str) -> None:
 def test_v14_v15_search_filters_and_clears(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/", cards=True)
     baseline = _visible_card_count(page)
+    baseline_total = _api_total(page, base_url, "/api/v1/curated")
 
     with page.expect_response(lambda response: "/api/v1/curated" in response.url and "q=OpenAI" in response.url):
         page.locator('input[type="search"]').fill("OpenAI")
     expect(page.locator(".timeline-card").first).to_be_visible()
-    assert _visible_card_count(page) < baseline
+    assert _visible_card_count(page) <= baseline
+    assert _api_total(page, base_url, "/api/v1/curated?q=OpenAI") < baseline_total
     for index in range(_visible_card_count(page)):
         assert "openai" in page.locator(".timeline-card").nth(index).inner_text().lower()
 

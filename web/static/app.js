@@ -655,9 +655,9 @@ function renderWechatPagination(root, { page = 1, total = 0, limit = 50 } = {}) 
   renderPaginationControls(root, { page, total, limit }, (value) => `/wechat?page=${value}`);
 }
 
-function renderPagination(root, { page, total, limit, q = "", category = "all", channel = "all" }) {
+function renderPagination(root, { page, total, limit, q = "", category = "all", channel = "all", path = "/all" }) {
   renderPaginationControls(root, { page, total, limit }, (value) =>
-    feedUrl("/all", { q, category, channel, page: String(value) })
+    feedUrl(path, { q, category, channel, page: String(value) })
   );
 }
 
@@ -880,45 +880,88 @@ export async function initCurated() {
   initNavigation();
   const search = document.querySelector("#search");
   const list = document.querySelector("#list");
+  const pagination = document.querySelector("#pagination");
   const runMeta = document.querySelector("#run-meta");
   let activeCategory = categoryFromUrl();
-  let currentItems = [];
+  let currentPage = pageFromUrl();
   if (runMeta) runMeta.textContent = "AI 自动挑选的高价值内容（日期为原文发布日，截至 2026 年）";
   const syncCategoryControls = bindCategoryControls((category) => {
     activeCategory = category;
-    updateFeedUrl("/", { q: search.value.trim(), category: activeCategory }, "push");
-    void load(search.value.trim());
+    void load({ page: 1, mode: "push" });
   });
+  function curatedUrlParams(page = currentPage) {
+    return {
+      q: search.value.trim(),
+      category: activeCategory,
+      page: page > 1 ? String(page) : "",
+    };
+  }
+  function syncCuratedUrl(page = currentPage, mode = "replace") {
+    updateFeedUrl("/", {
+      q: search.value.trim(),
+      category: activeCategory,
+      page: page > 1 ? String(page) : "",
+    }, mode);
+  }
   search.value = searchFromUrl();
-  normalizeFeedUrl("/", { q: search.value.trim(), category: activeCategory });
+  normalizeFeedUrl("/", curatedUrlParams(currentPage));
+  syncCategoryControls(activeCategory);
 
-  function renderView(q = "") {
+  function renderView(rawItems, meta = {}) {
     syncCategoryControls(activeCategory);
-    renderTimeline(list, currentItems.filter((item) => itemMatchesCategory(item, activeCategory)), {
+    const q = search.value.trim();
+    const visibleItems = rawItems.filter((item) => itemMatchesCategory(item, activeCategory));
+    renderTimeline(list, visibleItems, {
       showScore: true,
       sortByScore: false,
       emptyTitle: q ? "没有匹配条目" : activeCategory === "all" ? "暂无精选条目" : `${CATEGORY_LABELS[activeCategory]}分类暂无精选`,
       emptyBody: q ? "清空搜索后可回到默认列表。" : "可以切换到全部继续浏览精选内容。",
     });
+    renderPagination(pagination, {
+      page: meta.page || currentPage,
+      total: meta.total || rawItems.length,
+      limit: meta.limit || 40,
+      q,
+      category: activeCategory,
+      path: "/",
+    });
   }
 
-  async function load(q = "") {
+  async function load({ page = pageFromUrl(), mode = "replace", updateUrl = true } = {}) {
+    currentPage = page;
+    const q = search.value.trim();
+    if (updateUrl) syncCuratedUrl(page, mode);
+    syncCategoryControls(activeCategory);
     renderTimelineLoading(list);
+    if (pagination) pagination.hidden = true;
     try {
       const data = await api(queryPath("/api/v1/curated", {
+        limit: 40,
+        page,
         q,
         category: CATEGORY_URL_VALUES[activeCategory] || "",
       }));
-      currentItems = data.items;
-      renderView(q);
+      const responsePage = Number(data.page || page);
+      currentPage = responsePage;
+      if (responsePage !== page || pageFromUrl() !== responsePage) {
+        syncCuratedUrl(responsePage, "replace");
+      }
+      const total = Number(data.total || 0);
+      const responseLimit = Number(data.limit || 40);
+      const totalPages = Math.max(1, Math.ceil(total / responseLimit));
+      if (total > 0 && !data.items.length && page > totalPages) {
+        await load({ page: totalPages, mode: "replace" });
+        return;
+      }
+      renderView(data.items, data);
     } catch (error) {
-      renderTimelineError(list, error, () => load(q));
+      if (pagination) pagination.hidden = true;
+      renderTimelineError(list, error, () => load({ page, mode: "replace" }));
     }
   }
 
   async function runSearch() {
-    updateFeedUrl("/", { q: search.value.trim(), category: activeCategory }, "replace");
-    await load(search.value.trim());
+    await load({ page: 1, mode: "replace" });
   }
 
   debounceInput(search, runSearch);
@@ -926,13 +969,30 @@ export async function initCurated() {
     event.preventDefault();
     runSearch();
   });
+  pagination?.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-page]");
+    if (!link) return;
+    event.preventDefault();
+    const nextPage = Number(link.dataset.page || "1");
+    load({ page: nextPage, mode: "push" });
+  });
+  window.addEventListener("popstate", () => {
+    activeCategory = categoryFromUrl();
+    search.value = searchFromUrl();
+    currentPage = pageFromUrl();
+    normalizeFeedUrl("/", curatedUrlParams(currentPage));
+    load({ page: currentPage, updateUrl: false });
+  });
   rememberListScroll(list);
   const preload = readPreload();
   if (preload && Array.isArray(preload.items)) {
-    currentItems = preload.items;
-    renderView(search.value.trim());
+    currentPage = Number(preload.page || currentPage);
+    if (currentPage !== pageFromUrl()) {
+      syncCuratedUrl(currentPage, "replace");
+    }
+    renderView(preload.items, preload);
   } else {
-    await load(search.value.trim());
+    await load({ page: currentPage, updateUrl: false });
   }
   restoreListScroll();
 }

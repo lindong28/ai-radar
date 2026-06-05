@@ -196,6 +196,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeline.prewarm_timeline_total_cache(app.state.db_path)
+        curated.prewarm_curated_archive_total_cache(app.state.db_path)
         yield
 
     app = FastAPI(title="AI Radar", version="0.1.0", lifespan=lifespan)
@@ -241,8 +242,14 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.include_router(wechat_routes.router, prefix=api_prefix)
 
     @app.get("/", include_in_schema=False)
-    def index_page(request: Request, category: str | None = None, q: str | None = None) -> HTMLResponse:
-        payload = curated.curated(request, category=category, q=q)
+    def index_page(
+        request: Request,
+        category: str | None = None,
+        q: str | None = None,
+        page: int = 1,
+        limit: int = 40,
+    ) -> HTMLResponse:
+        payload = curated.curated(request, category=category, q=q, page=page, limit=limit)
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -325,8 +332,14 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return RedirectResponse(url="/", status_code=308)
 
     @app.get("/curated", include_in_schema=False)
-    def curated_alias(request: Request, category: str | None = None, q: str | None = None) -> HTMLResponse:
-        return index_page(request, category=category, q=q)
+    def curated_alias(
+        request: Request,
+        category: str | None = None,
+        q: str | None = None,
+        page: int = 1,
+        limit: int = 40,
+    ) -> HTMLResponse:
+        return index_page(request, category=category, q=q, page=page, limit=limit)
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

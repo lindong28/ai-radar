@@ -106,6 +106,77 @@ def test_curated_without_date_keeps_latest_run_behavior(tmp_path: Path) -> None:
     assert [item["id"] for item in data["items"]] == ["item-today", "item-history"]
 
 
+def test_curated_without_date_returns_deduped_archive_page_and_latest_metadata(tmp_path: Path) -> None:
+    db_path, today, history = _seed_db(tmp_path)
+    older = history - timedelta(days=5)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES ('item-older', 's', 'https://example.com/older', 'Older Item', 'Ada', ?, ?, 'older', NULL, 'older', '{}')
+        """,
+        (f"{older.isoformat()}T07:00:00Z", f"{older.isoformat()}T07:00:00Z"),
+    )
+    conn.execute(
+        """
+        INSERT INTO curation_runs (
+          id, ruleset_version, weights_json, threshold, input_eval_ids, output_curated_ids, created_at
+        )
+        VALUES ('run-2', 'test.r1', '{}', 6.5, '[]', '["item-history","item-older"]', ?)
+        """,
+        (f"{today.isoformat()}T11:00:00Z",),
+    )
+    latest_reason = {
+        "scores": {
+            "relevance": 10,
+            "density": 9,
+            "recency": 8,
+            "authority": 9,
+            "engineering": 9,
+            "reasoning": "最新精选理由：历史条目在第二轮再次入选，应使用第二轮元数据。",
+        }
+    }
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES ('run-2', 'item-history', 9.1, 7, ?)
+        """,
+        (json.dumps(latest_reason),),
+    )
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES ('run-2', 'item-older', 7.7, 8, ?)
+        """,
+        (json.dumps(latest_reason),),
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    first_page = client.get("/api/v1/curated", params={"limit": 2}).json()["data"]
+    overflow = client.get("/api/v1/curated", params={"page": 99, "limit": 2}).json()["data"]
+    daily_date = client.get("/api/v1/curated", params={"date": history.isoformat()}).json()["data"]
+
+    assert first_page["page"] == 1
+    assert first_page["limit"] == 2
+    assert first_page["total"] == 3
+    assert first_page["count"] == 2
+    assert first_page["date"] == today.isoformat()
+    assert [item["id"] for item in first_page["items"]] == ["item-today", "item-history"]
+    assert first_page["items"][1]["weighted_score"] == 9.1
+    assert first_page["items"][1]["rank"] == 7
+    assert "第二轮元数据" in first_page["items"][1]["reasoning"]
+    assert overflow["page"] == 2
+    assert [item["id"] for item in overflow["items"]] == ["item-older"]
+    assert daily_date["count"] == 1
+    assert [item["id"] for item in daily_date["items"]] == ["item-history"]
+    assert "total" not in daily_date
+
+
 def test_curated_date_filters_items_by_published_day(tmp_path: Path) -> None:
     db_path, _today, history = _seed_db(tmp_path)
     client = TestClient(create_app(db_path))

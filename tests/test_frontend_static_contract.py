@@ -97,6 +97,14 @@ def test_all_page_declares_aihot_style_channel_filter_and_pagination() -> None:
     assert 'id="more"' not in html
 
 
+def test_curated_page_declares_archive_pagination() -> None:
+    html = _read("index.html")
+
+    assert 'id="pagination"' in html
+    assert 'class="pagination"' in html
+    assert 'aria-label="分页"' in html
+
+
 def test_app_js_supports_url_state_score_tiers_and_card_dividers() -> None:
     js = _read("app.js")
 
@@ -152,16 +160,25 @@ def test_app_js_supports_all_page_channel_pagination_and_full_card_affordances()
     assert "compact: true" not in js
 
 
+def test_app_js_supports_curated_archive_pagination() -> None:
+    js = _read("app.js")
+
+    assert 'const pagination = document.querySelector("#pagination");' in js
+    assert 'queryPath("/api/v1/curated"' in js
+    assert "limit: 40" in js
+    assert "page," in js
+    assert 'path: "/"' in js
+    assert 'page: page > 1 ? String(page) : ""' in js
+
+
 def test_app_js_uses_preload_for_initial_curated_and_timeline_render() -> None:
     js = _read("app.js")
 
     assert "function readPreload()" in js
     assert 'document.querySelector("#__PRELOAD__")' in js
     assert "const preload = readPreload();" in js
-    assert "currentItems = preload.items;" in js
-    assert "renderView(search.value.trim());" in js
+    assert "currentPage = Number(preload.page || currentPage);" in js
     assert "renderView(preload.items, preload);" in js
-    assert "await load(search.value.trim());" in js
     assert "await load({ page: currentPage, updateUrl: false });" in js
 
 

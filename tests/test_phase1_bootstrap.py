@@ -51,6 +51,12 @@ def test_migrate_creates_expected_tables_and_is_idempotent(tmp_path: Path) -> No
         "sources",
     }.issubset(table_names)
 
+    with sqlite3.connect(db_path) as conn:
+        curated_indexes = {
+            row[1] for row in conn.execute("PRAGMA index_list('curated_items')").fetchall()
+        }
+    assert "idx_curated_items_item_run" in curated_indexes
+
 
 def test_migrate_upgrades_cached_wechat_avatar_urls_to_https(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"

@@ -231,7 +231,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | 端点 | 方法 | 用途 |
 |---|---|---|
 | `/api/v1/timeline` | GET | 全量时间线，支持页码分页（返回真实总数 COUNT）、channel 过滤（x/news/firstParty）、category 过滤、混合 FTS/LIKE 搜索 |
-| `/api/v1/curated` | GET | 精选内容，支持 run_id、date、category、混合 FTS/LIKE 搜索 |
+| `/api/v1/curated` | GET | 精选内容。无 `run_id`/`date` 时进入归档模式（跨 run 去重的累积归档，页码分页 + 真实总数）；带 `run_id`/`date` 时为单轮/单日 digest（`/daily` 复用）。支持 category、混合 FTS/LIKE 搜索 |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url |
 | `/api/v1/sources` | GET | 信源列表 |
@@ -241,7 +241,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 | URL | 渲染方式 | 说明 |
 |---|---|---|
-| `/` | `web/templates/index.html` | 精选首页，Jinja2 SSR，内联 `/api/v1/curated` 形状的 preload JSON |
+| `/` | `web/templates/index.html` | 精选累积归档首页（跨 run 去重，页码分页，第 1 页为最新精选），Jinja2 SSR，内联 `/api/v1/curated` 归档形状的 preload JSON |
 | `/all` | `web/templates/all.html` | 全量时间线，Jinja2 SSR，内联 `/api/v1/timeline` 形状的 preload JSON |
 | `/wechat` | `web/templates/wechat.html` | 微信文章解读列表，Jinja2 SSR，内联 `/api/v1/wechat` 形状的 preload JSON |
 | `/wechat/{slug}` | `web/templates/wechat_detail.html` | 微信文章解读详情页，`summary_md` 经 markdown-it-py 渲染后用 nh3 sanitize |
@@ -279,13 +279,13 @@ SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"
 | `paper` | 论文/研究 |
 | `tip` | 教程/实践、部署/工程 |
 
-### Timeline 计数与分页
+### 真实计数与分页
 
-`/all` 和 `/wechat` 用数字页码分页（首末页固定、当前页相邻页、… 省略），共用 `web/static/app.js` 的一套分页组件。这要求 API 返回真实总数以定位末页。
+`/`（精选归档）、`/all`（timeline）、`/wechat` 都用数字页码分页（首末页固定、当前页相邻页、… 省略），共用 `web/static/app.js` 的一套分页组件。这要求 API 返回真实总数以定位末页。三者共享同一"真实计数 + 数据版本缓存"骨架：独立 count 函数、过滤签名 + 数据版本作 LRU key（上限 64，带锁）、search 路径不缓存直接算、越界页 clamp 到真实末页、FastAPI lifespan 启动 prewarm 默认视图计数。决策与性能数据见 ADR-005（timeline）与 ADR-006（精选归档）。
 
-`/api/v1/timeline` 返回真实总数 COUNT（非 ADR-004 时期的前向估算），并把越界页 clamp 到真实末页。计数与 rows 查询是**两套独立 SQL**：rows 用 EXISTS-per-row 子句判定每条 item 的最新 prefilter/scoring 评估，计数用 `latest_prefilter` / `latest_scoring` CTE + JOIN 的集合公式（`_count_timeline_items_with_prefilter()`），避免 per-row 子查询随数据量退化——改 timeline 过滤逻辑时两处需同步。
+**Timeline（`/api/v1/timeline`）**：返回真实总数 COUNT（非 ADR-004 时期的前向估算）。计数与 rows 查询是**两套独立 SQL**：rows 用 EXISTS-per-row 子句判定每条 item 的最新 prefilter/scoring 评估，计数用 `latest_prefilter` / `latest_scoring` CTE + JOIN 的集合公式（`_count_timeline_items_with_prefilter()`），避免 per-row 子查询随数据量退化——改 timeline 过滤逻辑时两处需同步。计数缓存数据版本为 `_timeline_data_version()`（最新 curation_run id/ruleset、items 行数与 max rowid、max eval id）。CTE 计数依赖 migration `010` 的 `item_evaluations(stage,error,item_id,id DESC)` 索引。
 
-计数走进程内 LRU 缓存（`_cached_timeline_total()`，上限 64），key = 过滤签名 + 数据版本（`_timeline_data_version()`：最新 curation_run id/ruleset、items 行数与 max rowid、max eval id），pipeline/curation 落新数据时自动失效；search/cursor 路径不缓存直接算。FastAPI lifespan 启动时 prewarm 默认视图计数。CTE 计数依赖 migration `010` 的 `item_evaluations(stage,error,item_id,id DESC)` 索引。决策与性能数据见 ADR-005。
+**精选归档（`/api/v1/curated` 无 `run_id`/`date`）**：跨 run 去重的累积归档——`_latest_curated_join()` 用 `c.run_id = (SELECT MAX(run_id) FROM curated_items WHERE item_id=i.id)` 相关子查询，每个 item 只保留其最近一次被精选的元数据。真实计数走 `_count_archive_items()` + `_cached_archive_total()`，数据版本为 `_curated_data_version()`（latest run_id、curated_items 计数/max rowid、items 计数/max rowid、max eval id）。归档每页用 `_compute_archive_page()` **现算 item_summary**（不依赖 `summary_json`——预计算只覆盖约 30%），enrichment 一次 `LEFT JOIN` 取出，关联讨论按页 `_batch_related_discussions()` 批量正/反查（`items_fts` 反查）。去重子查询依赖 migration `011` 的 `idx_curated_items_item_run(item_id, run_id)`。带 `run_id`/`date` 时走原单轮/单日 digest 路径（`/daily` 复用），不进归档逻辑。
 
 ## Key Abstractions
 
