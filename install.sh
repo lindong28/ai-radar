@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install ai-radar services. Idempotent.
 # Usage: ./install.sh              # all services
-#        ./install.sh <service>    # serve | tunnel | pipeline | wewe | alert
+#        ./install.sh <service>    # serve | tunnel | pipeline | alert
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,18 +42,9 @@ install_pipeline() {
   echo "✓ pipeline: installed in user crontab (every 15 min)"
 }
 
-# wewe prerequisite: Docker daemon must be reachable.
-needs_docker=0
-for slug in "${SELECTED_SERVICES[@]}"; do
-  [[ "$slug" == "wewe" ]] && needs_docker=1
-done
-if [[ "$needs_docker" -eq 1 ]]; then
-  ensure_docker_daemon || exit 1
-fi
-
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
-    serve|tunnel|wewe|alert) install_launchd_service "$slug" ;;
+    serve|tunnel|alert) install_launchd_service "$slug" ;;
     pipeline)          install_pipeline ;;
   esac
 done
@@ -61,5 +52,5 @@ done
 cat <<EOF
 
 Verify with: ./status.sh
-Logs:        logs/serve-access.log, logs/alert-check.log, /tmp/ai-radar-{tunnel,wewe}.{log,err}, logs/pipeline-*.log
+Logs:        logs/serve-access.log, logs/alert-check.log, /tmp/ai-radar-tunnel.{log,err}, logs/pipeline-*.log
 EOF

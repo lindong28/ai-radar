@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read-only service status panel. Never modifies state.
 # Usage: ./status.sh              # all services
-#        ./status.sh <service>    # serve | tunnel | pipeline | wewe | alert
+#        ./status.sh <service>    # serve | tunnel | pipeline | alert
 
 set -uo pipefail  # no -e: status must report failures, not abort on them
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,19 +30,6 @@ status_launchd_service() {
 
   # Service-specific extras
   case "$slug" in
-    wewe)
-      printf " | "
-      local cstatus
-      cstatus="$(docker ps --filter "name=ai-radar-wewe-rss" --format "{{.Status}}" 2>/dev/null | head -1)"
-      if [[ -n "$cstatus" ]] && [[ "$cstatus" == Up* ]]; then
-        printf "container ✓ %s" "$cstatus"
-      elif command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
-        printf "docker daemon down"
-      else
-        printf "container ✗"
-      fi
-      printf " | log /tmp/ai-radar-wewe.err"
-      ;;
     serve)  printf " | log logs/serve-access.log" ;;
     tunnel) printf " | log /tmp/ai-radar-tunnel.err" ;;
     alert)  printf " | log logs/alert-check.log" ;;
@@ -70,7 +57,7 @@ status_pipeline() {
 
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
-    serve|tunnel|wewe|alert) status_launchd_service "$slug" ;;
+    serve|tunnel|alert) status_launchd_service "$slug" ;;
     pipeline)          status_pipeline ;;
   esac
 done

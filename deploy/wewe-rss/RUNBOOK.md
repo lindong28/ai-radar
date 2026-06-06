@@ -1,6 +1,8 @@
 # WeWe RSS Runbook
 
 > Deployment runbook for the local WeWe RSS bridge used by `kind="wechat"` sources.
+>
+> **Retired (2026-06-06).** WeChat ingestion migrated to the hosted Mp2RSS feed (see [docs/operations/wechat-ingestion.md](../../docs/operations/wechat-ingestion.md)). The `wewe` launchd service and the `install.sh`/`uninstall.sh`/`status.sh` wiring have been removed — `./install.sh wewe` no longer exists. This compose file and runbook are kept only for rollback; to restore the launchd wiring, recover it from git history (the removal commit), then re-add the `wx_*` sources to `data/sources.toml`.
 
 ## Purpose
 

@@ -138,7 +138,6 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 | `serve` | launchd | FastAPI web server on :8000 |
 | `tunnel` | launchd | Cloudflare tunnel 到 aiplanet.live |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
-| `wewe` | launchd（包装 docker compose） | WeWe RSS 桥接 :4000（已被 Mp2RSS 取代，仅作回滚锚点保留；新部署无需启用） |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`，按 A1-A4 规则发送飞书告警 |
 
 ### 部署 / 移除 / 查状态
@@ -149,9 +148,9 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `wewe` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
 
-完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接的 onboarding 见 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)（已停用，仅回滚时参考）。
+完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除（仅回滚时参考 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)）。
 
 ## 部署
 

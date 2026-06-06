@@ -127,8 +127,21 @@
 
 ---
 
-## [open] install.sh 的 docker 就绪检查无法从 "OrbStack 已开但 VM 停" 恢复
+## [open] `alert` 服务每 5 分钟运行但 `AI_RADAR_FEISHU_WEBHOOK` 未配置，告警无法送达
 
+- Type: bug
+- Priority: medium
+- Discovered: 2026-06-06 服务级审计——`live.aiplanet.ai-radar.alert` launchd 每 5 分钟跑 `admin alert-check` 并算出 A1-A4（日志显示规则在跑），但 `AI_RADAR_FEISHU_WEBHOOK` 在进程 env、项目 `.env`、`~/.claude/.env` 三处均未设置。
+- Description: webhook 缺失时 alert 降级为 dry-run（sent=0）——逐次计算告警规则却无法投递。后果：serve/pipeline/摄取真异常时**不会有任何告警发出**，监控形同虚设，且每 5 分钟仍消耗一次计算。`~/.claude/.env` 里已有 `FEISHU_GENERAL_ALERT_WEBHOOK`（watchdog 用），但 ai-radar 专属的 `AI_RADAR_FEISHU_WEBHOOK` 从未配置。
+- Notes:
+  - 两种处置（用户决定）：(a) 配置 `AI_RADAR_FEISHU_WEBHOOK`（专属 webhook，或复用 `FEISHU_GENERAL_ALERT_WEBHOOK`）让 alert 真正能送达；(b) 暂不需要 ai-radar 告警则 `./uninstall.sh alert` 停掉每 5 分钟 inert 运行，想做时再 install。
+  - 配置后用 `./run.sh admin alert-check` 验证：有触发条件时 sent 计数 > 0。
+
+---
+
+## [resolved] install.sh 的 docker 就绪检查无法从 "OrbStack 已开但 VM 停" 恢复
+
+- Resolution: 2026-06-06 `wewe` 从服务层移除（WeChat 摄取迁移 Mp2RSS），`deploy/lib/services.sh` 的 `ensure_docker_daemon` 整个 docker 预检随之删除，`install.sh` 不再触碰 Docker——本 issue 的代码路径已不存在。
 - Type: improvement
 - Priority: low
 - Discovered: 2026-06-01 `/custom:supervise` 委派 codex 跑 `./install.sh wewe` 时，OrbStack GUI 进程在跑但其 VM 因 idle 被自动关机，`docker info` 不可达
@@ -151,8 +164,9 @@
 
 ---
 
-## [open] OrbStack VM idle 自动关机 → wewe 容器随之停 → WeChat 摄取频繁中断
+## [resolved] OrbStack VM idle 自动关机 → wewe 容器随之停 → WeChat 摄取频繁中断
 
+- Resolution: 2026-06-06 WeChat 摄取迁移到托管 Mp2RSS feed，`wewe` 桥 + 本地 docker 容器整体退役（服务层移除），不再依赖 OrbStack VM——本失败模式消失。同日还移除了 OrbStack 开机自启（登录项）+ 退出 helper，因为已无任何服务需要 Docker。
 - Type: bug
 - Priority: medium
 - Discovered: 2026-06-01 一个 session 内观察到 3 次：每次起好 wewe（`./install.sh wewe` / orbctl start）后几十分钟内 OrbStack 又把 VM idle 关机，`ai-radar-wewe-rss` 容器随之停，`127.0.0.1:4000` 不可达。

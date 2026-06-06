@@ -2,7 +2,7 @@
 # Uninstall ai-radar services. Idempotent and tolerant — silent if not installed.
 # Keeps source, plist files, logs, and data. Only unregisters from supervisors.
 # Usage: ./uninstall.sh              # all services
-#        ./uninstall.sh <service>    # serve | tunnel | pipeline | wewe | alert
+#        ./uninstall.sh <service>    # serve | tunnel | pipeline | alert
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,16 +23,6 @@ uninstall_launchd_service() {
   else
     echo "  $slug: nothing to remove (not loaded)"
   fi
-
-  # wewe is a docker compose wrapper: `restart: unless-stopped` keeps the
-  # container alive after launchd lets go. Take it down to honor the protocol
-  # contract that uninstall actually stops the service. Data volume retained.
-  if [[ "$slug" == "wewe" ]] && docker info >/dev/null 2>&1; then
-    if docker ps --filter "name=ai-radar-wewe-rss" --format "{{.Names}}" 2>/dev/null | grep -q wewe; then
-      (cd "$REPO_ROOT/deploy/wewe-rss" && docker compose -f docker-compose.sqlite.yml down >/dev/null 2>&1) || true
-      echo "  wewe: container stopped (data volume retained)"
-    fi
-  fi
 }
 
 uninstall_pipeline() {
@@ -49,7 +39,7 @@ uninstall_pipeline() {
 
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
-    serve|tunnel|wewe|alert) uninstall_launchd_service "$slug" ;;
+    serve|tunnel|alert) uninstall_launchd_service "$slug" ;;
     pipeline)          uninstall_pipeline ;;
   esac
 done

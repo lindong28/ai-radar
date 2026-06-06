@@ -4,13 +4,12 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-ALL_SERVICES=(serve tunnel pipeline wewe alert)
+ALL_SERVICES=(serve tunnel pipeline alert)
 
 service_label() {
   case "$1" in
     serve)    echo "live.aiplanet.ai-radar.serve" ;;
     tunnel)   echo "live.aiplanet.ai-radar.tunnel" ;;
-    wewe)     echo "live.aiplanet.ai-radar.wewe" ;;
     alert)    echo "live.aiplanet.ai-radar.alert" ;;
     pipeline) echo "" ;;
     *) return 1 ;;
@@ -21,7 +20,6 @@ service_plist_name() {
   case "$1" in
     serve)  echo "ai-radar-serve.plist" ;;
     tunnel) echo "ai-radar-tunnel.plist" ;;
-    wewe)   echo "ai-radar-wewe.plist" ;;
     alert)  echo "ai-radar-alert.plist" ;;
     pipeline) echo "" ;;
     *) return 1 ;;
@@ -32,7 +30,6 @@ service_desc() {
   case "$1" in
     serve)    echo "FastAPI web server on :8000" ;;
     tunnel)   echo "Cloudflare tunnel to aiplanet.live" ;;
-    wewe)     echo "WeWe RSS bridge on :4000 (WeChat ingestion)" ;;
     alert)    echo "Monitoring alert check (launchd, 5 min)" ;;
     pipeline) echo "Incremental fetch/score/enrich/curate (cron, 15 min)" ;;
     *) return 1 ;;
@@ -159,20 +156,4 @@ is_launchd_loaded() {
 
 launchd_pid() {
   launchctl list 2>/dev/null | awk -v lbl="$1" '$3==lbl {print $1; exit}'
-}
-
-# Make sure Docker daemon is up. Returns 0 if reachable, 1 otherwise. Tries
-# to start OrbStack if it's installed and not running. Used by wewe install.
-ensure_docker_daemon() {
-  docker info >/dev/null 2>&1 && return 0
-  if command -v orbctl >/dev/null 2>&1; then
-    echo "  Docker daemon not reachable; starting OrbStack..."
-    open -a OrbStack 2>/dev/null || true
-    for _ in 1 2 3 4 5 6 7 8; do
-      sleep 2
-      docker info >/dev/null 2>&1 && return 0
-    done
-  fi
-  echo "✗ Docker daemon still unreachable. Start your Docker provider (OrbStack / Docker Desktop) first." >&2
-  return 1
 }

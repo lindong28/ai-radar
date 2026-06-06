@@ -12,7 +12,7 @@
 | 登录维护 | 上游负责 | 需本机微信读书扫码，频繁失效 |
 | ai-radar 侧 | 消费一个合集 feed URL | 每个公众号一个 per-feed URL |
 
-WeWe RSS 桥接（`wewe` launchd 服务、`deploy/wewe-rss/`、`docs/references/wechat-sources.md`）仅作回滚锚点保留，新部署无需启用。
+WeWe RSS 桥接已于 2026-06-06 从服务层移除（不再有 `wewe` launchd 服务或脚本 wiring）。回滚材料仍保留为文档：`deploy/wewe-rss/`（docker-compose + RUNBOOK）、`docs/references/wechat-sources.md`，launchd plist 与脚本 wiring 从 git 历史恢复。
 
 ## 配置：`MP2RSS_FEED_URL`
 
@@ -128,6 +128,6 @@ cd /Users/lindong/research/ai-assistant
 
 - [README.md §信源](../../README.md#信源) — 用户视角的 `wechat` kind 说明
 - [README.md §微信文章解读](../../README.md#微信文章解读) — `/wechat` 与 ai-assistant KB 回写说明
-- [docs/operations/services.md](services.md) — 服务清单（含已停用的 `wewe`）
+- [docs/operations/services.md](services.md) — 服务清单（4 个活跃服务；`wewe` 已移除，附回滚说明）
 - [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 添加流程（已停用，仅回滚参考）
 - [deploy/wewe-rss/RUNBOOK.md](../../deploy/wewe-rss/RUNBOOK.md) — 旧 WeWe RSS 桥接运维手册（已停用）
