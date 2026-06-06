@@ -9,3 +9,4 @@
 | Dev Environment | [dev-environment.md](./dev-environment.md) | 开发环境配置和工具使用 |
 | Deployment | [deployment.md](./deployment.md) | 部署和调度相关的坑点和 pattern |
 | LLM Pipeline | [llm-pipeline.md](./llm-pipeline.md) | LLM 调用、模型选型、prompt 调优、eval 管线 |
+| Integration | [integration.md](./integration.md) | 跨系统 / 外部工具接口约定（ai-assistant、summarize.sh、KB 写入器） |

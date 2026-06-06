@@ -43,3 +43,9 @@
 - Problem: V6 对比决策包 HTML 交付给用户两次被退回。第一次：matched pairs 依赖不安全的 text+source 模糊匹配，导致"同篇文章对比"实际不是同篇。第二次：matched 样本量不足 10，统计意义不够。两次退回时 HTML 的技术指标（schema valid、ballot submit、浏览器渲染）都是通过的。
 - Solution: 增加 `v6-html-audit.md` 自审 gate，在交付前检查：(1) matched pair 数量是否足够；(2) 每对是否有 URL 级同篇证据；(3) 是否残留 text+source 模糊匹配；(4) 推荐语长度/风格是否达标；(5) 标签覆盖是否达标。技术正确性（schema、渲染）是必要条件，不是充分条件。
 - Applies when: 任何需要用户基于 HTML/报告做决策的交付——先问"这个 artifact 是否能支撑用户做出有信心的决策"，再验证技术正确性。
+
+## 2026-06-01 DeepSeek/ARK 余额不足会伪装成 404 model-not-found
+
+- Problem: DeepSeek/ARK 账户余额不足时，API 不返回明确的欠费/余额错误，而是返回误导性的 `404 InvalidEndpointOrModel.NotFound: The model or endpoint <name> does not exist or you do not have access to it`。ai-radar 现象：prefilter（`deepseek-v4-flash`）和 score/enrich（`deepseek-v4-pro`）同时全挂、都报这个 404 时，第一直觉容易误判成"模型被下线/改名"，去翻 provider 代码找 model_id；真实原因是上游欠费。本次约 24h 处理层空转。
+- Solution: 看到多模型同时报 model-not-found 404 时，第一嫌疑放在**上游余额**而非代码改动。判别要点：(a) model_id 写死在 `src/airadar/provider/deepseek_v4_flash.py` / `deepseek_v4_pro.py`，`git blame` 这些行若久未动 → 排除代码改动、指向服务端；(b) 充值后自动恢复无需改代码——正在跑的 enrich 进程错误计数冻结、接连返回 OK 即恢复指纹（本次约 14:59 PDT 充值生效后自愈）；(c) 真实错因落点——prefilter 异常进 `logs/pipeline-*.log` traceback，score/enrich 的 per-item 异常落 DB `item_evaluations.error` 列。
+- Applies when: pipeline 处理层（prefilter/score/enrich）批量报 model-not-found / 无访问权限的 404 时——先查 DeepSeek/ARK 控制台余额，再怀疑模型变更。多模型同时全挂尤其指向账户级问题（余额、key 失效）而非单模型下线。实际发生于 2026-06-01。
