@@ -30,7 +30,7 @@ def test_alert_launchd_template_runs_alert_check_every_five_minutes() -> None:
     assert "<string>live.aiplanet.ai-radar.alert</string>" in plist
     assert "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin ./run.sh admin alert-check" in plist
     assert "__AI_RADAR_ALERT_ENVIRONMENT__" in plist
-    assert "AI_RADAR_FEISHU_WEBHOOK" in services
+    assert "FEISHU_GENERAL_ALERT_WEBHOOK" in services
     assert "AI_RADAR_DB" in services
     assert "<key>EnvironmentVariables</key>" in services
     assert "<key>StartInterval</key><integer>300</integer>" in plist
@@ -40,14 +40,14 @@ def test_alert_launchd_template_runs_alert_check_every_five_minutes() -> None:
 def test_alert_launchd_environment_xml_includes_webhook_and_optional_db() -> None:
     script = """
     source deploy/lib/services.sh
-    AI_RADAR_FEISHU_WEBHOOK='http://127.0.0.1:8765/hook?a=1&b=2' \
+    FEISHU_GENERAL_ALERT_WEBHOOK='http://127.0.0.1:8765/hook?a=1&b=2' \
     AI_RADAR_DB='/tmp/ai-radar-alert-prod-path.db' \
     alert_environment_xml
     """
 
     result = subprocess.run(["bash", "-lc", script], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
 
-    assert "<key>AI_RADAR_FEISHU_WEBHOOK</key>" in result.stdout
+    assert "<key>FEISHU_GENERAL_ALERT_WEBHOOK</key>" in result.stdout
     assert "http://127.0.0.1:8765/hook?a=1&amp;b=2" in result.stdout
     assert "<key>AI_RADAR_DB</key>" in result.stdout
     assert "/tmp/ai-radar-alert-prod-path.db" in result.stdout

@@ -39,7 +39,7 @@
 2. 复制 webhook URL，写入项目根目录 `.env` 或 `~/.claude/.env`，不要提交真实 URL：
 
 ```bash
-AI_RADAR_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/...
+FEISHU_GENERAL_ALERT_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/...
 ```
 
 3. 在部署机执行 preflight：
@@ -55,10 +55,10 @@ AI_RADAR_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/...
 ./install.sh alert
 ```
 
-`install.sh alert` 会从当前进程环境、`.env` 或 `~/.claude/.env` 读取 `AI_RADAR_FEISHU_WEBHOOK`，并写入本机生成的 `deploy/launchd/ai-radar-alert.plist` 的 `EnvironmentVariables`。launchd 不继承交互式 zsh 的临时 `export`；如果只在 shell 里 export 但没有重新安装 alert，后台任务拿不到 webhook。安装后可用下面命令确认本机 plist 已带 webhook 环境键（不要把真实 URL 贴到 issue/commit/聊天里）：
+`install.sh alert` 会从当前进程环境、`.env` 或 `~/.claude/.env` 读取 `FEISHU_GENERAL_ALERT_WEBHOOK`，并写入本机生成的 `deploy/launchd/ai-radar-alert.plist` 的 `EnvironmentVariables`。launchd 不继承交互式 zsh 的临时 `export`；如果只在 shell 里 export 但没有重新安装 alert，后台任务拿不到 webhook。安装后可用下面命令确认本机 plist 已带 webhook 环境键（不要把真实 URL 贴到 issue/commit/聊天里）：
 
 ```bash
-plutil -p deploy/launchd/ai-radar-alert.plist | rg 'AI_RADAR_FEISHU_WEBHOOK'
+plutil -p deploy/launchd/ai-radar-alert.plist | rg 'FEISHU_GENERAL_ALERT_WEBHOOK'
 ```
 
 测试或自定义数据库路径时，`install.sh alert` 也会把已设置的 `AI_RADAR_DB` 写入同一个 `EnvironmentVariables`，让 launchd job 与手工 `./run.sh admin alert-check` 使用同一份 SQLite。
@@ -70,7 +70,7 @@ plutil -p deploy/launchd/ai-radar-alert.plist | rg 'AI_RADAR_FEISHU_WEBHOOK'
 ./install.sh alert
 ```
 
-没有 `AI_RADAR_FEISHU_WEBHOOK` 时，`alert-check` 只评估规则；触发告警时日志会显示 `send <rule> <type> skipped reason=AI_RADAR_FEISHU_WEBHOOK is not set`，不会发送消息。
+没有 `FEISHU_GENERAL_ALERT_WEBHOOK` 时，`alert-check` 只评估规则；触发告警时日志会显示 `send <rule> <type> skipped reason=FEISHU_GENERAL_ALERT_WEBHOOK is not set`，不会发送消息。
 
 ## Cloudflare Access
 

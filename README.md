@@ -165,7 +165,7 @@ cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 
 ### 运维监控
 
-公网 `/admin` 需要 Cloudflare Access application + policy；飞书告警需要配置 `AI_RADAR_FEISHU_WEBHOOK`。具体步骤见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
+公网 `/admin` 需要 Cloudflare Access application + policy；飞书告警需要配置 `FEISHU_GENERAL_ALERT_WEBHOOK`。具体步骤见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
 
 ### Docker / 其他平台
 

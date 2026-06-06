@@ -39,7 +39,7 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
                 {
                     "rule_id": "A2",
                     "type": "firing",
-                    "send_result": {"skipped": True, "reason": "AI_RADAR_FEISHU_WEBHOOK is not set"},
+                    "send_result": {"skipped": True, "reason": "FEISHU_GENERAL_ALERT_WEBHOOK is not set"},
                 },
             ],
             "results": [
@@ -60,6 +60,6 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
     assert "alert-check ruleset={A1,A2,A3,A4}" in output
     assert "sent=0" in output
     assert "send A1 firing sent status_code=200" in output
-    assert "send A2 firing skipped reason=AI_RADAR_FEISHU_WEBHOOK is not set" in output
+    assert "send A2 firing skipped reason=FEISHU_GENERAL_ALERT_WEBHOOK is not set" in output
     assert "A1 ok 上游模型不可用" in output
     assert "A4 ok 文章摄取骤降" in output

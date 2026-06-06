@@ -127,8 +127,9 @@
 
 ---
 
-## [open] `alert` 服务每 5 分钟运行但 `AI_RADAR_FEISHU_WEBHOOK` 未配置，告警无法送达
+## [resolved] `alert` 服务每 5 分钟运行但飞书 webhook 未配置，告警无法送达
 
+- Resolution: 2026-06-06 改为直接读 `~/.claude/.env` 已有的 `FEISHU_GENERAL_ALERT_WEBHOOK`（与 watchdog 共用，单一来源）；`alerts.py` / `deploy/lib/services.sh` / 测试 / 文档不再引用 ai-radar 专属的 `AI_RADAR_FEISHU_WEBHOOK`。`./uninstall.sh alert && ./install.sh alert` 后 `launchctl print` 确认环境注入，走 `send_feishu_message` 实发飞书返回 `StatusCode:0 success`，A1-A4 全绿 `sent=0`。
 - Type: bug
 - Priority: medium
 - Discovered: 2026-06-06 服务级审计——`live.aiplanet.ai-radar.alert` launchd 每 5 分钟跑 `admin alert-check` 并算出 A1-A4（日志显示规则在跑），但 `AI_RADAR_FEISHU_WEBHOOK` 在进程 env、项目 `.env`、`~/.claude/.env` 三处均未设置。

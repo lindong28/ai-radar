@@ -192,7 +192,7 @@ def run_alert_state_machine(
     current = current.astimezone(SHANGHAI_TZ)
     path = Path(state_path)
     state = _load_state(path)
-    sender = send or (lambda text: send_feishu_message(os.environ.get("AI_RADAR_FEISHU_WEBHOOK"), text))
+    sender = send or (lambda text: send_feishu_message(os.environ.get("FEISHU_GENERAL_ALERT_WEBHOOK"), text))
     results = evaluate_rules(signals, thresholds=thresholds)
     sent: list[dict[str, object]] = []
 
@@ -236,7 +236,7 @@ def run_alert_state_machine(
 
 def send_feishu_message(webhook_url: str | None, text: str) -> dict[str, object]:
     if not webhook_url:
-        return {"skipped": True, "reason": "AI_RADAR_FEISHU_WEBHOOK is not set"}
+        return {"skipped": True, "reason": "FEISHU_GENERAL_ALERT_WEBHOOK is not set"}
     payload = {"msg_type": "text", "content": {"text": text}}
     response = httpx.post(webhook_url, json=payload, timeout=10.0)
     response.raise_for_status()

@@ -107,16 +107,16 @@ alert_environment_entry_xml() {
 
 alert_environment_xml() {
   local webhook db_path
-  webhook="$(runtime_env_value AI_RADAR_FEISHU_WEBHOOK || true)"
+  webhook="$(runtime_env_value FEISHU_GENERAL_ALERT_WEBHOOK || true)"
   if [[ -z "$webhook" ]]; then
-    echo "⚠ alert: AI_RADAR_FEISHU_WEBHOOK not found in process env, .env, or ~/.claude/.env; launchd alert will dry-run only." >&2
+    echo "⚠ alert: FEISHU_GENERAL_ALERT_WEBHOOK not found in process env, .env, or ~/.claude/.env; launchd alert will dry-run only." >&2
     return 0
   fi
   db_path="$(runtime_env_value AI_RADAR_DB || true)"
   cat <<EOF
   <key>EnvironmentVariables</key>
   <dict>
-$(alert_environment_entry_xml AI_RADAR_FEISHU_WEBHOOK "$webhook")
+$(alert_environment_entry_xml FEISHU_GENERAL_ALERT_WEBHOOK "$webhook")
 $(alert_environment_entry_xml AI_RADAR_DB "$db_path")
   </dict>
 EOF
@@ -124,7 +124,7 @@ EOF
 
 # Generate deploy/launchd/<name>.plist from <name>.plist.example, replacing
 # the placeholder path with REPO_ROOT. Idempotent except alert, whose local
-# plist is regenerated so AI_RADAR_FEISHU_WEBHOOK changes are picked up.
+# plist is regenerated so FEISHU_GENERAL_ALERT_WEBHOOK changes are picked up.
 ensure_plist() {
   local name="$1"
   local example="$REPO_ROOT/deploy/launchd/${name}.example"
