@@ -6,10 +6,10 @@
     <title>AI Radar · 微信文章解读</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="modulepreload" href="/app.js?v=20260607-wechat-search1">
+    <link rel="modulepreload" href="/app.js?v=20260607-wechat-origin1">
     <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" onload="this.onload=null;this.rel='stylesheet'">
     <noscript><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" rel="stylesheet"></noscript>
-    <link rel="stylesheet" href="/style.css?v=20260602-wechat-uxfix1">
+    <link rel="stylesheet" href="/style.css?v=20260607-wechat-origin1">
   </head>
   <body>
     <aside id="app-sidebar" class="sidebar" aria-label="主导航">
@@ -65,7 +65,10 @@
                     <span class="source-name">{{ item.author }}</span>
                   </a>
                 </div>
-                {% if item.recommendation %}<span class="hot-pill">{{ item.recommendation }}</span>{% endif %}
+                <div class="card-topline-end">
+                  {% if item.recommendation %}<span class="hot-pill">{{ item.recommendation }}</span>{% endif %}
+                  {% if item.url %}<a class="wechat-card-origin" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">原文 <span aria-hidden="true">↗</span></a>{% endif %}
+                </div>
               </div>
               <a class="item-title" href="{{ item.detail_url }}">{{ item.title }}</a>
               <p class="summary">{{ item.abstract }}</p>
@@ -84,7 +87,7 @@
       {{ preload | tojson | safe }}
     </script>
     <script type="module" async>
-      import { initWechat } from "/app.js?v=20260607-wechat-search1";
+      import { initWechat } from "/app.js?v=20260607-wechat-origin1";
       initWechat();
     </script>
   </body>

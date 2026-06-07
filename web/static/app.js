@@ -430,6 +430,7 @@ function wechatCard(item) {
   const img = avatar ? `<img class="source-avatar" src="${esc(avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
   const source = item.author || "微信公众号";
   const recommendation = item.recommendation ? `<span class="hot-pill">${esc(item.recommendation)}</span>` : "";
+  const origin = item.url ? `<a class="wechat-card-origin" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">原文 <span aria-hidden="true">↗</span></a>` : "";
   const detailUrl = item.detail_url || `/wechat/${item.slug}`;
   return `<article class="item-row timeline-card wechat-card" data-detail-url="${esc(detailUrl)}" role="link" tabindex="0">
     <div class="card-topline">
@@ -439,7 +440,7 @@ function wechatCard(item) {
           <span class="source-name">${esc(source)}</span>
         </a>
       </div>
-      ${recommendation}
+      <div class="card-topline-end">${recommendation}${origin}</div>
     </div>
     <a class="item-title" href="${esc(detailUrl)}">${esc(item.title || "")}</a>
     <p class="summary">${esc(item.abstract || "")}</p>

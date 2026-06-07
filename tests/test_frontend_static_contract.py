@@ -125,6 +125,14 @@ def test_app_js_uses_wechat_author_name_and_avatar_fallback() -> None:
     assert 'item.source_kind !== "wechat"' in js
 
 
+def test_app_js_wechat_card_renders_visit_original_link() -> None:
+    js = _read("app.js")
+
+    # 客户端重渲染路径（搜索/翻页后）也要带「访问原文」链接，与 Jinja 卡片保持一致
+    assert "wechat-card-origin" in js
+    assert 'target="_blank" rel="noopener noreferrer"' in js
+
+
 def test_app_js_uses_title_and_media_as_natural_external_targets() -> None:
     js = _read("app.js")
 

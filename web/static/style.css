@@ -1296,6 +1296,27 @@ button,
   flex: 0 0 auto;
 }
 
+.card-topline-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.wechat-card-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.wechat-card-origin:hover {
+  text-decoration: underline;
+}
+
 .wechat-detail {
   width: min(100%, 900px);
   padding: 22px;
@@ -1331,6 +1352,28 @@ button,
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.wechat-origin-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin-top: 18px;
+  padding: 8px 16px;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  border-radius: 8px;
+  background: rgba(34, 211, 238, 0.08);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.wechat-origin-link:hover {
+  background: rgba(34, 211, 238, 0.16);
+  border-color: rgba(34, 211, 238, 0.85);
 }
 
 .summary-body {

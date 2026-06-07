@@ -552,6 +552,42 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
     assert "side-link-active" in skipped.text
 
 
+def test_wechat_detail_and_list_render_visit_original_links(tmp_path: Path) -> None:
+    db_path = _seed_wechat_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    detail = client.get("/wechat/newer-slug")
+    assert detail.status_code == 200
+    # 详情页：显式「访问原文」描边按钮，指向该条 items.url、新标签页打开
+    assert 'class="wechat-origin-link"' in detail.text
+    assert "访问原文" in detail.text
+    assert (
+        '<a class="wechat-origin-link" href="https://mp.weixin.qq.com/s/newer"'
+        ' target="_blank" rel="noopener noreferrer"' in detail.text
+    )
+    # 保留：既有公众号名 source-link 仍在、仍指向原文（已拍决策，不得删）
+    assert 'class="source-link" href="https://mp.weixin.qq.com/s/newer"' in detail.text
+
+    listing = client.get("/wechat")
+    assert listing.status_code == 200
+    # 列表 count 一致性：原文链接数 == 有 url 的 worth-reading 卡片数（动态导出，非 existence）
+    with _connect(db_path) as conn:
+        expected_cards = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM wechat_interpretations wi
+            JOIN items i ON i.id = wi.item_id
+            WHERE wi.save_decision = 1 AND i.url IS NOT NULL AND i.url != ''
+            """
+        ).fetchone()[0]
+    assert expected_cards == 2
+    assert listing.text.count('class="wechat-card-origin"') == expected_cards
+    assert "https://mp.weixin.qq.com/s/newer" in listing.text
+    assert "https://mp.weixin.qq.com/s/older" in listing.text
+    # 保留：列表卡片既有 source-link 仍在
+    assert 'class="source-link" href="https://mp.weixin.qq.com/s/newer"' in listing.text
+
+
 def test_wechat_pages_thread_search_query_through_preload_detail_and_404(tmp_path: Path) -> None:
     db_path = _seed_wechat_search_db(tmp_path)
     client = TestClient(create_app(db_path))
