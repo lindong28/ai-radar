@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +39,18 @@ Agent, 工程化, 自动化
 值得一看，因为它包含可执行的工程实践。
 <script>alert("xss")</script><img src="x" onerror="alert(1)">
 """
+
+
+def _preload_from_html(html: str) -> dict[str, Any]:
+    match = re.search(r'<script id="__PRELOAD__" type="application/json">\s*(.*?)\s*</script>', html, re.S)
+    assert match is not None
+    return json.loads(match.group(1))
+
+
+def _feed_filter_form(html: str) -> str:
+    start_marker = '<form class="feed-filter"'
+    assert start_marker in html
+    return html.split(start_marker, 1)[1].split("</form>", 1)[0]
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -154,6 +168,150 @@ def _seed_wechat_db(tmp_path: Path) -> Path:
     return db_path
 
 
+def _seed_wechat_search_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "search-radar.db"
+    migrate(db_path)
+    conn = _connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO sources (
+          id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, synced_at
+        )
+        VALUES (
+          'wx_mp2rss', '微信公众号（Mp2RSS 合集）', 'https://feed.example/rss', 'T2', 1,
+          'wechat', 'https://mp.weixin.qq.com/', '/wechat-icon.svg', '{}', '2026-06-02T00:00:00Z'
+        )
+        """
+    )
+    rows = [
+        (
+            "search-author-new",
+            "author-new-slug",
+            "https://mp.weixin.qq.com/s/author-new",
+            "机器学习进展",
+            "机器之心",
+            "2026-06-07T10:00:00Z",
+            "searchterm author newer abstract",
+            '["基线"]',
+            "总结里没有特殊词。",
+        ),
+        (
+            "search-non-author",
+            "non-author-slug",
+            "https://mp.weixin.qq.com/s/non-author",
+            "提到机器之心的外部观察",
+            "量子位",
+            "2026-06-08T10:00:00Z",
+            "searchterm non author abstract",
+            '["观察"]',
+            "总结里没有特殊词。",
+        ),
+        (
+            "search-author-old",
+            "author-old-slug",
+            "https://mp.weixin.qq.com/s/author-old",
+            "工程实践旧文",
+            "机器之心",
+            "2026-06-06T10:00:00Z",
+            "searchterm author older abstract",
+            '["工程"]',
+            "总结里没有特殊词。",
+        ),
+        (
+            "search-title",
+            "title-slug",
+            "https://mp.weixin.qq.com/s/title",
+            "具身智能平台进展",
+            "新智元",
+            "2026-06-05T10:00:00Z",
+            "普通摘要",
+            '["机器人"]',
+            "总结里有只在 summary_md 出现的深海泡泡词。",
+        ),
+        (
+            "search-abstract",
+            "abstract-slug",
+            "https://mp.weixin.qq.com/s/abstract",
+            "多模态模型观察",
+            "量子位",
+            "2026-06-04T10:00:00Z",
+            "这里包含蓝桥摘要词用于抽象字段检索",
+            '["模型"]',
+            "总结里没有特殊词。",
+        ),
+        (
+            "search-tag",
+            "tag-slug",
+            "https://mp.weixin.qq.com/s/tag",
+            "图像模型观察",
+            "量子位",
+            "2026-06-03T10:00:00Z",
+            "普通摘要",
+            '["检索标签"]',
+            "总结里没有特殊词。",
+        ),
+        (
+            "search-traditional",
+            "guicang-slug",
+            "https://mp.weixin.qq.com/s/guicang",
+            "工作流工具箱",
+            "歸藏的AI工具箱",
+            "2026-06-02T10:00:00Z",
+            "普通摘要",
+            '["工具"]',
+            "总结里没有特殊词。",
+        ),
+        (
+            "search-skipped",
+            "skipped-slug",
+            "https://mp.weixin.qq.com/s/skipped",
+            "不应出现在搜索",
+            "机器之心",
+            "2026-06-09T10:00:00Z",
+            "searchterm skipped abstract",
+            '["跳过"]',
+            "总结里没有特殊词。",
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (?, 'wx_mp2rss', ?, ?, ?, ?, ?, '正文', NULL, ?, '{}')
+        """,
+        [
+            (item_id, url, title, author, published_at, published_at, f"h-{item_id}")
+            for item_id, _slug, url, title, author, published_at, _abstract, _tags, _summary in rows
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO wechat_interpretations (
+          item_id, slug, recommendation, save_decision, save_reason, abstract,
+          tags_json, summary_md, model, kb_synced, processed_at, error
+        )
+        VALUES (?, ?, '值得一看', ?, '测试', ?, ?, ?, 'fake-model', 1, ?, NULL)
+        """,
+        [
+            (
+                item_id,
+                slug,
+                0 if item_id == "search-skipped" else 1,
+                abstract,
+                tags,
+                summary,
+                published_at,
+            )
+            for item_id, slug, _url, _title, _author, published_at, abstract, tags, summary in rows
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
 def _seed_runner_db(tmp_path: Path, *, item_id: str = "item-1", title: str = "测试文章") -> Path:
     db_path = tmp_path / "runner.db"
     migrate(db_path)
@@ -255,6 +413,84 @@ def test_wechat_api_clamps_out_of_range_page_and_carries_page_in_detail_urls(tmp
     assert "/wechat/older-slug?page=2" in listing.text
 
 
+def test_wechat_api_searches_interpretation_card_fields_and_prioritizes_author(tmp_path: Path) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    title_data = client.get("/api/v1/wechat?q=具身智能&limit=50").json()["data"]
+    assert title_data["total"] == 1
+    assert [item["slug"] for item in title_data["items"]] == ["title-slug"]
+
+    abstract_data = client.get("/api/v1/wechat?q=蓝桥摘要词&limit=50").json()["data"]
+    assert abstract_data["total"] == 1
+    assert [item["slug"] for item in abstract_data["items"]] == ["abstract-slug"]
+
+    tag_data = client.get("/api/v1/wechat?q=检索标签&limit=50").json()["data"]
+    assert tag_data["total"] == 1
+    assert [item["slug"] for item in tag_data["items"]] == ["tag-slug"]
+
+    author_data = client.get("/api/v1/wechat?q=机器之心&limit=50").json()["data"]
+    authors = [item["author"] for item in author_data["items"]]
+    first_non_author_index = next(index for index, author in enumerate(authors) if author != "机器之心")
+    assert all(author == "机器之心" for author in authors[:first_non_author_index])
+    assert all(author != "机器之心" for author in authors[first_non_author_index:])
+    assert [item["slug"] for item in author_data["items"][:2]] == ["author-new-slug", "author-old-slug"]
+
+
+def test_wechat_api_search_supports_traditional_simplified_short_terms_and_negative_fields(
+    tmp_path: Path,
+) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    for query in ("歸藏", "归藏"):
+        data = client.get(f"/api/v1/wechat?q={query}&limit=50").json()["data"]
+        assert data["total"] == 1
+        assert [item["slug"] for item in data["items"]] == ["guicang-slug"]
+
+    source_name_only = client.get("/api/v1/wechat?q=合集&limit=50").json()["data"]
+    assert source_name_only["total"] == 0
+    assert source_name_only["items"] == []
+
+    summary_only = client.get("/api/v1/wechat?q=深海泡泡词&limit=50").json()["data"]
+    assert summary_only["total"] == 0
+    assert summary_only["items"] == []
+
+
+def test_wechat_api_search_paginates_clamps_and_carries_q_in_detail_urls(tmp_path: Path) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    page_two = client.get("/api/v1/wechat?q=searchterm&limit=2&page=2").json()["data"]
+    assert page_two["total"] == 3
+    assert page_two["page"] == 2
+    assert [item["slug"] for item in page_two["items"]] == ["author-old-slug"]
+    parsed_detail = urlparse(page_two["items"][0]["detail_url"])
+    assert parsed_detail.path == "/wechat/author-old-slug"
+    assert parse_qs(parsed_detail.query) == {"q": ["searchterm"], "page": ["2"]}
+
+    out_of_range = client.get("/api/v1/wechat?q=searchterm&limit=2&page=999").json()["data"]
+    assert out_of_range["total"] == 3
+    assert out_of_range["page"] == 2
+    assert [item["slug"] for item in out_of_range["items"]] == ["author-old-slug"]
+
+    empty = client.get("/api/v1/wechat?q=zzz不存在zzz&limit=50&page=3")
+    assert empty.status_code == 200
+    assert empty.json()["data"] == {"items": [], "total": 0, "page": 1, "limit": 50}
+
+    no_query = client.get("/api/v1/wechat?limit=50").json()["data"]
+    assert no_query["total"] == 7
+    assert [item["slug"] for item in no_query["items"]] == [
+        "non-author-slug",
+        "author-new-slug",
+        "author-old-slug",
+        "title-slug",
+        "abstract-slug",
+        "tag-slug",
+        "guicang-slug",
+    ]
+
+
 def test_wechat_title_artifact_repair_cleans_existing_title_and_unique_slug(tmp_path: Path) -> None:
     from airadar.interpret.runner import repair_wechat_title_artifacts
 
@@ -314,6 +550,44 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
     assert "微信文章解读" in skipped.text
     assert 'href="/wechat"' in skipped.text
     assert "side-link-active" in skipped.text
+
+
+def test_wechat_pages_thread_search_query_through_preload_detail_and_404(tmp_path: Path) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    listing = client.get("/wechat?q=具身智能&limit=50")
+    assert listing.status_code == 200
+    preload = _preload_from_html(listing.text)
+    assert preload["total"] == 1
+    assert [item["slug"] for item in preload["items"]] == ["title-slug"]
+    assert "title-slug" in listing.text
+    assert "abstract-slug" not in listing.text
+
+    detail = client.get("/wechat/title-slug?q=foo&page=2")
+    assert detail.status_code == 200
+    assert 'href="/wechat?q=foo&amp;page=2"' in detail.text
+
+    missing = client.get("/wechat/missing-slug?q=foo&page=2")
+    assert missing.status_code == 404
+    assert 'href="/wechat?q=foo&amp;page=2"' in missing.text
+
+
+def test_wechat_page_adds_only_search_filter_controls(tmp_path: Path) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    client = TestClient(create_app(db_path))
+
+    response = client.get("/wechat")
+    assert response.status_code == 200
+    form = _feed_filter_form(response.text)
+    assert re.findall(r'\bname="([^"]+)"', form) == ["q"]
+    assert 'id="search"' in form
+    assert 'type="search"' in form
+    assert 'placeholder="搜索标题/公众号/摘要/标签…"' in form
+    assert 'value=' not in form
+    assert 'name="category"' not in form
+    assert 'name="channel"' not in form
+    assert 'class="seg-item' not in response.text
 
 
 def test_wechat_sidebar_link_and_curated_alias_exist_on_public_pages(tmp_path: Path) -> None:

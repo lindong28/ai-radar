@@ -112,7 +112,7 @@ origin_fake_header_page=200
 ## 常用命令
 
 ```bash
-./status.sh serve tunnel pipeline wewe alert
+./status.sh serve tunnel pipeline alert
 ./run.sh admin alert-check
 tail -n 50 logs/serve-access.log
 tail -n 50 logs/alert-check.log

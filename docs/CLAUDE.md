@@ -104,6 +104,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260607-wechat-interpretation-search/](plans/20260607-wechat-interpretation-search/) | 微信文章解读页 `/wechat` 支持按标题、公众号、摘要和标签搜索 |
 | [20260604-2104-curated-archive-ux-test/](plans/20260604-2104-curated-archive-ux-test/) | 精选页改为累积归档 + 分页的 UX 契约测试与修复 |
 | [20260604-1156-ux-contract-ux-test/](plans/20260604-1156-ux-contract-ux-test/) | 分页升级（数字页码 + 省略号）的 UX 契约测试与修复 |
 | [20260602-wechat-article-interpretation/](plans/20260602-wechat-article-interpretation/) | 微信文章解读 tab、ai-assistant summarize 复用、KB 回写与旧 WeWe 源移除 |

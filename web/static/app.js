@@ -447,12 +447,12 @@ function wechatCard(item) {
   </article>`;
 }
 
-function renderWechatTimeline(container, items) {
+function renderWechatTimeline(container, items, { hasQuery = false } = {}) {
   if (!container) return;
   if (!items.length) {
     container.innerHTML = `<div class="empty-state">
-      <h2>暂无微信文章解读</h2>
-      <p>完成下一轮解读后会在这里显示。</p>
+      <h2>${hasQuery ? "没有匹配条目" : "暂无微信文章解读"}</h2>
+      <p>${hasQuery ? "清空搜索后可回到默认列表。" : "完成下一轮解读后会在这里显示。"}</p>
     </div>`;
     return;
   }
@@ -651,8 +651,10 @@ function renderPaginationControls(root, stateArgs, urlForPage) {
   root.innerHTML = parts.join("");
 }
 
-function renderWechatPagination(root, { page = 1, total = 0, limit = 50 } = {}) {
-  renderPaginationControls(root, { page, total, limit }, (value) => `/wechat?page=${value}`);
+function renderWechatPagination(root, { page = 1, total = 0, limit = 50 } = {}, q = "") {
+  renderPaginationControls(root, { page, total, limit }, (value) =>
+    feedUrl("/wechat", { q, page: String(value) })
+  );
 }
 
 function renderPagination(root, { page, total, limit, q = "", category = "all", channel = "all", path = "/all" }) {
@@ -694,45 +696,89 @@ export async function initWechat() {
   initNavigation();
   const list = document.querySelector("#list");
   const pagination = document.querySelector("#pagination");
+  const search = document.querySelector("#search");
+  if (!search) return;
   let currentPage = pageFromUrl();
 
-  function renderView(data) {
-    renderWechatTimeline(list, Array.isArray(data.items) ? data.items : []);
-    renderWechatPagination(pagination, data);
+  function wechatUrlParams(page = currentPage) {
+    return {
+      q: search.value.trim(),
+      page: page > 1 ? String(page) : "",
+    };
   }
 
-  async function load(page = pageFromUrl(), mode = "replace") {
+  function syncWechatUrl(page = currentPage, mode = "replace") {
+    updateFeedUrl("/wechat", wechatUrlParams(page), mode);
+  }
+
+  search.value = searchFromUrl();
+  normalizeFeedUrl("/wechat", wechatUrlParams(currentPage));
+
+  function renderView(data) {
+    renderWechatTimeline(list, Array.isArray(data.items) ? data.items : [], {
+      hasQuery: Boolean(search.value.trim()),
+    });
+    renderWechatPagination(pagination, data, search.value.trim());
+  }
+
+  async function load(page = pageFromUrl(), mode = "replace", updateUrl = true) {
     currentPage = page;
+    const q = search.value.trim();
+    if (updateUrl) syncWechatUrl(page, mode);
     renderTimelineLoading(list);
     if (pagination) pagination.hidden = true;
     try {
-      const data = await api(queryPath("/api/v1/wechat", { page, limit: 50 }));
-      currentPage = Number(data.page || page);
-      updateFeedUrl("/wechat", { page: currentPage > 1 ? String(currentPage) : "" }, mode);
+      const data = await api(queryPath("/api/v1/wechat", { page, q, limit: 50 }));
+      const responsePage = Number(data.page || page);
+      currentPage = responsePage;
+      if (responsePage !== page || pageFromUrl() !== responsePage) {
+        syncWechatUrl(responsePage, "replace");
+      }
+      const total = Number(data.total || 0);
+      const responseLimit = Number(data.limit || 50);
+      const totalPages = Math.max(1, Math.ceil(total / responseLimit));
+      if (total > 0 && !data.items.length && page > totalPages) {
+        await load(totalPages, "replace");
+        return;
+      }
       renderView(data);
     } catch (error) {
       renderTimelineError(list, error, () => load(page, "replace"));
     }
   }
 
+  async function runSearch() {
+    await load(1, "replace");
+  }
+
+  debounceInput(search, runSearch);
+  search.closest("form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runSearch();
+  });
   pagination?.addEventListener("click", (event) => {
     const link = event.target.closest("[data-page]");
     if (!link) return;
     event.preventDefault();
     load(Number(link.dataset.page || "1"), "push");
   });
-  window.addEventListener("popstate", () => load(pageFromUrl(), "replace"));
+  window.addEventListener("popstate", () => {
+    search.value = searchFromUrl();
+    currentPage = pageFromUrl();
+    normalizeFeedUrl("/wechat", wechatUrlParams(currentPage));
+    load(currentPage, "replace", false);
+  });
   bindWechatCardNavigation(list);
   rememberListScroll(list);
   const preload = readPreload();
   if (preload && Array.isArray(preload.items)) {
     currentPage = Number(preload.page || currentPage);
     if (currentPage !== pageFromUrl()) {
-      updateFeedUrl("/wechat", { page: currentPage > 1 ? String(currentPage) : "" }, "replace");
+      syncWechatUrl(currentPage, "replace");
     }
     renderView(preload);
   } else {
-    await load(currentPage, "replace");
+    await load(currentPage, "replace", false);
   }
   restoreListScroll();
 }

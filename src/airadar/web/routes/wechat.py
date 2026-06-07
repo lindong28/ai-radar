@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any
+from urllib.parse import urlencode
 
 import nh3
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -9,7 +10,7 @@ from markdown_it import MarkdownIt
 
 from ...wechat_text import normalize_wechat_title
 from ..envelope import ok
-from .common import conn_from_request, json_loads
+from .common import conn_from_request, json_loads, like_patterns_for_query
 
 router = APIRouter()
 
@@ -60,12 +61,18 @@ def _tags(value: str | None) -> list[str]:
     return [tag.strip() for tag in raw if isinstance(tag, str) and tag.strip()]
 
 
-def _detail_url(slug: str, page: int | None = None) -> str:
-    suffix = f"?page={page}" if page and page > 1 else ""
+def _detail_url(slug: str, page: int | None = None, q: str | None = None) -> str:
+    params: list[tuple[str, object]] = []
+    query = (q or "").strip()
+    if query:
+        params.append(("q", query))
+    if page and page > 1:
+        params.append(("page", page))
+    suffix = f"?{urlencode(params)}" if params else ""
     return f"/wechat/{slug}{suffix}"
 
 
-def _item_from_row(row: sqlite3.Row, *, page: int | None = None) -> dict[str, Any]:
+def _item_from_row(row: sqlite3.Row, *, page: int | None = None, q: str | None = None) -> dict[str, Any]:
     return {
         "slug": row["slug"],
         "title": normalize_wechat_title(row["title"]),
@@ -75,25 +82,66 @@ def _item_from_row(row: sqlite3.Row, *, page: int | None = None) -> dict[str, An
         "avatar_url": row["avatar_url"],
         "published_at": row["published_at"],
         "url": row["url"],
-        "detail_url": _detail_url(str(row["slug"]), page),
+        "detail_url": _detail_url(str(row["slug"]), page, q),
         "recommendation": row["recommendation"],
     }
+
+
+def _search_sql(q: str | None) -> tuple[str, list[object], str, list[object], str | None]:
+    patterns = like_patterns_for_query(q)
+    if not patterns:
+        return "", [], "", [], None
+
+    search_clauses: list[str] = []
+    search_params: list[object] = []
+    author_clauses: list[str] = []
+    author_params: list[object] = []
+    for pattern in patterns:
+        search_clauses.extend(
+            [
+                "i.title LIKE ? ESCAPE '\\'",
+                "i.author LIKE ? ESCAPE '\\'",
+                "wi.abstract LIKE ? ESCAPE '\\'",
+                "wi.tags_json LIKE ? ESCAPE '\\'",
+            ]
+        )
+        search_params.extend([pattern, pattern, pattern, pattern])
+        author_clauses.append("i.author LIKE ? ESCAPE '\\'")
+        author_params.append(pattern)
+
+    where_sql = f" AND ({' OR '.join(search_clauses)})"
+    author_match_sql = f"CASE WHEN ({' OR '.join(author_clauses)}) THEN 1 ELSE 0 END"
+    query = (q or "").strip()
+    return where_sql, search_params, author_match_sql, author_params, query
 
 
 def list_wechat_items(
     conn: sqlite3.Connection,
     *,
+    q: str | None = None,
     page: int = 1,
     limit: int = 50,
 ) -> dict[str, Any]:
+    where_sql, search_params, author_match_sql, author_params, query = _search_sql(q)
     total = conn.execute(
-        "SELECT COUNT(*) FROM wechat_interpretations WHERE save_decision=1"
+        f"""
+        SELECT COUNT(*)
+        FROM wechat_interpretations wi
+        JOIN items i ON i.id=wi.item_id
+        WHERE wi.save_decision=1{where_sql}
+        """,
+        search_params,
     ).fetchone()[0]
     total_pages = max(1, (int(total) + limit - 1) // limit)
     current_page = min(max(int(page), 1), total_pages)
     offset = (current_page - 1) * limit
+    order_sql = (
+        f"{author_match_sql} DESC, i.published_at DESC, i.fetched_at DESC, i.id DESC"
+        if query
+        else "i.published_at DESC, i.fetched_at DESC, i.id DESC"
+    )
     rows = conn.execute(
-        """
+        f"""
         SELECT wi.slug, wi.recommendation, wi.abstract, wi.tags_json,
                i.title, i.author, i.published_at, i.url,
                s.name AS source_name,
@@ -105,14 +153,14 @@ def list_wechat_items(
           ON COALESCE(s.kind, 'feed')='wechat'
          AND wa.account=i.author
          AND wa.avatar_url IS NOT NULL
-        WHERE wi.save_decision=1
-        ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
+        WHERE wi.save_decision=1{where_sql}
+        ORDER BY {order_sql}
         LIMIT ? OFFSET ?
         """,
-        (limit, offset),
+        (*search_params, *author_params, limit, offset),
     ).fetchall()
     return {
-        "items": [_item_from_row(row, page=current_page) for row in rows],
+        "items": [_item_from_row(row, page=current_page, q=query) for row in rows],
         "total": total,
         "page": current_page,
         "limit": limit,
@@ -148,8 +196,9 @@ def get_wechat_detail(conn: sqlite3.Connection, slug: str) -> dict[str, Any]:
 @router.get("/wechat")
 def wechat(
     request: Request,
+    q: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=500),
 ) -> dict[str, object]:
     with conn_from_request(request) as conn:
-        return ok(list_wechat_items(conn, page=page, limit=limit))
+        return ok(list_wechat_items(conn, q=q, page=page, limit=limit))

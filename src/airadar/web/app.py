@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlencode
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
@@ -186,8 +187,14 @@ def _preload_context(data: dict[str, object], *, timeline_page: bool) -> dict[st
     }
 
 
-def _wechat_back_href(page: int | None) -> str:
-    return f"/wechat?page={page}" if page and page > 1 else "/wechat"
+def _wechat_back_href(page: int | None, q: str | None = None) -> str:
+    params: list[tuple[str, object]] = []
+    query = (q or "").strip()
+    if query:
+        params.append(("q", query))
+    if page and page > 1:
+        params.append(("page", page))
+    return f"/wechat?{urlencode(params)}" if params else "/wechat"
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -212,6 +219,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         if request.url.path.startswith("/wechat/"):
             page_raw = request.query_params.get("page")
+            q = request.query_params.get("q")
             try:
                 page = int(page_raw) if page_raw else None
             except ValueError:
@@ -219,7 +227,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "wechat_404.html",
-                {"back_href": _wechat_back_href(page)},
+                {"back_href": _wechat_back_href(page, q)},
                 status_code=404,
             )
         return HTMLResponse(
@@ -282,9 +290,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         )
 
     @app.get("/wechat", include_in_schema=False)
-    def wechat_page(request: Request, page: int = 1, limit: int = 50) -> HTMLResponse:
+    def wechat_page(request: Request, q: str | None = None, page: int = 1, limit: int = 50) -> HTMLResponse:
         with db.get_conn(request.app.state.db_path) as conn:
-            data = wechat_routes.list_wechat_items(conn, page=page, limit=limit)
+            data = wechat_routes.list_wechat_items(conn, q=q, page=page, limit=limit)
         return templates.TemplateResponse(
             request,
             "wechat.html",
@@ -292,13 +300,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         )
 
     @app.get("/wechat/{slug}", include_in_schema=False)
-    def wechat_detail_page(request: Request, slug: str, page: int | None = None) -> HTMLResponse:
+    def wechat_detail_page(
+        request: Request,
+        slug: str,
+        q: str | None = None,
+        page: int | None = None,
+    ) -> HTMLResponse:
         with db.get_conn(request.app.state.db_path) as conn:
             item = wechat_routes.get_wechat_detail(conn, slug)
         return templates.TemplateResponse(
             request,
             "wechat_detail.html",
-            {"item": item, "back_href": _wechat_back_href(page)},
+            {"item": item, "back_href": _wechat_back_href(page, q)},
         )
 
     @app.get("/admin", include_in_schema=False)

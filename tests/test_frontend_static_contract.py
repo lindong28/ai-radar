@@ -171,6 +171,24 @@ def test_app_js_supports_curated_archive_pagination() -> None:
     assert 'page: page > 1 ? String(page) : ""' in js
 
 
+def test_app_js_supports_wechat_search_url_state_and_empty_copy() -> None:
+    js = _read("app.js")
+    init_wechat = js.split("export async function initWechat()", 1)[1].split("export async function initTimeline()", 1)[0]
+
+    assert 'const search = document.querySelector("#search");' in init_wechat
+    assert "search.value = searchFromUrl();" in init_wechat
+    assert 'normalizeFeedUrl("/wechat"' in init_wechat
+    assert 'queryPath("/api/v1/wechat"' in init_wechat
+    assert "q," in init_wechat
+    assert 'updateFeedUrl("/wechat"' in init_wechat
+    assert "debounceInput(search, runSearch);" in init_wechat
+    assert 'search.closest("form")?.addEventListener("submit"' in init_wechat
+    assert 'window.addEventListener("popstate"' in init_wechat
+    assert "renderWechatPagination(pagination, data, search.value.trim())" in init_wechat
+    assert "没有匹配条目" in js
+    assert "清空搜索后可回到默认列表。" in js
+
+
 def test_app_js_uses_preload_for_initial_curated_and_timeline_render() -> None:
     js = _read("app.js")
 

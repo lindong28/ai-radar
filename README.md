@@ -77,7 +77,7 @@ crontab deploy/cron/ai-radar-pipeline  # 手动加载 cron 条目
 |------|-----|------|
 | 精选 | `/` | 高评分精选内容，按日期分组 |
 | 全部 AI 动态 | `/all` | 完整时间线，最新优先 |
-| 微信文章解读 | `/wechat` | 已订阅微信公众号文章的结构化总结；详情页为 `/wechat/<slug>` |
+| 微信文章解读 | `/wechat` | 已订阅微信公众号文章的结构化总结，支持按标题、公众号、摘要和标签搜索；详情页为 `/wechat/<slug>` |
 | AI 日报 | `/daily` | 每日精选归档，支持 `?date=YYYY-MM-DD` |
 | 关于 | `/about` | 项目介绍和信源池 |
 | 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
@@ -109,7 +109,7 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 
 ### 微信文章解读
 
-`interpret` 阶段只处理启用的微信公众号源（当前 `wx_mp2rss`）。它通过 `AI_ASSISTANT_ROOT`（默认 `/Users/lindong/research/ai-assistant`）零拷贝调用 ai-assistant 的 `agents/summary-agent/summarize.sh` / `run.sh`，将 `save_decision=1` 的文章展示到 `/wechat` 并回写 ai-assistant 知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
+`interpret` 阶段只处理启用的微信公众号源（当前 `wx_mp2rss`）。它通过 `AI_ASSISTANT_ROOT`（默认 `/Users/lindong/research/ai-assistant`）零拷贝调用 ai-assistant 的 `agents/summary-agent/summarize.sh` / `run.sh`，将 `save_decision=1` 的文章展示到 `/wechat` 并回写 ai-assistant 知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
 
 ### LLM Provider
 

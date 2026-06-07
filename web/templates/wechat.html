@@ -6,7 +6,7 @@
     <title>AI Radar · 微信文章解读</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="modulepreload" href="/app.js?v=20260604-curated-archive1">
+    <link rel="modulepreload" href="/app.js?v=20260607-wechat-search1">
     <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" onload="this.onload=null;this.rel='stylesheet'">
     <noscript><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" rel="stylesheet"></noscript>
     <link rel="stylesheet" href="/style.css?v=20260602-wechat-uxfix1">
@@ -34,6 +34,12 @@
         <div>
           <h1>微信文章解读</h1>
           <p class="page-subtitle">来自已订阅公众号的结构化总结</p>
+        </div>
+        <div class="feed-toolbar-row">
+          <form class="feed-filter" action="/wechat" method="get">
+            <input id="search" type="search" name="q" placeholder="搜索标题/公众号/摘要/标签…">
+            <button class="filter-submit" type="submit">搜索</button>
+          </form>
         </div>
       </section>
       <section id="list" class="timeline wechat-timeline" aria-live="polite">
@@ -78,7 +84,7 @@
       {{ preload | tojson | safe }}
     </script>
     <script type="module" async>
-      import { initWechat } from "/app.js?v=20260604-curated-archive1";
+      import { initWechat } from "/app.js?v=20260607-wechat-search1";
       initWechat();
     </script>
   </body>

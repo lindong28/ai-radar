@@ -17,7 +17,7 @@ def test_alert_service_is_registered_in_service_helpers() -> None:
 
     result = subprocess.run(["bash", "-lc", script], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
 
-    assert "services=serve tunnel pipeline wewe alert" in result.stdout
+    assert "services=serve tunnel pipeline alert" in result.stdout
     assert "label=live.aiplanet.ai-radar.alert" in result.stdout
     assert "plist=ai-radar-alert.plist" in result.stdout
     assert "desc=Monitoring alert check" in result.stdout
@@ -67,6 +67,6 @@ def test_service_scripts_accept_alert_slug_and_document_usage() -> None:
 
     assert status.stdout.startswith("alert     | ")
     assert "unknown service" not in status.stderr
-    assert "serve | tunnel | pipeline | wewe | alert" in install_text
-    assert "serve | tunnel | pipeline | wewe | alert" in uninstall_text
+    assert "serve | tunnel | pipeline | alert" in install_text
+    assert "serve | tunnel | pipeline | alert" in uninstall_text
     assert "logs/alert-check.log" in install_text

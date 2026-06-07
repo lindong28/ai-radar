@@ -80,6 +80,8 @@ WHERE s.kind='wechat' AND s.enabled=1;
 
 详情页 `/wechat/<slug>` 使用 `markdown-it-py==4.0.0` 渲染 markdown，并用 `nh3==0.3.1` sanitize。LLM 生成的 `summary_md` 一律视为不可信 HTML 输入。
 
+`/wechat` 列表支持 `?q=` 搜索，匹配范围限定为解读卡片字段：`items.title`、`items.author`（公众号名）、`wechat_interpretations.abstract`、`wechat_interpretations.tags_json`。不匹配聚合 feed 名 `sources.name`，也不搜索 `summary_md` 全文。搜索使用 SQLite `LIKE` + 简繁扩展，详情链接和详情页返回链接会保留 `q` 与 `page`。
+
 ## 运维记录
 
 ### 2026-06-02 迁移留尾 author 回填（直接写生产 DB）
@@ -118,6 +120,8 @@ sqlite3 data/radar.db \
 sqlite3 data/radar.db \
   "SELECT save_decision, kb_synced, COUNT(*) FROM wechat_interpretations GROUP BY save_decision, kb_synced;"
 curl -s http://localhost:8000/api/v1/wechat | jq '.data.total'
+curl -s 'http://localhost:8000/api/v1/wechat?q=歸藏' | jq '.data.total'
+curl -s 'http://localhost:8000/api/v1/wechat?q=合集' | jq '.data.total' # 应为 0；不匹配 Mp2RSS 合集源名
 
 # KB 去重/可检索前置检查
 cd /Users/lindong/research/ai-assistant
