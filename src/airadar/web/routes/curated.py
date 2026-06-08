@@ -288,13 +288,20 @@ def _compute_items(
     return items
 
 
-def _archive_where(normalized_category: str | None, q: str | None) -> tuple[str, list[object], str | None]:
+def _archive_where(
+    normalized_category: str | None,
+    q: str | None,
+    selected_date: str | None = None,
+) -> tuple[str, list[object], str | None]:
     params: list[object] = []
     where_clauses = [deduped_item_clause("i")]
     search_subquery, search_params = search_id_subquery(q)
     if search_subquery:
         where_clauses.append(f"i.id IN ({search_subquery})")
         params.extend(search_params)
+    if selected_date:
+        where_clauses.append("date(datetime(i.published_at, '+08:00')) = ?")
+        params.append(selected_date)
     category_clause, category_params = category_filter_clause(normalized_category, "i")
     if category_clause:
         where_clauses.append(category_clause)
@@ -420,6 +427,56 @@ def _compute_archive_page(
     total_pages = max(1, (total + limit - 1) // limit)
     response_page = min(max(page, 1), total_pages)
     offset = (response_page - 1) * limit
+    items = _archive_items(
+        conn,
+        where,
+        params,
+        search_subquery,
+        q=q,
+        normalized_category=normalized_category,
+        limit=limit,
+        offset=offset,
+    )
+    return items, total, response_page
+
+
+def _compute_archive_for_date(
+    conn: sqlite3.Connection,
+    *,
+    selected_date: str,
+    normalized_category: str | None,
+    q: str | None,
+) -> list[dict[str, Any]]:
+    """Curated items published on ``selected_date`` aggregated across all runs.
+
+    Unlike the single-run paths, this dedupes by item to its latest curation, so a
+    daily report covers every item ever curated for that day — not only items that
+    happen to be in the most recent run.
+    """
+    where, params, search_subquery = _archive_where(normalized_category, q, selected_date)
+    return _archive_items(
+        conn,
+        where,
+        params,
+        search_subquery,
+        q=q,
+        normalized_category=normalized_category,
+        limit=-1,
+        offset=0,
+    )
+
+
+def _archive_items(
+    conn: sqlite3.Connection,
+    where: str,
+    params: list[object],
+    search_subquery: str | None,
+    *,
+    q: str | None,
+    normalized_category: str | None,
+    limit: int,
+    offset: int,
+) -> list[dict[str, Any]]:
     preview_query = q if search_subquery else None
     search_select = ""
     order_by = "ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC"
@@ -486,7 +543,7 @@ def _compute_archive_page(
         item["scores"] = scores
         if matches_category(item, normalized_category):
             items.append(item)
-    return items, total, response_page
+    return items
 
 
 def _archive_response_date(conn: sqlite3.Connection, items: list[dict[str, Any]]) -> str | None:
@@ -537,15 +594,10 @@ def curated(
     selected_date = _normalized_date(date)
     normalized_category = category if category in CATEGORY_TAGS else None
     with conn_from_request(request) as conn:
-        if run_id or selected_date:
-            if run_id:
-                run = conn.execute("SELECT * FROM curation_runs WHERE id=?", (run_id,)).fetchone()
-            else:
-                run = _latest_run(conn)
+        if run_id:
+            run = conn.execute("SELECT * FROM curation_runs WHERE id=?", (run_id,)).fetchone()
             if run is None:
-                if run_id:
-                    raise HTTPException(status_code=404, detail="curation run not found")
-                return ok({"run_id": None, "ruleset_version": None, "items": [], "date": selected_date, "count": 0})
+                raise HTTPException(status_code=404, detail="curation run not found")
             items = _load_precomputed(conn, run["id"], selected_date, normalized_category, q)
             if items is None:
                 items = _compute_items(conn, run, selected_date, normalized_category, q)
@@ -556,6 +608,24 @@ def curated(
                     "ruleset_version": run["ruleset_version"],
                     "items": items,
                     "date": response_date,
+                    "count": len(items),
+                }
+            )
+
+        if selected_date:
+            run = _latest_run(conn)
+            items = _compute_archive_for_date(
+                conn,
+                selected_date=selected_date,
+                normalized_category=normalized_category,
+                q=q,
+            )
+            return ok(
+                {
+                    "run_id": run["id"] if run is not None else None,
+                    "ruleset_version": run["ruleset_version"] if run is not None else None,
+                    "items": items,
+                    "date": selected_date,
                     "count": len(items),
                 }
             )

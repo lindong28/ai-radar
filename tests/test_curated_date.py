@@ -188,6 +188,40 @@ def test_curated_date_filters_items_by_published_day(tmp_path: Path) -> None:
     assert [item["id"] for item in data["items"]] == ["item-history"]
 
 
+def test_curated_date_includes_items_curated_only_in_older_runs(tmp_path: Path) -> None:
+    db_path, today, history = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    # A newer run that re-curates only today's item — mirrors production, where each
+    # run curates ~one day of fresh items and the history item lives only in run-1.
+    conn.execute(
+        """
+        INSERT INTO curation_runs (
+          id, ruleset_version, weights_json, threshold, input_eval_ids, output_curated_ids, created_at
+        )
+        VALUES ('run-2', 'test.r1', '{}', 6.5, '[]', '["item-today"]', ?)
+        """,
+        (f"{today.isoformat()}T12:00:00Z",),
+    )
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+        VALUES ('run-2', 'item-today', 8.5, 1, ?)
+        """,
+        (json.dumps({"scores": {}}),),
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    data = client.get("/api/v1/curated", params={"date": history.isoformat()}).json()["data"]
+
+    # The history item is curated only in the older run-1, but the latest run is run-2.
+    # The daily report must aggregate curated items across runs by published day.
+    assert data["date"] == history.isoformat()
+    assert data["count"] == 1
+    assert [item["id"] for item in data["items"]] == ["item-history"]
+
+
 def test_curated_invalid_and_future_dates_fallback_to_today(tmp_path: Path) -> None:
     db_path, today, _history = _seed_db(tmp_path)
     client = TestClient(create_app(db_path))

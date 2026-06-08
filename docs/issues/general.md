@@ -219,3 +219,17 @@
   - 与 nitter/wewe/覆盖率监控 issue 同族（均属"缺主动健康监控"），可一并纳入统一健康面板设计。
 
 ---
+
+## [open] launchd serve plist 与 test_service_contract 期望漂移（access log 路径）
+
+- Type: bug
+- Priority: low
+- Discovered: 2026-06-08 daily 历史数据修复 session 跑全量测试时（已验 pre-task `HEAD` 基线同样 fail = 既有，与本次 curated 改动无关）
+- Description: `tests/test_service_contract.py::test_serve_launchd_writes_access_log_to_persistent_logs_dir` 期望 `deploy/launchd/ai-radar-serve.plist` 的 `StandardOutPath` 指向 `<repo>/logs/serve-access.log`，但实际 plist 指向 `/tmp/ai-radar-serve.log` + `StandardErrorPath=/tmp/ai-radar-serve.err`。test 与 plist 哪个为准需确认：若访问日志应持久化到 `logs/`，改 plist；否则改 test。Fix 方向：对齐二者，确认生产 serve 的 access log 落盘位置。
+
+## [open] test_phase2 wechat 卡片点击测试数据依赖 flaky（.timeline-card 不可见）
+
+- Type: bug
+- Priority: low
+- Discovered: 2026-06-08 daily 历史数据修复 session（已验 pre-task `HEAD` 基线同样 fail = 既有，与本次 curated 改动无关）
+- Description: `tests/playwright/test_phase2.py::test_wechat_card_body_click_opens_detail_and_back_preserves_page` 等待 `.timeline-card` 可见超时——依赖本地 DB 内有 wechat 数据，数据缺失即 fail。与 general.md 既有的 test_phase2 数据依赖 flaky 同族。Fix 方向：测试自带 seed 数据或显式 skip 无数据场景，去除对本地 DB 现状的隐式依赖。
