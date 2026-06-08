@@ -16,7 +16,7 @@ from .curator.select import curate
 from .curator.weights import load_weights
 from .enrich.runner import run_enrich
 from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
-from .fetcher.runner import fetch_all, reload_sources
+from .fetcher.runner import fetch_all, refresh_wechat_avatar, reload_sources
 from .interpret.runner import run_interpret
 from .prefilter.runner import run_prefilter
 from .scorer.runner import run_scoring
@@ -242,6 +242,15 @@ def _admin(args: argparse.Namespace) -> int:
                 for row in rows:
                     print(f"{row['id']}\t{row['tier']}\t{row['enabled']}\t{row['url']}")
                 return 0
+    if args.admin_command == "wechat-avatar" and args.wechat_avatar_command == "refresh":
+        with db.get_conn(args.db_path) as conn:
+            avatar_url = refresh_wechat_avatar(conn, args.account)
+            conn.commit()
+        if avatar_url:
+            print(f"wechat-avatar account={args.account} avatar_url={avatar_url}")
+            return 0
+        print(f"wechat-avatar account={args.account} avatar_url=")
+        return 1
     if args.admin_command == "curate":
         return _curate(args)
     if args.admin_command == "alert-check":
@@ -333,6 +342,11 @@ def build_parser() -> argparse.ArgumentParser:
     sources_subparsers = sources_parser.add_subparsers(dest="sources_command", required=True)
     sources_subparsers.add_parser("reload")
     sources_subparsers.add_parser("list")
+    wechat_avatar_parser = admin_subparsers.add_parser("wechat-avatar")
+    wechat_avatar_subparsers = wechat_avatar_parser.add_subparsers(dest="wechat_avatar_command", required=True)
+    wechat_avatar_refresh = wechat_avatar_subparsers.add_parser("refresh")
+    wechat_avatar_refresh.add_argument("--account", required=True)
+    wechat_avatar_refresh.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
     admin_curate = admin_subparsers.add_parser("curate")
     admin_curate.add_argument("--threshold", type=float)
     admin_curate.add_argument("--weights")

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from airadar import cli
 from airadar.admin.alerts import AlertSignals
+from airadar.db import migrate
 
 
 def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001
@@ -62,3 +63,25 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
     assert "send A2 firing skipped reason=FEISHU_GENERAL_ALERT_WEBHOOK is not set" in output
     assert "A1 ok 上游模型不可用" in output
     assert "A4 ok 文章摄取骤降" in output
+
+
+def test_admin_wechat_avatar_refresh_command_updates_one_account(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    seen: dict[str, str] = {}
+
+    def fake_refresh(conn, account: str) -> str:
+        seen["account"] = account
+        seen["db_path"] = conn.execute("PRAGMA database_list").fetchone()[2]
+        return "https://mmbiz.qpic.cn/avatar.png"
+
+    monkeypatch.setattr(cli, "refresh_wechat_avatar", fake_refresh)
+
+    args = cli.build_parser().parse_args(
+        ["admin", "wechat-avatar", "refresh", "--account", "赛博禅心", "--db-path", str(db_path)]
+    )
+
+    assert cli._admin(args) == 0
+    output = capsys.readouterr().out
+    assert seen == {"account": "赛博禅心", "db_path": str(db_path)}
+    assert "wechat-avatar account=赛博禅心 avatar_url=https://mmbiz.qpic.cn/avatar.png" in output

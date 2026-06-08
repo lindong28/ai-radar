@@ -16,7 +16,7 @@ from .rss import parse_feed
 from .wechat import normalize_wechat_avatar_url, scrape_article
 
 logger = logging.getLogger(__name__)
-WECHAT_AVATAR_NEGATIVE_CACHE_TTL = timedelta(days=7)
+WECHAT_AVATAR_NEGATIVE_CACHE_TTL = timedelta(days=2)
 WECHAT_AVATAR_BACKFILL_LIMIT = 1
 
 
@@ -173,6 +173,39 @@ def _cache_wechat_avatar_from_article(
     if account is None:
         return
     _cache_wechat_avatar_result(conn, account, article.get("author_avatar_url"))
+
+
+def refresh_wechat_avatar(conn: sqlite3.Connection, account: str) -> str | None:
+    normalized_account = _wechat_account(account)
+    if normalized_account is None:
+        raise ValueError("account must not be empty")
+
+    row = conn.execute(
+        """
+        SELECT i.url
+        FROM items i
+        JOIN sources s ON s.id=i.source_id
+        WHERE COALESCE(s.kind, 'feed')='wechat'
+          AND i.author=?
+          AND i.url IS NOT NULL
+          AND trim(i.url) != ''
+        ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
+        LIMIT 1
+        """,
+        (normalized_account,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"no WeChat article found for account: {normalized_account}")
+
+    article = scrape_article(str(row[0]))
+    _cache_wechat_avatar_from_article(conn, normalized_account, article)
+    cached = conn.execute(
+        "SELECT avatar_url FROM wechat_account_avatars WHERE account=?",
+        (normalized_account,),
+    ).fetchone()
+    if cached is None or not cached[0]:
+        return None
+    return str(cached[0])
 
 
 def _backfill_wechat_avatar_cache(

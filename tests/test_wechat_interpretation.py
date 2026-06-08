@@ -437,6 +437,101 @@ def test_wechat_api_searches_interpretation_card_fields_and_prioritizes_author(t
     assert [item["slug"] for item in author_data["items"][:2]] == ["author-new-slug", "author-old-slug"]
 
 
+def test_wechat_api_search_ignores_internal_whitespace_across_card_fields(tmp_path: Path) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    conn = _connect(db_path)
+    rows = [
+        (
+            "search-whitespace-title",
+            "whitespace-title-slug",
+            "https://mp.weixin.qq.com/s/whitespace-title",
+            "分享Claude Code",
+            "空白测试",
+            "2026-06-10T10:00:00Z",
+            "普通摘要",
+            '["普通标签"]',
+        ),
+        (
+            "search-whitespace-author",
+            "whitespace-author-slug",
+            "https://mp.weixin.qq.com/s/whitespace-author",
+            "普通标题",
+            "空白作者Claude Code",
+            "2026-06-10T09:00:00Z",
+            "普通摘要",
+            '["普通标签"]',
+        ),
+        (
+            "search-whitespace-abstract",
+            "whitespace-abstract-slug",
+            "https://mp.weixin.qq.com/s/whitespace-abstract",
+            "普通标题",
+            "空白测试",
+            "2026-06-10T08:00:00Z",
+            "这段摘要包含空白摘要Claude Code字段",
+            '["普通标签"]',
+        ),
+        (
+            "search-whitespace-tag",
+            "whitespace-tag-slug",
+            "https://mp.weixin.qq.com/s/whitespace-tag",
+            "普通标题",
+            "空白测试",
+            "2026-06-10T07:00:00Z",
+            "普通摘要",
+            '["空白标签Claude Code"]',
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (?, 'wx_mp2rss', ?, ?, ?, ?, ?, '正文', NULL, ?, '{}')
+        """,
+        [
+            (item_id, url, title, author, published_at, published_at, f"h-{item_id}")
+            for item_id, _slug, url, title, author, published_at, _abstract, _tags in rows
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO wechat_interpretations (
+          item_id, slug, recommendation, save_decision, save_reason, abstract,
+          tags_json, summary_md, model, kb_synced, processed_at, error
+        )
+        VALUES (?, ?, '值得一看', 1, '测试', ?, ?, ?, 'fake-model', 1, ?, NULL)
+        """,
+        [
+            (item_id, slug, abstract, tags, SUMMARY_MD, published_at)
+            for item_id, slug, _url, _title, _author, published_at, abstract, tags in rows
+        ],
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    title_exact = client.get("/api/v1/wechat", params={"q": "分享Claude Code", "limit": 50}).json()["data"]
+    title_spaced = client.get("/api/v1/wechat", params={"q": "分享 Claude Code", "limit": 50}).json()["data"]
+    title_full_width_tab = client.get(
+        "/api/v1/wechat",
+        params={"q": "分享\u3000Claude\tCode", "limit": 50},
+    ).json()["data"]
+
+    assert [item["slug"] for item in title_exact["items"]] == ["whitespace-title-slug"]
+    assert [item["slug"] for item in title_spaced["items"]] == ["whitespace-title-slug"]
+    assert [item["slug"] for item in title_full_width_tab["items"]] == ["whitespace-title-slug"]
+
+    author = client.get("/api/v1/wechat", params={"q": "空白作者 Claude Code", "limit": 50}).json()["data"]
+    abstract = client.get("/api/v1/wechat", params={"q": "空白摘要 Claude Code", "limit": 50}).json()["data"]
+    tag = client.get("/api/v1/wechat", params={"q": "空白标签 Claude Code", "limit": 50}).json()["data"]
+
+    assert [item["slug"] for item in author["items"]] == ["whitespace-author-slug"]
+    assert [item["slug"] for item in abstract["items"]] == ["whitespace-abstract-slug"]
+    assert [item["slug"] for item in tag["items"]] == ["whitespace-tag-slug"]
+
+
 def test_wechat_api_search_supports_traditional_simplified_short_terms_and_negative_fields(
     tmp_path: Path,
 ) -> None:

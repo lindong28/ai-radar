@@ -20,6 +20,8 @@ from ...topics import topic_tags
 URL_RE = re.compile(r"https?://[^\s<>)\"']+")
 TERM_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_.-]{3,}")
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+SEARCH_WHITESPACE_RE = re.compile(r"[\s\u3000]+")
+SQL_SEARCH_WHITESPACE_REMOVALS = ("' '", "char(12288)", "char(9)", "char(10)", "char(13)")
 RELATED_STOPWORDS = {
     "https",
     "http",
@@ -256,8 +258,21 @@ def fts_phrase_query(value: str | None) -> str | None:
     return f'"{query}"'
 
 
-def expand_st_variants(q: str | None) -> list[str]:
+def remove_search_whitespace(value: str | None) -> str:
+    return SEARCH_WHITESPACE_RE.sub("", (value or "").strip())
+
+
+def whitespace_insensitive_sql(expr: str) -> str:
+    sql = f"COALESCE({expr}, '')"
+    for removal in SQL_SEARCH_WHITESPACE_REMOVALS:
+        sql = f"REPLACE({sql}, {removal}, '')"
+    return sql
+
+
+def expand_st_variants(q: str | None, *, remove_whitespace: bool = False) -> list[str]:
     query = (q or "").strip()
+    if remove_whitespace:
+        query = remove_search_whitespace(query)
     if not query:
         return []
     variants = [
@@ -278,7 +293,7 @@ def escape_like(value: str) -> str:
 
 
 def like_patterns_for_query(q: str | None) -> list[str]:
-    return [f"%{escape_like(variant)}%" for variant in expand_st_variants(q)]
+    return [f"%{escape_like(variant)}%" for variant in expand_st_variants(q, remove_whitespace=True)]
 
 
 def source_match_expression(q: str | None, *, source_alias: str = "s", item_alias: str = "i") -> tuple[str, list[object]]:
@@ -288,11 +303,30 @@ def source_match_expression(q: str | None, *, source_alias: str = "s", item_alia
     clauses: list[str] = []
     params: list[object] = []
     for pattern in patterns:
-        clauses.append(f"{source_alias}.name LIKE ? ESCAPE '\\'")
+        clauses.append(f"{whitespace_insensitive_sql(f'{source_alias}.name')} LIKE ? ESCAPE '\\'")
         params.append(pattern)
-        clauses.append(f"{item_alias}.author LIKE ? ESCAPE '\\'")
+        clauses.append(f"{whitespace_insensitive_sql(f'{item_alias}.author')} LIKE ? ESCAPE '\\'")
         params.append(pattern)
     return f"CASE WHEN ({' OR '.join(clauses)}) THEN 1 ELSE 0 END", params
+
+
+def _normalized_like_subquery_from_fts(patterns: list[str]) -> tuple[str | None, list[str]]:
+    if not patterns:
+        return None, []
+    field_exprs = [
+        whitespace_insensitive_sql("title"),
+        whitespace_insensitive_sql("content_text"),
+        whitespace_insensitive_sql("source_name"),
+        whitespace_insensitive_sql("author"),
+        whitespace_insensitive_sql("title_zh"),
+    ]
+    clauses: list[str] = []
+    params: list[str] = []
+    for pattern in patterns:
+        for expr in field_exprs:
+            clauses.append(f"{expr} LIKE ? ESCAPE '\\'")
+            params.append(pattern)
+    return f"SELECT item_id FROM items_fts WHERE {' OR '.join(clauses)}", params
 
 
 def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
@@ -301,9 +335,23 @@ def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
         return None, []
     if len(qs) >= 3:
         fts_query = " OR ".join(phrase for variant in expand_st_variants(qs) if (phrase := fts_phrase_query(variant)))
+        normalized_qs = remove_search_whitespace(qs)
+        if normalized_qs != qs and normalized_qs:
+            like_subquery, like_params = _normalized_like_subquery_from_fts(like_patterns_for_query(qs))
+            if like_subquery:
+                return f"SELECT item_id FROM items_fts WHERE items_fts MATCH ? UNION {like_subquery}", [
+                    fts_query,
+                    *like_params,
+                ]
         return "SELECT item_id FROM items_fts WHERE items_fts MATCH ?", [fts_query]
 
     like_patterns = like_patterns_for_query(qs)
+    field_exprs = [
+        whitespace_insensitive_sql("i2.title"),
+        whitespace_insensitive_sql("i2.author"),
+        whitespace_insensitive_sql("s2.name"),
+        whitespace_insensitive_sql("COALESCE(json_extract(e2.output_json, '$.title_zh'), '')"),
+    ]
     subquery = (
         "SELECT i2.id FROM items i2 "
         "JOIN sources s2 ON s2.id = i2.source_id "
@@ -312,15 +360,7 @@ def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
         "  WHERE le.item_id = i2.id AND le.stage = 'enrich' AND le.error IS NULL"
         ") "
         "WHERE "
-        + " OR ".join(
-            [
-                "i2.title LIKE ? ESCAPE '\\'",
-                "i2.author LIKE ? ESCAPE '\\'",
-                "s2.name LIKE ? ESCAPE '\\'",
-                "COALESCE(json_extract(e2.output_json, '$.title_zh'), '') LIKE ? ESCAPE '\\'",
-            ]
-            * len(like_patterns)
-        )
+        + " OR ".join(f"{expr} LIKE ? ESCAPE '\\'" for _pattern in like_patterns for expr in field_exprs)
     )
     params = [pattern for pattern in like_patterns for _ in range(4)]
     return subquery, params

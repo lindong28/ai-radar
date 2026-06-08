@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from airadar.db import migrate
 from airadar.fetcher.dedup import FetchedItem, upsert_item
 from airadar.fetcher.http_client import FeedResponse
-from airadar.fetcher.runner import _enrich_wechat_bodies, fetch_source
+from airadar.fetcher.runner import (
+    _enrich_wechat_bodies,
+    _wechat_avatar_cache_is_fresh,
+    fetch_source,
+    refresh_wechat_avatar,
+)
 from airadar.sources.loader import SourceConfig
 from airadar.sources.sync import sync_to_db
 
@@ -213,6 +219,65 @@ def test_fetch_source_backfills_wechat_avatar_when_feed_not_modified(tmp_path: P
         "SELECT avatar_url FROM wechat_account_avatars WHERE account='RSS Author'"
     ).fetchone()[0]
     assert avatar == "https://mmbiz.qpic.cn/not-modified-avatar.png"
+
+
+def test_failed_wechat_avatar_cache_expires_after_short_retry_window(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    now = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+    conn.execute(
+        """
+        INSERT INTO wechat_account_avatars (account, avatar_url, checked_at, updated_at)
+        VALUES ('RSS Author', NULL, ?, ?)
+        """,
+        (
+            (now - timedelta(days=2, minutes=1)).isoformat().replace("+00:00", "Z"),
+            (now - timedelta(days=2, minutes=1)).isoformat().replace("+00:00", "Z"),
+        ),
+    )
+
+    assert _wechat_avatar_cache_is_fresh(conn, "RSS Author", now=now) is False
+
+
+def test_successful_wechat_avatar_cache_remains_fresh_without_retry(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    now = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+    _cache_avatar(conn, "RSS Author", "https://mmbiz.qpic.cn/avatar.png")
+
+    assert _wechat_avatar_cache_is_fresh(conn, "RSS Author", now=now) is True
+
+
+def test_refresh_wechat_avatar_scrapes_latest_account_article_and_updates_cache(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    old_item = _item("https://mp.weixin.qq.com/s/old")
+    new_item = replace(
+        _item("https://mp.weixin.qq.com/s/new"),
+        published_at="2026-05-29T01:02:03Z",
+        content_text="New RSS Title",
+    )
+    assert upsert_item(conn, old_item) is True
+    assert upsert_item(conn, new_item) is True
+    conn.execute(
+        """
+        INSERT INTO wechat_account_avatars (account, avatar_url, checked_at, updated_at)
+        VALUES ('RSS Author', NULL, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')
+        """
+    )
+
+    with patch(
+        "airadar.fetcher.runner.scrape_article",
+        return_value={
+            "success": True,
+            "author_avatar_url": "http://mmbiz.qpic.cn/refreshed-avatar.png",
+        },
+    ) as scrape:
+        avatar = refresh_wechat_avatar(conn, "RSS Author")
+
+    scrape.assert_called_once_with(new_item.url)
+    assert avatar == "https://mmbiz.qpic.cn/refreshed-avatar.png"
+    cached = conn.execute(
+        "SELECT avatar_url FROM wechat_account_avatars WHERE account='RSS Author'"
+    ).fetchone()[0]
+    assert cached == "https://mmbiz.qpic.cn/refreshed-avatar.png"
 
 
 def test_fetch_source_preserves_existing_full_text_when_repeat_fetch_degrades(tmp_path: Path) -> None:

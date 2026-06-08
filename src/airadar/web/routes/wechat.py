@@ -10,7 +10,7 @@ from markdown_it import MarkdownIt
 
 from ...wechat_text import normalize_wechat_title
 from ..envelope import ok
-from .common import conn_from_request, json_loads, like_patterns_for_query
+from .common import conn_from_request, json_loads, like_patterns_for_query, whitespace_insensitive_sql
 
 router = APIRouter()
 
@@ -96,17 +96,17 @@ def _search_sql(q: str | None) -> tuple[str, list[object], str, list[object], st
     search_params: list[object] = []
     author_clauses: list[str] = []
     author_params: list[object] = []
+    search_fields = [
+        whitespace_insensitive_sql("i.title"),
+        whitespace_insensitive_sql("i.author"),
+        whitespace_insensitive_sql("wi.abstract"),
+        whitespace_insensitive_sql("wi.tags_json"),
+    ]
+    author_field = whitespace_insensitive_sql("i.author")
     for pattern in patterns:
-        search_clauses.extend(
-            [
-                "i.title LIKE ? ESCAPE '\\'",
-                "i.author LIKE ? ESCAPE '\\'",
-                "wi.abstract LIKE ? ESCAPE '\\'",
-                "wi.tags_json LIKE ? ESCAPE '\\'",
-            ]
-        )
+        search_clauses.extend(f"{field} LIKE ? ESCAPE '\\'" for field in search_fields)
         search_params.extend([pattern, pattern, pattern, pattern])
-        author_clauses.append("i.author LIKE ? ESCAPE '\\'")
+        author_clauses.append(f"{author_field} LIKE ? ESCAPE '\\'")
         author_params.append(pattern)
 
     where_sql = f" AND ({' OR '.join(search_clauses)})"

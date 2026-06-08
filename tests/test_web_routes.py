@@ -794,6 +794,17 @@ def test_search_id_subquery_switches_between_fts_like_and_noop() -> None:
     assert like_params == [r"%\%\_%", r"%\%\_%", r"%\%\_%", r"%\%\_%"]
 
 
+def test_like_search_helpers_ignore_internal_whitespace() -> None:
+    assert route_common.like_patterns_for_query("分享 Claude\tCode\u3000") == ["%分享ClaudeCode%"]
+
+    sql, params = route_common.source_match_expression("分享 Claude Code", source_alias="src", item_alias="it")
+
+    assert "REPLACE(" in sql
+    assert "src.name LIKE" not in sql
+    assert "it.author LIKE" not in sql
+    assert params == ["%分享ClaudeCode%", "%分享ClaudeCode%"]
+
+
 def test_expand_st_variants_uses_opencc_bidirectionally() -> None:
     assert route_common.expand_st_variants("归藏") == ["归藏", "歸藏"]
     assert route_common.expand_st_variants("歸藏") == ["歸藏", "归藏"]
@@ -815,7 +826,10 @@ def test_source_match_expression_reuses_like_escape() -> None:
     sql, params = route_common.source_match_expression(r"100%_AI", source_alias="src", item_alias="it")
 
     assert sql == (
-        "CASE WHEN (src.name LIKE ? ESCAPE '\\' OR it.author LIKE ? ESCAPE '\\') THEN 1 ELSE 0 END"
+        "CASE WHEN (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(src.name, ''), ' ', ''), "
+        "char(12288), ''), char(9), ''), char(10), ''), char(13), '') LIKE ? ESCAPE '\\' OR "
+        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(it.author, ''), ' ', ''), char(12288), ''), "
+        "char(9), ''), char(10), ''), char(13), '') LIKE ? ESCAPE '\\') THEN 1 ELSE 0 END"
     )
     assert params == [r"%100\%\_AI%", r"%100\%\_AI%"]
 
@@ -926,6 +940,37 @@ def test_simplified_short_search_matches_traditional_source_name(tmp_path: Path)
 
     assert [item["id"] for item in timeline["items"]] == ["item-guizang"]
     assert [item["id"] for item in curated["items"]] == ["item-guizang"]
+
+
+def test_timeline_and_curated_search_ignore_internal_whitespace(tmp_path: Path) -> None:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_source(conn, "whitespace_feed", "Whitespace Feed")
+    _insert_item(
+        conn,
+        "item-whitespace-title",
+        "whitespace_feed",
+        "分享Claude Code",
+        "Whitespace Author",
+        "Body intentionally avoids the spaced query.",
+        "2026-05-08T10:40:00Z",
+    )
+    conn.execute(
+        """
+        INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json, summary_json)
+        VALUES ('run-1', 'item-whitespace-title', 8.0, 2, '{}', ?)
+        """,
+        (_curated_summary("item-whitespace-title", "whitespace_feed", "Whitespace Feed", "分享Claude Code", "Whitespace Author"),),
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    timeline = client.get("/api/v1/timeline", params={"q": "分享 Claude Code", "limit": 50}).json()["data"]
+    curated = client.get("/api/v1/curated", params={"q": "分享 Claude Code", "limit": 50}).json()["data"]
+
+    assert [item["id"] for item in timeline["items"]] == ["item-whitespace-title"]
+    assert [item["id"] for item in curated["items"]] == ["item-whitespace-title"]
 
 
 def test_simplified_query_marks_traditional_source_as_source_match_for_ranking(tmp_path: Path) -> None:
