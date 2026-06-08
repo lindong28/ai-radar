@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from time import monotonic
 
@@ -10,6 +11,7 @@ from dotenv import dotenv_values
 
 from . import db
 from .admin.alerts import collect_alert_signals, run_alert_state_machine
+from .admin.metrics import SHANGHAI_TZ
 from .curator.select import curate
 from .curator.weights import load_weights
 from .enrich.runner import run_enrich
@@ -245,16 +247,20 @@ def _admin(args: argparse.Namespace) -> int:
     if args.admin_command == "alert-check":
         signals = collect_alert_signals()
         result = run_alert_state_machine(signals, state_path=args.state_path)
+        # One timestamp per run so the log is forensically usable (when did a
+        # rule fire, how long it lasted, correlation with deploys).
+        stamp = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S%z")
+        emit = lambda line: print(f"[{stamp}] {line}")  # noqa: E731
         ruleset = result.get("ruleset", [])
         if not isinstance(ruleset, list):
             ruleset = []
-        print(f"alert-check ruleset={{{','.join(str(rule) for rule in ruleset)}}} sent={result.get('sent_count', 0)}")
+        emit(f"alert-check ruleset={{{','.join(str(rule) for rule in ruleset)}}} sent={result.get('sent_count', 0)}")
         sent = result.get("sent", [])
         if isinstance(sent, list):
             for raw_sent in sent:
                 line = _format_alert_send_status(raw_sent)
                 if line:
-                    print(line)
+                    emit(line)
         results = result.get("results", [])
         if not isinstance(results, list):
             results = []
@@ -262,7 +268,7 @@ def _admin(args: argparse.Namespace) -> int:
             if not isinstance(raw, dict):
                 continue
             status = "firing" if raw.get("firing") else "ok"
-            print(f"{raw.get('rule_id')} {status} {raw.get('title')} - {raw.get('detail')}")
+            emit(f"{raw.get('rule_id')} {status} {raw.get('title')} - {raw.get('detail')}")
         return 0
     return _not_implemented("admin")
 

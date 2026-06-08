@@ -27,8 +27,8 @@
 | 规则 | 故障类别 | 典型含义 | 处置动作 |
 |---|---|---|---|
 | A1 | 上游模型不可用 | DeepSeek/OpenAI/GLM/ARK 返回 endpoint/model/权限/余额类错误；`schema validation failed` 已排除 | 查 provider 控制台余额、模型权限、API key；必要时切换 provider 或充值 |
-| A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 错误率或 P95 超阈值，或 pipeline heartbeat 过旧 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
-| A3 | 网站用户侧异常 | `/admin` 以外用户访问出现高 5xx 或 healthz 连续失败 | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel` |
+| A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 错误率或 P95 超阈值，或**超过 120 分钟没有成功 pipeline**。SKIP 日志=「pipeline 已在运行」=存活，不计故障，故长任务进行中不会告警；只有真停产/僵尸锁（长时间无成功且 SKIP 堆积）才触发 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
+| A3 | 网站用户侧异常 | `/admin` 以外用户访问出现高 5xx 率（healthz 主动探测尚未实现，原写死的 healthz 维度已移除，见 `docs/issues/general.md`） | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel` |
 | A4 | 文章摄取骤降 | fetch 失败率高或今日 items 增量低于基线 | 查 RSS/WeWe/X 源可用性、WeWe 容器、`./run.sh fetch` 输出 |
 
 告警状态存储在 `data/alert-state.json`。同一规则 firing 后有 30 分钟冷却；恢复时发送 resolved。
@@ -48,7 +48,7 @@ FEISHU_GENERAL_ALERT_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/...
 ./run.sh admin alert-check
 ```
 
-4. 确认群里收到包含「故障类别」「具体故障对象/数值」「处置方向」的消息。
+4. 确认群里收到以 `【AI Radar】` 开头、包含「故障类别」「具体故障对象/数值」「处置方向」的消息。该前缀来自 `alerts.py` 的 `ALERT_SOURCE` 常量，用于在多个项目共用同一 webhook 时让收件人区分告警来源。
 5. 安装周期告警服务：
 
 ```bash

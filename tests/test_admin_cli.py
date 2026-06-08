@@ -16,7 +16,6 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
         minutes_since_successful_pipeline=1,
         consecutive_skip_logs=0,
         server_error_rate=0.0,
-        health_failures=0,
         fetch_failed_ratio=0.0,
         items_today=300,
     )

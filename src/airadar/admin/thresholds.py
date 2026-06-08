@@ -19,13 +19,11 @@ ALERT_THRESHOLDS: dict[str, object] = {
             "enrich": 22569,
         },
         "latency_multiplier": 3.0,
-        "no_success_minutes": 45,
-        "skip_logs": 3,
+        "no_success_minutes": 120,
     },
     "a3": {
         "window_minutes": 15,
         "server_error_rate": 0.05,
-        "health_failures": 2,
     },
     "a4": {
         "fetch_failed_ratio": 0.4,

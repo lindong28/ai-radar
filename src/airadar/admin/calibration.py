@@ -168,13 +168,11 @@ def _thresholds_from_baselines(
             "stage_error_rate": stage_error_rates,
             "stage_p95_latency_ms": stage_p95_latency_ms,
             "latency_multiplier": 3.0,
-            "no_success_minutes": 45,
-            "skip_logs": 3,
+            "no_success_minutes": 120,
         },
         "a3": {
             "window_minutes": 15,
             "server_error_rate": _round_rate(_clamp(_float_value(a3.get("server_error_rate")) * 3, 0.05, 0.5)),
-            "health_failures": 2,
         },
         "a4": {
             "fetch_failed_ratio": _round_rate(

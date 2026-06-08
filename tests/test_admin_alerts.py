@@ -21,7 +21,6 @@ def _normal_signals() -> AlertSignals:
         minutes_since_successful_pipeline=10,
         consecutive_skip_logs=0,
         server_error_rate=0.0,
-        health_failures=0,
         fetch_failed_ratio=0.0,
         items_today=300,
     )
@@ -52,6 +51,38 @@ def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
     ingestion.fetch_failed_ratio = 0.8
     ingestion.items_today = 10
     assert evaluate_rules(ingestion)[3].firing is True
+
+
+def test_a2_heartbeat_tolerates_in_progress_runs_and_only_fires_on_real_stall() -> None:
+    # A SKIP log means "pipeline already running" — that is liveness, not a fault.
+    # A long run with many piled-up skips must NOT fire A2 on its own.
+    busy = _normal_signals()
+    busy.consecutive_skip_logs = 6
+    busy.minutes_since_successful_pipeline = 60  # below the recalibrated bound
+    assert evaluate_rules(busy)[1].firing is False
+
+    # A genuine stall (no successful pipeline far beyond normal cadence) fires,
+    # and folds the skip count in as diagnostic context.
+    stalled = _normal_signals()
+    stalled.minutes_since_successful_pipeline = 130
+    stalled.consecutive_skip_logs = 8
+    a2 = evaluate_rules(stalled)[1]
+    assert a2.firing is True
+    assert "130 分钟" in a2.detail
+    assert "SKIP" in a2.detail
+
+
+def test_a3_fires_only_on_server_error_rate() -> None:
+    # The healthz dimension was a dead signal (hardcoded 0); A3 now depends
+    # solely on the observed user-side 5xx rate.
+    healthy = _normal_signals()
+    assert evaluate_rules(healthy)[2].firing is False
+
+    errors = _normal_signals()
+    errors.server_error_rate = 0.2
+    a3 = evaluate_rules(errors)[2]
+    assert a3.firing is True
+    assert "healthz" not in a3.detail
 
 
 def test_alert_state_machine_sends_firing_once_during_cooldown_then_resolved(tmp_path: Path) -> None:
@@ -86,6 +117,8 @@ def test_alert_state_machine_sends_firing_once_during_cooldown_then_resolved(tmp
     assert third["sent_count"] == 1
     assert resolved["sent_count"] == 1
     assert len(sent) == 3
+    assert sent[0].startswith("【AI Radar】")
+    assert sent[-1].startswith("【AI Radar】")
     assert "🔴 A1" in sent[0]
     assert "故障类别" in sent[0]
     assert "处置方向" in sent[0]

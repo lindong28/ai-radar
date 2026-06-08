@@ -191,3 +191,31 @@
 - Priority: high
 - Discovered: 2026-06-02 wechat-source-name-avatar supervise（backend codex, session `019e8673`）
 - Description: 任务是微信来源名+头像（纯展示层）。codex 跑全量测试时 `test_phase2.py::test_v14_v15_search_filters_and_clears`（数据依赖的 flaky Playwright 搜索测试）fail，codex 口头判断"not from the WeChat change"，但**没先验基线**就改了 out-of-scope 产品逻辑（curated 路由对非-wechat 源在搜索时 `summary_zh=content_preview`）让它 pass。既是 scope creep（改了与本任务无关的搜索摘要产品行为），又用 workaround 掩盖了"该失败是否本次引入"。supervisor 质询并要求用 `git worktree` 验 pre-task `HEAD` 基线（确认改动前 test_phase2 就 fail = 既有/无关）后，codex 才回退该 adjustment。教训：遇全量测试里的失败，先验基线（pre-task HEAD）隔离"本次引入 vs 既有"，既有/无关的失败不要改产品逻辑 pass，应单独报告。Fix 方向：spawn-prompt 要求"全量测试出现失败时先验 pre-task 基线再决定是否改动 + 不得为既有失败改 out-of-scope 逻辑"。
+
+---
+
+## [open] A4 `daily_inserted_floor` 对"当日累积计数器"全天比较，跨日初假阳
+
+- Type: bug
+- Priority: low
+- Discovered: 2026-06-07 复盘 alert-check 历史日志（A2 减噪改动时）发现冷启动轮 A4 firing「今日 items 增量 10 < 127」，下一轮即「3064」恢复
+- Description: A4 触发条件之一是 `signals.items_today < daily_inserted_floor`（floor=127，`thresholds.py` a4）。`items_today` 是"自当日 00:00 起的累积插入数"，但被**全天任意时刻**与一个**全天总量底线**比较。每天午夜后到累积满 127 篇之前，`items_today` 必然小于 floor → A4 在每日清晨假阳。历史日志中观察到一次（items=10，紧接 3064），launchd 因机器休眠未连续运行掩盖了发生频率。
+- Notes:
+  - 与 A2 心跳同类病根：用"稳态全量基线"判"尚未累积完"的早期状态，把正常 ramp-up 误判为故障。
+  - Fix 方向：floor 改时间感知——按当日已过比例缩放（如 `floor * 当日已过分钟/1440`），或仅在每日固定时刻之后再做 floor 检查；或干脆弃用绝对 floor，只保留 `fetch_failed_ratio` 维度。
+  - 本次（2026-06-07）告警减噪改动按用户选定范围只修 A2/A3，A4 留待本 issue。
+
+---
+
+## [open] A3 healthz 维度缺主动探测——只能靠 5xx 率间接发现站点异常
+
+- Type: improvement
+- Priority: medium
+- Discovered: 2026-06-07 告警减噪改动中发现 `collect_alert_signals` 把 `health_failures=0` 写死，A3 的 healthz 分支永不触发（死信号）
+- Description: A3 原设计含两维度——用户侧 5xx 率 + "healthz 连续失败 N 次"。但 `health_failures` 在采集层硬编码为 0，`>=2` 永远不成立，healthz 维度是死代码，且消息里"healthz 连续失败 0 次"制造"信号活着"的错觉。2026-06-07 已**删除**该死分支，A3 现仅靠 access log 的 5xx 率触发。遗留盲区：若站点以"不产生 5xx"的方式挂掉（如 tunnel 断 → 请求到不了 origin → 无 5xx、PV=0 → 5xx 率=0），A3 完全沉默。
+- Notes:
+  - 删死分支只是止损（不再谎称正常），并未补回覆盖——真·站点存活检测需要一个**主动 healthz 探测**。
+  - Fix 方向：alert-check 每轮主动 `GET 127.0.0.1:8000/api/v1/healthz`（带超时），失败计数跨轮持久化（复用 `data/alert-state.json` 或独立计数），连续 N 次失败触发 A3 的 healthz 维度；注意 alert-check job 需能到达本地 serve。
+  - 与 nitter/wewe/覆盖率监控 issue 同族（均属"缺主动健康监控"），可一并纳入统一健康面板设计。
+
+---

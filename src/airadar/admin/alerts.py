@@ -18,6 +18,9 @@ from .thresholds import ALERT_THRESHOLDS
 RULESET = ("A1", "A2", "A3", "A4")
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
 COOLDOWN = timedelta(minutes=30)
+# Project label prefixed on every alert so a shared Feishu webhook (used by
+# multiple projects) lets the reader tell which project an alert came from.
+ALERT_SOURCE = "AI Radar"
 
 
 @dataclass
@@ -30,7 +33,6 @@ class AlertSignals:
     minutes_since_successful_pipeline: int
     consecutive_skip_logs: int
     server_error_rate: float
-    health_failures: int
     fetch_failed_ratio: float
     items_today: int
 
@@ -87,16 +89,22 @@ def evaluate_rules(
             threshold = stage_p95_thresholds.get(stage)
             if threshold is not None and observed > int(threshold):
                 stage_reasons.append(f"{stage} P95 {observed}ms > {int(threshold)}ms")
-    no_success_minutes = _int_threshold(a2, "no_success_minutes", 45)
+    # A SKIP log means "pipeline already running" — a run is in progress, which is
+    # liveness, not a fault. So skip count is never a standalone trigger; it only
+    # rides along as context when the heartbeat itself has genuinely gone stale.
+    no_success_minutes = _int_threshold(a2, "no_success_minutes", 120)
     if signals.minutes_since_successful_pipeline > no_success_minutes:
-        stage_reasons.append(f"最近成功 pipeline 已超过 {signals.minutes_since_successful_pipeline} 分钟")
-    skip_logs = _int_threshold(a2, "skip_logs", 3)
-    if signals.consecutive_skip_logs >= skip_logs:
-        stage_reasons.append(f"连续 SKIP 日志 {signals.consecutive_skip_logs} 个")
+        skip_note = (
+            f"（期间连续 SKIP {signals.consecutive_skip_logs} 次，疑似卡死/僵尸锁）"
+            if signals.consecutive_skip_logs
+            else ""
+        )
+        stage_reasons.append(
+            f"最近成功 pipeline 已超过 {signals.minutes_since_successful_pipeline} 分钟{skip_note}"
+        )
 
     a3_rate = _float_threshold(a3, "server_error_rate", 0.05)
-    health_failures = _int_threshold(a3, "health_failures", 2)
-    a3_firing = signals.server_error_rate > a3_rate or signals.health_failures >= health_failures
+    a3_firing = signals.server_error_rate > a3_rate
 
     a4_fetch_ratio = _float_threshold(a4, "fetch_failed_ratio", 0.4)
     daily_inserted_floor = _int_threshold(a4, "daily_inserted_floor", 0)
@@ -134,9 +142,9 @@ def evaluate_rules(
             rule_id="A3",
             title="网站用户侧异常",
             firing=a3_firing,
-            detail=f"5xx 率 {signals.server_error_rate:.1%}，healthz 连续失败 {signals.health_failures} 次",
+            detail=f"用户侧 5xx 率 {signals.server_error_rate:.1%}",
             action="先探测 /api/v1/healthz 与 serve 日志；若 healthz 正常但 5xx 上升，查看最近部署和 upstream API。",
-            values={"server_error_rate": signals.server_error_rate, "health_failures": signals.health_failures},
+            values={"server_error_rate": signals.server_error_rate},
         ),
         AlertRuleResult(
             rule_id="A4",
@@ -151,7 +159,7 @@ def evaluate_rules(
 
 def _format_firing(result: AlertRuleResult) -> str:
     return (
-        f"🔴 {result.rule_id} {result.title}\n"
+        f"【{ALERT_SOURCE}】🔴 {result.rule_id} {result.title}\n"
         f"故障类别：{result.title}\n"
         f"具体故障对象/数值：{result.detail}\n"
         f"处置方向：{result.action}"
@@ -160,7 +168,7 @@ def _format_firing(result: AlertRuleResult) -> str:
 
 def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
     suffix = f"（since {since}）" if since else ""
-    return f"✅ {result.rule_id} {result.title} 已恢复{suffix}"
+    return f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}"
 
 
 def _load_state(path: Path) -> dict[str, dict[str, object]]:
@@ -330,7 +338,6 @@ def collect_alert_signals(
         minutes_since_successful_pipeline=minutes_since_success,
         consecutive_skip_logs=consecutive_skip_logs,
         server_error_rate=_server_error_rate(users),
-        health_failures=0,
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
         items_today=int(ingestion.get("items_today") or 0),
     )
