@@ -125,6 +125,61 @@ def test_alert_state_machine_sends_firing_once_during_cooldown_then_resolved(tmp
     assert "✅ A1" in sent[-1]
 
 
+def _a4_firing() -> AlertSignals:
+    signals = _normal_signals()
+    signals.fetch_failed_ratio = 0.8  # > a4 fetch_failed_ratio threshold (0.4)
+    return signals
+
+
+def test_a4_debounce_absorbs_transient_flap(tmp_path: Path) -> None:
+    # nitter.net flaps for a single fetch round (~15 min) then recovers. With the
+    # 30-min debounce, A4 must stay completely silent — no firing, no resolved —
+    # so a transient that self-heals never reaches the on-call channel.
+    state_path = tmp_path / "alert-state.json"
+    sent: list[str] = []
+    now = datetime.fromisoformat("2026-06-09T16:31:00+08:00")
+
+    first = run_alert_state_machine(_a4_firing(), state_path=state_path, now=now, send=lambda text: sent.append(text))
+    recovered = run_alert_state_machine(
+        _normal_signals(),
+        state_path=state_path,
+        now=now + timedelta(minutes=15),
+        send=lambda text: sent.append(text),
+    )
+
+    assert first["sent_count"] == 0  # within debounce window → not yet confirmed
+    assert recovered["sent_count"] == 0  # recovered before confirmation → silently absorbed
+    assert sent == []
+
+
+def test_a4_debounce_fires_after_sustained_outage_then_resolves(tmp_path: Path) -> None:
+    # A genuine outage that outlasts the debounce window must fire once, and the
+    # later recovery must send a resolved (because a firing was actually delivered).
+    state_path = tmp_path / "alert-state.json"
+    sent: list[str] = []
+    now = datetime.fromisoformat("2026-06-09T16:31:00+08:00")
+
+    first = run_alert_state_machine(_a4_firing(), state_path=state_path, now=now, send=lambda text: sent.append(text))
+    confirmed = run_alert_state_machine(
+        _a4_firing(),
+        state_path=state_path,
+        now=now + timedelta(minutes=31),
+        send=lambda text: sent.append(text),
+    )
+    resolved = run_alert_state_machine(
+        _normal_signals(),
+        state_path=state_path,
+        now=now + timedelta(minutes=50),
+        send=lambda text: sent.append(text),
+    )
+
+    assert first["sent_count"] == 0  # debounced
+    assert confirmed["sent_count"] == 1  # sustained past 30 min → fires
+    assert resolved["sent_count"] == 1  # resolved after a real firing
+    assert "🔴 A4" in sent[0]
+    assert "✅ A4" in sent[1]
+
+
 def test_send_feishu_message_posts_text_payload(monkeypatch) -> None:  # noqa: ANN001
     calls: list[tuple[str, dict[str, object], float]] = []
 

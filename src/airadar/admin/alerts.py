@@ -62,6 +62,11 @@ def _int_threshold(section: dict[str, Any], key: str, default: int) -> int:
     return int(value) if value is not None else default
 
 
+def _debounce_window(thresholds: dict[str, object], rule_id: str) -> timedelta:
+    section = _threshold_section(thresholds, rule_id.lower())
+    return timedelta(minutes=_int_threshold(section, "debounce_minutes", 0))
+
+
 def evaluate_rules(
     signals: AlertSignals,
     thresholds: dict[str, object] | None = None,
@@ -151,7 +156,7 @@ def evaluate_rules(
             title="文章摄取骤降",
             firing=a4_firing,
             detail=f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，今日 items 增量 {signals.items_today}",
-            action="查看最近一轮 fetch 源健康；微信源连接失败先检查 wewe-rss/bridge，其余源按 source error 分组处理。",
+            action="查看最近一轮各源健康并按 source error 分组：X(nitter) 源整批 SSL/超时多为公共实例瞬态（已加 30min 去抖，持续才告警）；微信源走 Mp2RSS；其余源按错误类型分别处理。",
             values={"fetch_failed_ratio": signals.fetch_failed_ratio, "items_today": signals.items_today},
         ),
     ]
@@ -201,27 +206,40 @@ def run_alert_state_machine(
     path = Path(state_path)
     state = _load_state(path)
     sender = send or (lambda text: send_feishu_message(os.environ.get("FEISHU_GENERAL_ALERT_WEBHOOK"), text))
-    results = evaluate_rules(signals, thresholds=thresholds)
+    active_thresholds = thresholds or ALERT_THRESHOLDS
+    results = evaluate_rules(signals, thresholds=active_thresholds)
     sent: list[dict[str, object]] = []
 
     for result in results:
         entry = state.get(result.rule_id, {"state": "ok"})
         previous_state = str(entry.get("state", "ok"))
         last_notified = _parse_dt(entry.get("last_notified"))
+        debounce = _debounce_window(active_thresholds, result.rule_id)
         if result.firing:
-            should_notify = previous_state != "firing" or last_notified is None or current - last_notified >= COOLDOWN
+            # `since` anchors the current firing episode; a fresh episode starts now.
+            since = entry.get("since") if previous_state == "firing" else current.isoformat()
+            since_dt = _parse_dt(since)
+            # Hold notifications until the episode has persisted past the debounce
+            # window, so single-round flaps that self-heal never page anyone.
+            confirmed = since_dt is None or current - since_dt >= debounce
+            should_notify = confirmed and (last_notified is None or current - last_notified >= COOLDOWN)
             if should_notify:
                 text = _format_firing(result)
                 send_result = sender(text)
                 sent.append({"rule_id": result.rule_id, "type": "firing", "text": text, "send_result": send_result})
             state[result.rule_id] = {
                 "state": "firing",
-                "since": entry.get("since") if previous_state == "firing" else current.isoformat(),
+                "since": since,
                 "last_notified": current.isoformat() if should_notify else entry.get("last_notified"),
                 "detail": result.detail,
             }
         else:
-            if previous_state == "firing":
+            # Only send a resolved if this episode actually delivered a firing —
+            # i.e. last_notified falls within the episode. A debounced flap that
+            # was never announced resolves silently too.
+            since_dt = _parse_dt(entry.get("since"))
+            announced = last_notified is not None and (since_dt is None or last_notified >= since_dt)
+            if previous_state == "firing" and announced:
                 text = _format_resolved(result, str(entry.get("since") or ""))
                 send_result = sender(text)
                 sent.append({"rule_id": result.rule_id, "type": "resolved", "text": text, "send_result": send_result})

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-09
+
+- Stopped A4 (article ingestion) from alerting on transient fetch flaps. All X/Twitter sources fetch through the single public `nitter.net` instance, which intermittently times out for one ~15-minute fetch round and then self-heals; each flap fired and resolved A4 within ~15 minutes as pure noise, while the daily ingestion count was never actually affected (a round skipped by the flap is backfilled by the next). A4 now debounces: a fetch-failure condition must persist past a 30-minute window (≈2 fetch rounds) before it notifies, and a flap that recovers within the window is absorbed silently — no firing and no resolved. The debounce is per-rule and configured only for A4 (`a4.debounce_minutes`); A1/A3 still notify immediately, so this does not delay genuinely urgent alerts. Also corrected A4's disposition text, which pointed at the retired `wewe-rss/bridge` for WeChat — WeChat now ingests via Mp2RSS, and a batch X-source failure is the more common trigger. The `alert` service must be running the updated code for this to take effect.
+
 ## 2026-06-08
 
 - Made `/wechat` search (and the shared timeline/curated search) whitespace-insensitive, so a query with extra internal spaces returns the same results as one without. Previously a stored title like `分享Claude Code` was found by `分享Claude Code` but not by `分享 Claude Code`, because the query and the matched columns were compared with their spaces intact. Both the query patterns and the searched columns (title, author, abstract, tags) now have all whitespace — including full-width spaces — stripped before matching, and the longer-query FTS path handles spaced queries too. Simplified/Traditional matching is unchanged. The web layer must be restarted for this to take effect.
