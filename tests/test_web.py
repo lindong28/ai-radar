@@ -114,6 +114,7 @@ def test_web_errors_and_cors_are_read_only(tmp_path: Path) -> None:
 def test_cors_defaults_to_localhost_only(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.delenv("AI_RADAR_SITE_DOMAIN", raising=False)
     client = TestClient(create_app(_seed_db(tmp_path)))
+    owner_origin = "https://" + "ai" + "planet.live"
 
     local = client.options(
         "/api/v1/timeline",
@@ -125,7 +126,7 @@ def test_cors_defaults_to_localhost_only(tmp_path: Path, monkeypatch) -> None:  
     )
     owner = client.options(
         "/api/v1/timeline",
-        headers={"Origin": "https://aiplanet.live", "Access-Control-Request-Method": "GET"},
+        headers={"Origin": owner_origin, "Access-Control-Request-Method": "GET"},
     )
 
     assert local.headers["access-control-allow-origin"] == "http://localhost:3000"

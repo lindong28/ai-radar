@@ -37,8 +37,8 @@ install_pipeline() {
     return 0
   fi
   local entry
-  entry="$(cat "$REPO_ROOT/deploy/cron/ai-radar-pipeline")"
-  (crontab -l 2>/dev/null; echo ""; echo "$entry") | crontab -
+  entry="$(sed "s|/path/to/ai-radar|$REPO_ROOT|g" "$REPO_ROOT/deploy/cron/ai-radar-pipeline")"
+  (crontab -l 2>/dev/null || true; echo ""; echo "$entry") | crontab -
   echo "✓ pipeline: installed in user crontab (every 15 min)"
 }
 

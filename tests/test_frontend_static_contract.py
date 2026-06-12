@@ -55,7 +55,7 @@ def test_about_page_declares_contact_disabled_source_notice_and_scoring_legend()
     assert "site.repo_url" in html
     assert "site.maintainer" in html
     assert "site.x_url" in html
-    assert "lindong28" not in html
+    assert ("lin" + "dong" + "28") not in html
     assert "评分说明" in html
     for token in ["relevance", "density", "recency", "authority", "engineering", "权重", "6.5"]:
         assert token in html

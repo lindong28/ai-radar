@@ -9,7 +9,7 @@ AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS、X 和微信�
 需要 Python 3.12+ 和 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-git clone https://github.com/lindong28/ai-radar.git
+git clone https://github.com/your-org/ai-radar.git
 cd ai-radar
 uv sync
 uv run playwright install chromium  # 仅启用微信公众号抓取时需要
@@ -27,7 +27,7 @@ cp .env.example .env
 DEEPSEEK_API_KEY=sk-xxx
 ```
 
-其他配置项均有默认值，详见 `.env.example` 中的注释。
+其他配置项均有默认值，详见 `.env.example` 中的注释。第一次本地试跑可以先保留站点身份默认值；如果暂时没有 Mp2RSS 合集 feed，请先在 `data/sources.toml` 中禁用 `wx_mp2rss`，或把 `MP2RSS_FEED_URL` 设置为自己的 feed URL。
 
 ### 3. 初始化数据库
 
@@ -61,15 +61,20 @@ DEEPSEEK_API_KEY=sk-xxx
 
 默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 
-cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调度前确认 `.env`（项目根目录或 `~/.claude/.env`）已配 LLM API Key。
+cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调度前确认项目根目录 `.env` 或 supervisor 环境已配 LLM API Key。
 
 ```bash
 ./pipeline.sh             # 手动跑一次
 ./install.sh pipeline     # 注册到 user crontab，每 15 分钟一次
-crontab deploy/cron/ai-radar-pipeline  # 手动加载 cron 条目
 ```
 
-调度方式详情、`launchctl bootstrap` launchd 备选模板见 §服务 + [docs/operations/services.md](docs/operations/services.md)。
+调度方式详情、launchd 备选模板见 §服务 + [docs/operations/services.md](docs/operations/services.md)。
+
+如需手动写入 cron，不要直接 `crontab deploy/cron/ai-radar-pipeline`，因为仓库内文件保留 `/path/to/ai-radar` 占位符。使用当前仓库路径展开后再写入：
+
+```bash
+sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
+```
 
 ## Web 页面
 
@@ -98,6 +103,24 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 - **interpret** — 可选阶段，默认关闭；启用后对微信公众号文章调用 ai-assistant 兼容的 summary-agent 脚本，保存独立网站解读数据，并把值得阅读的文章回写外部知识库
 
 ## 配置
+
+### 从零部署最小配置
+
+`cp .env.example .env` 后，最少需要：
+
+```bash
+DEEPSEEK_API_KEY=sk-xxx
+AI_RADAR_SITE_DOMAIN=                  # 本地开发可留空
+AI_RADAR_SITE_REPO_URL=https://github.com/your-org/ai-radar
+AI_RADAR_SITE_MAINTAINER=your-name
+AI_RADAR_SITE_MAINTAINER_URL=
+AI_RADAR_SITE_X_URL=
+AI_RADAR_ENABLE_INTERPRET=false
+AI_ASSISTANT_ROOT=
+AI_RADAR_INTERPRET_USER=default
+```
+
+公网部署时把 `AI_RADAR_SITE_DOMAIN`、仓库链接和维护者链接改成你自己的值。微信文章解读是可选外部集成，默认关闭；只有在你提供 ai-assistant 兼容实现时才设置 `AI_RADAR_ENABLE_INTERPRET=true` 和 `AI_ASSISTANT_ROOT`。
 
 ### 站点身份与域名
 
@@ -166,7 +189,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
 
-完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除（仅回滚时参考 [`deploy/wewe-rss/RUNBOOK.md`](deploy/wewe-rss/RUNBOOK.md)）。
+完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除，不再作为发布快照的一部分维护。
 
 ## 部署
 

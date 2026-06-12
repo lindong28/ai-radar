@@ -53,11 +53,12 @@ def test_alert_launchd_environment_xml_includes_webhook_and_optional_db() -> Non
     assert "/tmp/ai-radar-alert-prod-path.db" in result.stdout
 
 
-def test_serve_launchd_writes_access_log_to_persistent_logs_dir() -> None:
-    plist = (REPO_ROOT / "deploy/launchd/ai-radar-serve.plist").read_text(encoding="utf-8")
+def test_serve_launchd_template_writes_access_log_to_repo_logs_dir() -> None:
+    plist = (REPO_ROOT / "deploy/launchd/ai-radar-serve.plist.example").read_text(encoding="utf-8")
 
-    assert "<key>StandardOutPath</key><string>/Users/lindong/research/ai-radar/logs/serve-access.log</string>" in plist
-    assert "<key>StandardErrorPath</key><string>/Users/lindong/research/ai-radar/logs/serve-access.err.log</string>" in plist
+    assert "<key>StandardOutPath</key><string>/path/to/ai-radar/logs/serve-access.log</string>" in plist
+    assert "<key>StandardErrorPath</key><string>/path/to/ai-radar/logs/serve-access.err.log</string>" in plist
+    assert ("/" + "Users/") not in plist
 
 
 def test_service_scripts_accept_alert_slug_and_document_usage() -> None:

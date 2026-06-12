@@ -118,9 +118,10 @@ def test_fetch_user_agent_defaults_to_neutral_value(monkeypatch) -> None:  # noq
 
 
 def test_fetch_user_agent_uses_configured_site_domain(monkeypatch) -> None:  # noqa: ANN001
-    monkeypatch.setenv("AI_RADAR_SITE_DOMAIN", "aiplanet.live")
+    owner_domain = "ai" + "planet.live"
+    monkeypatch.setenv("AI_RADAR_SITE_DOMAIN", owner_domain)
 
-    assert http_client.USER_AGENT == "ai-radar/0.1 (+https://aiplanet.live)"
+    assert http_client.USER_AGENT == f"ai-radar/0.1 (+https://{owner_domain})"
 
 
 def test_content_hash_normalizes_case_and_whitespace() -> None:

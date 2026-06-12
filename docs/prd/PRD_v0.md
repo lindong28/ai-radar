@@ -1,7 +1,7 @@
 # ai-radar v0 PRD
 
 > 状态：v0.1 草案 (2026-05-07)
-> 维护者：lindong
+> 维护者：见仓库配置
 > 前置文档：[VISION.md](VISION.md) — 范围只读，§4 BINDING 原则在本 PRD 中仍然有效
 
 ---
@@ -71,7 +71,7 @@ VISION §10 锁定的 D1–D14 在 v0 持续有效。本 PRD §13 新增 D15–D
                          │  (公开只读)
                          │
                   Cloudflare Tunnel
-                  aiplanet.live
+                  your-public-domain.example
 ```
 
 写入口（admin）独立 CLI 通道，**不**通过 HTTP：
@@ -223,7 +223,7 @@ base path: `/api/v1`
 | GET | `/sources` | 当前信源池（read-only） | `{sources}` |
 | GET | `/healthz` | 健康检查 | `{ok: true, ruleset_version}` |
 
-API 响应统一包络：`{success, data, error}`（依 VISION §共用模式 + 项目 patterns）。CORS 仅放行 `aiplanet.live` 自身。**没有任何 POST/PUT/DELETE 端点**。
+API 响应统一包络：`{success, data, error}`（依 VISION §共用模式 + 项目 patterns）。CORS 仅放行配置的公开站点域名。**没有任何 POST/PUT/DELETE 端点**。
 
 ### 5.3 LLM Provider 抽象
 
@@ -377,10 +377,10 @@ weighted_score = ( w_rel * relevance
    ├── launchd job: ai-radar-fetch.plist (每 30 min)
    ├── launchd job: ai-radar-curate.plist (每小时)
    ├── launchd job: ai-radar-serve.plist (常驻 :8000)
-   └── cloudflared service (Tunnel → aiplanet.live)
+   └── cloudflared service (Tunnel → configured public domain)
         │
         ▼
-   Cloudflare edge → aiplanet.live (HTTPS, free SSL)
+   Cloudflare edge → configured public domain (HTTPS, free SSL)
 ```
 
 ### 9.2 部署步骤（在 plan 阶段展开）
@@ -419,7 +419,7 @@ AI_RADAR_DB=./apps/ai-radar/data/radar.db
 | E2 | prefilter 能筛掉非 AI 内容 | 手工抽查 20 条 prefilter 结果，AI 相关识别准确率 ≥ 85% |
 | E3 | 评分输出严格 5 个 0-10 浮点数 | pytest schema 校验 100% 通过 |
 | E4 | curate 一次产出 ≤ 30 条精选 | 实际数据下跑通 |
-| E5 | 浏览器访问 https://aiplanet.live 显示时间线 + 精选页 | E2E 手动验证 |
+| E5 | 浏览器访问配置的公开站点域名显示时间线 + 精选页 | E2E 手动验证 |
 | E6 | 公开访问无任何写入口（无登录、无表单） | 静态 HTML 审查 + curl 探测 admin 路径 404 |
 | E7 | admin CLI 能增删信源后下次 fetch 生效 | 端到端命令链 |
 
@@ -432,7 +432,7 @@ AI_RADAR_DB=./apps/ai-radar/data/radar.db
 | prefilter | provider mock、错误注入、ruleset_version 写入 |
 | scorer | 5 维边界值、provider mock、JSON schema 严格校验 |
 | curator | 加权公式、阈值、排序、去重、上限 30 |
-| web | 路由响应、CORS、404、CORS only `aiplanet.live` |
+| web | 路由响应、CORS、404、CORS only configured public domain |
 | provider | 4 个 provider 各自接口契约（mock 化）|
 | admin | sources add/remove 双向、rerun-eval 不损坏现有数据 |
 
@@ -496,7 +496,7 @@ PRD 实施时如果出现以下诱惑，一律拒绝并 ping owner：
 | D18 | LLM 评分模型（开发期） | GLM 预筛 + Codex gpt-mini 评分 | DeepSeek 全套 / Anthropic 全套 | 利用 owner 现有 codex 订阅，降本；provider 抽象保证后续切换 |
 | D19 | LLM 评分模型（长期） | DeepSeek V3.2 预筛 + DeepSeek V4 Pro 评分 | 继续用开发期组合 | AIHOT 同款；国内访问稳定；本预算 100-500 元/月 |
 | D20 | 信源池起步规模 | 17 条具体 RSS（owner redline） | placeholder / 模板化 | 一开始就有真实数据可调参 |
-| D21 | 公开域名 | aiplanet.live (Cloudflare DNS+Tunnel+SSL) | 不绑域名 / 个人子域 | owner 已持有；Cloudflare 一站式免费 SSL |
+| D21 | 公开域名 | 由部署者配置的公开域名 (Cloudflare DNS+Tunnel+SSL) | 不绑域名 / 个人子域 | 使用配置化域名保持部署可复用；Cloudflare 一站式免费 SSL |
 | D22 | admin 写入口 | CLI（`run.sh admin ...`） | Web admin + token / IP 白名单 | 单户场景下 CLI 最省心，零鉴权代码 |
 
 ---

@@ -103,7 +103,7 @@ def test_pipeline_script_skips_when_another_pipeline_is_running(tmp_path: Path) 
     assert f"=== pipeline SKIP: already running pid={os.getpid()} ===" in log_text
 
 
-def test_pipeline_deploy_cron_entry_uses_absolute_fifteen_minute_schedule() -> None:
+def test_pipeline_deploy_cron_entry_uses_repo_placeholder_fifteen_minute_schedule() -> None:
     cron_file = REPO_ROOT / "deploy" / "cron" / "ai-radar-pipeline"
     assert cron_file.exists(), "deploy/cron/ai-radar-pipeline should exist"
 
@@ -114,16 +114,54 @@ def test_pipeline_deploy_cron_entry_uses_absolute_fifteen_minute_schedule() -> N
     ]
 
     assert "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" in lines
-    assert f"*/15 * * * * {REPO_ROOT / 'pipeline.sh'} >/dev/null 2>&1" in lines
+    assert "*/15 * * * * /path/to/ai-radar/pipeline.sh >/dev/null 2>&1" in lines
+
+
+def test_install_pipeline_expands_cron_template_to_repo_root(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "installed-crontab"
+    crontab = fake_bin / "crontab"
+    crontab.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            if [[ "${1:-}" == "-l" ]]; then
+              exit 1
+            fi
+            cat > "$CRONTAB_CAPTURE"
+            """
+        ),
+        encoding="utf-8",
+    )
+    crontab.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["CRONTAB_CAPTURE"] = str(capture)
+
+    result = subprocess.run(
+        ["./install.sh", "pipeline"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    installed = capture.read_text(encoding="utf-8")
+    assert f"*/15 * * * * {REPO_ROOT / 'pipeline.sh'} >/dev/null 2>&1" in installed
+    assert "/path/to/ai-radar" not in installed
 
 
 def test_pipeline_launchd_fallback_runs_every_fifteen_minutes() -> None:
     plist = (REPO_ROOT / "deploy" / "launchd" / "ai-radar-pipeline.plist.example").read_text(encoding="utf-8")
 
     assert "<string>live.aiplanet.ai-radar.pipeline</string>" in plist
-    assert f"<string>{REPO_ROOT / 'pipeline.sh'}</string>" in plist
+    assert "<string>/path/to/ai-radar/pipeline.sh</string>" in plist
     assert "<key>StartInterval</key><integer>900</integer>" in plist
-    assert f"<key>WorkingDirectory</key><string>{REPO_ROOT}</string>" in plist
+    assert "<key>WorkingDirectory</key><string>/path/to/ai-radar</string>" in plist
 
 
 def test_readme_documents_automatic_scheduler_setup() -> None:
@@ -131,7 +169,7 @@ def test_readme_documents_automatic_scheduler_setup() -> None:
 
     assert "## 自动化调度" in readme
     assert "./pipeline.sh" in readme
-    assert "crontab deploy/cron/ai-radar-pipeline" in readme
+    assert "sed \"s|/path/to/ai-radar|$PWD|g\" deploy/cron/ai-radar-pipeline | crontab -" in readme
     assert "*/15 * * * *" in readme
-    assert "launchctl bootstrap" in readme
-    assert "~/.claude/.env" in readme
+    assert "launchd 备选模板" in readme
+    assert ".env" in readme

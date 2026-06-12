@@ -5,12 +5,12 @@
   <key>Label</key><string>live.aiplanet.ai-radar.pipeline</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/lindong/research/ai-radar/pipeline.sh</string>
+    <string>/path/to/ai-radar/pipeline.sh</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/lindong/research/ai-radar</string>
+  <key>WorkingDirectory</key><string>/path/to/ai-radar</string>
   <key>StartInterval</key><integer>900</integer>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/Users/lindong/research/ai-radar/logs/launchd-pipeline.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/lindong/research/ai-radar/logs/launchd-pipeline.err.log</string>
+  <key>StandardOutPath</key><string>/path/to/ai-radar/logs/launchd-pipeline.out.log</string>
+  <key>StandardErrorPath</key><string>/path/to/ai-radar/logs/launchd-pipeline.err.log</string>
 </dict>
 </plist>

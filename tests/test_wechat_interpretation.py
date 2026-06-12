@@ -1108,7 +1108,7 @@ def test_interpret_subprocess_does_not_inherit_radar_virtualenv(
     from airadar.interpret.runner import _run_json
 
     seen_env: dict[str, str] = {}
-    monkeypatch.setenv("VIRTUAL_ENV", "/Users/lindong/research/ai-radar/.venv")
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / ".venv"))
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         seen_env.update(kwargs["env"])

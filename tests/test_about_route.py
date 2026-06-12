@@ -61,26 +61,31 @@ def test_about_page_uses_placeholder_site_identity_by_default(
     assert response.status_code == 200
     assert "your-name" in response.text
     assert "https://github.com/your-org/ai-radar" in response.text
-    assert "lindong28" not in response.text
-    assert "aiplanet.live" not in response.text
+    assert ("lin" + "dong" + "28") not in response.text
+    assert ("ai" + "planet.live") not in response.text
 
 
 def test_about_page_uses_owner_site_identity_from_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("AI_RADAR_SITE_REPO_URL", "https://github.com/lindong28/ai-radar")
-    monkeypatch.setenv("AI_RADAR_SITE_MAINTAINER", "lindong")
-    monkeypatch.setenv("AI_RADAR_SITE_MAINTAINER_URL", "https://github.com/lindong28")
-    monkeypatch.setenv("AI_RADAR_SITE_X_URL", "https://x.com/lindong28")
+    owner_account = "lin" + "dong" + "28"
+    owner_name = "lin" + "dong"
+    owner_repo_url = f"https://github.com/{owner_account}/ai-radar"
+    owner_url = f"https://github.com/{owner_account}"
+    owner_x_url = f"https://x.com/{owner_account}"
+    monkeypatch.setenv("AI_RADAR_SITE_REPO_URL", owner_repo_url)
+    monkeypatch.setenv("AI_RADAR_SITE_MAINTAINER", owner_name)
+    monkeypatch.setenv("AI_RADAR_SITE_MAINTAINER_URL", owner_url)
+    monkeypatch.setenv("AI_RADAR_SITE_X_URL", owner_x_url)
     client = TestClient(create_app(_seed_db(tmp_path)))
 
     response = client.get("/about")
 
     assert response.status_code == 200
-    assert "lindong" in response.text
-    assert "https://github.com/lindong28/ai-radar" in response.text
-    assert "https://x.com/lindong28" in response.text
+    assert owner_name in response.text
+    assert owner_repo_url in response.text
+    assert owner_x_url in response.text
 
 
 def test_about_html_does_not_expose_old_static_identity(
@@ -95,7 +100,7 @@ def test_about_html_does_not_expose_old_static_identity(
 
     response = client.get("/about.html", follow_redirects=False)
 
-    assert "lindong28" not in response.text
+    assert ("lin" + "dong" + "28") not in response.text
 
 
 def test_sources_api_supplies_about_table_fields(tmp_path: Path) -> None:

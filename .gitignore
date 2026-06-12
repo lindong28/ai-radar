@@ -25,6 +25,10 @@ __pycache__/
 # Deploy (actual configs contain secrets / local paths)
 deploy/cloudflared/config.yml
 deploy/launchd/*.plist
+deploy/wewe-rss/
+
+# Internal planning artifacts
+docs/plans/
 
 # Runtime logs
 logs/
