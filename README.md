@@ -44,7 +44,7 @@ DEEPSEEK_API_KEY=sk-xxx
 ./run.sh score       # 五维评分
 ./run.sh enrich      # LLM 生成中文标题和摘要
 ./run.sh curate      # 精选高价值内容
-./run.sh interpret   # 微信文章解读 + ai-assistant 知识库回写
+./run.sh interpret   # 可选：微信文章解读 + ai-assistant 兼容知识库回写（默认关闭）
 ```
 
 ### 5. 启动 Web 服务
@@ -95,9 +95,23 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 - **score** — 五维评分（relevance、density、recency、authority、engineering）
 - **enrich** — LLM 生成中文标题和摘要
 - **curate** — 按阈值精选高价值内容（默认阈值 6.5）
-- **interpret** — 对已启用微信公众号文章调用 ai-assistant `summarize-article` 逻辑，保存独立网站解读数据，并把值得阅读的文章回写 ai-assistant 知识库
+- **interpret** — 可选阶段，默认关闭；启用后对微信公众号文章调用 ai-assistant 兼容的 summary-agent 脚本，保存独立网站解读数据，并把值得阅读的文章回写外部知识库
 
 ## 配置
+
+### 站点身份与域名
+
+`/about`、CORS 和 RSS 抓取 User-Agent 由以下环境变量控制，默认值适合 fork 后本地开发：
+
+```bash
+AI_RADAR_SITE_DOMAIN=                 # 未设置时仅允许 localhost CORS，User-Agent 为 ai-radar/0.1
+AI_RADAR_SITE_REPO_URL=https://github.com/your-org/ai-radar
+AI_RADAR_SITE_MAINTAINER=your-name
+AI_RADAR_SITE_MAINTAINER_URL=
+AI_RADAR_SITE_X_URL=
+```
+
+部署到公网时，将 `AI_RADAR_SITE_DOMAIN` 设置为你的域名（不带协议即可，例如 `example.com`）。此时 CORS 会允许 `https://example.com`，抓取 User-Agent 会变为 `ai-radar/0.1 (+https://example.com)`。
 
 ### 信源
 
@@ -109,7 +123,9 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 
 ### 微信文章解读
 
-`interpret` 阶段只处理启用的微信公众号源（当前 `wx_mp2rss`）。它通过 `AI_ASSISTANT_ROOT`（默认 `/Users/lindong/research/ai-assistant`）零拷贝调用 ai-assistant 的 `agents/summary-agent/summarize.sh` / `run.sh`，将 `save_decision=1` 的文章展示到 `/wechat` 并回写 ai-assistant 知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
+`interpret` 阶段只处理启用的微信公众号源（当前 `wx_mp2rss`）。该外部集成默认关闭：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时，`./run.sh interpret` 会输出 skipped 并成功退出，不读取任何外部路径。
+
+启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，并可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。AI Radar 会调用 `$AI_ASSISTANT_ROOT/agents/summary-agent/summarize.sh` / `run.sh`，将 `save_decision=1` 的文章展示到 `/wechat` 并回写外部知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约见 [`docs/operations/ai-assistant-integration.md`](docs/operations/ai-assistant-integration.md)，运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
 
 ### LLM Provider
 
@@ -136,7 +152,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 | 服务 | Supervisor | 作用 |
 |---|---|---|
 | `serve` | launchd | FastAPI web server on :8000 |
-| `tunnel` | launchd | Cloudflare tunnel 到 aiplanet.live |
+| `tunnel` | launchd | Cloudflare tunnel 到你的公网域名 |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`，按 A1-A4 规则发送飞书告警 |
 

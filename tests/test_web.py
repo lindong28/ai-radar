@@ -111,6 +111,42 @@ def test_web_errors_and_cors_are_read_only(tmp_path: Path) -> None:
     assert "access-control-allow-origin" not in response.headers
 
 
+def test_cors_defaults_to_localhost_only(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("AI_RADAR_SITE_DOMAIN", raising=False)
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    local = client.options(
+        "/api/v1/timeline",
+        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
+    )
+    evil = client.options(
+        "/api/v1/timeline",
+        headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"},
+    )
+    owner = client.options(
+        "/api/v1/timeline",
+        headers={"Origin": "https://aiplanet.live", "Access-Control-Request-Method": "GET"},
+    )
+
+    assert local.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "access-control-allow-origin" not in evil.headers
+    assert "access-control-allow-origin" not in owner.headers
+    assert local.headers["access-control-allow-origin"] != "*"
+
+
+def test_cors_adds_configured_site_domain(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("AI_RADAR_SITE_DOMAIN", "fork.example")
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    configured = client.options(
+        "/api/v1/timeline",
+        headers={"Origin": "https://fork.example", "Access-Control-Request-Method": "GET"},
+    )
+
+    assert configured.headers["access-control-allow-origin"] == "https://fork.example"
+    assert configured.headers["access-control-allow-origin"] != "*"
+
+
 def test_item_detail_suppresses_wechat_full_text(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"
     migrate(db_path)

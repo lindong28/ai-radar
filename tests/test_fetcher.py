@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from airadar.db import migrate
+from airadar.fetcher import http_client
 from airadar.fetcher.dedup import FetchedItem, content_hash, upsert_item
 from airadar.fetcher.http_client import fetch_feed
 from airadar.fetcher.rss import parse_feed
@@ -108,6 +109,18 @@ def test_fetch_feed_keeps_environment_proxy_for_external_urls(monkeypatch) -> No
 
     assert response.status_code == 200
     assert calls[0]["trust_env"] is True
+
+
+def test_fetch_user_agent_defaults_to_neutral_value(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("AI_RADAR_SITE_DOMAIN", raising=False)
+
+    assert http_client.USER_AGENT == "ai-radar/0.1"
+
+
+def test_fetch_user_agent_uses_configured_site_domain(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("AI_RADAR_SITE_DOMAIN", "aiplanet.live")
+
+    assert http_client.USER_AGENT == "ai-radar/0.1 (+https://aiplanet.live)"
 
 
 def test_content_hash_normalizes_case_and_whitespace() -> None:

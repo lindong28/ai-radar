@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from airadar.db import migrate
@@ -39,6 +40,62 @@ def test_about_page_contains_required_static_sections(tmp_path: Path) -> None:
     assert "信源池" in response.text
     assert "设计原则" in response.text
     assert "联系方式" in response.text
+
+
+def test_about_page_uses_placeholder_site_identity_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "AI_RADAR_SITE_DOMAIN",
+        "AI_RADAR_SITE_REPO_URL",
+        "AI_RADAR_SITE_MAINTAINER",
+        "AI_RADAR_SITE_MAINTAINER_URL",
+        "AI_RADAR_SITE_X_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    response = client.get("/about")
+
+    assert response.status_code == 200
+    assert "your-name" in response.text
+    assert "https://github.com/your-org/ai-radar" in response.text
+    assert "lindong28" not in response.text
+    assert "aiplanet.live" not in response.text
+
+
+def test_about_page_uses_owner_site_identity_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_RADAR_SITE_REPO_URL", "https://github.com/lindong28/ai-radar")
+    monkeypatch.setenv("AI_RADAR_SITE_MAINTAINER", "lindong")
+    monkeypatch.setenv("AI_RADAR_SITE_MAINTAINER_URL", "https://github.com/lindong28")
+    monkeypatch.setenv("AI_RADAR_SITE_X_URL", "https://x.com/lindong28")
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    response = client.get("/about")
+
+    assert response.status_code == 200
+    assert "lindong" in response.text
+    assert "https://github.com/lindong28/ai-radar" in response.text
+    assert "https://x.com/lindong28" in response.text
+
+
+def test_about_html_does_not_expose_old_static_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AI_RADAR_SITE_REPO_URL", raising=False)
+    monkeypatch.delenv("AI_RADAR_SITE_MAINTAINER", raising=False)
+    monkeypatch.delenv("AI_RADAR_SITE_MAINTAINER_URL", raising=False)
+    monkeypatch.delenv("AI_RADAR_SITE_X_URL", raising=False)
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    response = client.get("/about.html", follow_redirects=False)
+
+    assert "lindong28" not in response.text
 
 
 def test_sources_api_supplies_about_table_fields(tmp_path: Path) -> None:

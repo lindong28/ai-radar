@@ -355,6 +355,10 @@ def _assistant_root(tmp_path: Path) -> Path:
     return root
 
 
+def _enable_interpret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_RADAR_ENABLE_INTERPRET", "true")
+
+
 def test_wechat_migration_creates_table_and_indexes(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"
     migrate(db_path)
@@ -743,6 +747,7 @@ def test_interpret_runner_saves_worth_reading_result_and_patches_kb_meta(
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
+    _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
     batch_dir = tmp_path / "batch"
@@ -817,6 +822,7 @@ def test_interpret_runner_skips_kb_for_not_worth_reading(
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
+    _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
     batch_dir = tmp_path / "batch"
@@ -872,11 +878,12 @@ def test_interpret_runner_reuses_kb_check_url_hit_without_llm(
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
+    _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
     kb_summary = tmp_path / "kb-existing_output.md"
     kb_summary.write_text(SUMMARY_MD, encoding="utf-8")
-    index_path = assistant_root / "data" / "summary_agent" / "dong_lin" / "index.json"
+    index_path = assistant_root / "data" / "summary_agent" / "default" / "index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(
         json.dumps(
@@ -941,6 +948,7 @@ def test_interpret_runner_falls_back_when_kb_summary_file_missing(
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
+    _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
     batch_dir = tmp_path / "batch"
@@ -1003,6 +1011,7 @@ def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
+    _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
     batch_dir = tmp_path / "batch"
@@ -1010,11 +1019,11 @@ def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
     (batch_dir / "existing-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "existing-slug_article.md").write_text("# 测试文章\n\n正文", encoding="utf-8")
     (batch_dir / "existing-slug_meta.json").write_text("{}", encoding="utf-8")
-    kb_summary_rel = Path("data/summary_agent/dong_lin/article_summaries/existing-slug_output.md")
+    kb_summary_rel = Path("data/summary_agent/default/article_summaries/existing-slug_output.md")
     kb_summary = assistant_root / kb_summary_rel
     kb_summary.parent.mkdir(parents=True)
     kb_summary.write_text(SUMMARY_MD, encoding="utf-8")
-    index_path = assistant_root / "data" / "summary_agent" / "dong_lin" / "index.json"
+    index_path = assistant_root / "data" / "summary_agent" / "default" / "index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(
         json.dumps(
@@ -1119,6 +1128,7 @@ def test_interpret_runner_records_errors_without_aborting_batch(
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
+    _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
 
@@ -1138,9 +1148,78 @@ def test_interpret_runner_records_errors_without_aborting_batch(
     assert "boom" in row["error"]
 
 
-def test_interpret_runner_preflight_skip_for_missing_assistant_root(tmp_path: Path) -> None:
+def test_interpret_runner_default_disabled_skips_without_resolving_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import airadar.interpret.runner as runner
+
+    monkeypatch.delenv("AI_RADAR_ENABLE_INTERPRET", raising=False)
+    monkeypatch.delenv("AI_ASSISTANT_ROOT", raising=False)
+
+    def fail_assistant_root(value: str | Path | None) -> Path:
+        raise AssertionError(f"_assistant_root should not be called while disabled: {value}")
+
+    monkeypatch.setattr(runner, "_assistant_root", fail_assistant_root)
+    db_path = _seed_runner_db(tmp_path)
+    with _connect(db_path) as conn:
+        summary = runner.run_interpret(conn, backfill=True, tmp_root=tmp_path / "tmp")
+
+    assert summary.skipped is True
+    assert summary.processed == 0
+    assert summary.message == "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
+
+
+def test_interpret_runner_enabled_without_assistant_root_skips(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from airadar.interpret.runner import run_interpret
 
+    _enable_interpret(monkeypatch)
+    monkeypatch.delenv("AI_ASSISTANT_ROOT", raising=False)
+
+    db_path = _seed_runner_db(tmp_path)
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, backfill=True, tmp_root=tmp_path / "tmp")
+
+    assert summary.skipped is True
+    assert summary.processed == 0
+    assert summary.message == "interpret enabled but AI_ASSISTANT_ROOT is not set"
+
+
+def test_interpret_runner_enabled_with_valid_root_uses_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import airadar.interpret.runner as runner
+
+    _enable_interpret(monkeypatch)
+    assistant_root = _assistant_root(tmp_path)
+    seen_root: list[Path] = []
+
+    def fake_preflight(root: Path) -> tuple[bool, str]:
+        seen_root.append(root)
+        return False, "sentinel preflight skip"
+
+    monkeypatch.setattr(runner, "_preflight", fake_preflight)
+
+    db_path = _seed_runner_db(tmp_path)
+    with _connect(db_path) as conn:
+        summary = runner.run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+
+    assert seen_root == [assistant_root.resolve()]
+    assert summary.skipped is True
+    assert summary.message == "sentinel preflight skip"
+
+
+def test_interpret_runner_preflight_skip_for_missing_assistant_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     with _connect(db_path) as conn:
         summary = run_interpret(conn, backfill=True, assistant_root=tmp_path / "missing", tmp_root=tmp_path / "tmp")

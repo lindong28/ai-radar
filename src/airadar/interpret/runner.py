@@ -14,8 +14,9 @@ from typing import Any
 from .. import db
 from ..wechat_text import has_wechat_title_artifacts, normalize_wechat_title, wechat_slug_seed
 
-DEFAULT_AI_ASSISTANT_ROOT = Path("/Users/lindong/research/ai-assistant")
-DEFAULT_USER = "dong_lin"
+DEFAULT_INTERPRET_USER = "default"
+DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
+MISSING_ROOT_MESSAGE = "interpret enabled but AI_ASSISTANT_ROOT is not set"
 SUMMARY_AGENT_DIR = Path("agents") / "summary-agent"
 
 
@@ -31,9 +32,19 @@ def _utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _assistant_root(value: str | Path | None) -> Path:
-    configured = value or os.environ.get("AI_ASSISTANT_ROOT") or DEFAULT_AI_ASSISTANT_ROOT
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _assistant_root(value: str | Path | None) -> Path | None:
+    configured = value or os.environ.get("AI_ASSISTANT_ROOT")
+    if not configured:
+        return None
     return Path(configured).expanduser().resolve()
+
+
+def _interpret_user(value: str | None) -> str:
+    return value or os.environ.get("AI_RADAR_INTERPRET_USER") or DEFAULT_INTERPRET_USER
 
 
 def _summary_agent_scripts(root: Path) -> tuple[Path, Path]:
@@ -559,17 +570,24 @@ def run_interpret(
     backfill: bool = False,
     limit: int | None = None,
     assistant_root: str | Path | None = None,
-    user: str = DEFAULT_USER,
+    user: str | None = None,
     tmp_root: str | Path | None = None,
 ) -> InterpretSummary:
     del backfill  # Existing rows are always skipped; backfill selects the same unprocessed enabled scope.
+    if not _env_flag_enabled("AI_RADAR_ENABLE_INTERPRET"):
+        return InterpretSummary(skipped=True, message=DISABLED_MESSAGE)
+
     root = _assistant_root(assistant_root)
+    if root is None:
+        return InterpretSummary(skipped=True, message=MISSING_ROOT_MESSAGE)
+
     ready, message = _preflight(root)
     if not ready:
         print(message)
         return InterpretSummary(skipped=True, message=message)
 
     summarize_script, run_script = _summary_agent_scripts(root)
+    interpret_user = _interpret_user(user)
     tmp_path = Path(tmp_root) if tmp_root is not None else db.PROJECT_ROOT / "tmp" / "interpret"
     rows = _candidate_rows(conn, limit=limit)
     processed = 0
@@ -580,7 +598,7 @@ def run_interpret(
                 root=root,
                 summarize_script=summarize_script,
                 run_script=run_script,
-                user=user,
+                user=interpret_user,
                 tmp_root=tmp_path,
                 row=row,
             )

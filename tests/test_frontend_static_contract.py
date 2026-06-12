@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 STATIC = Path("web/static")
+TEMPLATES = Path("web/templates")
 AIHOT_FONT_HREF = (
     "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800"
     "&amp;family=IBM+Plex+Sans:wght@400;500;600;700"
@@ -12,7 +13,10 @@ AIHOT_FONT_HREF = (
 
 
 def _read(name: str) -> str:
-    return (STATIC / name).read_text(encoding="utf-8")
+    static_path = STATIC / name
+    if static_path.exists():
+        return static_path.read_text(encoding="utf-8")
+    return (TEMPLATES / name).read_text(encoding="utf-8")
 
 
 def test_static_pages_have_aihot_mobile_bar_and_no_search_button() -> None:
@@ -48,9 +52,10 @@ def test_about_page_declares_contact_disabled_source_notice_and_scoring_legend()
 
     assert "来源（信源池）" in html
     assert "停用源仅停止继续抓取" in html
-    assert "https://github.com/lindong28/ai-radar" in html
-    assert "https://github.com/AIPlanetLive/ai-radar" not in html
-    assert "https://x.com/lindong28" in html
+    assert "site.repo_url" in html
+    assert "site.maintainer" in html
+    assert "site.x_url" in html
+    assert "lindong28" not in html
     assert "评分说明" in html
     for token in ["relevance", "density", "recency", "authority", "engineering", "权重", "6.5"]:
         assert token in html

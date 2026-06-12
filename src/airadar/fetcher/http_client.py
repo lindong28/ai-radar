@@ -7,9 +7,22 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..site_config import site_user_agent
 from ..sources.loader import SourceConfig
 
-USER_AGENT = "ai-radar/0.1 (+https://aiplanet.live)"
+
+class _DynamicUserAgent:
+    def __str__(self) -> str:
+        return site_user_agent()
+
+    def __repr__(self) -> str:
+        return repr(str(self))
+
+    def __eq__(self, other: object) -> bool:
+        return str(self) == other
+
+
+USER_AGENT = _DynamicUserAgent()
 
 
 @dataclass(frozen=True)
@@ -27,7 +40,7 @@ def _is_loopback_url(url: str) -> bool:
 def fetch_feed(source: SourceConfig, conn: sqlite3.Connection, timeout: float = 30.0) -> FeedResponse:
     headers = {
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-        "User-Agent": USER_AGENT,
+        "User-Agent": str(USER_AGENT),
     }
     etag = source.meta.get("etag")
     last_modified = source.meta.get("last_modified")

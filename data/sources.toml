@@ -31,36 +31,6 @@ homepage_url = "https://openai.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=openai.com&sz=64"
 
 [[source]]
-slug = "openai_x"
-name = "OpenAI"
-url = "https://nitter.net/OpenAI/rss"
-tier = "T1"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/OpenAI"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "luma_labs_x"
-name = "Luma"
-url = "https://nitter.net/LumaLabsAI/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/LumaLabsAI"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "openai_devs_x"
-name = "OpenAI Developers"
-url = "https://nitter.net/OpenAIDevs/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/OpenAIDevs"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
 slug = "simonw"
 name = "Simon Willison's Weblog"
 url = "https://simonwillison.net/atom/everything/"
@@ -68,16 +38,6 @@ tier = "T1.5"
 enabled = true
 homepage_url = "https://simonwillison.net/"
 icon_url = "https://www.google.com/s2/favicons?domain=simonwillison.net&sz=64"
-
-[[source]]
-slug = "kimmonismus_x"
-name = "Kimmonismus"
-url = "https://nitter.net/kimmonismus/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/kimmonismus"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
 
 [[source]]
 slug = "tomer_tunguz"
@@ -98,56 +58,6 @@ homepage_url = "https://github.com/anthropics/claude-code/releases"
 icon_url = "https://www.google.com/s2/favicons?domain=github.com&sz=64"
 
 [[source]]
-slug = "minimax_x"
-name = "MiniMax"
-url = "https://nitter.net/MiniMax_AI/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/MiniMax_AI"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "replit_x"
-name = "Replit"
-url = "https://nitter.net/Replit/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/Replit"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "msft_research_x"
-name = "Microsoft Research"
-url = "https://nitter.net/MSFTResearch/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/MSFTResearch"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "pixverse_x"
-name = "PixVerse"
-url = "https://nitter.net/PixVerse_/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/PixVerse_"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "gemini_app_x"
-name = "Google Gemini"
-url = "https://nitter.net/GeminiApp/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/GeminiApp"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
 slug = "anthropic_blog"
 name = "Claude Blog"
 url = "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_claude.xml"
@@ -157,46 +67,6 @@ homepage_url = "https://claude.com/blog"
 icon_url = "https://www.google.com/s2/favicons?domain=www.anthropic.com&sz=64"
 
 [[source]]
-slug = "googleaidevs_x"
-name = "Google AI Developers"
-url = "https://nitter.net/googleaidevs/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/googleaidevs"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "karpathy_x"
-name = "Andrej Karpathy"
-url = "https://nitter.net/karpathy/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/karpathy"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "frxiaobei_x"
-name = "凡人小北"
-url = "https://nitter.net/frxiaobei/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/frxiaobei"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "swyx_x"
-name = "swyx"
-url = "https://nitter.net/swyx/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/swyx"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
 slug = "runway_news"
 name = "Runway News"
 url = "https://runwayml.com/news/rss.xml"
@@ -204,96 +74,6 @@ tier = "T1.5"
 enabled = false  # disabled 2026-05-12: probe failed; see plans/ai-radar-alignment-20260512/source-probe.md
 homepage_url = "https://runwayml.com/news"
 icon_url = "https://www.google.com/s2/favicons?domain=runwayml.com&sz=64"
-
-[[source]]
-slug = "berryxia_x"
-name = "Berryxia.AI"
-url = "https://nitter.net/berryxia/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/berryxia"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "openrouter_x"
-name = "OpenRouter"
-url = "https://nitter.net/OpenRouter/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/OpenRouter"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "vista8_x"
-name = "向阳乔木"
-url = "https://nitter.net/vista8/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/vista8"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "sensetime_x"
-name = "SenseTime"
-url = "https://nitter.net/SenseTime_AI/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/SenseTime_AI"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "tencent_hunyuan_x"
-name = "Tencent Hunyuan"
-url = "https://nitter.net/TencentHunyuan/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/TencentHunyuan"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "ayi_ainotes_x"
-name = "阿绎 AYi"
-url = "https://nitter.net/AYi_AInotes/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/AYi_AInotes"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "op7418_x"
-name = "歸藏"
-url = "https://nitter.net/op7418/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/op7418"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "alibaba_cloud_x"
-name = "Alibaba Cloud"
-url = "https://nitter.net/alibaba_cloud/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/alibaba_cloud"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
-
-[[source]]
-slug = "sama_x"
-name = "Sam Altman"
-url = "https://nitter.net/sama/rss"
-tier = "T1.5"
-enabled = true
-kind = "x"
-homepage_url = "https://x.com/sama"
-icon_url = "https://www.google.com/s2/favicons?domain=x.com&sz=64"
 
 [[source]]
 slug = "anthropic_news"

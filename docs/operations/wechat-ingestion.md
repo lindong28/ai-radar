@@ -61,16 +61,23 @@ WHERE s.kind='wechat' AND s.enabled=1;
 运行方式：
 
 ```bash
+./run.sh interpret            # 默认关闭时输出 skipped=true 并成功退出
+AI_RADAR_ENABLE_INTERPRET=true \
+AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 ./run.sh interpret            # 增量，跳过已有 wechat_interpretations 行
+AI_RADAR_ENABLE_INTERPRET=true \
+AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 ./run.sh interpret --backfill # 回填启用源全集；已处理行仍跳过
 ```
 
 跨 repo 依赖：
 
-- 默认 `AI_ASSISTANT_ROOT=/Users/lindong/research/ai-assistant`，可用环境变量覆盖。
-- preflight 要求 `agents/summary-agent/summarize.sh` 和 `agents/summary-agent/run.sh` 存在且可执行；缺失时打印 `skip interpret...` 并 exit 0，不阻断前置 pipeline。
-- `summarize.sh --input <tmpfile> --user dong_lin` 负责生成 `<batch_dir>/<slug>_summary.md` 与 meta；`run.sh --save-from-batch ...` 负责写 ai-assistant KB、index 和 embedding。
-- `run.sh --check-url <url> --user dong_lin` 命中时不重新调用 LLM，直接读取 KB 中已有 summary 填充 `wechat_interpretations`。
+- 默认关闭：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时不会读取任何外部路径，打印 skipped 并 exit 0。
+- 启用后必须设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`；也可设置 `AI_RADAR_INTERPRET_USER`，默认 `default`。
+- preflight 要求 `$AI_ASSISTANT_ROOT/agents/summary-agent/summarize.sh` 和 `$AI_ASSISTANT_ROOT/agents/summary-agent/run.sh` 存在且可执行；缺失时打印 `skip interpret...` 并 exit 0，不阻断前置 pipeline。
+- `summarize.sh --input <tmpfile> --user "$AI_RADAR_INTERPRET_USER"` 负责生成 `<batch_dir>/<slug>_summary.md` 与 meta；`run.sh --save-from-batch ...` 负责写外部 KB、index 和 embedding。
+- `run.sh --check-url <url> --user "$AI_RADAR_INTERPRET_USER"` 命中时不重新调用 LLM，直接读取 KB 中已有 summary 填充 `wechat_interpretations`。
+- 脚本调用、stdout JSON、summary markdown 与 index.json 的完整契约见 [`ai-assistant-integration.md`](ai-assistant-integration.md)。
 
 数据约定：
 
@@ -125,14 +132,15 @@ curl -s 'http://localhost:8000/api/v1/wechat?q=歸藏' | jq '.data.total'
 curl -s 'http://localhost:8000/api/v1/wechat?q=合集' | jq '.data.total' # 应为 0；不匹配 Mp2RSS 合集源名
 
 # KB 去重/可检索前置检查
-cd /Users/lindong/research/ai-assistant
-./agents/summary-agent/run.sh --check-url '<wechat-url>' --user dong_lin
+cd "$AI_ASSISTANT_ROOT"
+./agents/summary-agent/run.sh --check-url '<wechat-url>' --user "${AI_RADAR_INTERPRET_USER:-default}"
 ```
 
 ## 相关参考
 
 - [README.md §信源](../../README.md#信源) — 用户视角的 `wechat` kind 说明
 - [README.md §微信文章解读](../../README.md#微信文章解读) — `/wechat` 与 ai-assistant KB 回写说明
+- [docs/operations/ai-assistant-integration.md](ai-assistant-integration.md) — 可选 summary-agent 脚本契约
 - [docs/operations/services.md](services.md) — 服务清单（4 个活跃服务；`wewe` 已移除，附回滚说明）
 - [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 添加流程（已停用，仅回滚参考）
 - [deploy/wewe-rss/RUNBOOK.md](../../deploy/wewe-rss/RUNBOOK.md) — 旧 WeWe RSS 桥接运维手册（已停用）

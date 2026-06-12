@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from uvicorn.config import LOGGING_CONFIG
 
 from .. import db
+from ..site_config import get_site_config
 from .cors import configure_cors
 from .routes import admin, curated, health, items, sources, timeline
 from .routes import wechat as wechat_routes
@@ -337,8 +338,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return FileResponse(STATIC_DIR / "daily.html")
 
     @app.get("/about", include_in_schema=False)
-    def about_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "about.html")
+    def about_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "about.html",
+            {"site": get_site_config()},
+        )
+
+    @app.get("/about.html", include_in_schema=False)
+    def about_html_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/about", status_code=308)
 
     @app.get("/curated.html", include_in_schema=False)
     def curated_redirect() -> RedirectResponse:

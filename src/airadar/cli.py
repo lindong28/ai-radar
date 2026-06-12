@@ -320,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     interpret_parser.add_argument("--backfill", action="store_true")
     interpret_parser.add_argument("--limit", type=int)
     interpret_parser.add_argument("--assistant-root")
-    interpret_parser.add_argument("--user", default="dong_lin")
+    interpret_parser.add_argument("--user")
 
     eval_parser = subparsers.add_parser("eval")
     eval_parser.add_argument("--date")
