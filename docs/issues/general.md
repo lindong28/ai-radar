@@ -4,6 +4,17 @@
 
 ---
 
+## [open] interpret KB check-url hit drops metadata tags in regression test
+
+- Type: bug
+- Priority: low
+- Discovered: 2026-06-12 open-source-readiness TASK-011/TASK-012 verification
+- Description: `AI_RADAR_DB=/tmp/airadar-task011-012-nonplaywright.db uv run pytest --ignore=tests/playwright -q` failed only at `tests/test_wechat_interpretation.py::test_interpret_runner_reuses_kb_check_url_hit_without_llm`. The row was written with `tags_json=[]` while the test expected `["Agent"]` from the KB metadata path on a `run.sh --check-url` hit. `src/airadar/interpret/runner.py` and `tests/test_wechat_interpretation.py` were untouched in this TASK-011/TASK-012 diff, so this was not fixed in the install/source-loader scope.
+- Notes:
+  - Fix direction: inspect the check-url hit path in `run_interpret`; either preserve tags from the KB hit/index metadata when no summarize call runs, or adjust the test contract if check-url hits intentionally do not reuse KB metadata tags.
+
+---
+
 ## [open] interpret 回填无法并发——复用的 ai-assistant KB 写入器非并发安全
 
 - Type: improvement

@@ -139,8 +139,8 @@ homepage_url = "https://news.ycombinator.com/"
 icon_url = "https://www.google.com/s2/favicons?domain=news.ycombinator.com&sz=64"
 
 # 微信公众号经 Mp2RSS 托管合集接入（替代自建 WeWe，根除本地 Docker + 微信读书扫码维护）。
-# 真实 feed URL 含专属密钥，存于 ~/.claude/.env 的 MP2RSS_FEED_URL（已 gitignore，不入库）；
-# loader 经 os.path.expandvars 展开下面的占位符。
+# 真实 feed URL 含专属密钥，存于 .env 或 ~/.claude/.env 的 MP2RSS_FEED_URL（已 gitignore，不入库）；
+# MP2RSS_FEED_URL 未设置或为空时 loader 会跳过该源，其他信源照常加载。
 [[source]]
 slug = "wx_mp2rss"
 name = "微信公众号（Mp2RSS 合集）"

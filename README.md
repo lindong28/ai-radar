@@ -27,7 +27,7 @@ cp .env.example .env
 DEEPSEEK_API_KEY=sk-xxx
 ```
 
-其他配置项均有默认值，详见 `.env.example` 中的注释。第一次本地试跑可以先保留站点身份默认值；如果暂时没有 Mp2RSS 合集 feed，请先在 `data/sources.toml` 中禁用 `wx_mp2rss`，或把 `MP2RSS_FEED_URL` 设置为自己的 feed URL。
+其他配置项均有默认值，详见 `.env.example` 中的注释。第一次本地试跑可以先保留站点身份默认值；如果暂时没有 Mp2RSS 合集 feed，可以不设置 `MP2RSS_FEED_URL`，loader 会跳过 `wx_mp2rss` 并继续加载其他信源。
 
 ### 3. 初始化数据库
 
@@ -61,7 +61,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 
-cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调度前确认项目根目录 `.env` 或 supervisor 环境已配 LLM API Key。
+cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调度前确认项目根目录 `.env`、`~/.claude/.env` 或 supervisor 环境已配 LLM API Key。
 
 ```bash
 ./pipeline.sh             # 手动跑一次
@@ -142,7 +142,7 @@ AI_RADAR_SITE_X_URL=
 
 - `feed`：普通 RSS/Atom 信源
 - `x`：X/Twitter 导出的 RSS 信源，前端允许展示完整 thread
-- `wechat`：微信公众号源，通过托管的 [Mp2RSS](https://mp2rss.com/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开，未设置时启动报错）。文章卡片按 author 显示真实公众号名与头像。配置和运维记录见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
+- `wechat`：微信公众号源，通过托管的 [Mp2RSS](https://mp2rss.com/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开）。未设置或设置为空时，loader 会记录 warning、跳过该源，并继续加载其他信源；设置 `MP2RSS_FEED_URL` 后该源自动启用。文章卡片按 author 显示真实公众号名与头像。配置和运维记录见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
 
 ### 微信文章解读
 
@@ -188,6 +188,17 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 ```
 
 服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+
+`./install.sh` 会在安装每个服务前检查依赖：
+
+| 服务 | 依赖 | 缺失时 |
+|---|---|---|
+| `serve` | 无 | 始终安装 |
+| `pipeline` | 至少一个 LLM key：`DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` | 交互式终端会询问 `DEEPSEEK_API_KEY` 并追加到 `./.env`；非交互环境自动跳过 |
+| `alert` | `FEISHU_GENERAL_ALERT_WEBHOOK` | 交互式终端会询问 webhook 并追加到 `./.env`；非交互环境自动跳过 |
+| `tunnel` | `deploy/cloudflared/config.yml` | 提示从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置，本次跳过 |
+
+依赖查找顺序是当前进程环境、项目 `./.env`、`~/.claude/.env`。因此已有密钥放在 `~/.claude/.env` 的本机部署不会出现提示。任何自动跳过都会在命令末尾的 summary 中列出原因。
 
 完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除，不再作为发布快照的一部分维护。
 

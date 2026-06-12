@@ -22,9 +22,9 @@ WeWe RSS 桥接已于 2026-06-06 从服务层移除（不再有 `wewe` launchd �
 MP2RSS_FEED_URL=https://mp2rss.com/feeds/<your-key>.xml
 ```
 
-sources loader 用 `os.path.expandvars` 展开占位符（`src/airadar/sources/loader.py`）。环境变量未设置时占位符无法展开，启动即报错——这是有意的 fail-fast，避免静默抓空 feed。
+sources loader 用 `os.path.expandvars` 展开占位符（`src/airadar/sources/loader.py`）。`MP2RSS_FEED_URL` 未设置或设置为空时，loader 会记录 warning、跳过 `wx_mp2rss`，并继续加载其他信源；设置真实 feed URL 后该源自动生效。
 
-cron / launchd 不继承交互式 shell 的 `export`，自动调度前确认 `.env` 已落该变量（与 LLM API Key 同处理，见 README §自动化调度）。
+cron / launchd 不继承交互式 shell 的 `export`。需要启用微信公众号摄取时，自动调度前确认 `.env` 或 `~/.claude/.env` 已落该变量（与 LLM API Key 同处理，见 README §自动化调度）；暂不启用时可以保持为空。
 
 ## 已移除的旧源
 
@@ -105,7 +105,7 @@ AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 ## 验证
 
 ```bash
-# 占位符已展开（不应再看到字面 ${MP2RSS_FEED_URL}）
+# 设置 MP2RSS_FEED_URL 后，占位符已展开（不应再看到字面 ${MP2RSS_FEED_URL}）
 ./run.sh admin sources reload && sqlite3 data/radar.db \
   "SELECT id, enabled, substr(url,1,40) FROM sources WHERE kind='wechat';"
 

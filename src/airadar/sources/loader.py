@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tomllib
@@ -11,6 +12,9 @@ from urllib.parse import urlparse
 VALID_TIERS = {"T1", "T1.5", "T2"}
 VALID_KINDS = {"feed", "x", "wechat"}
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_]*[a-z0-9]$")
+LOGGER = logging.getLogger(__name__)
+MP2RSS_FEED_PLACEHOLDER = "${MP2RSS_FEED_URL}"
+MP2RSS_FEED_ENV = "MP2RSS_FEED_URL"
 
 
 @dataclass(frozen=True)
@@ -80,13 +84,29 @@ def _validate_source(raw: dict[str, Any]) -> SourceConfig:
     )
 
 
+def _should_skip_unconfigured_mp2rss(raw: dict[str, Any]) -> bool:
+    raw_url = raw.get("url")
+    if raw_url is None or MP2RSS_FEED_PLACEHOLDER not in str(raw_url):
+        return False
+    return not os.environ.get(MP2RSS_FEED_ENV, "").strip()
+
+
 def load_sources(path: Path) -> list[SourceConfig]:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     raw_sources = data.get("source", [])
     if not isinstance(raw_sources, list):
         raise ValueError("sources.toml must contain [[source]] entries")
 
-    sources = [_validate_source(raw) for raw in raw_sources]
+    sources: list[SourceConfig] = []
+    for raw in raw_sources:
+        if _should_skip_unconfigured_mp2rss(raw):
+            LOGGER.warning(
+                "source %s skipped: %s is not set; set it to enable the Mp2RSS WeChat feed",
+                raw.get("slug", "<unknown>"),
+                MP2RSS_FEED_ENV,
+            )
+            continue
+        sources.append(_validate_source(raw))
     seen: set[str] = set()
     for source in sources:
         if source.slug in seen:

@@ -5,6 +5,9 @@
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 ALL_SERVICES=(serve tunnel pipeline alert)
+LLM_PROVIDER_ENV_KEYS=(DEEPSEEK_API_KEY ARK_API_KEY OPENAI_API_KEY GLM_API_KEY)
+LLM_PROVIDER_ENV_KEYS_TEXT="DEEPSEEK_API_KEY, ARK_API_KEY, OPENAI_API_KEY, GLM_API_KEY"
+SERVICE_DEPENDENCY_SKIP_REASON=""
 
 service_label() {
   case "$1" in
@@ -84,6 +87,102 @@ runtime_env_value() {
   done
 
   return 1
+}
+
+append_runtime_env_value() {
+  local key="$1"
+  local value="$2"
+  local env_file="$REPO_ROOT/.env"
+  touch "$env_file"
+  printf "\n%s=%s\n" "$key" "$value" >> "$env_file"
+}
+
+llm_provider_key_present() {
+  local key
+  for key in "${LLM_PROVIDER_ENV_KEYS[@]}"; do
+    if runtime_env_value "$key" >/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+service_dependency_missing_reason() {
+  local slug="$1"
+  case "$slug" in
+    serve)
+      return 1
+      ;;
+    pipeline)
+      if llm_provider_key_present; then
+        return 1
+      fi
+      echo "missing one of $LLM_PROVIDER_ENV_KEYS_TEXT"
+      return 0
+      ;;
+    alert)
+      if runtime_env_value FEISHU_GENERAL_ALERT_WEBHOOK >/dev/null; then
+        return 1
+      fi
+      echo "missing FEISHU_GENERAL_ALERT_WEBHOOK"
+      return 0
+      ;;
+    tunnel)
+      if [[ -f "$REPO_ROOT/deploy/cloudflared/config.yml" ]]; then
+        return 1
+      fi
+      echo "missing deploy/cloudflared/config.yml"
+      return 0
+      ;;
+    *)
+      validate_service "$slug" >/dev/null
+      ;;
+  esac
+}
+
+ensure_install_dependency() {
+  local slug="$1"
+  local reason key value
+  SERVICE_DEPENDENCY_SKIP_REASON=""
+
+  if ! reason="$(service_dependency_missing_reason "$slug")"; then
+    return 0
+  fi
+
+  if [[ "$slug" == "tunnel" ]]; then
+    SERVICE_DEPENDENCY_SKIP_REASON="$reason; create it from deploy/cloudflared/config.yml.example and re-run ./install.sh tunnel"
+    echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
+    return 1
+  fi
+
+  case "$slug" in
+    pipeline) key="DEEPSEEK_API_KEY" ;;
+    alert) key="FEISHU_GENERAL_ALERT_WEBHOOK" ;;
+    *)
+      SERVICE_DEPENDENCY_SKIP_REASON="$reason"
+      echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
+      return 1
+      ;;
+  esac
+
+  if [[ ! -t 0 ]]; then
+    SERVICE_DEPENDENCY_SKIP_REASON="$reason; stdin is not a TTY"
+    echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
+    return 1
+  fi
+
+  echo "⚠ $slug: $reason." >&2
+  read -r -p "Enter $key to save to ./.env and install $slug, or press Enter to skip: " value
+  if [[ -z "$value" ]]; then
+    SERVICE_DEPENDENCY_SKIP_REASON="$reason; user skipped prompt"
+    echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
+    return 1
+  fi
+
+  append_runtime_env_value "$key" "$value"
+  export "$key=$value"
+  echo "✓ $slug: saved $key to ./.env"
+  return 0
 }
 
 xml_escape() {

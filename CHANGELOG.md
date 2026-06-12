@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-12
+
+- Made fresh-clone setup degrade cleanly when optional private resources are missing. The Mp2RSS WeChat source now skips with a warning when `MP2RSS_FEED_URL` is unset or empty instead of aborting source loading, and `.env.example` no longer contains a fake Mp2RSS URL that would force a broken fetch. `./install.sh` now checks each service before installing: `serve` always installs, `pipeline` needs one LLM API key, `alert` needs `FEISHU_GENERAL_ALERT_WEBHOOK`, and `tunnel` needs `deploy/cloudflared/config.yml`. Missing promptable values can be entered interactively and are appended to `./.env`; non-interactive installs skip only the affected services and print a summary.
+
 ## 2026-06-09
 
 - Stopped A4 (article ingestion) from alerting on transient fetch flaps. All X/Twitter sources fetch through the single public `nitter.net` instance, which intermittently times out for one ~15-minute fetch round and then self-heals; each flap fired and resolved A4 within ~15 minutes as pure noise, while the daily ingestion count was never actually affected (a round skipped by the flap is backfilled by the next). A4 now debounces: a fetch-failure condition must persist past a 30-minute window (≈2 fetch rounds) before it notifies, and a flap that recovers within the window is absorbed silently — no firing and no resolved. The debounce is per-rule and configured only for A4 (`a4.debounce_minutes`); A1/A3 still notify immediately, so this does not delay genuinely urgent alerts. Also corrected A4's disposition text, which pointed at the retired `wewe-rss/bridge` for WeChat — WeChat now ingests via Mp2RSS, and a batch X-source failure is the more common trigger. The `alert` service must be running the updated code for this to take effect.

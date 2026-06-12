@@ -13,6 +13,8 @@
 
 不带服务名时，`./install.sh` / `./uninstall.sh` / `./status.sh` 对全部 4 个服务生效。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
 
+`./install.sh` 会逐服务检查依赖。缺少 `pipeline` 的 LLM key 时，交互式终端会询问 `DEEPSEEK_API_KEY` 并写入项目 `.env`；缺少 `alert` 的 `FEISHU_GENERAL_ALERT_WEBHOOK` 时同理询问 webhook。非交互环境不会等待输入，会跳过缺依赖的服务并在 summary 中列原因。`tunnel` 缺少 `deploy/cloudflared/config.yml` 时不会询问密钥，需先从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置后重跑 `./install.sh tunnel`。依赖读取顺序为当前进程环境、项目 `.env`、`~/.claude/.env`。
+
 > 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）。微信摄取走 Mp2RSS（见 [wechat-ingestion.md](wechat-ingestion.md)）。如需回滚到 WeWe RSS：`deploy/wewe-rss/`（docker-compose + RUNBOOK）仍在，launchd plist 与脚本 wiring 从 git 历史恢复（移除 commit 见 git log）。
 
 调度方式选择：pipeline 在 cron 和 launchd 之间二选一，**不要同时启用**——详见 [experiences/deployment.md 2026-05-15 条目](../experiences/deployment.md)。当前生产用 cron。
@@ -23,6 +25,9 @@
 |---|---|---|
 | cron 守护 | macOS 自带，默认运行 | `pgrep cron` |
 | launchd | 系统自带，登录后自动运行 | `launchctl print gui/$UID` |
+| pipeline LLM key | `DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` 任一 | `./install.sh pipeline` summary 显示 installed |
+| alert webhook | `FEISHU_GENERAL_ALERT_WEBHOOK` | `plutil -p deploy/launchd/ai-radar-alert.plist | rg FEISHU_GENERAL_ALERT_WEBHOOK` |
+| Cloudflare tunnel | `deploy/cloudflared/config.yml` | `test -f deploy/cloudflared/config.yml` |
 
 ## 验证（新机器 bring-up / 大改动后跑一遍）
 
