@@ -6,10 +6,10 @@
 
 | 服务 | 自动启动 | 当前状态 | 生命周期脚本 | Instructions |
 |---|---|---|---|---|
-| `live.aiplanet.ai-radar.serve` | launchd, KeepAlive=true | 已加载 | `./install.sh serve` / `./uninstall.sh serve` / `./status.sh serve` | [deploy/launchd/ai-radar-serve.plist.example](../../deploy/launchd/ai-radar-serve.plist.example) |
-| `live.aiplanet.ai-radar.tunnel` | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
+| serve | launchd, KeepAlive=true | 已加载 | `./install.sh serve` / `./uninstall.sh serve` / `./status.sh serve` | [deploy/launchd/ai-radar-serve.plist.example](../../deploy/launchd/ai-radar-serve.plist.example) |
+| tunnel | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
 | ai-radar pipeline (15min) | cron (`*/15 * * * *`) | 在 user crontab | `./install.sh pipeline` / `./uninstall.sh pipeline` / `./status.sh pipeline` | [deploy/cron/ai-radar-pipeline](../../deploy/cron/ai-radar-pipeline) · launchd 替代模板见 [ai-radar-pipeline.plist.example](../../deploy/launchd/ai-radar-pipeline.plist.example) |
-| `live.aiplanet.ai-radar.alert` | launchd, StartInterval=300, RunAtLoad=true | 已加载（2026-06-06；读 `~/.claude/.env` 的 `FEISHU_GENERAL_ALERT_WEBHOOK`，与 watchdog 共用同一变量） | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
+| alert | launchd, StartInterval=300, RunAtLoad=true | 已加载（2026-06-06；读部署环境中的 `FEISHU_GENERAL_ALERT_WEBHOOK`，与 watchdog 共用同一变量） | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
 
 不带服务名时，`./install.sh` / `./uninstall.sh` / `./status.sh` 对全部 4 个服务生效。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
 
@@ -29,7 +29,7 @@
 ```bash
 ./status.sh                                        # 4 行总览
 curl -sf http://127.0.0.1:8000/api/v1/healthz && echo serve_ok
-curl -sf https://aiplanet.live/             -o /dev/null && echo tunnel_ok
+curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok
 ./run.sh admin alert-check                         # alert 规则 dry-run；无 webhook 时 sent=0
 ./run.sh fetch | tail -5                           # pipeline + Mp2RSS feed 联通性
 ```
@@ -51,14 +51,14 @@ curl -sf https://aiplanet.live/             -o /dev/null && echo tunnel_ok
 强制重启某个 launchd 服务：
 
 ```bash
-launchctl kickstart -k gui/$UID/live.aiplanet.ai-radar.<serve|tunnel|alert>
+launchctl kickstart -k "gui/$UID/<launchd-label-for-serve|tunnel|alert>"
 ```
 
 ⚠ 改了 alert 的 `FEISHU_GENERAL_ALERT_WEBHOOK`（或任何 launchd 服务的环境变量）后，`kickstart -k` 和"已加载时重跑 `./install.sh`"都**不会**让新值生效——plist 的 `<EnvironmentVariables>` 在生成时烘焙，launchd 持有 bootstrap 那一刻的快照。必须先 bootout 再 bootstrap：
 
 ```bash
 ./uninstall.sh alert && ./install.sh alert    # 推荐：重新生成 plist 并干净重载
-# 或手动：launchctl bootout gui/$UID/live.aiplanet.ai-radar.alert && launchctl bootstrap gui/$UID "$PWD/deploy/launchd/ai-radar-alert.plist"
+# 或手动：launchctl bootout "gui/$UID/<launchd-label-for-alert>" && launchctl bootstrap gui/$UID "$PWD/deploy/launchd/ai-radar-alert.plist"
 ```
 
 pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再手动 `launchctl bootstrap` launchd plist（暂未做成脚本——cron 是当前生产选择）。

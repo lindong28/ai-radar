@@ -9,7 +9,7 @@
 
 ## 2026-06-07 [expansion] ux-contract §微信文章解读页 未覆盖新增的搜索功能
 
-- Discovered: execute-plan 实施 `20260607-wechat-interpretation-search`（/wechat 新增搜索框）后的 supervisor 收尾核查 + test-ux 验收。已上线 aiplanet.live/wechat。
+- Discovered: execute-plan 实施 `20260607-wechat-interpretation-search`（/wechat 新增搜索框）后的 supervisor 收尾核查 + test-ux 验收。已上线公开站点 `/wechat`。
 - Description: 契约 §微信文章解读页 当前只描述"列表卡片 + 站内详情"、无搜索；但 `/wechat` 已新增搜索框，且语义**刻意不同于**精选/全部页（后者匹配 标题/正文/来源名/作者/中文标题、≥3 字走 FTS）：
   - 匹配字段：原文标题 / 公众号名(作者) / 摘要(abstract) / 标签(tags)——**不搜正文、不搜结构化解读全文 summary_md、不匹配聚合 feed 来源名 s.name「微信公众号（Mp2RSS 合集）」**（匹配 s.name 会让全部条目命中）。
   - 一律 LIKE（无 ≥3 字 FTS 分支），繁简互通，2 字专名可搜。
@@ -29,7 +29,7 @@
 
 ## 2026-05-28 19:20 [expansion] ux-contract 未明确 `/` 和 `/all` 首屏应 SSR 预载且不显示 loading spinner
 
-- Discovered: SSR preload plan production verification for `https://aiplanet.live/` after comparing the existing CSR loading behavior with AIHOT-style inline/preloaded content.
+- Discovered: SSR preload plan production verification for the public site after comparing the existing CSR loading behavior with AIHOT-style inline/preloaded content.
 - Description: 当前实现已让 `/`、`/all` 和三个常见 deep link 在生产环境首屏直出 `.item-row`，Playwright gate 结果为 spinner 0、initial API 0，FCP median 均低于 1.5s。但 ux-contract 还没有把"主 feed 首屏应在 HTML/preload 阶段可见，不依赖初始 API fetch，也不出现可感知 loading spinner"作为行为契约写死。
 - Recommendation: 在对应 Feed Reading / Initial Load contract 中补充：`/` 与 `/all` 的首屏内容必须通过 SSR preload 或等价机制在 HTML 到达后即可渲染；生产验证以 spinner 出现次数、首个 `.item-row` 时间、initial `/api/v1/*` 请求数为指标。
 
@@ -88,5 +88,5 @@
 ## 2026-05-18 22:30 [expansion] ux-contract §Feature-CategoryFilter 未明确"无效 slug 静默回退时是否清掉 URL 上的脏参数"
 
 - Discovered: 2026-05-18-r1 / s2-returning-power-user Issue 9（深链 `/?category=invalid-slug` 测试）
-- Description: §Feature-CategoryFilter 边界："无效 slug 静默回退到「全部」（不报错）。" 实测 `/?category=invalid-slug` 行为：列表正确渲染全部精选 ≈5s 后地址栏被改写为 `https://aiplanet.live/`（脏参数被剥）。契约没说要清也没说要保留。两种行为各有理由：清 → 防止用户把坏链发出去再次复制；保留 → 让 admin / monitoring 看到误配。
+- Description: §Feature-CategoryFilter 边界："无效 slug 静默回退到「全部」（不报错）。" 实测 `/?category=invalid-slug` 行为：列表正确渲染全部精选 ≈5s 后地址栏被改写为公开站点根路径（脏参数被剥）。契约没说要清也没说要保留。两种行为各有理由：清 → 防止用户把坏链发出去再次复制；保留 → 让 admin / monitoring 看到误配。
 - Recommendation: 在 §Feature-CategoryFilter 边界条目补一句明确，例如：「URL 保留无效参数以便排错」或「URL 清掉无效参数防止扩散」。同理 §Feature-ChannelFilter 也需补；§Feature-Pagination 的 page<1 / 非数字行为同样未说 URL 是否清——可以一并归类为"无效 query 参数的 URL 处理策略"统一段落。

@@ -29,7 +29,7 @@ service_plist_name() {
 service_desc() {
   case "$1" in
     serve)    echo "FastAPI web server on :8000" ;;
-    tunnel)   echo "Cloudflare tunnel to aiplanet.live" ;;
+    tunnel)   echo "Cloudflare tunnel to your public domain" ;;
     alert)    echo "Monitoring alert check (launchd, 5 min)" ;;
     pipeline) echo "Incremental fetch/score/enrich/curate (cron, 15 min)" ;;
     *) return 1 ;;

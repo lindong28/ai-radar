@@ -16,9 +16,9 @@
 
 ## 2026-05-28 Cloudflare Tunnel 路径会主导 SSR 首屏延迟
 
-- Problem: `/` 和 `/all` 已经改成 SSR preload 后，本地 origin TTFB 大多只有 7-43ms，但 `https://aiplanet.live/` 仍出现 2-6s TTFB spikes 和偶发 Playwright timeout。应用层 spinner/API 都已经消失，瓶颈在 Cloudflare Tunnel adapter 层。
-- Solution: Homebrew 管理的 `cloudflared` 要先升级到当前版本；本次从 2026.2.0 升到 2026.5.2。生产 tunnel config 中 `aiplanet.live` origin 应显式使用 `http://127.0.0.1:8000`，并设置 `region: us`、`edge-ip-version: "4"`，让连接落在 `lax/sjc` 这类 US IPv4 edge，避免自动路径注册到 HKG 等远端 edge。
-- Applies when: 通过 `live.aiplanet.ai-radar.tunnel` 暴露本地 FastAPI 服务，且生产 FCP/TTFB 明显慢于 `127.0.0.1:8000` origin。先看 `/tmp/ai-radar-tunnel.err` 的 registered tunnel locations，再跑生产和本地 TTFB 对照。
+- Problem: `/` 和 `/all` 已经改成 SSR preload 后，本地 origin TTFB 大多只有 7-43ms，但公开站点仍出现 2-6s TTFB spikes 和偶发 Playwright timeout。应用层 spinner/API 都已经消失，瓶颈在 Cloudflare Tunnel adapter 层。
+- Solution: Homebrew 管理的 `cloudflared` 要先升级到当前版本；本次从 2026.2.0 升到 2026.5.2。生产 tunnel config 中公开域名 origin 应显式使用 `http://127.0.0.1:8000`，并设置 `region: us`、`edge-ip-version: "4"`，让连接落在 `lax/sjc` 这类 US IPv4 edge，避免自动路径注册到 HKG 等远端 edge。
+- Applies when: 通过 tunnel launchd 服务暴露本地 FastAPI 服务，且生产 FCP/TTFB 明显慢于 `127.0.0.1:8000` origin。先看 `/tmp/ai-radar-tunnel.err` 的 registered tunnel locations，再跑生产和本地 TTFB 对照。
 
 ## 2026-05-29 WeWe RSS 需要区分容器出站代理和本机 loopback 抓取
 
@@ -35,5 +35,5 @@
 ## 2026-06-02 重启 serve 前必须避开 cron pipeline 持有的 DB 写锁
 
 - Problem: 生产 serve 启动时执行 `db.migrate()`（FTS 表 / trigger 重建需要 `data/radar.db` 写锁）。cron 每 15 分钟跑一次 `pipeline.sh`（prefilter/score/enrich/interpret），运行时持有同一个 `data/radar.db` 写锁。若在 cron 任务正持锁时 `kickstart` 重启 serve，migrate 因 `database is locked` 崩溃 → launchd 重试窗口内站点 down。注：interpret stage 串行（并发 1），因复用的 ai-assistant KB 写入器非并发安全（见 docs/issues/general.md），pipeline 持锁时间不短。
-- Solution: 安全重启顺序——先暂停 cron（注释 crontab 里 `*/15 ... pipeline.sh` 那行）或等当前 pipeline 跑完锁释放，`ps` 确认无 `pipeline.sh` / `airadar.cli prefilter|score|enrich` 在跑，再 `launchctl kickstart -k gui/$UID/live.aiplanet.ai-radar.serve`。migrate 成功后再恢复 crontab。
+- Solution: 安全重启顺序——先暂停 cron（注释 crontab 里 `*/15 ... pipeline.sh` 那行）或等当前 pipeline 跑完锁释放，`ps` 确认无 `pipeline.sh` / `airadar.cli prefilter|score|enrich` 在跑，再 `launchctl kickstart -k "gui/$UID/<launchd-label-for-serve>"`。migrate 成功后再恢复 crontab。
 - Applies when: 重启 serve（应用迁移、改配置、升级）时——任何会触发 `db.migrate()` 的 serve 重启都要先确认没有调度任务正持 DB 写锁，否则 migrate 崩溃导致站点短暂 down。实际发生于 2026-06-02 上线 wechat 文章解读 pipeline 期间。

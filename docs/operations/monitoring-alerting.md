@@ -4,8 +4,8 @@
 
 ## 入口
 
-- Dashboard：`https://aiplanet.live/admin`
-- Metrics API：`https://aiplanet.live/api/v1/admin/metrics`
+- Dashboard：`https://${AI_RADAR_SITE_DOMAIN}/admin`
+- Metrics API：`https://${AI_RADAR_SITE_DOMAIN}/api/v1/admin/metrics`
 - 本地 bypass：`http://127.0.0.1:8000/admin`
 - Alert 命令：`./run.sh admin alert-check`
 
@@ -81,7 +81,7 @@ Cloudflare Access 是公网真实鉴权边界；origin 只做 `Cf-Access-Jwt-Ass
 1. 打开 Cloudflare Zero Trust 控制台。
 2. 进入「Access」→「Applications」→「Add an application」→「Self-hosted」。
 3. 创建 `AI Radar Admin` application。
-4. Domain 填 `aiplanet.live`。
+4. Domain 填你的 `AI_RADAR_SITE_DOMAIN` 值。
 5. Path 至少覆盖：
    - `/admin*`
    - `/api/v1/admin*`
@@ -93,7 +93,7 @@ Cloudflare Access 是公网真实鉴权边界；origin 只做 `Cf-Access-Jwt-Ass
 公网无凭证预期返回 302/403：
 
 ```bash
-curl -sS -o /tmp/ai-radar-admin-public.out -w '%{http_code}\n' https://aiplanet.live/admin
+curl -sS -o /tmp/ai-radar-admin-public.out -w '%{http_code}\n' "https://${AI_RADAR_SITE_DOMAIN}/admin"
 ```
 
 origin 兜底预期：

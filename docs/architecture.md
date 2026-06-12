@@ -71,7 +71,7 @@ src/airadar/
 │
 ├── web/                # Web 服务
 │   ├── app.py          #   FastAPI app 工厂 + uvicorn 启动
-│   ├── cors.py         #   CORS 配置（aiplanet.live + localhost）
+│   ├── cors.py         #   CORS 配置（configured domain + localhost）
 │   ├── envelope.py     #   统一 API 响应包装 {success, data, error}
 │   └── routes/
 │       ├── common.py   #   共享查询逻辑（item_summary、去重、分类过滤、FTS）
