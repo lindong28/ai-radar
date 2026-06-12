@@ -29,6 +29,23 @@
 | alert webhook | `FEISHU_GENERAL_ALERT_WEBHOOK` | `plutil -p deploy/launchd/ai-radar-alert.plist | rg FEISHU_GENERAL_ALERT_WEBHOOK` |
 | Cloudflare tunnel | `deploy/cloudflared/config.yml` | `test -f deploy/cloudflared/config.yml` |
 
+## Cloudflare tunnel shared ingress
+
+The `ai-radar` tunnel is now a shared production dependency for two public sites:
+
+| Hostname | Local service | Owner repo | Notes |
+|---|---|---|---|
+| `aiplanet.live` | `http://127.0.0.1:8000` | `~/research/ai-radar` | Primary AI Radar web app. |
+| `sjtu.aiplanet.live` | `http://localhost:8100` | `~/research/sjtu-aaa` | SJTU 3A alumni site. `/admin` and `/api/admin` must stay blocked by the tunnel-level `http_status:403` rule above the SJTU main ingress rule. |
+
+Before editing, reinstalling, or removing this tunnel, inspect `~/research/sjtu-aaa/docs/operations/services.md` and preserve the SJTU ingress rules. A catch-all or rewritten tunnel config that only keeps `aiplanet.live` will silently take the SJTU site offline even if AI Radar still looks healthy. After any tunnel change, verify both:
+
+```bash
+curl -sf https://aiplanet.live/api/v1/healthz
+curl -sf https://sjtu.aiplanet.live/api/v1/healthz
+curl -s -o /dev/null -w '%{http_code}\n' https://sjtu.aiplanet.live/admin
+```
+
 ## 验证（新机器 bring-up / 大改动后跑一遍）
 
 ```bash
