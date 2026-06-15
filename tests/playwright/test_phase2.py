@@ -396,11 +396,21 @@ def test_v10h_typography_tone_matches_aihot_reference(page: Page, base_url: str)
             pageTitle: pick("h1"),
             time: pick(".timeline-time"),
             cardTitle: pick(".timeline-card:not(.x-card) .item-title"),
-            xCardTitle: pick(".timeline-card.x-card .item-title"),
             source: pick(".source-line"),
             summary: pick(".summary"),
             tag: pick(".tag"),
             filter: pick(".seg-item"),
+          };
+        }"""
+    )
+    _goto(page, base_url, "/all?channel=x", cards=True)
+    x_card_title = page.locator(".timeline-card.x-card .item-title").first.evaluate(
+        """el => {
+          const style = getComputedStyle(el);
+          return {
+            fontSize: style.fontSize,
+            fontWeight: style.fontWeight,
+            lineHeight: style.lineHeight,
           };
         }"""
     )
@@ -417,9 +427,9 @@ def test_v10h_typography_tone_matches_aihot_reference(page: Page, base_url: str)
     assert styles["cardTitle"]["fontWeight"] == "700"
     assert styles["cardTitle"]["lineHeight"] == "22.5px"
 
-    assert styles["xCardTitle"]["fontSize"] == "14px"
-    assert styles["xCardTitle"]["fontWeight"] == "400"
-    assert styles["xCardTitle"]["lineHeight"] == "23.8px"
+    assert x_card_title["fontSize"] == "14px"
+    assert x_card_title["fontWeight"] == "400"
+    assert x_card_title["lineHeight"] == "23.8px"
 
     assert "IBM Plex Sans" in styles["source"]["fontFamily"]
     assert styles["source"]["fontSize"] == "11px"

@@ -5,13 +5,14 @@ from pathlib import Path
 import pytest
 
 from airadar.db import migrate
-from airadar.web.app import create_app
 
 
 def test_business_routes_are_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "radar.db"
     migrate(db_path)
     monkeypatch.setenv("AI_RADAR_DB", str(db_path))
+
+    from airadar.web.app import create_app
 
     app = create_app()
     assert Path(app.state.db_path) == db_path

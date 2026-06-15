@@ -4,14 +4,13 @@
 
 ---
 
-## [open] interpret KB check-url hit drops metadata tags in regression test
+## [resolved] interpret KB check-url hit drops metadata tags in regression test
 
 - Type: bug
 - Priority: low
 - Discovered: 2026-06-12 open-source-readiness TASK-011/TASK-012 verification
+- Resolution (2026-06-15): `src/airadar/interpret/runner.py` now resolves the no-LLM `--check-url` hit back to the summary-agent index by URL, current-user summary file, or any-user summary file, then preserves `metadata.tags` (and related metadata such as recommendation/model) when saving `wechat_interpretations.tags_json`. Regression coverage is in `tests/test_wechat_interpretation.py::test_interpret_runner_reuses_kb_check_url_hit_without_llm`.
 - Description: `AI_RADAR_DB=/tmp/airadar-task011-012-nonplaywright.db uv run pytest --ignore=tests/playwright -q` failed only at `tests/test_wechat_interpretation.py::test_interpret_runner_reuses_kb_check_url_hit_without_llm`. The row was written with `tags_json=[]` while the test expected `["Agent"]` from the KB metadata path on a `run.sh --check-url` hit. `src/airadar/interpret/runner.py` and `tests/test_wechat_interpretation.py` were untouched in this TASK-011/TASK-012 diff, so this was not fixed in the install/source-loader scope.
-- Notes:
-  - Fix direction: inspect the check-url hit path in `run_interpret`; either preserve tags from the KB hit/index metadata when no summarize call runs, or adjust the test contract if check-url hits intentionally do not reuse KB metadata tags.
 
 ---
 
@@ -30,16 +29,13 @@
 
 ---
 
-## [open] `/admin` origin local-bypass 依赖 cloudflared 暴露公网 `client.host`
+## [resolved] `/admin` origin local-bypass 依赖 cloudflared 暴露公网 `client.host`
 
 - Type: security_note
 - Priority: high
 - Discovered: 2026-06-02 monitoring-alerting supervisor review
+- Resolution (2026-06-15): `/admin` 和 `/api/v1/admin/*` 的 loopback bypass 现仅在 `AI_RADAR_ADMIN_ALLOW_LOCAL` 为 `1/true/yes` 时启用，生产默认关闭；Cloudflare Access header 仍可放行运维入口。`tests/test_admin_routes.py` 覆盖无 env 的 loopback 403、显式 dev override 200、以及带 `Cf-Access-Jwt-Assertion` 的 200。剩余 JWT 验签 / origin token 属独立增强，记录在 `docs/operations/monitoring-alerting.md`。
 - Description: `/admin` 与 `/api/v1/admin/*` 的 origin guard 允许 `127.0.0.1` / `::1` / `localhost` 本地 bypass。当前不是活跃漏洞：公网无凭证 `curl` 已验证为 403，TASK-001 探针也观察到 tunnel 请求在 FastAPI/access log 中呈现真实公网 IP（非 loopback）。但该安全性依赖 cloudflared 当前 forwarded/client.host 行为；如果未来 cloudflared 改为通过本地 socket 转发，并让 FastAPI 看到 `client.host=127.0.0.1`，公网请求会被当成本地请求放行。
-- Notes:
-  - 与 monitoring-alerting MVP 中“origin 只检查 `Cf-Access-Jwt-Assertion` 存在性、不验签”的 TODO 同属 admin origin 鉴权增强。
-  - Fix 方向：生产环境删除 local-bypass，或把 bypass 挂到显式 dev env；同时完成 Cloudflare Access JWT 验签，必要时增加 origin-only secret/token 或可信 forwarded 头处理。
-  - Cloudflare Access 边缘 application+policy 配好后仍是公网真实闸，但 origin 不应长期依赖未完全证实的 `client.host` 机制。
 
 ---
 
@@ -168,15 +164,13 @@
 
 ---
 
-## [open] pipeline stage `--since` 解析会把 ISO `T...Z` 时间戳 lower-case 后解析失败
+## [resolved] pipeline stage `--since` 解析会把 ISO `T...Z` 时间戳 lower-case 后解析失败
 
 - Type: bug
 - Priority: low
 - Discovered: 2026-06-01 全量 WeChat RSS backfill 时，为避免 `score --since 24h` churn 非 WeChat backlog，尝试运行 `score --since 2026-06-01T10:43:04Z`。
+- Resolution (2026-06-15): `prefilter` / `scorer` / `enrich` runner 的 `_parse_since` 只对最后一位单位后缀做大小写归一，不再 lower-case 整个输入；标准 `2026-06-01T10:43:04Z` 与显式 offset ISO 都可解析为 UTC。Regression: `tests/test_runner_since_parsing.py`.
 - Description: `scorer/runner.py::_parse_since` 先对整个输入执行 `value.strip().lower()`，之后只替换大写 `"Z"`。因此标准 UTC ISO 字符串 `2026-06-01T10:43:04Z` 会变成 `2026-06-01t10:43:04z`，`datetime.fromisoformat(...)` 抛 `ValueError: Invalid isoformat string`。同样的 `_parse_since` 写法也存在于 prefilter/enrich runner，显式 ISO `T...Z` 窗口都可能中招。
-- Notes:
-  - Immediate workaround: 用空格和显式 offset，例如 `--since '2026-06-01 10:43:04+00:00'`；本次 backfill 用该形式成功完成 `score processed=131 errors=0`。
-  - Fix direction: 只对相对单位后缀做 case-insensitive 处理，或在 lower-case 前先标准化 `Z/z` 与 `T/t`；补 CLI/parser regression test 覆盖 `24h`、`7d`、`2026-06-01T10:43:04Z`、`2026-06-01 10:43:04+00:00`。
 
 ---
 
@@ -209,29 +203,23 @@
 
 ---
 
-## [open] A4 `daily_inserted_floor` 对"当日累积计数器"全天比较，跨日初假阳
+## [resolved] A4 `daily_inserted_floor` 对"当日累积计数器"全天比较，跨日初假阳
 
 - Type: bug
 - Priority: low
 - Discovered: 2026-06-07 复盘 alert-check 历史日志（A2 减噪改动时）发现冷启动轮 A4 firing「今日 items 增量 10 < 127」，下一轮即「3064」恢复
+- Resolution (2026-06-15): A4 now compares `items_today` against `daily_inserted_floor * minutes_elapsed_today / 1440` (clamped to the day), and `collect_alert_signals` supplies Shanghai-local minutes elapsed. The calibrated full-day floor remains the scaling basis while early-day false positives are avoided. Regression coverage is in `tests/test_admin_alerts.py::test_a4_daily_insert_floor_is_time_proportional`.
 - Description: A4 触发条件之一是 `signals.items_today < daily_inserted_floor`（floor=127，`thresholds.py` a4）。`items_today` 是"自当日 00:00 起的累积插入数"，但被**全天任意时刻**与一个**全天总量底线**比较。每天午夜后到累积满 127 篇之前，`items_today` 必然小于 floor → A4 在每日清晨假阳。历史日志中观察到一次（items=10，紧接 3064），launchd 因机器休眠未连续运行掩盖了发生频率。
-- Notes:
-  - 与 A2 心跳同类病根：用"稳态全量基线"判"尚未累积完"的早期状态，把正常 ramp-up 误判为故障。
-  - Fix 方向：floor 改时间感知——按当日已过比例缩放（如 `floor * 当日已过分钟/1440`），或仅在每日固定时刻之后再做 floor 检查；或干脆弃用绝对 floor，只保留 `fetch_failed_ratio` 维度。
-  - 本次（2026-06-07）告警减噪改动按用户选定范围只修 A2/A3，A4 留待本 issue。
 
 ---
 
-## [open] A3 healthz 维度缺主动探测——只能靠 5xx 率间接发现站点异常
+## [resolved] A3 healthz 维度缺主动探测——只能靠 5xx 率间接发现站点异常
 
 - Type: improvement
 - Priority: medium
 - Discovered: 2026-06-07 告警减噪改动中发现 `collect_alert_signals` 把 `health_failures=0` 写死，A3 的 healthz 分支永不触发（死信号）
+- Resolution (2026-06-15): `run_alert_state_machine` now actively probes local `/api/v1/healthz` every alert-check run, persists consecutive failures under `healthz_probe` in `data/alert-state.json`, and feeds that count into A3. A3 fires when either user-side 5xx rate exceeds threshold or healthz consecutive failures reach the configured floor. Regression coverage is in `tests/test_admin_alerts.py::test_a3_active_healthz_probe_persists_failures_and_recovers`.
 - Description: A3 原设计含两维度——用户侧 5xx 率 + "healthz 连续失败 N 次"。但 `health_failures` 在采集层硬编码为 0，`>=2` 永远不成立，healthz 维度是死代码，且消息里"healthz 连续失败 0 次"制造"信号活着"的错觉。2026-06-07 已**删除**该死分支，A3 现仅靠 access log 的 5xx 率触发。遗留盲区：若站点以"不产生 5xx"的方式挂掉（如 tunnel 断 → 请求到不了 origin → 无 5xx、PV=0 → 5xx 率=0），A3 完全沉默。
-- Notes:
-  - 删死分支只是止损（不再谎称正常），并未补回覆盖——真·站点存活检测需要一个**主动 healthz 探测**。
-  - Fix 方向：alert-check 每轮主动 `GET 127.0.0.1:8000/api/v1/healthz`（带超时），失败计数跨轮持久化（复用 `data/alert-state.json` 或独立计数），连续 N 次失败触发 A3 的 healthz 维度；注意 alert-check job 需能到达本地 serve。
-  - 与 nitter/wewe/覆盖率监控 issue 同族（均属"缺主动健康监控"），可一并纳入统一健康面板设计。
 
 ---
 
@@ -251,10 +239,10 @@
 - Description: `tests/playwright/test_phase2.py::test_wechat_card_body_click_opens_detail_and_back_preserves_page` 等待 `.timeline-card` 可见超时——依赖本地 DB 内有 wechat 数据，数据缺失即 fail。与 general.md 既有的 test_phase2 数据依赖 flaky 同族。Fix 方向：测试自带 seed 数据或显式 skip 无数据场景，去除对本地 DB 现状的隐式依赖。
 - Resolution (2026-06-15): `tests/playwright/test_phase2.py` 加 `_require_wechat_cards_on_page(page, base_url, page_number)` 守卫——测试先查 `/api/v1/wechat?page=N&limit=50`，若无可见 wechat 数据则 `pytest.skip(...)` 给出明确原因，不再隐式依赖本地 DB 现状（断言本身未削弱）。ruff + py_compile 通过。注：Playwright fixture 复用项目 `data/radar.db`（生产 serve 占锁），完整运行态验证需在无 serve 占锁的隔离环境进行。
 
-## [open] test_no_write_endpoints 写共享生产 DB，serve/cron 写入期 transient "database is locked"
+## [resolved] test_no_write_endpoints 写共享生产 DB，serve/cron 写入期 transient "database is locked"
 
 - Type: bug
 - Priority: low
 - Discovered: 2026-06-15 resolve-issues 全量验证时——`uv run pytest --ignore=tests/playwright -q` 偶发 `tests/test_no_write_endpoints.py::test_business_routes_are_read_only` 报 `sqlite3.OperationalError: database is locked`（`src/airadar/db.py:56`）；同轮重跑或换 `AI_RADAR_DB=/tmp/...` 即过，故为环境争用而非代码回归。
+- Resolution (2026-06-15): The test now migrates a temp DB, sets `AI_RADAR_DB` to that path, and imports/creates the web app only after that isolation is in place, so the test no longer needs the shared production SQLite file. Verified with `.venv/bin/python -m pytest tests/test_no_write_endpoints.py`.
 - Description: 该测试通过发写请求验证"业务路由只读"，但运行在共享的生产 `data/radar.db` 上——生产 serve（127.0.0.1:8000，aiplanet.live）+ 15min `score --since 24h` cron 写入时会拿到写锁，测试的写探针在短 busy_timeout 内撞锁即 fail。同族于 [[test_phase2 数据依赖 flaky]]：测试未隔离 DB，依赖运行环境。Fix 方向：测试改用隔离 DB（`AI_RADAR_DB` 指向 tmp 副本或 fixture 临时库），不写共享生产库。
-- Notes: 本轮 resolve-issues 期间发现（非本轮引入）。与 #13 同属"测试 DB 隔离缺失"。
