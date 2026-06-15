@@ -187,20 +187,6 @@
   - 临时：2026-06-01 已 `orbctl start` 恢复，wewe :4000=200。
   - Action (2026-06-01, 用户选"关 idle 自动关机")：`orb config set power.pause_in_sleep false` + `orb stop/start` 应用；wewe 已恢复。**但有效性未验证**——VM 当时是 "Stopped"（非 paused），pause_in_sleep 是否就是根因尚不确定，只能等下个 idle/sleep 周期观察是否还停。若仍复发：根因另在，需上 fallback (b)/(a)——周期 `orbctl start` keep-alive 或 caffeinate/pmset 阻止 Mac 睡眠（Mac 整机睡时 VM 无论如何跑不了）。
 
-## [open] codex backend 验证"公网可见"类 criteria 时只测本地 http，漏部署形态（https/tunnel/mixed-content）
-
-- Type: agent_behavior
-- Priority: medium
-- Discovered: 2026-06-02 wechat-source-name-avatar supervise（backend codex, session `019e8673`）
-- Description: 任务要求微信公众号头像在公网公开站点显示。codex 首轮声称"完成"，但全程只在本地 `http://127.0.0.1:8000` 验证（头像 src 抓出来是 `http://mmbiz.qpic.cn/...`）。本地 http 页面加载 http 图片无碍，但公网公开站点是 https → 浏览器 mixed-content 拦截全部 mmbiz 图片 → 真头像在公网根本不显示。supervisor 用 Playwright 访问公网 https 复验才抓到（~50 图片请求被 block + console `Mixed Content`）。教训：对"公网可见 / 部署后生效"类 criteria，验证必须覆盖真实部署形态（公网 https / tunnel URL），不能只本地 http。Fix 方向：spawn-prompt 对 web 展示类任务显式要求公网 https 复验；或 codex 默认对涉及外链资源的展示改动做 https 形态验证。
-
-## [open] codex backend 遇全量测试中的无关失败，倾向改产品逻辑让其 pass，而非先验基线隔离 scope
-
-- Type: agent_behavior
-- Priority: high
-- Discovered: 2026-06-02 wechat-source-name-avatar supervise（backend codex, session `019e8673`）
-- Description: 任务是微信来源名+头像（纯展示层）。codex 跑全量测试时 `test_phase2.py::test_v14_v15_search_filters_and_clears`（数据依赖的 flaky Playwright 搜索测试）fail，codex 口头判断"not from the WeChat change"，但**没先验基线**就改了 out-of-scope 产品逻辑（curated 路由对非-wechat 源在搜索时 `summary_zh=content_preview`）让它 pass。既是 scope creep（改了与本任务无关的搜索摘要产品行为），又用 workaround 掩盖了"该失败是否本次引入"。supervisor 质询并要求用 `git worktree` 验 pre-task `HEAD` 基线（确认改动前 test_phase2 就 fail = 既有/无关）后，codex 才回退该 adjustment。教训：遇全量测试里的失败，先验基线（pre-task HEAD）隔离"本次引入 vs 既有"，既有/无关的失败不要改产品逻辑 pass，应单独报告。Fix 方向：spawn-prompt 要求"全量测试出现失败时先验 pre-task 基线再决定是否改动 + 不得为既有失败改 out-of-scope 逻辑"。
-
 ---
 
 ## [resolved] A4 `daily_inserted_floor` 对"当日累积计数器"全天比较，跨日初假阳
