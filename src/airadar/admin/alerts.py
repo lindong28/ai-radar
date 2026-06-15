@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,12 @@ from .thresholds import ALERT_THRESHOLDS
 RULESET = ("A1", "A2", "A3", "A4")
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
 COOLDOWN = timedelta(minutes=30)
+MINUTES_PER_DAY = 24 * 60
+HEALTHZ_STATE_KEY = "healthz_probe"
+# src/airadar/web/routes/health.py registers /healthz and create_app mounts it
+# under the app API prefix /api/v1.
+DEFAULT_HEALTHZ_URL = "http://127.0.0.1:8000/api/v1/healthz"
+DEFAULT_HEALTHZ_TIMEOUT_SECONDS = 2.0
 # Project label prefixed on every alert so a shared Feishu webhook (used by
 # multiple projects) lets the reader tell which project an alert came from.
 ALERT_SOURCE = "AI Radar"
@@ -35,6 +41,8 @@ class AlertSignals:
     server_error_rate: float
     fetch_failed_ratio: float
     items_today: int
+    minutes_elapsed_today: int = MINUTES_PER_DAY
+    healthz_consecutive_failures: int = 0
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,17 @@ def _int_threshold(section: dict[str, Any], key: str, default: int) -> int:
 def _debounce_window(thresholds: dict[str, object], rule_id: str) -> timedelta:
     section = _threshold_section(thresholds, rule_id.lower())
     return timedelta(minutes=_int_threshold(section, "debounce_minutes", 0))
+
+
+def _minutes_elapsed_today(now: datetime) -> int:
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed = int((now - start).total_seconds() // 60)
+    return max(0, min(MINUTES_PER_DAY, elapsed))
+
+
+def _daily_inserted_floor_elapsed(daily_floor: int, minutes_elapsed_today: int) -> int:
+    elapsed = max(0, min(MINUTES_PER_DAY, minutes_elapsed_today))
+    return int(daily_floor * elapsed / MINUTES_PER_DAY)
 
 
 def evaluate_rules(
@@ -109,11 +128,26 @@ def evaluate_rules(
         )
 
     a3_rate = _float_threshold(a3, "server_error_rate", 0.05)
-    a3_firing = signals.server_error_rate > a3_rate
+    a3_healthz_failure_threshold = _int_threshold(a3, "healthz_consecutive_failures", 2)
+    a3_reasons: list[str] = []
+    if signals.server_error_rate > a3_rate:
+        a3_reasons.append(f"用户侧 5xx 率 {signals.server_error_rate:.1%} > {a3_rate:.1%}")
+    if (
+        a3_healthz_failure_threshold > 0
+        and signals.healthz_consecutive_failures >= a3_healthz_failure_threshold
+    ):
+        a3_reasons.append(
+            f"healthz 连续失败 {signals.healthz_consecutive_failures} 次 >= {a3_healthz_failure_threshold} 次"
+        )
+    a3_firing = bool(a3_reasons)
 
     a4_fetch_ratio = _float_threshold(a4, "fetch_failed_ratio", 0.4)
     daily_inserted_floor = _int_threshold(a4, "daily_inserted_floor", 0)
-    a4_firing = signals.fetch_failed_ratio > a4_fetch_ratio or signals.items_today < daily_inserted_floor
+    daily_inserted_floor_elapsed = _daily_inserted_floor_elapsed(
+        daily_inserted_floor,
+        signals.minutes_elapsed_today,
+    )
+    a4_firing = signals.fetch_failed_ratio > a4_fetch_ratio or signals.items_today < daily_inserted_floor_elapsed
 
     return [
         AlertRuleResult(
@@ -147,17 +181,36 @@ def evaluate_rules(
             rule_id="A3",
             title="网站用户侧异常",
             firing=a3_firing,
-            detail=f"用户侧 5xx 率 {signals.server_error_rate:.1%}",
+            detail=(
+                "；".join(a3_reasons)
+                if a3_reasons
+                else (
+                    f"用户侧 5xx 率 {signals.server_error_rate:.1%}，"
+                    f"healthz 连续失败 {signals.healthz_consecutive_failures} 次"
+                )
+            ),
             action="先探测 /api/v1/healthz 与 serve 日志；若 healthz 正常但 5xx 上升，查看最近部署和 upstream API。",
-            values={"server_error_rate": signals.server_error_rate},
+            values={
+                "server_error_rate": signals.server_error_rate,
+                "healthz_consecutive_failures": signals.healthz_consecutive_failures,
+            },
         ),
         AlertRuleResult(
             rule_id="A4",
             title="文章摄取骤降",
             firing=a4_firing,
-            detail=f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，今日 items 增量 {signals.items_today}",
+            detail=(
+                f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，今日 items 增量 {signals.items_today}，"
+                f"按日内进度 floor {daily_inserted_floor_elapsed}/{daily_inserted_floor}"
+            ),
             action="查看最近一轮各源健康并按 source error 分组：X(nitter) 源整批 SSL/超时多为公共实例瞬态（已加 30min 去抖，持续才告警）；微信源走 Mp2RSS；其余源按错误类型分别处理。",
-            values={"fetch_failed_ratio": signals.fetch_failed_ratio, "items_today": signals.items_today},
+            values={
+                "fetch_failed_ratio": signals.fetch_failed_ratio,
+                "items_today": signals.items_today,
+                "minutes_elapsed_today": signals.minutes_elapsed_today,
+                "daily_inserted_floor": daily_inserted_floor,
+                "daily_inserted_floor_elapsed": daily_inserted_floor_elapsed,
+            },
         ),
     ]
 
@@ -191,6 +244,52 @@ def _write_state(path: Path, state: dict[str, dict[str, object]]) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _probe_healthz(url: str, timeout: float) -> bool:
+    try:
+        response = httpx.get(url, timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    return payload.get("success") is True and isinstance(data, dict) and data.get("ok") is True
+
+
+def _record_healthz_probe(
+    state: dict[str, dict[str, object]],
+    *,
+    current: datetime,
+    thresholds: dict[str, object],
+    healthz_probe: Callable[[str, float], bool] | None,
+) -> int:
+    a3 = _threshold_section(thresholds, "a3")
+    url = str(a3.get("healthz_url") or DEFAULT_HEALTHZ_URL)
+    timeout = _float_threshold(a3, "healthz_timeout_seconds", DEFAULT_HEALTHZ_TIMEOUT_SECONDS)
+    probe = healthz_probe or _probe_healthz
+    last_error: str | None = None
+    try:
+        ok = bool(probe(url, timeout))
+    except Exception as exc:  # noqa: BLE001 - health probes must fail closed.
+        ok = False
+        last_error = f"{type(exc).__name__}: {exc}"
+
+    entry = state.get(HEALTHZ_STATE_KEY, {})
+    previous_failures = _int_threshold(entry, "consecutive_failures", 0) if isinstance(entry, dict) else 0
+    consecutive_failures = 0 if ok else previous_failures + 1
+    next_entry: dict[str, object] = {
+        "consecutive_failures": consecutive_failures,
+        "last_checked": current.isoformat(),
+        "last_ok": ok,
+        "url": url,
+    }
+    if last_error:
+        next_entry["last_error"] = last_error
+    state[HEALTHZ_STATE_KEY] = next_entry
+    return consecutive_failures
+
+
 def run_alert_state_machine(
     signals: AlertSignals,
     *,
@@ -198,6 +297,7 @@ def run_alert_state_machine(
     now: datetime | None = None,
     send: Callable[[str], object] | None = None,
     thresholds: dict[str, object] | None = None,
+    healthz_probe: Callable[[str, float], bool] | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(SHANGHAI_TZ)
     if current.tzinfo is None:
@@ -207,6 +307,13 @@ def run_alert_state_machine(
     state = _load_state(path)
     sender = send or (lambda text: send_feishu_message(os.environ.get("FEISHU_GENERAL_ALERT_WEBHOOK"), text))
     active_thresholds = thresholds or ALERT_THRESHOLDS
+    healthz_consecutive_failures = _record_healthz_probe(
+        state,
+        current=current,
+        thresholds=active_thresholds,
+        healthz_probe=healthz_probe,
+    )
+    signals = replace(signals, healthz_consecutive_failures=healthz_consecutive_failures)
     results = evaluate_rules(signals, thresholds=active_thresholds)
     sent: list[dict[str, object]] = []
 
@@ -358,6 +465,7 @@ def collect_alert_signals(
         server_error_rate=_server_error_rate(users),
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
         items_today=int(ingestion.get("items_today") or 0),
+        minutes_elapsed_today=_minutes_elapsed_today(current),
     )
 
 

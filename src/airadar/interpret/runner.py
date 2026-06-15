@@ -240,37 +240,61 @@ def _summary_file_slug(value: str) -> str:
     return stem.removesuffix("_output")
 
 
-def _index_entry_for_slug(root: Path, user: str, slug: str) -> dict[str, Any] | None:
+def _summary_agent_index_entries(root: Path, user: str) -> list[dict[str, Any]]:
     index_path = _summary_agent_index_path(root, user)
     if not index_path.exists():
-        return None
+        return []
     entries = _json_loads(index_path.read_text(encoding="utf-8"), [])
     if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _entry_summary_file(entry: dict[str, Any]) -> str | None:
+    output = entry.get("output")
+    if not isinstance(output, dict):
         return None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        output = entry.get("output")
-        if not isinstance(output, dict):
-            continue
-        summary_file = output.get("summary_file_path") or output.get("summary_file")
-        if isinstance(summary_file, str) and _summary_file_slug(summary_file) == slug:
+    summary_file = output.get("summary_file_path") or output.get("summary_file")
+    return summary_file if isinstance(summary_file, str) and summary_file else None
+
+
+def _same_summary_file(root: Path, left: str, right: str) -> bool:
+    if left == right:
+        return True
+    return _path_from_ai_assistant(root, left).resolve() == _path_from_ai_assistant(root, right).resolve()
+
+
+def _index_entry_for_slug(root: Path, user: str, slug: str) -> dict[str, Any] | None:
+    for entry in _summary_agent_index_entries(root, user):
+        summary_file = _entry_summary_file(entry)
+        if summary_file and _summary_file_slug(summary_file) == slug:
             return entry
     return None
 
 
 def _index_entry_for_url(root: Path, user: str, url: str) -> dict[str, Any] | None:
-    index_path = _summary_agent_index_path(root, user)
-    if not index_path.exists():
-        return None
-    entries = _json_loads(index_path.read_text(encoding="utf-8"), [])
-    if not isinstance(entries, list):
-        return None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
+    for entry in _summary_agent_index_entries(root, user):
         metadata = entry.get("metadata")
         if isinstance(metadata, dict) and metadata.get("url") == url:
+            return entry
+    return None
+
+
+def _index_entry_for_summary_file(root: Path, user: str, summary_file: str) -> dict[str, Any] | None:
+    for entry in _summary_agent_index_entries(root, user):
+        entry_summary_file = _entry_summary_file(entry)
+        if entry_summary_file and _same_summary_file(root, entry_summary_file, summary_file):
+            return entry
+    return None
+
+
+def _index_entry_for_summary_file_any_user(root: Path, summary_file: str) -> dict[str, Any] | None:
+    summary_agent_root = root / "data" / "summary_agent"
+    if not summary_agent_root.is_dir():
+        return None
+    for index_path in sorted(summary_agent_root.glob("*/index.json")):
+        entry = _index_entry_for_summary_file(root, index_path.parent.name, summary_file)
+        if entry is not None:
             return entry
     return None
 
@@ -476,20 +500,38 @@ def _summarize_item(
             if summary_md:
                 raw_slug = str(hit.get("slug") or _slug_seed(Path(str(summary_file)).stem.removesuffix("_output")))
                 slug = _result_slug_for_row(row, raw_slug)
-                entry = _index_entry_for_url(root, user, str(row["url"] or ""))
-                metadata = entry.get("metadata") if isinstance(entry, dict) and isinstance(entry.get("metadata"), dict) else {}
+                entry = (
+                    _index_entry_for_url(root, user, str(row["url"] or ""))
+                    or _index_entry_for_summary_file(root, user, str(summary_file))
+                    or _index_entry_for_summary_file_any_user(root, str(summary_file))
+                )
+                index_metadata = (
+                    entry.get("metadata") if isinstance(entry, dict) and isinstance(entry.get("metadata"), dict) else {}
+                )
+                hit_metadata = hit.get("metadata") if isinstance(hit.get("metadata"), dict) else {}
                 return {
                     "slug": slug,
                     "recommendation": (
                         hit.get("recommendation")
-                        or metadata.get("recommendation")
+                        or hit_metadata.get("recommendation")
+                        or index_metadata.get("recommendation")
                         or _recommendation_from_summary(summary_md)
                     ),
                     "save_decision": True,
                     "save_reason": hit.get("save_reason") or "URL already exists in ai-assistant KB",
-                    "tags": _safe_tags(hit.get("tags")) or _safe_tags(metadata.get("tags")),
+                    "tags": (
+                        _safe_tags(hit.get("tags"))
+                        or _safe_tags(hit_metadata.get("tags"))
+                        or _safe_tags(index_metadata.get("tags"))
+                    ),
                     "summary_md": summary_md,
-                    "model": hit.get("model") or metadata.get("model_name") or metadata.get("model"),
+                    "model": (
+                        hit.get("model")
+                        or hit_metadata.get("model_name")
+                        or hit_metadata.get("model")
+                        or index_metadata.get("model_name")
+                        or index_metadata.get("model")
+                    ),
                     "kb_synced": True,
                     "saved": False,
                 }

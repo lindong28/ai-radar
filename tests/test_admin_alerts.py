@@ -26,6 +26,12 @@ def _normal_signals() -> AlertSignals:
     )
 
 
+def _healthz_ok(url: str, timeout: float) -> bool:
+    assert url == "http://127.0.0.1:8000/api/v1/healthz"
+    assert timeout <= 2.0
+    return True
+
+
 def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
     normal = evaluate_rules(_normal_signals())
 
@@ -72,9 +78,7 @@ def test_a2_heartbeat_tolerates_in_progress_runs_and_only_fires_on_real_stall() 
     assert "SKIP" in a2.detail
 
 
-def test_a3_fires_only_on_server_error_rate() -> None:
-    # The healthz dimension was a dead signal (hardcoded 0); A3 now depends
-    # solely on the observed user-side 5xx rate.
+def test_a3_fires_on_server_error_rate_or_confirmed_healthz_failures() -> None:
     healthy = _normal_signals()
     assert evaluate_rules(healthy)[2].firing is False
 
@@ -82,7 +86,76 @@ def test_a3_fires_only_on_server_error_rate() -> None:
     errors.server_error_rate = 0.2
     a3 = evaluate_rules(errors)[2]
     assert a3.firing is True
-    assert "healthz" not in a3.detail
+
+    healthz_down = _normal_signals()
+    healthz_down.healthz_consecutive_failures = 2
+    a3 = evaluate_rules(healthz_down)[2]
+    assert a3.firing is True
+    assert "healthz" in a3.detail
+
+
+def test_a4_daily_insert_floor_is_time_proportional() -> None:
+    early = _normal_signals()
+    early.items_today = 3
+    early.minutes_elapsed_today = 30
+
+    a4 = evaluate_rules(early)[3]
+
+    assert a4.firing is False
+    assert a4.values["daily_inserted_floor"] == 127
+    assert a4.values["daily_inserted_floor_elapsed"] == 2
+
+    lagging = _normal_signals()
+    lagging.items_today = 0
+    lagging.minutes_elapsed_today = 720
+
+    a4 = evaluate_rules(lagging)[3]
+
+    assert a4.firing is True
+    assert a4.values["daily_inserted_floor_elapsed"] == 63
+
+
+def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    sent: list[str] = []
+    now = datetime.fromisoformat("2026-06-09T08:00:00+08:00")
+    calls: list[tuple[str, float]] = []
+
+    def healthz_down(url: str, timeout: float) -> bool:
+        calls.append((url, timeout))
+        return False
+
+    first = run_alert_state_machine(
+        _normal_signals(),
+        state_path=state_path,
+        now=now,
+        send=lambda text: sent.append(text),
+        healthz_probe=healthz_down,
+    )
+    second = run_alert_state_machine(
+        _normal_signals(),
+        state_path=state_path,
+        now=now + timedelta(minutes=5),
+        send=lambda text: sent.append(text),
+        healthz_probe=healthz_down,
+    )
+    recovered = run_alert_state_machine(
+        _normal_signals(),
+        state_path=state_path,
+        now=now + timedelta(minutes=10),
+        send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
+    )
+
+    assert calls == [
+        ("http://127.0.0.1:8000/api/v1/healthz", 2.0),
+        ("http://127.0.0.1:8000/api/v1/healthz", 2.0),
+    ]
+    assert first["results"][2]["firing"] is False
+    assert second["results"][2]["firing"] is True
+    assert recovered["results"][2]["firing"] is False
+    assert "🔴 A3" in sent[0]
+    assert "✅ A3" in sent[1]
 
 
 def test_alert_state_machine_sends_firing_once_during_cooldown_then_resolved(tmp_path: Path) -> None:
@@ -92,24 +165,33 @@ def test_alert_state_machine_sends_firing_once_during_cooldown_then_resolved(tmp
     firing = _normal_signals()
     firing.upstream_error_rate = 0.8
 
-    first = run_alert_state_machine(firing, state_path=state_path, now=now, send=lambda text: sent.append(text))
+    first = run_alert_state_machine(
+        firing,
+        state_path=state_path,
+        now=now,
+        send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
+    )
     second = run_alert_state_machine(
         firing,
         state_path=state_path,
         now=now + timedelta(minutes=10),
         send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
     )
     third = run_alert_state_machine(
         firing,
         state_path=state_path,
         now=now + timedelta(minutes=31),
         send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
     )
     resolved = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
         now=now + timedelta(minutes=40),
         send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
     )
 
     assert first["sent_count"] == 1
@@ -139,12 +221,19 @@ def test_a4_debounce_absorbs_transient_flap(tmp_path: Path) -> None:
     sent: list[str] = []
     now = datetime.fromisoformat("2026-06-09T16:31:00+08:00")
 
-    first = run_alert_state_machine(_a4_firing(), state_path=state_path, now=now, send=lambda text: sent.append(text))
+    first = run_alert_state_machine(
+        _a4_firing(),
+        state_path=state_path,
+        now=now,
+        send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
+    )
     recovered = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
         now=now + timedelta(minutes=15),
         send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
     )
 
     assert first["sent_count"] == 0  # within debounce window → not yet confirmed
@@ -159,18 +248,26 @@ def test_a4_debounce_fires_after_sustained_outage_then_resolves(tmp_path: Path) 
     sent: list[str] = []
     now = datetime.fromisoformat("2026-06-09T16:31:00+08:00")
 
-    first = run_alert_state_machine(_a4_firing(), state_path=state_path, now=now, send=lambda text: sent.append(text))
+    first = run_alert_state_machine(
+        _a4_firing(),
+        state_path=state_path,
+        now=now,
+        send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
+    )
     confirmed = run_alert_state_machine(
         _a4_firing(),
         state_path=state_path,
         now=now + timedelta(minutes=31),
         send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
     )
     resolved = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
         now=now + timedelta(minutes=50),
         send=lambda text: sent.append(text),
+        healthz_probe=_healthz_ok,
     )
 
     assert first["sent_count"] == 0  # debounced

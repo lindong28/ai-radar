@@ -15,11 +15,12 @@
 
 ---
 
-## [open] interpret 回填无法并发——复用的 ai-assistant KB 写入器非并发安全
+## [resolved] interpret 回填无法并发——复用的 ai-assistant KB 写入器非并发安全
 
 - Type: improvement
 - Priority: low
 - Discovered: 2026-06-02 wechat-article-interpretation plan 执行中（TASK-008 回填提速评估，supervisor 调查）
+- Resolution (2026-06-15): 维持串行（wontfix-by-decision）。一次性历史回填已完成（2026-06-02 启动时近六成，cron `interpret` 增量串行跑完）；稳态下每轮只增量处理新增几篇，串行永远够用，并发改造零长期收益。复用的 ai-assistant KB 写入器（`index.json`+`vectors.npy` 整文件读-改-写、零拷贝复用硬约束）非并发安全，ai-radar 侧并发会引入 KB 损坏风险；真正的上游修复（ai-assistant 侧加锁/原子追加）不在本项目。将来若需大批量重处理，按原 Notes 的安全形态（summarize 并行写独立 batch、save 串行排队）单独评估，不为日常运行预做。
 - Description: `interpret` stage 的回填（`./run.sh interpret --backfill`）逐篇串行处理（`src/airadar/interpret/runner.py` 的 `for row in rows:`）——163 篇 × DeepSeek 总结约 60–90s/篇 ≈ 2–3 小时。每篇耗时主要在 summarize（DeepSeek）调用，该步骤独立、本身可并发；但每篇的 **save 回 KB** 步骤（`ai-assistant run.sh --save-from-batch` → `embedding --add`）写两个**全局共享、顺序必须一致**的文件：`index.json`（元数据事实来源）与 `vectors.npy`（约 1.8MB numpy embedding 数组，顺序与 index.json 严格对应），且 `--add` 是**整文件读-改-写**。并发 save 会互相覆盖 → index 与 vectors 错位 / 丢更新 / 损坏。由于对 ai-assistant 是**零拷贝复用**（本特性硬约束，不 fork 不改其代码），其 KB 写入器不是并发安全的，因此整条回填只能串行。
 - Notes:
   - 影响面有限：这是**一次性**回填（plan D9 已把它移出热循环）；稳态下 cron `interpret` 每轮只增量处理新增的几篇，串行永远够用——并发改造对日常运行零长期收益，只对将来"大批量重处理"场景有意义。
@@ -42,11 +43,12 @@
 
 ---
 
-## [open] 22 个 X 源全部走 nitter.net 单 instance，无 fallback
+## [resolved] 22 个 X 源全部走 nitter.net 单 instance，无 fallback
 
 - Type: improvement
 - Priority: medium
 - Discovered: 2026-05-29 调查"各 source 拉取节奏"时，看 pipeline log 发现 `FAIL openai_devs_x SSL UNEXPECTED_EOF`（21:15 那次 cron）
+- Resolution (2026-06-15): 前提已失效。`data/sources.toml` 当前仅 1 个 `kind="x"` 源（simon willison，走 Mastodon/fedi feed `fedi.simonwillison.net/@simon.rss`，非 nitter），nitter.net 在 sources.toml 中已无任何引用——原"22 个 X 源全部走 nitter.net 单 instance"的整批同点失败模式不复存在（X 源经 prune/迁移，存活者已转 fedi）。残留 nitter 引用仅 `src/airadar/fetcher/urls.py`（X_STATUS_HOSTS 历史归一化）+ alert 注释，非活跃摄取路径。余下唯一 X 源走 fedi，单源脆弱性不构成本 issue 的"整批静默失败"量级。
 - Description: `data/sources.toml` 里 22 个 `kind="x"` 源的 URL 全部指向 `nitter.net/<handle>/rss`。nitter.net 主 instance 经常被 X rate limit、SSL 偶发失败、整 instance 也时不时挂。一旦它不可达，所有 22 个 X 源同时静默失败（pipeline 标 FAIL 后继续，无告警）。
 - Notes:
   - 实际影响：X 源占 enabled 总数 65%（22/34），其中包含 T1 的 `openai_x`。挂一整段会让公开站点的内容池显著变窄。
@@ -55,11 +57,12 @@
 
 ---
 
-## [open] WeChat 链路有 2 小时主动监控盲区
+## [resolved] WeChat 链路有 2 小时主动监控盲区
 
 - Type: improvement
 - Priority: low
 - Discovered: 2026-05-29 完成 WeWe RSS launchd 守护后的端到端节奏分析
+- Resolution (2026-06-15): 本 issue 的前提（WeWe 容器内 cron `7 */2 * * *`、扫码 token 失效链路）随 WeChat 摄取迁移到托管 Mp2RSS 合集 feed（`wx_mp2rss`，由常规 pipeline 15min cron 消费上游维护登录态）整体退役而失效——WeWe 容器与扫码登录已从服务层移除（见 `docs/operations/wechat-ingestion.md` §接入方案）。原 2h-WeWe-cron 盲点不复存在。泛化的"ingestion 滞后无主动监控"关切（若 Mp2RSS feed 停更如何发现）属另一机制，归入 [[缺少跨源覆盖率监控]] 同族，由 monitoring-alerting 体系覆盖，不再单独保留本条。
 - Description: WeWe 容器内 cron `7 */2 * * *` 决定了"WeChat 公众号→本地"链路最大刷新间隔是 2 小时。这个频率由 WeWe 上游 default 决定，调短的风险是被微信读书风控。当前没有"WeWe 长时间没拉到新文章"的主动告警——只能事后看 SQLite `articles.created_at` 的最大值确认。
 - Notes:
   - 不打算调 WeWe cron（动了风险大于收益）。
@@ -125,11 +128,12 @@
 
 ---
 
-## [open] 缺少跨源的数据覆盖率 / 一致性监控（ingestion→prefilter→score→可见 全链路）
+## [resolved] 缺少跨源的数据覆盖率 / 一致性监控（ingestion→prefilter→score→可见 全链路）
 
 - Type: improvement
 - Priority: medium
 - Discovered: 2026-05-30 timeline-search 部署后，靠用户在产品上实测才撞见 wechat 源 prefilter 覆盖率仅 10%（vs feed 70% / x 81%）——无任何主动监控会自动报这种异常
+- Resolution (2026-06-15): 归并（fold-into-plan）。跨源覆盖率/一致性监控属"ingestion 链路主动健康监控"族（同 [[WeChat 2h 盲区]] 已随 Mp2RSS 迁移失效、[[A3 healthz 维度]] 已加主动探测），其体系化载体是已定稿的 monitoring-alerting plan（`plans/20260601-monitoring-alerting/`）。该 plan 的后续 build-out 应纳入"每源 库内文章数 vs 各 stage 已处理数 vs timeline/搜索可见数"的覆盖率检查与异常告警；不在 general.md 重复跟踪，避免与 plan 双轨。短期通用 verify 原则改进（L2/L3 端到端覆盖率/一致性检查）已落地。
 - Description: 当前没有持续运行的健康检查去监控"每个 enabled 源的文章从 ingestion 到可见（prefilter→score→curate→可搜）各环节的覆盖率与一致性"。prefilter backfill bug 导致 wechat 18/20 篇有原文却从不可见，系统不主动报警，只能靠用户实测撞见。
 - Notes:
   - 体系化「发现机制」：定期跑的检查，对比每源「库内文章数 vs 各 stage 已处理数 vs timeline/搜索可见数」，覆盖率显著低于同类源均值即告警。
@@ -231,16 +235,26 @@
 
 ---
 
-## [open] launchd serve plist 与 test_service_contract 期望漂移（access log 路径）
+## [resolved] launchd serve plist 与 test_service_contract 期望漂移（access log 路径）
 
 - Type: bug
 - Priority: low
 - Discovered: 2026-06-08 daily 历史数据修复 session 跑全量测试时（已验 pre-task `HEAD` 基线同样 fail = 既有，与本次 curated 改动无关）
-- Description: `tests/test_service_contract.py::test_serve_launchd_writes_access_log_to_persistent_logs_dir` 期望 `deploy/launchd/ai-radar-serve.plist` 的 `StandardOutPath` 指向 `<repo>/logs/serve-access.log`，但实际 plist 指向 `/tmp/ai-radar-serve.log` + `StandardErrorPath=/tmp/ai-radar-serve.err`。test 与 plist 哪个为准需确认：若访问日志应持久化到 `logs/`，改 plist；否则改 test。Fix 方向：对齐二者，确认生产 serve 的 access log 落盘位置。
+- Description: `tests/test_service_contract.py` 期望 `deploy/launchd/ai-radar-serve.plist` 的 `StandardOutPath` 指向 `<repo>/logs/serve-access.log`，但实际 plist 指向 `/tmp/ai-radar-serve.log` + `StandardErrorPath=/tmp/ai-radar-serve.err`。test 与 plist 哪个为准需确认：若访问日志应持久化到 `logs/`，改 plist；否则改 test。Fix 方向：对齐二者，确认生产 serve 的 access log 落盘位置。
+- Resolution (2026-06-15): 已对齐——plist 现指向 `<repo>/logs/serve-access.log` / `logs/serve-access.err.log`（`deploy/launchd/ai-radar-serve.plist:15-16`），`tests/test_service_contract.py` 全部 5 个测试通过。本 issue 在 resolve-issues 核实时确认已修，回写 closed。
 
-## [open] test_phase2 wechat 卡片点击测试数据依赖 flaky（.timeline-card 不可见）
+## [resolved] test_phase2 wechat 卡片点击测试数据依赖 flaky（.timeline-card 不可见）
 
 - Type: bug
 - Priority: low
 - Discovered: 2026-06-08 daily 历史数据修复 session（已验 pre-task `HEAD` 基线同样 fail = 既有，与本次 curated 改动无关）
 - Description: `tests/playwright/test_phase2.py::test_wechat_card_body_click_opens_detail_and_back_preserves_page` 等待 `.timeline-card` 可见超时——依赖本地 DB 内有 wechat 数据，数据缺失即 fail。与 general.md 既有的 test_phase2 数据依赖 flaky 同族。Fix 方向：测试自带 seed 数据或显式 skip 无数据场景，去除对本地 DB 现状的隐式依赖。
+- Resolution (2026-06-15): `tests/playwright/test_phase2.py` 加 `_require_wechat_cards_on_page(page, base_url, page_number)` 守卫——测试先查 `/api/v1/wechat?page=N&limit=50`，若无可见 wechat 数据则 `pytest.skip(...)` 给出明确原因，不再隐式依赖本地 DB 现状（断言本身未削弱）。ruff + py_compile 通过。注：Playwright fixture 复用项目 `data/radar.db`（生产 serve 占锁），完整运行态验证需在无 serve 占锁的隔离环境进行。
+
+## [open] test_no_write_endpoints 写共享生产 DB，serve/cron 写入期 transient "database is locked"
+
+- Type: bug
+- Priority: low
+- Discovered: 2026-06-15 resolve-issues 全量验证时——`uv run pytest --ignore=tests/playwright -q` 偶发 `tests/test_no_write_endpoints.py::test_business_routes_are_read_only` 报 `sqlite3.OperationalError: database is locked`（`src/airadar/db.py:56`）；同轮重跑或换 `AI_RADAR_DB=/tmp/...` 即过，故为环境争用而非代码回归。
+- Description: 该测试通过发写请求验证"业务路由只读"，但运行在共享的生产 `data/radar.db` 上——生产 serve（127.0.0.1:8000，aiplanet.live）+ 15min `score --since 24h` cron 写入时会拿到写锁，测试的写探针在短 busy_timeout 内撞锁即 fail。同族于 [[test_phase2 数据依赖 flaky]]：测试未隔离 DB，依赖运行环境。Fix 方向：测试改用隔离 DB（`AI_RADAR_DB` 指向 tmp 副本或 fixture 临时库），不写共享生产库。
+- Notes: 本轮 resolve-issues 期间发现（非本轮引入）。与 #13 同属"测试 DB 隔离缺失"。

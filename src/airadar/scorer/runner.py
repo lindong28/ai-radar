@@ -33,10 +33,11 @@ def _utc_now() -> str:
 
 
 def _parse_since(value: str) -> datetime:
-    value = value.strip().lower()
-    if value.endswith("h"):
+    value = value.strip()
+    unit = value[-1:].lower()
+    if unit == "h":
         return datetime.now(UTC) - timedelta(hours=float(value[:-1]))
-    if value.endswith("d"):
+    if unit == "d":
         return datetime.now(UTC) - timedelta(days=float(value[:-1]))
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 

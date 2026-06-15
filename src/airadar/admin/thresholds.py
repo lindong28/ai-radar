@@ -24,6 +24,9 @@ ALERT_THRESHOLDS: dict[str, object] = {
     "a3": {
         "window_minutes": 15,
         "server_error_rate": 0.05,
+        "healthz_url": "http://127.0.0.1:8000/api/v1/healthz",
+        "healthz_timeout_seconds": 2.0,
+        "healthz_consecutive_failures": 2,
     },
     "a4": {
         "fetch_failed_ratio": 0.4,

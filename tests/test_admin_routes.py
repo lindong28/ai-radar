@@ -4,6 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from airadar.db import migrate
@@ -59,6 +60,42 @@ def test_admin_metrics_requires_cloudflare_access_header(tmp_path: Path) -> None
     assert payload["success"] is True
     assert payload["data"]["timezone"] == "Asia/Shanghai"
     assert payload["data"]["pipeline"]["stages"]["scoring"]["processed"] == 1
+
+
+def test_admin_metrics_blocks_loopback_without_dev_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_RADAR_ADMIN_ALLOW_LOCAL", raising=False)
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    assert client.get("/api/v1/admin/metrics").status_code == 403
+
+
+def test_admin_metrics_allows_loopback_with_dev_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_RADAR_ADMIN_ALLOW_LOCAL", "yes")
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    response = client.get("/api/v1/admin/metrics")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+
+def test_admin_metrics_allows_cloudflare_header_from_loopback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_RADAR_ADMIN_ALLOW_LOCAL", raising=False)
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    response = client.get("/api/v1/admin/metrics", headers={"Cf-Access-Jwt-Assertion": "test"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
 
 
 def test_admin_page_renders_four_dashboard_sections(tmp_path: Path) -> None:

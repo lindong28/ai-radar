@@ -9,6 +9,7 @@
 
 ## 2026-06-07 [expansion] ux-contract §微信文章解读页 未覆盖新增的搜索功能
 
+- Resolution (2026-06-15): 已在 ux-contract.md `/wechat` 页面描述与 WX-4 写入 WeChat 专属搜索字段、LIKE/繁简/2 字行为、URL/分页/详情/404 上下文和空态，修正"v1 无搜索"旧描述。
 - Discovered: execute-plan 实施 `20260607-wechat-interpretation-search`（/wechat 新增搜索框）后的 supervisor 收尾核查 + test-ux 验收。已上线公开站点 `/wechat`。
 - Description: 契约 §微信文章解读页 当前只描述"列表卡片 + 站内详情"、无搜索；但 `/wechat` 已新增搜索框，且语义**刻意不同于**精选/全部页（后者匹配 标题/正文/来源名/作者/中文标题、≥3 字走 FTS）：
   - 匹配字段：原文标题 / 公众号名(作者) / 摘要(abstract) / 标签(tags)——**不搜正文、不搜结构化解读全文 summary_md、不匹配聚合 feed 来源名 s.name「微信公众号（Mp2RSS 合集）」**（匹配 s.name 会让全部条目命中）。
@@ -21,6 +22,7 @@
 
 ## 2026-06-01 [expansion] ux-contract 未明确搜来源名时的排序承诺
 
+- Resolution (2026-06-15): 已在 HP-4/TL-3 写入 `q` 生效时来源名/作者命中优先、同层按 `source_id` 轮转进入分页结果、无 `q` 保持时间倒序。
 - Discovered: 中文/微信公众号源搜索可用性修复（#6）落地后，产品实现已在搜索态将 source name / author 命中的条目排在内容命中之前，并在同名来源之间用 source_id 轮转，避免高产同名源淹没低产公众号源。
 - Description: `ux-contract.md` HP-4 已承诺"搜源名返回该源内容"，但未定义首屏排序语义。没有排序契约时，未来重构可能回退到纯时间序，导致 `歸藏` 这类同名 X + 微信公众号场景再次让公众号在首屏外。
 - Recommendation: 在搜索契约中补充：有 `q` 时，source name / author 命中优先于 title/content-only 命中；同一命中层内按来源轮转保证每个命中来源首条在 page1 可见；无 `q` 时保留原时间/日期排序。
@@ -29,6 +31,7 @@
 
 ## 2026-05-28 19:20 [expansion] ux-contract 未明确 `/` 和 `/all` 首屏应 SSR 预载且不显示 loading spinner
 
+- Resolution (2026-06-15): 已在 HP-1/TL-1/RS-3 写入 `/` 与 `/all` 首屏 SSR preload、HTML 到达即有 `.item-row`、不依赖初始 `/api/v1/*` fetch、无可感知 spinner。
 - Discovered: SSR preload plan production verification for the public site after comparing the existing CSR loading behavior with AIHOT-style inline/preloaded content.
 - Description: 当前实现已让 `/`、`/all` 和三个常见 deep link 在生产环境首屏直出 `.item-row`，Playwright gate 结果为 spinner 0、initial API 0，FCP median 均低于 1.5s。但 ux-contract 还没有把"主 feed 首屏应在 HTML/preload 阶段可见，不依赖初始 API fetch，也不出现可感知 loading spinner"作为行为契约写死。
 - Recommendation: 在对应 Feed Reading / Initial Load contract 中补充：`/` 与 `/all` 的首屏内容必须通过 SSR preload 或等价机制在 HTML 到达后即可渲染；生产验证以 spinner 出现次数、首个 `.item-row` 时间、initial `/api/v1/*` 请求数为指标。
@@ -37,6 +40,7 @@
 
 ## 2026-05-29 [expansion] ux-contract 未约定图片加载行为（图床可达性 / 不阻塞首屏 / 懒加载），与 AIHOT 实现存在 parity gap
 
+- Resolution (2026-06-15): 已在 HP-7 写入当前 shipped 图片 lazy loading 与失败隔离契约；未改变产品行为，未引入图片代理或额外属性。
 - Discovered: 对比 `https://aihot.virxact.com/all` 加载机制的讨论收尾。AIHOT 首屏初次加载发起 26 个 `/api/img-proxy?u=<encoded-image-url>` 请求代理外部图床（主要是 X `pbs.twimg.com` 头像），并行下载且不阻塞 HTML 首屏渲染。AI Planet 现状是 `app.js` 渲染卡片时直接引用原始外部图床 URL（X `pbs.twimg.com`、各家 OG image 等），无服务端代理、无懒加载属性。
 - Description: 现行 `ux-contract.md` Feed Reading 段只约束文本/标签/分数的首屏可见性，对图片只字未提。实际后果至少三条：(a) X 图床在国内网络不稳定，图片偶发失败/超时但 contract 未声明"图片失败不应影响阅读"或"图片必须可达"；(b) 大量并行图片请求与文本首屏共享 HTTP 连接预算，理论上可能拖累 `.item-row` 渲染（已通过 SSR prepaint 缓解但未量化）；(c) Off-screen 图片随 HTML 一并加载，浪费首屏带宽。AIHOT 通过 `/api/img-proxy` 同源代理把图床可达性收敛到自家 CF/服务器，并隐式启用浏览器 connection coalescing。
 - Recommendation: 三选一或组合：
@@ -49,6 +53,7 @@
 
 ## 2026-05-18 22:30 [drift] aihot-parity-contract §SourceParity-AboutSurfaceReflection 假设 AIHOT 通过 /about 暴露 source pool，实际 AIHOT /about 是个人介绍页 + 公众号 QR
 
+- Resolution (2026-06-15): Obsolete/resolved：`aihot-parity-contract.md` 已在开源清理中移除，目标契约不存在，不再需要修订该 parity 条目。
 - Discovered: 2026-05-18-r1 / s3-parity-auditor / Layer 1 跑测时对照 AIHOT `/about`
 - Description: `aihot-parity-contract.md §SourceParity-AboutSurfaceReflection` 暗含"两端 /about 都暴露 source table"的假设；实测 AIHOT `/about` (`evidence/s3/aihot-about.png`) 是"嗨,我是数字生命卡兹克 / 这个站是我做的,免费给大家用" + 公众号 QR，不暴露任何 source pool。AIHOT 的源池只能从 `/all` / `/curated` 卡片头像 + handle 推断。AI Planet `/about` 暴露 41 行 source table 是设计差异，不算 issue（VISION §6 透明原则），但当前契约措辞会让下游 test-ux 误以为可以两端 `/about` 直接对照。
 - Recommendation: 修改 §0 参照锚点表中 `信源池真值` 一栏，对 AIHOT 改为 "公开站点暴露源（卡片头像 + handle，不通过 /about）"；并把 §SourceParity-AboutSurfaceReflection 改为 AI Planet 内部一致性测试（`sources.toml` ↔ `/about table`），不再要求与 AIHOT 对照。
@@ -57,6 +62,7 @@
 
 ## 2026-05-18 22:30 [drift] ux-contract §Feature-DailyNav 与 §Feature-DailySections 在"合法日期 + 无内容"上承诺重叠/冲突
 
+- Resolution (2026-06-15): 已在 DY-2 拆分边界：非法/不可解析日期切最近一期并显示 fallback banner；合法但无数据日期保留该日期并显示明确空态。
 - Discovered: 2026-05-18-r1 / s4-responsive-and-edges / Issue 6（也被 s1-first-time-visitor Issue 2 在 `/daily/1999-01-01` 上独立交叉验证）
 - Description: §Feature-DailyNav 边界承诺：「访问 `/daily/<无效或无内容日期>` 时静默切到最近一期，并显示 fallback banner」；§Feature-DailySections 边界承诺：「某日全节皆空时整个 sections 区显示明确空态文案而非白屏」。两条边界在"合法日期格式但无数据"上重叠：当前实现是 `/daily/9999-99-99`（非法格式）走 §Feature-DailyNav fallback banner，`/daily/2000-01-01` 或 `/daily/1999-01-01`（合法格式 + 无数据）走 §Feature-DailySections 空态文案。契约没区分"非法格式 vs 合法 + 无内容"两种情形，导致同样是无内容用户拿到两种不同体验。
 - Recommendation: 拆分边界承诺。建议措辞：
@@ -68,6 +74,7 @@
 
 ## 2026-05-18 22:30 [drift] ux-contract §Feature-Pagination 措辞"超范围 page 返回空列表"，实现是 clamp 到 max page
 
+- Resolution (2026-06-15): Resolved：ux-contract.md HP-8/TL-4/WX-4 现均明确越界页码 clamp 到最后一页，契约已与实现对齐。
 - Discovered: 2026-05-18-r1 / s4-responsive-and-edges Issue 5 + Issue 8（s2-returning-power-user Issue 5 也在 `?page=999` 上看到了长 loading 后才发生 clamp）
 - Description: §Feature-Pagination 边界："超范围 page 返回空列表，分页器仍可回退；page<1 或非数字按 1 处理。" 实测 `/all?page=999` 经过 ~9s loading 后 URL 被前端改写为 `/all?page=16`（最后一页），渲染该页内容；`/all?category=ai-models&page=2`（超范围因为 ai-models 只 1 页）则 URL 被改写为 `/all?category=ai-models`（直接剥掉 page 参数）。两种行为都不是契约措辞的"返回空列表"。
 - Recommendation: 二选一并写死：
@@ -79,6 +86,7 @@
 
 ## 2026-05-29 07:15 [expansion] ux-contract 未覆盖 wechat（微信公众号）源类型及其"未 enrich 时抑制正文预览"的展示规则
 
+- Resolution (2026-06-15): 已在 TL-2 写入微信公众号来源归入"资讯"、未 enrich 时抑制正文预览、enrich 后显示中文摘要、标题回链 mp.weixin 原文。
 - Discovered: execute-plan 实施 `20260528-wechat-oa-ingestion`（新增 `kind="wechat"` 源）后的 supervisor 收尾核查。
 - Description: 新增 wechat 源（首批 歸藏的AI工具箱 / 十字路口Crossing）归入"资讯"频道（`kind != "x"`），在 `/` 与 `/all` 同普通 feed 源一并展示。但有一处 wechat 特有的展示规则未写入 ux-contract：出于合规（不公开转载公众号正文），wechat item 在 web 层**抑制 `content_preview`**——未 enrich 的 wechat 卡片正文区为空（仅中文标题 + 回链 mp.weixin），enrich 后才显示 `summary_zh`；而普通 feed 源未 enrich 时仍显示 `content_preview`（正文前 320 字）。当前 ux-contract（§TL-2 信源类型筛选只列 一手信源/资讯/推文；卡片展示默认有 preview/摘要）未反映这点，下游 test-ux 可能把"未 enrich 的 wechat 卡片无正文预览"误判为 bug。
 - Recommendation: 在 ux-contract 补充 wechat 源的展示契约：(a) wechat 源归入"资讯"类型（feed/x/wechat 三类信源）；(b) 卡片正文：enrich 后显示中文摘要，未 enrich 时仅标题 + 回链（正文不对外公开，合规要求）；(c) 点击标题回链到 `mp.weixin.qq.com` 原文。
@@ -87,6 +95,7 @@
 
 ## 2026-05-18 22:30 [expansion] ux-contract §Feature-CategoryFilter 未明确"无效 slug 静默回退时是否清掉 URL 上的脏参数"
 
+- Resolution (2026-06-15): 已在 HP-3 写入 `/?category=<无效 slug>` 静默回退到"全部"并由客户端剥除无效 `category` 参数。
 - Discovered: 2026-05-18-r1 / s2-returning-power-user Issue 9（深链 `/?category=invalid-slug` 测试）
 - Description: §Feature-CategoryFilter 边界："无效 slug 静默回退到「全部」（不报错）。" 实测 `/?category=invalid-slug` 行为：列表正确渲染全部精选 ≈5s 后地址栏被改写为公开站点根路径（脏参数被剥）。契约没说要清也没说要保留。两种行为各有理由：清 → 防止用户把坏链发出去再次复制；保留 → 让 admin / monitoring 看到误配。
 - Recommendation: 在 §Feature-CategoryFilter 边界条目补一句明确，例如：「URL 保留无效参数以便排错」或「URL 清掉无效参数防止扩散」。同理 §Feature-ChannelFilter 也需补；§Feature-Pagination 的 page<1 / 非数字行为同样未说 URL 是否清——可以一并归类为"无效 query 参数的 URL 处理策略"统一段落。

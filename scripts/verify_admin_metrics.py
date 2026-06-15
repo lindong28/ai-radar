@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sqlite3
 from collections import defaultdict
@@ -11,6 +12,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -18,6 +20,8 @@ from airadar.admin.access_log import aggregate_access_log
 from airadar.db import DEFAULT_DB_PATH, PROJECT_ROOT
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+ADMIN_ALLOW_LOCAL_ENV = "AI_RADAR_ADMIN_ALLOW_LOCAL"
+LOCAL_ADMIN_HOSTS = {"127.0.0.1", "::1", "localhost"}
 PIPELINE_FILE_RE = re.compile(r"pipeline-(?P<stamp>\d{8}-\d{6})\.log$")
 STAGE_EVENT_RE = re.compile(
     r"^\[(?P<ts>[^\]]+)\]\s+===\s+(?P<stage>[a-z_]+)\s+(?P<event>START|OK|FAIL)(?:\s+\(exit\s+\d+\))?\s+==="
@@ -178,6 +182,16 @@ def read_access_lines(paths: list[Path]) -> list[str]:
     return lines
 
 
+def is_local_admin_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and (parsed.hostname or "").lower() in LOCAL_ADMIN_HOSTS
+
+
+def enable_local_admin_access(url: str) -> None:
+    if is_local_admin_url(url):
+        os.environ.setdefault(ADMIN_ALLOW_LOCAL_ENV, "1")
+
+
 def fetch_metrics(url: str) -> dict[str, Any]:
     request = Request(url, headers={"Accept": "application/json"})
     with urlopen(request, timeout=15) as response:
@@ -312,6 +326,7 @@ def main() -> int:
 
     access_paths = args.access_log or [PROJECT_ROOT / "logs" / "serve-access.log", Path("/tmp/ai-radar-serve.log")]
     access_lines_snapshot = read_access_lines(access_paths)
+    enable_local_admin_access(args.url)
     actual = fetch_metrics(args.url)
     start = parse_dt(actual["window"]["today_start"])
     end = parse_dt(actual["window"]["today_end"])

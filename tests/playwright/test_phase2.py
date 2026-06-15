@@ -4,6 +4,7 @@ import json
 import re
 from urllib.parse import parse_qs, unquote, urlparse
 
+import pytest
 from playwright.sync_api import Page, expect
 
 PRELOAD_RE = re.compile(
@@ -40,6 +41,22 @@ def _api_total(page: Page, base_url: str, path: str) -> int:
     payload = response.json()
     assert payload["success"] is True
     return int(payload["data"]["total"])
+
+
+def _require_wechat_cards_on_page(page: Page, base_url: str, page_number: int) -> None:
+    path = f"/api/v1/wechat?page={page_number}&limit=50"
+    response = page.request.get(f"{base_url}{path}")
+    assert response.ok
+    payload = response.json()
+    assert payload["success"] is True
+    data = payload["data"]
+    items = data["items"]
+    current_page = int(data["page"])
+    if current_page != page_number or not items:
+        pytest.skip(
+            f"requires local WeChat data visible on /wechat?page={page_number}; "
+            f"{path} returned page={current_page} with {len(items)} items (total={data['total']})"
+        )
 
 
 def _grouped_times(page: Page) -> list[list[str]]:
@@ -271,6 +288,7 @@ def test_v10f_all_page_pagination_is_a_natural_click_target(page: Page, base_url
 
 
 def test_wechat_card_body_click_opens_detail_and_back_preserves_page(page: Page, base_url: str) -> None:
+    _require_wechat_cards_on_page(page, base_url, 2)
     _goto(page, base_url, "/wechat?page=2", cards=True)
 
     first_card = page.locator(".wechat-card").first
