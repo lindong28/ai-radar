@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from ..llm_usage import db_path_from_connection, usage_db_path
 from ..provider.base import ProviderItem, ScoringProvider, ScoringResult
 from ..provider.codex_gpt_mini import CodexGptMiniScorer
+from ..provider.deepseek_v4_flash import DeepSeekV4FlashScorer
 from ..provider.deepseek_v4_pro import DeepSeekV4ProScorer
 from ..ruleset import current_version
 from .prompts import render_scoring_prompt
@@ -44,9 +45,11 @@ def _parse_since(value: str) -> datetime:
 
 
 def _provider_from_env() -> ScoringProvider:
-    name = os.environ.get("AI_RADAR_SCORER", "deepseek_v4_pro")
+    name = os.environ.get("AI_RADAR_SCORER", "deepseek_v4_flash")
     if name == "codex_gpt_mini":
         return CodexGptMiniScorer()
+    if name == "deepseek_v4_flash":
+        return DeepSeekV4FlashScorer()
     if name == "deepseek_v4_pro":
         return DeepSeekV4ProScorer()
     raise ValueError(f"unknown AI_RADAR_SCORER provider: {name}")

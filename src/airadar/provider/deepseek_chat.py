@@ -10,6 +10,7 @@ import json_repair
 from openai import OpenAI
 
 from ..llm_usage import LlmUsageRecord, estimate_cost_usd, record_llm_usage, usage_int
+from . import ark_breaker
 
 
 @dataclass(frozen=True)
@@ -62,17 +63,10 @@ def chat_json(
     attribution: dict[str, Any] | None = None,
     db_path: str | Path | None = None,
 ) -> ChatJsonResult:
+    # ARK (Volcengine agent plan) is tried first so its prepaid monthly token
+    # allowance is consumed before the pay-per-token DeepSeek fallback. The
+    # breaker short-circuits ARK once that allowance is exhausted.
     attempts: list[tuple[str, str, str, str]] = []
-    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
-    if deepseek_key:
-        attempts.append(
-            (
-                "deepseek",
-                deepseek_key,
-                _normalized_deepseek_base_url(),
-                os.environ.get(model_env, default_model),
-            )
-        )
     ark_key = os.environ.get("ARK_API_KEY")
     if ark_key:
         attempts.append(
@@ -85,11 +79,26 @@ def chat_json(
                 or os.environ.get(model_env, default_model),
             )
         )
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+    if deepseek_key:
+        attempts.append(
+            (
+                "deepseek",
+                deepseek_key,
+                _normalized_deepseek_base_url(),
+                os.environ.get(model_env, default_model),
+            )
+        )
     if not attempts:
         raise RuntimeError("DEEPSEEK_API_KEY or ARK_API_KEY is required for DeepSeek provider")
 
+    has_deepseek_fallback = bool(deepseek_key)
     last_error: Exception | None = None
     for provider, api_key, base_url, model in attempts:
+        # Skip ARK while the breaker is open, but only when DeepSeek can take over;
+        # if ARK is the only configured provider there is nothing to fall back to.
+        if provider == "ark" and has_deepseek_fallback and ark_breaker.is_open():
+            continue
         try:
             client = OpenAI(
                 api_key=api_key,
@@ -99,15 +108,20 @@ def chat_json(
             request: dict[str, Any] = {
                 "model": model,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                "response_format": {"type": "json_object"},
                 "temperature": temperature,
             }
-            if provider == "deepseek" and (
-                model.startswith("deepseek-v4") or model in {"deepseek-chat", "deepseek-reasoner"}
-            ):
-                request["extra_body"] = {
-                    "thinking": {"type": os.environ.get("AI_RADAR_DEEPSEEK_THINKING", "disabled")}
-                }
+            if provider == "ark":
+                # The agent-plan endpoint rejects response_format=json_object (HTTP 400)
+                # and defaults thinking ON (burning reasoning tokens). Omit the former and
+                # always disable the latter; prompts already ask for JSON and
+                # _parse_json_object() repairs any stray wrapping.
+                request["extra_body"] = {"thinking": {"type": os.environ.get("AI_RADAR_ARK_THINKING", "disabled")}}
+            else:
+                request["response_format"] = {"type": "json_object"}
+                if model.startswith("deepseek-v4") or model in {"deepseek-chat", "deepseek-reasoner"}:
+                    request["extra_body"] = {
+                        "thinking": {"type": os.environ.get("AI_RADAR_DEEPSEEK_THINKING", "disabled")}
+                    }
             if max_tokens is not None:
                 request["max_tokens"] = max_tokens
             completion = client.chat.completions.create(**request)
@@ -127,9 +141,7 @@ def chat_json(
                         output_tokens=output_tokens,
                         total_tokens=total_tokens,
                         input_item_count=input_item_count,
-                        input_char_count=input_char_count
-                        if input_char_count is not None
-                        else len(system) + len(user),
+                        input_char_count=input_char_count if input_char_count is not None else len(system) + len(user),
                         cost_usd=estimate_cost_usd(actual_model, input_tokens, output_tokens),
                         attribution={
                             **(attribution or {}),
@@ -146,4 +158,6 @@ def chat_json(
             return ChatJsonResult(json=_parse_json_object(content), provider=provider, model=actual_model)
         except Exception as exc:  # pragma: no cover - exercised only with live providers
             last_error = exc
+            if provider == "ark":
+                ark_breaker.record_failure(exc)
     raise RuntimeError(f"all DeepSeek provider endpoints failed: {last_error}")
