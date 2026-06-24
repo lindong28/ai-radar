@@ -329,6 +329,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         admin.require_admin_access(request)
         return Response(status_code=204)
 
+    @app.get("/admin/usage", include_in_schema=False)
+    def admin_usage_page(request: Request) -> HTMLResponse:
+        admin.require_admin_access(request)
+        return templates.TemplateResponse(
+            request,
+            "admin_usage.html",
+            {"usage": admin.collect_admin_usage(request)},
+        )
+
     @app.get("/daily", include_in_schema=False)
     def daily_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "daily.html")

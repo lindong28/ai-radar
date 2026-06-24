@@ -47,6 +47,7 @@ def test_migrate_creates_expected_tables_and_is_idempotent(tmp_path: Path) -> No
         "feedback",
         "item_evaluations",
         "items_fts",
+        "llm_usage",
         "items",
         "sources",
     }.issubset(table_names)

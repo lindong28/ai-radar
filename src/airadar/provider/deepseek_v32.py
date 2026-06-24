@@ -20,6 +20,7 @@ class DeepSeekV32Prefilter:
         ):
             return heuristic_prefilter(item)
         prompt = render_prefilter_prompt(item)
+        input_char_count = len(prompt["system"]) + len(prompt["user"])
         result = chat_json(
             system=prompt["system"],
             user=prompt["user"],
@@ -28,6 +29,11 @@ class DeepSeekV32Prefilter:
             ark_model_env="AI_RADAR_ARK_PREFILTER_MODEL",
             temperature=0.0,
             max_tokens=200,
+            stage="prefilter",
+            item_id=item.id,
+            input_item_count=1,
+            input_char_count=input_char_count,
+            attribution={"source_id": item.source_id, "url": item.url, "title": item.title},
         )
         payload = result.json
         return PrefilterResult(

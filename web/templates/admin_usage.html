@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Radar · LLM 用量</title>
+    <link rel="stylesheet" href="/style.css?v=20260515-ux5">
+    <style>
+      body {
+        background: #f6f7f9;
+        color: #18202a;
+      }
+      .admin-shell {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 28px 20px 48px;
+      }
+      .admin-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-end;
+        margin-bottom: 24px;
+      }
+      .admin-header h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+      }
+      .admin-meta {
+        margin: 0;
+        color: #667085;
+        font-size: 14px;
+      }
+      .admin-panel {
+        background: #fff;
+        border: 1px solid #d7dce3;
+        border-radius: 8px;
+        margin-bottom: 16px;
+        padding: 18px;
+      }
+      .admin-panel h2 {
+        margin: 0 0 14px;
+        font-size: 18px;
+      }
+      .metric-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .metric {
+        border: 1px solid #e3e7ed;
+        border-radius: 6px;
+        padding: 10px;
+        min-width: 0;
+      }
+      .metric-label {
+        display: block;
+        color: #667085;
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      .metric-value {
+        display: block;
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      .admin-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      .admin-table th,
+      .admin-table td {
+        border-bottom: 1px solid #e3e7ed;
+        padding: 8px 6px;
+        text-align: left;
+        vertical-align: top;
+      }
+      .admin-table th {
+        color: #667085;
+        font-weight: 600;
+      }
+      .usage-day {
+        margin-top: 18px;
+      }
+      .usage-day h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+      .usage-examples {
+        margin: 6px 0 0;
+        padding-left: 18px;
+        color: #475467;
+      }
+      .muted {
+        color: #667085;
+      }
+      @media (max-width: 860px) {
+        .metric-row {
+          grid-template-columns: 1fr;
+        }
+        .admin-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    {% macro num(value) -%}{{ "{:,}".format(value) }}{%- endmacro %}
+    <main class="admin-shell">
+      <header class="admin-header">
+        <div>
+          <h1>LLM 用量</h1>
+          <p class="admin-meta">时间窗口：{{ usage.window.start_date }} 至 {{ usage.window.end_date }} · {{ usage.timezone }}</p>
+        </div>
+        <a href="/admin">返回运维监控</a>
+      </header>
+
+      <section class="admin-panel" aria-label="LLM 用量总览">
+        <h2>最近 30 天总览</h2>
+        <div class="metric-row">
+          <div class="metric"><span class="metric-label">LLM calls</span><span class="metric-value">{{ num(usage.totals.calls) }}</span></div>
+          <div class="metric"><span class="metric-label">Input tokens</span><span class="metric-value">{{ num(usage.totals.input_tokens) }}</span></div>
+          <div class="metric"><span class="metric-label">Output tokens</span><span class="metric-value">{{ num(usage.totals.output_tokens) }}</span></div>
+          <div class="metric"><span class="metric-label">输入字符规模</span><span class="metric-value">{{ num(usage.totals.input_chars) }}</span></div>
+        </div>
+        <p class="admin-meta">成本字段来自 `AI_RADAR_LLM_PRICING_JSON` 可选配置；未配置时按 0 记录。</p>
+      </section>
+
+      <section class="admin-panel" aria-label="按天按模型 LLM 用量">
+        <h2>按天 / 模型</h2>
+        {% if usage.totals.calls == 0 %}
+        <p class="muted">暂无 LLM 用量记录；新数据会在 prefilter / score / enrich 后开始出现。</p>
+        {% endif %}
+        {% for day in usage.daily %}
+          {% if day.models %}
+          <div class="usage-day">
+            <h3>{{ day.date }}</h3>
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>模型</th>
+                  <th>Provider</th>
+                  <th>LLM call</th>
+                  <th>Input tokens</th>
+                  <th>Output tokens</th>
+                  <th>Total tokens</th>
+                  <th>估算成本</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for model in day.models %}
+                <tr>
+                  <td>{{ model.model }}</td>
+                  <td>{{ model.providers|join(", ") }}</td>
+                  <td>{{ num(model.calls) }}</td>
+                  <td>{{ num(model.input_tokens) }}</td>
+                  <td>{{ num(model.output_tokens) }}</td>
+                  <td>{{ num(model.total_tokens) }}</td>
+                  <td>${{ "%.6f"|format(model.cost_usd) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </section>
+
+      <section class="admin-panel" aria-label="LLM 用量归因">
+        <h2>归因解释</h2>
+        {% if usage.totals.calls == 0 %}
+        <p class="muted">暂无可归因的 LLM 调用。</p>
+        {% endif %}
+        {% for day in usage.daily %}
+          {% for model in day.models %}
+            {% for stage in model.stages %}
+            <div class="usage-day">
+              <h3>{{ day.date }} · {{ model.model }} · {{ stage.stage }}</h3>
+              <table class="admin-table">
+                <tbody>
+                  <tr><th>调用用途</th><td>{{ stage.stage }} pipeline stage/service</td></tr>
+                  <tr><th>调用次数</th><td>{{ num(stage.calls) }}</td></tr>
+                  <tr><th>处理输入条目数</th><td>{{ num(stage.input_items) }}</td></tr>
+                  <tr><th>输入规模</th><td>{{ num(stage.input_chars) }} chars · {{ num(stage.input_tokens) }} input tokens</td></tr>
+                  <tr>
+                    <th>输入样例</th>
+                    <td>
+                      <ul class="usage-examples">
+                        {% for example in stage.examples %}
+                        <li>{{ example.title }}{% if example.source_name %} · {{ example.source_name }}{% endif %}{% if example.item_id %} · {{ example.item_id }}{% endif %}</li>
+                        {% endfor %}
+                      </ul>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {% endfor %}
+          {% endfor %}
+        {% endfor %}
+      </section>
+    </main>
+  </body>
+</html>

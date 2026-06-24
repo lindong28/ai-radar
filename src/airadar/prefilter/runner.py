@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ..llm_usage import db_path_from_connection, usage_db_path
 from ..provider.base import PrefilterProvider, PrefilterResult, ProviderItem
 from ..provider.deepseek_v32 import DeepSeekV32Prefilter
 from ..provider.glm import GLMPrefilter
@@ -186,11 +187,12 @@ def run_prefilter(
     rows = _candidate_rows(conn, since, selected_ruleset, limit, force, item_ids)
     processed = 0
     errors = 0
-    for row in rows:
-        item = _to_provider_item(row)
-        numeric, output, error, latency_ms = _evaluate_item(selected_provider, item)
-        errors += 1 if error else 0
-        _insert_evaluation(conn, item, selected_provider, selected_ruleset, numeric, output, error, latency_ms)
-        processed += 1
+    with usage_db_path(db_path_from_connection(conn)):
+        for row in rows:
+            item = _to_provider_item(row)
+            numeric, output, error, latency_ms = _evaluate_item(selected_provider, item)
+            errors += 1 if error else 0
+            _insert_evaluation(conn, item, selected_provider, selected_ruleset, numeric, output, error, latency_ms)
+            processed += 1
     conn.commit()
     return PrefilterRunSummary(processed=processed, errors=errors)

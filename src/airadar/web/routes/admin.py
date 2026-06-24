@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from ...admin.metrics import collect_metrics
+from ...admin.usage import collect_usage
 from ..envelope import ok
 
 router = APIRouter()
@@ -43,7 +44,17 @@ def collect_admin_metrics(request: Request) -> dict[str, object]:
     )
 
 
+def collect_admin_usage(request: Request) -> dict[str, object]:
+    return collect_usage(db_path=getattr(request.app.state, "db_path", None))
+
+
 @router.get("/admin/metrics")
 def admin_metrics(request: Request) -> dict[str, object]:
     require_admin_access(request)
     return ok(collect_admin_metrics(request))
+
+
+@router.get("/admin/usage")
+def admin_usage(request: Request) -> dict[str, object]:
+    require_admin_access(request)
+    return ok(collect_admin_usage(request))

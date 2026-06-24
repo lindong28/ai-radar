@@ -45,6 +45,27 @@ def _seed_admin_db(tmp_path: Path) -> Path:
     return db_path
 
 
+def _seed_usage_db(tmp_path: Path) -> Path:
+    db_path = _seed_admin_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO llm_usage (
+          stage, provider, model, item_id, input_tokens, output_tokens,
+          total_tokens, input_item_count, input_char_count, cost_usd,
+          attribution_json, created_at
+        )
+        VALUES (
+          'prefilter', 'deepseek', 'deepseek-v4-flash', 'item-1',
+          100, 20, 120, 1, 4321, 0, '{"source":"test"}', ?
+        )
+        """,
+        (datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),),
+    )
+    conn.commit()
+    return db_path
+
+
 def test_admin_metrics_requires_cloudflare_access_header(tmp_path: Path) -> None:
     app = create_app(_seed_admin_db(tmp_path))
     app.state.pipeline_log_dir = str(tmp_path / "logs")
@@ -121,3 +142,51 @@ def test_admin_head_probe_uses_same_cloudflare_access_guard(tmp_path: Path) -> N
 
     assert client.head("/admin").status_code == 403
     assert client.head("/admin", headers={"Cf-Access-Jwt-Assertion": "test"}).status_code == 204
+
+
+def test_admin_usage_route_requires_admin_access_and_renders_usage(tmp_path: Path) -> None:
+    app = create_app(_seed_usage_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app)
+
+    assert client.get("/admin/usage").status_code == 403
+    assert client.get("/api/v1/admin/usage").status_code == 403
+
+    page = client.get("/admin/usage", headers={"Cf-Access-Jwt-Assertion": "test"})
+    api = client.get("/api/v1/admin/usage", headers={"Cf-Access-Jwt-Assertion": "test"})
+
+    assert page.status_code == 200
+    assert "LLM 用量" in page.text
+    assert "deepseek-v4-flash" in page.text
+    assert "prefilter" in page.text
+    assert "Item 1" in page.text
+    assert "4,321" in page.text
+    assert api.status_code == 200
+    data = api.json()["data"]
+    model_row = next(
+        row
+        for day in data["daily"]
+        for row in day["models"]
+        if row["model"] == "deepseek-v4-flash"
+    )
+    assert model_row["calls"] == 1
+    assert model_row["input_tokens"] == 100
+    assert model_row["output_tokens"] == 20
+
+
+def test_admin_usage_is_not_linked_from_public_navigation() -> None:
+    public_pages = [
+        Path("web/templates/index.html"),
+        Path("web/templates/all.html"),
+        Path("web/templates/wechat.html"),
+        Path("web/templates/wechat_detail.html"),
+        Path("web/templates/about.html"),
+        Path("web/static/index.html"),
+        Path("web/static/all.html"),
+        Path("web/static/daily.html"),
+        Path("web/static/item.html"),
+    ]
+
+    for page in public_pages:
+        assert "/admin/usage" not in page.read_text(encoding="utf-8")

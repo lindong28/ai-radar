@@ -86,6 +86,7 @@ sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 | AI 日报 | `/daily` | 每日精选归档，支持 `?date=YYYY-MM-DD` |
 | 关于 | `/about` | 项目介绍和信源池 |
 | 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
+| LLM 用量 | `/admin/usage` | 内部页面，展示最近 30 天 prefilter / score / enrich 的按天、按模型 token 用量与输入归因；公网需 Cloudflare Access |
 
 ## 数据流水线
 
@@ -161,6 +162,8 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 ```
 
 也支持 `heuristics` 作为无 LLM 的纯规则后备方案。
+
+DeepSeek / ARK 的 `chat_json` 调用会把 `completion.usage` 写入 `llm_usage` 表，每次 LLM call 一行，记录阶段（prefilter / score / enrich）、模型、input/output token、item_id 和输入字符规模。内部 `/admin/usage` 页面按查询时聚合展示最近 30 天用量；可选设置 `AI_RADAR_LLM_PRICING_JSON` 为模型提供 per-million-token 价格，用于估算成本。
 
 ## 测试
 

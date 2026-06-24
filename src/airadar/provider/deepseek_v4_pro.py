@@ -21,6 +21,7 @@ class DeepSeekV4ProScorer:
         ):
             return heuristic_score(item)
         prompt = render_scoring_prompt(item)
+        input_char_count = len(prompt["system"]) + len(prompt["user"])
         result = chat_json(
             system=prompt["system"],
             user=prompt["user"],
@@ -29,6 +30,11 @@ class DeepSeekV4ProScorer:
             ark_model_env="AI_RADAR_ARK_SCORER_MODEL",
             temperature=0.0,
             max_tokens=600,
+            stage="score",
+            item_id=item.id,
+            input_item_count=1,
+            input_char_count=input_char_count,
+            attribution={"source_id": item.source_id, "url": item.url, "title": item.title},
         )
         payload = result.json
         return ScoringResult(
@@ -51,6 +57,7 @@ class DeepSeekV4ProEnricher:
 
     def enrich(self, item: ProviderItem) -> EnrichResult:
         prompt = render_enrich_prompt(item)
+        input_char_count = len(prompt["system"]) + len(prompt["user"])
         result = chat_json(
             system=prompt["system"],
             user=prompt["user"],
@@ -58,6 +65,11 @@ class DeepSeekV4ProEnricher:
             model_env="AI_RADAR_DEEPSEEK_ENRICH_MODEL",
             ark_model_env="AI_RADAR_ARK_ENRICH_MODEL",
             temperature=float(os.environ.get("AI_RADAR_ENRICH_TEMPERATURE", "0.2")),
+            stage="enrich",
+            item_id=item.id,
+            input_item_count=1,
+            input_char_count=input_char_count,
+            attribution={"source_id": item.source_id, "url": item.url, "title": item.title},
         )
         payload = result.json
         return EnrichResult(

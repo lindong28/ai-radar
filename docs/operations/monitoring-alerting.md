@@ -6,10 +6,12 @@
 
 - Dashboard：`https://${AI_RADAR_SITE_DOMAIN}/admin`
 - Metrics API：`https://${AI_RADAR_SITE_DOMAIN}/api/v1/admin/metrics`
+- LLM 用量：`https://${AI_RADAR_SITE_DOMAIN}/admin/usage`
+- LLM 用量 API：`https://${AI_RADAR_SITE_DOMAIN}/api/v1/admin/usage`
 - 本地访问（需显式开启）：`AI_RADAR_ADMIN_ALLOW_LOCAL=1` 后 `http://127.0.0.1:8000/admin`
 - Alert 命令：`./run.sh admin alert-check`
 
-`/admin` 是运维面板，不是公开页面。公网访问必须通过 Cloudflare Access。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**——仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行，便于部署验证和故障排查；生产 serve 不设该变量，origin 仅认 Cloudflare Access 的 `Cf-Access-Jwt-Assertion`（存在性校验，验签为后续增强）。
+`/admin` 和 `/admin/usage` 是运维面板，不是公开页面，也不挂公开导航。公网访问必须通过 Cloudflare Access。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**——仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行，便于部署验证和故障排查；生产 serve 不设该变量，origin 仅认 Cloudflare Access 的 `Cf-Access-Jwt-Assertion`（存在性校验，验签为后续增强）。
 
 ## Dashboard 怎么看
 
@@ -18,9 +20,16 @@
 | 用户量 | access log 过滤 bot/static/scanner 后的 PV/UV；`raw_unique_ips` 作为上界参考 | 看真实用户访问是否骤降，结合 5xx 率判断是否用户侧故障 |
 | 文章摄取 | 今日 items 增量、最新 fetch 插入/失败、最近 curation run | 看内容是否仍在进入系统；fetch 失败率高或今日增量低会触发 A4 |
 | Pipeline 阶段健康 | fetch/prefilter/scoring/enrich/curate 的处理量、错误率、P50/P95、成本 | 定位是哪一阶段异常；日志中的 `score` 已归一为 dashboard 的 `scoring` |
+| LLM 用量（`/admin/usage`） | `llm_usage` per-call 行按最近 30 天查询时聚合：每天、每模型的 calls/input tokens/output tokens，并按 prefilter/score/enrich 展示 item_id、输入字符数和样例标题 | 看 LLM 花费来自哪个阶段、哪个模型、处理了多少条/多大输入；历史数据无法回填，页面从升级后开始累积 |
 | 当前告警 | A1-A4 规则的当前状态、触发数值、处置方向 | 先看故障类别，再看具体对象和下一步动作 |
 
 时间口径固定为 `Asia/Shanghai`。access log 当前写入 `logs/serve-access.log`，pipeline 日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
+
+`/admin/usage` 的成本列默认显示 0，因为 token 单价会随供应商和模型变化。需要估算美元成本时，在运行环境设置 `AI_RADAR_LLM_PRICING_JSON`，格式为每百万 token 价格：
+
+```bash
+AI_RADAR_LLM_PRICING_JSON='{"deepseek-v4-pro":{"input_per_million_tokens_usd":0.14,"output_per_million_tokens_usd":0.28}}'
+```
 
 ## 告警规则
 

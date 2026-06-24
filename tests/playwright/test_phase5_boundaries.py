@@ -126,6 +126,11 @@ def test_v18_unknown_tab_paths_return_404(page: Page, base_url: str) -> None:
 
     admin_response = page.goto(f"{base_url}/admin", wait_until="domcontentloaded")
     assert admin_response is not None
+    assert admin_response.status == 403
+
+    page.set_extra_http_headers({"Cf-Access-Jwt-Assertion": "test"})
+    admin_response = page.goto(f"{base_url}/admin", wait_until="domcontentloaded")
+    assert admin_response is not None
     assert admin_response.status == 200
     expect(page.locator("h1")).to_contain_text("运维监控")
 

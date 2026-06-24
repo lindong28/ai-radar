@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from ..llm_usage import db_path_from_connection, usage_db_path
 from ..provider.base import EnrichProvider, EnrichResult, ProviderItem
 from ..provider.deepseek_v4_flash import DeepSeekV4FlashEnricher
 from ..provider.deepseek_v4_pro import DeepSeekV4ProEnricher
@@ -224,6 +225,11 @@ def run_enrich(
     selected_workers = max(1, min(workers, total or 1))
     processed = 0
     errors = 0
+    usage_path = db_path_from_connection(conn)
+
+    def evaluate_with_usage_context(item: ProviderItem) -> tuple[EnrichOutput | None, dict[str, Any], str | None, int]:
+        with usage_db_path(usage_path):
+            return _evaluate_item(selected_provider, item)
 
     def record(
         item: ProviderItem,
@@ -251,12 +257,12 @@ def run_enrich(
 
     if selected_workers == 1:
         for item in items:
-            enriched, output, error, latency_ms = _evaluate_item(selected_provider, item)
+            enriched, output, error, latency_ms = evaluate_with_usage_context(item)
             record(item, enriched, output, error, latency_ms)
         return EnrichRunSummary(processed=processed, errors=errors)
 
     with ThreadPoolExecutor(max_workers=selected_workers) as executor:
-        future_to_item = {executor.submit(_evaluate_item, selected_provider, item): item for item in items}
+        future_to_item = {executor.submit(evaluate_with_usage_context, item): item for item in items}
         for future in as_completed(future_to_item):
             item = future_to_item[future]
             enriched, output, error, latency_ms = future.result()

@@ -16,7 +16,7 @@ src/airadar/
 ├── db.py               # 数据库连接、迁移执行
 ├── ruleset.py          # Ruleset 版本管理（日期.rev 格式）
 ├── topics.py           # 受控标签词表 + 确定性标签规则
-├── migrations/         # SQL 迁移脚本（001-009），幂等执行
+├── migrations/         # SQL 迁移脚本（001-012），幂等执行
 │
 ├── sources/            # 信源管理
 │   ├── loader.py       #   解析 data/sources.toml -> SourceConfig
@@ -82,7 +82,7 @@ src/airadar/
 │       ├── wechat.py   #   GET /api/v1/wechat — 微信文章解读列表 + markdown sanitize helper
 │       └── health.py   #   GET /api/v1/healthz — 健康检查
 │
-└── admin/              # 管理命令（预留）
+└── admin/              # 运维聚合：metrics、alerts、LLM usage
 
 web/static/             # 前端静态文件（根目录 web/，非 src 内）
 ├── index.html          #   精选首页旧静态文件（deprecated，保留作回滚）
@@ -142,6 +142,8 @@ data/sources.toml
    │ prefilter │ ─────────────> │ item_evaluations 表  │
    │ runner    │  is_ai_related │ stage='prefilter'     │
    └───────────┘  + confidence  └──────────┬───────────┘
+          │                                │
+          └── chat_json usage ───────────> │ llm_usage 表
                                            │ 仅 is_ai_related=true
        ┌───────────────────────────────────┘
        │
@@ -150,6 +152,8 @@ data/sources.toml
    │ scorer  │ ────────────────> │ item_evaluations 表  │
    │ runner  │  relevance/      │ stage='scoring'       │
    └─────────┘  density/...     └──────────┬───────────┘
+        │                                  │
+        └── chat_json usage ─────────────> │ llm_usage 表
                                            │
        ┌───────────────────────────────────┘
        │
@@ -158,6 +162,8 @@ data/sources.toml
    │ enrich  │ ────────────────> │ item_evaluations 表  │
    │ runner  │  title_zh/       │ stage='enrich'        │
    └─────────┘  summary_zh/...  └──────────┬───────────┘
+        │                                  │
+        └── chat_json usage ─────────────> │ llm_usage 表
                                            │
        ┌───────────────────────────────────┘
        │
@@ -193,6 +199,7 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 | `item_evaluations` | LLM 评估结果，stage 区分阶段 | `id` (INTEGER, 自增) |
 | `curation_runs` | 精选运行记录 | `id` (TEXT, 时间戳+随机) |
 | `curated_items` | 精选条目（关联 run） | `(run_id, item_id)` |
+| `llm_usage` | DeepSeek/ARK `chat_json` 的 per-call token 用量、模型、阶段与输入归因 | `id` (INTEGER, 自增) |
 | `wechat_interpretations` | 微信文章解读结果（summary_md、tags、save_decision、KB 同步状态） | `item_id` |
 | `items_fts` | FTS5 搜索虚拟表（trigram 分词），列为 `item_id/title/content_text/source_name/author/title_zh` | -- |
 | `feedback` | 用户反馈（预留） | `id` (INTEGER, 自增) |
@@ -202,6 +209,7 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 
 - **去重策略**：`items` 表通过 `(source_id, content_hash)` 唯一约束去重。`content_hash` 是内容文本的 SHA1 前 16 位。同 URL 不同内容视为更新
 - **多阶段评估**：`item_evaluations` 通过 `stage` 字段区分 prefilter / scoring / enrich，共用同一张表。每条记录保存完整的 input/output/numeric JSON
+- **LLM 用量归因**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 调用写一行，阶段值使用 prefilter / score / enrich，记录实际响应模型、prompt/completion token、item_id、输入条目数和输入字符规模；`/admin/usage` 在查询时做最近 30 天按天 rollup，不回填升级前已丢弃的 usage
 - **Ruleset 版本**：格式 `YYYY-MM-DD.rN`，用于跟踪 prompt 和规则的变更。同一条目可以有不同 ruleset 版本的评估记录
 - **信源层级**：T1（官方一手源，乘数 1.25）/ T1.5（高质量聚合，乘数 1.0）/ T2（社区源，乘数 0.75）
 - **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。
@@ -217,6 +225,9 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 | `idx_items_published_fetched_id` | `(published_at DESC, fetched_at DESC, id DESC)` |
 | `idx_evaluations_item_stage_ruleset` | `(item_id, stage, ruleset_version)` |
 | `idx_curated_items_run_rank` | `(run_id, rank)` |
+| `idx_llm_usage_created_model` | `(created_at, model)` |
+| `idx_llm_usage_stage_created` | `(stage, created_at)` |
+| `idx_llm_usage_item` | `(item_id)` |
 | `idx_wechat_interp_decision` | `(save_decision, processed_at DESC)` |
 | `idx_wechat_interp_slug` | `(slug)` unique |
 
@@ -236,6 +247,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url |
 | `/api/v1/sources` | GET | 信源列表 |
 | `/api/v1/healthz` | GET | 健康检查（条目数、运行数、ruleset 版本） |
+| `/api/v1/admin/metrics` | GET | 内部运维指标；与 `/admin` 同一访问门控 |
+| `/api/v1/admin/usage` | GET | 内部 LLM 用量 rollup；与 `/admin` 同一访问门控 |
 
 ### 页面路由
 
@@ -247,6 +260,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/wechat/{slug}` | `web/templates/wechat_detail.html` | 微信文章解读详情页，`summary_md` 经 markdown-it-py 渲染后用 nh3 sanitize |
 | `/daily` | `web/static/daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
 | `/about` | `web/static/about.html` | 关于页 |
+| `/admin` | `web/templates/admin.html` | 内部运维 dashboard；需 Cloudflare Access 或显式本地 bypass |
+| `/admin/usage` | `web/templates/admin_usage.html` | 内部 LLM token/cost 归因页面；需 Cloudflare Access 或显式本地 bypass，不挂公开导航 |
 | `/item.html` | `web/static/item.html` | 单条详情页（StaticFiles 隐式提供） |
 
 ### SSR preload contract
