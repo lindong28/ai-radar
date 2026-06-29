@@ -229,7 +229,11 @@ def _format_alert_send_status(raw: object) -> str | None:
 def _admin(args: argparse.Namespace) -> int:
     if args.admin_command == "db" and args.db_command == "migrate":
         db.migrate()
+        from .llm_usage import migrate_usage_db
+
+        usage_path = migrate_usage_db(main_db_path=db.resolve_db_path())
         print(f"migrated {db.resolve_db_path()}")
+        print(f"migrated llm_usage {usage_path}")
         return 0
     if args.admin_command == "sources":
         with db.get_conn() as conn:

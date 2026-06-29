@@ -12,12 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from .. import db
+from ..llm_usage import LlmUsageRecord, estimate_cost_usd, record_llm_usage, usage_int
 from ..wechat_text import has_wechat_title_artifacts, normalize_wechat_title, wechat_slug_seed
 
 DEFAULT_INTERPRET_USER = "default"
 DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
 MISSING_ROOT_MESSAGE = "interpret enabled but AI_ASSISTANT_ROOT is not set"
 SUMMARY_AGENT_DIR = Path("agents") / "summary-agent"
+SUMMARY_AGENT_INTERPRET_MODEL = "ai-radar-interpret-deepseek"
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,7 @@ def _json_loads(value: str | None, fallback: Any) -> Any:
 def _subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("VIRTUAL_ENV", None)
+    env.setdefault("AI_RADAR_ARK_BREAKER_STATE", str(db.PROJECT_ROOT / "data" / "ark-breaker.json"))
     return env
 
 
@@ -536,7 +539,18 @@ def _summarize_item(
                     "saved": False,
                 }
 
-    summary_payload = _run_json([str(summarize_script), "--input", str(input_path), "--user", user], cwd=root)
+    summary_payload = _run_json(
+        [
+            str(summarize_script),
+            "--input",
+            str(input_path),
+            "--user",
+            user,
+            "--model",
+            SUMMARY_AGENT_INTERPRET_MODEL,
+        ],
+        cwd=root,
+    )
     result = summary_payload.get("result")
     if not isinstance(result, dict):
         raise ValueError("summarize.sh JSON missing result object")
@@ -600,10 +614,53 @@ def _summarize_item(
         "save_reason": result.get("save_reason"),
         "tags": _safe_tags(result.get("tags")),
         "summary_md": summary_md,
-        "model": result.get("model"),
+        "model": result.get("model") or result.get("model_name"),
+        "llm_metadata": result.get("llm_metadata"),
         "kb_synced": kb_synced,
         "saved": kb_synced,
     }
+
+
+def _usage_value(usage: object, *field_names: str) -> int:
+    for field_name in field_names:
+        value = usage_int(usage, field_name)
+        if value:
+            return value
+    return 0
+
+
+def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
+    metadata = result.get("llm_metadata")
+    if not isinstance(metadata, dict):
+        return
+    usage = metadata.get("usage")
+    if not isinstance(usage, dict):
+        return
+    provider = str(metadata.get("provider") or "").strip()
+    model = str(metadata.get("backend_model") or result.get("model") or "").strip()
+    if not provider or not model:
+        return
+    input_tokens = _usage_value(usage, "input_tokens", "prompt_tokens")
+    output_tokens = _usage_value(usage, "output_tokens", "completion_tokens")
+    total_tokens = _usage_value(usage, "total_tokens") or input_tokens + output_tokens
+    attribution = {key: value for key, value in metadata.items() if key != "usage"}
+    attribution["source"] = "summary-agent"
+    attribution["summary_slug"] = result.get("slug")
+    record_llm_usage(
+        LlmUsageRecord(
+            stage="interpret",
+            provider=provider,
+            model=model,
+            item_id=str(row["id"]),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            input_item_count=1,
+            input_char_count=usage_int(metadata, "input_char_count"),
+            cost_usd=estimate_cost_usd(model, input_tokens, output_tokens),
+            attribution=attribution,
+        )
+    )
 
 
 def run_interpret(
@@ -644,6 +701,7 @@ def run_interpret(
                 tmp_root=tmp_path,
                 row=row,
             )
+            _record_interpret_usage(row, result)
             slug = _unique_slug(conn, str(result["slug"]), row["id"])
             summary_md = str(result.get("summary_md") or "")
             _save_interpretation(

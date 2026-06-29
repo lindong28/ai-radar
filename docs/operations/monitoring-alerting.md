@@ -19,8 +19,8 @@
 |---|---|---|
 | 用户量 | access log 过滤 bot/static/scanner 后的 PV/UV；`raw_unique_ips` 作为上界参考 | 看真实用户访问是否骤降，结合 5xx 率判断是否用户侧故障 |
 | 文章摄取 | 今日 items 增量、最新 fetch 插入/失败、最近 curation run | 看内容是否仍在进入系统；fetch 失败率高或今日增量低会触发 A4 |
-| Pipeline 阶段健康 | fetch/prefilter/scoring/enrich/curate 的处理量、错误率、P50/P95、成本 | 定位是哪一阶段异常；日志中的 `score` 已归一为 dashboard 的 `scoring` |
-| LLM 用量（`/admin/usage`） | `llm_usage` per-call 行按最近 30 天查询时聚合：每天、每模型的 calls/input tokens/output tokens，并按 prefilter/score/enrich 展示 item_id、输入字符数和样例标题 | 看 LLM 花费来自哪个阶段、哪个模型、处理了多少条/多大输入；历史数据无法回填，页面从升级后开始累积 |
+| Pipeline 阶段健康 | fetch/prefilter/scoring/enrich/curate 的处理量、错误率、P50/P95、成本；prefilter P95 使用最近 2 小时滑动窗口，避免已恢复后旧慢样本保留到午夜 | 定位是哪一阶段异常；日志中的 `score` 已归一为 dashboard 的 `scoring` |
+| LLM 用量（`/admin/usage`） | 独立 `data/llm_usage.db` 中的 `llm_usage` per-call 行按最近 30 天查询时聚合：每天、每模型的 calls/input tokens/output tokens，并按 prefilter/score/enrich/interpret 展示 item_id、输入字符数和样例标题 | 看 LLM 花费来自哪个阶段、哪个模型、处理了多少条/多大输入；旧 `radar.db.llm_usage` 历史会在首次初始化时复制到独立库 |
 | 当前告警 | A1-A4 规则的当前状态、触发数值、处置方向 | 先看故障类别，再看具体对象和下一步动作 |
 
 时间口径固定为 `Asia/Shanghai`。access log 当前写入 `logs/serve-access.log`，pipeline 日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
@@ -36,7 +36,7 @@ AI_RADAR_LLM_PRICING_JSON='{"deepseek-v4-pro":{"input_per_million_tokens_usd":0.
 | 规则 | 故障类别 | 典型含义 | 处置动作 |
 |---|---|---|---|
 | A1 | 上游模型不可用 | DeepSeek/OpenAI/GLM/ARK 返回 endpoint/model/权限/余额类错误；`schema validation failed` 已排除 | 查 provider 控制台余额、模型权限、API key；必要时切换 provider 或充值 |
-| A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 错误率或 P95 超阈值，或**超过 120 分钟没有成功 pipeline**。SKIP 日志=「pipeline 已在运行」=存活，不计故障，故长任务进行中不会告警；只有真停产/僵尸锁（长时间无成功且 SKIP 堆积）才触发 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
+| A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 错误率或 P95 超阈值，或**超过 120 分钟没有成功 pipeline**。prefilter P95 是最近 2 小时滑动窗口，I/O 恢复后会随新快样本自动清除；SKIP 日志=「pipeline 已在运行」=存活，不计故障，故长任务进行中不会告警；只有真停产/僵尸锁（长时间无成功且 SKIP 堆积）才触发 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
 | A3 | 网站用户侧异常 | `/admin` 以外用户访问出现高 5xx 率，**或** healthz 主动探测连续失败（每轮 alert-check 主动 GET 本地 `/api/v1/healthz`，连续失败计数跨轮持久化于 `data/alert-state.json`） | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
 | A4 | 文章摄取骤降 | fetch 失败率高，**或**今日 items 增量低于**按当日已过时间缩放的**基线（`daily_inserted_floor` 按当日已过分钟 / 1440 缩放，避免清晨累积未满时假阳） | 查 RSS / X(fedi) / 微信 Mp2RSS 源可用性、`./run.sh fetch` 输出 |
 

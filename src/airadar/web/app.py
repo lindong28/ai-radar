@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.gzip import GZipMiddleware
 from uvicorn.config import LOGGING_CONFIG
 
 from .. import db
@@ -52,6 +53,7 @@ PRELOAD_ITEM_KEYS = {
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 PREPAINT_ITEM_LIMIT = 12
 WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601"
+WECHAT_PAGE_LIMIT = 50
 
 
 def _uvicorn_log_config() -> dict[str, object]:
@@ -212,6 +214,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
     templates.env.policies["json.dumps_kwargs"] = {"ensure_ascii": False}
     configure_cors(app)
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     api_prefix = "/api/v1"
 
     @app.exception_handler(StarletteHTTPException)
@@ -291,7 +294,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         )
 
     @app.get("/wechat", include_in_schema=False)
-    def wechat_page(request: Request, q: str | None = None, page: int = 1, limit: int = 50) -> HTMLResponse:
+    def wechat_page(request: Request, q: str | None = None, page: int = 1, limit: int = WECHAT_PAGE_LIMIT) -> HTMLResponse:
         with db.get_conn(request.app.state.db_path) as conn:
             data = wechat_routes.list_wechat_items(conn, q=q, page=page, limit=limit)
         return templates.TemplateResponse(

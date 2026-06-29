@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS llm_usage (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  stage TEXT NOT NULL CHECK (stage IN ('prefilter', 'score', 'enrich')),
+  stage TEXT NOT NULL CHECK (stage IN ('prefilter', 'score', 'enrich', 'interpret')),
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
   item_id TEXT,

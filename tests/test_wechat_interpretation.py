@@ -120,8 +120,10 @@ def _seed_wechat_db(tmp_path: Path) -> Path:
         )
         VALUES (?, 'wx_mp2rss', ?, ?, ?, ?, ?, ?, NULL, ?, '{}')
         """,
-        [(item_id, url, title, author, published_at, published_at, content, content_hash)
-         for item_id, url, title, author, published_at, content, content_hash in items],
+        [
+            (item_id, url, title, author, published_at, published_at, content, content_hash)
+            for item_id, url, title, author, published_at, content, content_hash in items
+        ],
     )
     conn.execute(
         """
@@ -719,10 +721,35 @@ def test_wechat_page_adds_only_search_filter_controls(tmp_path: Path) -> None:
     assert 'id="search"' in form
     assert 'type="search"' in form
     assert 'placeholder="搜索标题/公众号/摘要/标签…"' in form
-    assert 'value=' not in form
+    assert "value=" not in form
     assert 'name="category"' not in form
     assert 'name="channel"' not in form
     assert 'class="seg-item' not in response.text
+
+
+def test_wechat_page_default_limit_matches_fast_initial_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, int] = {}
+
+    def fake_list_wechat_items(
+        conn: sqlite3.Connection,
+        *,
+        q: str | None = None,
+        page: int = 1,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        captured["limit"] = limit
+        return {"items": [], "total": 0, "page": page, "limit": limit}
+
+    monkeypatch.setattr("airadar.web.app.wechat_routes.list_wechat_items", fake_list_wechat_items)
+    client = TestClient(create_app(tmp_path / "radar.db"))
+
+    response = client.get("/wechat")
+
+    assert response.status_code == 200
+    assert captured["limit"] == 50
 
 
 def test_wechat_sidebar_link_and_curated_alias_exist_on_public_pages(tmp_path: Path) -> None:
@@ -814,6 +841,110 @@ def test_interpret_runner_saves_worth_reading_result_and_patches_kb_meta(
     assert saved_meta["source"] == "机器之心"
     assert saved_meta["publish_date"] == "2026-06-02T10:00:00Z"
     assert any("--save-from-batch" in call for call in calls)
+
+
+def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    usage_db_path = tmp_path / "llm_usage.db"
+    monkeypatch.setenv("AI_RADAR_DB", str(db_path))
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
+    monkeypatch.setenv(
+        "AI_RADAR_LLM_PRICING_JSON",
+        json.dumps(
+            {
+                "ark-actual-model": {
+                    "input_per_million_tokens_usd": 1.0,
+                    "output_per_million_tokens_usd": 2.0,
+                }
+            }
+        ),
+    )
+    assistant_root = _assistant_root(tmp_path)
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    (batch_dir / "usage-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
+    (batch_dir / "usage-slug_meta.json").write_text("{}", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append([str(part) for part in cmd])
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}, indent=2), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "batch_dir": str(batch_dir),
+                        "result": {
+                            "slug": "usage-slug",
+                            "save_decision": True,
+                            "save_reason": "有实践价值",
+                            "recommendation": "值得一看",
+                            "tags": ["Agent", "工程化"],
+                            "model": "ark-actual-model",
+                            "llm_metadata": {
+                                "requested_model": "ai-radar-interpret-deepseek",
+                                "backend_attempted": "deepseek-ark-first",
+                                "backend_used": "openai-api",
+                                "provider": "ark",
+                                "backend_model": "ark-actual-model",
+                                "fallback_used": False,
+                                "input_char_count": 4321,
+                                "usage": {
+                                    "prompt_tokens": 100,
+                                    "completion_tokens": 20,
+                                    "total_tokens": 120,
+                                    "input_tokens": 100,
+                                    "output_tokens": 20,
+                                },
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        if "--save-from-batch" in cmd:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({"ok": True, "summary_file_path": "/kb/usage-slug_output.md"}),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+
+    summarize_call = next(call for call in calls if "summarize.sh" in call[0])
+    with sqlite3.connect(usage_db_path) as conn:
+        usage_row = conn.execute(
+            """
+            SELECT stage, provider, model, item_id, input_tokens, output_tokens,
+                   total_tokens, input_item_count, input_char_count, cost_usd,
+                   attribution_json
+            FROM llm_usage
+            """
+        ).fetchone()
+
+    assert summary.processed == 1
+    assert summary.errors == 0
+    assert summarize_call[summarize_call.index("--model") + 1] == "ai-radar-interpret-deepseek"
+    assert usage_row[:10] == ("interpret", "ark", "ark-actual-model", "item-1", 100, 20, 120, 1, 4321, 0.00014)
+    attribution = json.loads(usage_row[10])
+    assert attribution["requested_model"] == "ai-radar-interpret-deepseek"
+    assert attribution["backend_attempted"] == "deepseek-ark-first"
 
 
 def test_interpret_runner_skips_kb_for_not_worth_reading(

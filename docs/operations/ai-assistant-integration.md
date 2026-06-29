@@ -43,7 +43,8 @@ The file path is passed to `summarize.sh` as:
 ```bash
 $AI_ASSISTANT_ROOT/agents/summary-agent/summarize.sh \
   --input "$TMP_FILE" \
-  --user "$AI_RADAR_INTERPRET_USER"
+  --user "$AI_RADAR_INTERPRET_USER" \
+  --model ai-radar-interpret-deepseek
 ```
 
 Before summarizing, AI Radar checks for existing KB content:
@@ -97,7 +98,23 @@ For a new article, `summarize.sh` must return:
     "save_reason": "has reusable engineering value",
     "recommendation": "值得一看",
     "tags": ["Agent", "工程化"],
-    "model": "summary-model"
+    "model": "summary-model",
+    "llm_metadata": {
+      "requested_model": "ai-radar-interpret-deepseek",
+      "backend_attempted": "deepseek-ark-first",
+      "backend_used": "openai-api",
+      "provider": "ark",
+      "backend_model": "ark-deepseek-model",
+      "fallback_used": false,
+      "input_char_count": 12345,
+      "usage": {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "input_tokens": 1000,
+        "output_tokens": 200
+      }
+    }
   }
 }
 ```
@@ -107,7 +124,8 @@ Recognized fields:
 - `batch_dir`: absolute path or path relative to `$AI_ASSISTANT_ROOT`.
 - `result.slug`: base slug. AI Radar may normalize it for WeChat title artifacts or uniqueness.
 - `result.save_decision`: true means save back to the external KB and show the article on `/wechat`.
-- `result.save_reason`, `result.recommendation`, `result.tags`, `result.model`: metadata copied into `wechat_interpretations`.
+- `result.save_reason`, `result.recommendation`, `result.tags`, `result.model` or `result.model_name`: metadata copied into `wechat_interpretations`.
+- `result.llm_metadata.provider`, `backend_model`, `usage`, and `input_char_count`: optional but required for LLM usage metering. When present, AI Radar writes one `llm_usage` row with `stage='interpret'`. `usage` may use either OpenAI names (`prompt_tokens`, `completion_tokens`, `total_tokens`) or normalized names (`input_tokens`, `output_tokens`, `total_tokens`).
 
 AI Radar reads the Markdown summary from:
 

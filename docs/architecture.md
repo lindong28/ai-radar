@@ -143,7 +143,7 @@ data/sources.toml
    │ runner    │  is_ai_related │ stage='prefilter'     │
    └───────────┘  + confidence  └──────────┬───────────┘
           │                                │
-          └── chat_json usage ───────────> │ llm_usage 表
+          └── chat_json usage ───────────> │ llm_usage.db
                                            │ 仅 is_ai_related=true
        ┌───────────────────────────────────┘
        │
@@ -153,7 +153,7 @@ data/sources.toml
    │ runner  │  relevance/      │ stage='scoring'       │
    └─────────┘  density/...     └──────────┬───────────┘
         │                                  │
-        └── chat_json usage ─────────────> │ llm_usage 表
+        └── chat_json usage ─────────────> │ llm_usage.db
                                            │
        ┌───────────────────────────────────┘
        │
@@ -163,7 +163,7 @@ data/sources.toml
    │ runner  │  title_zh/       │ stage='enrich'        │
    └─────────┘  summary_zh/...  └──────────┬───────────┘
         │                                  │
-        └── chat_json usage ─────────────> │ llm_usage 表
+        └── chat_json usage ─────────────> │ llm_usage.db
                                            │
        ┌───────────────────────────────────┘
        │
@@ -188,7 +188,7 @@ data/sources.toml
 
 ## Database
 
-SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环境变量覆盖）。开启 WAL 模式、`busy_timeout=5000`。
+主业务 SQLite 数据库路径为 `data/radar.db`（可通过 `AI_RADAR_DB` 环境变量覆盖）。LLM token 用量写入独立 SQLite 文件 `data/llm_usage.db`（可通过 `AI_RADAR_LLM_USAGE_DB` 覆盖），避免 prefilter/score/enrich 的 per-call usage 写入与主库 pipeline/serve 写锁竞争。两者均由 `db.get_conn()` 开启 WAL 模式、`busy_timeout=5000`。
 
 ### 核心表
 
@@ -199,7 +199,7 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 | `item_evaluations` | LLM 评估结果，stage 区分阶段 | `id` (INTEGER, 自增) |
 | `curation_runs` | 精选运行记录 | `id` (TEXT, 时间戳+随机) |
 | `curated_items` | 精选条目（关联 run） | `(run_id, item_id)` |
-| `llm_usage` | DeepSeek/ARK `chat_json` 的 per-call token 用量、模型、阶段与输入归因 | `id` (INTEGER, 自增) |
+| `llm_usage` | DeepSeek/ARK `chat_json` 的 per-call token 用量、模型、阶段与输入归因；存放在独立 `llm_usage.db` | `id` (INTEGER, 自增) |
 | `wechat_interpretations` | 微信文章解读结果（summary_md、tags、save_decision、KB 同步状态） | `item_id` |
 | `items_fts` | FTS5 搜索虚拟表（trigram 分词），列为 `item_id/title/content_text/source_name/author/title_zh` | -- |
 | `feedback` | 用户反馈（预留） | `id` (INTEGER, 自增) |
@@ -209,7 +209,7 @@ SQLite 单文件数据库，路径 `data/radar.db`（可通过 `AI_RADAR_DB` 环
 
 - **去重策略**：`items` 表通过 `(source_id, content_hash)` 唯一约束去重。`content_hash` 是内容文本的 SHA1 前 16 位。同 URL 不同内容视为更新
 - **多阶段评估**：`item_evaluations` 通过 `stage` 字段区分 prefilter / scoring / enrich，共用同一张表。每条记录保存完整的 input/output/numeric JSON
-- **LLM 用量归因**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 调用写一行，阶段值使用 prefilter / score / enrich，记录实际响应模型、prompt/completion token、item_id、输入条目数和输入字符规模；`/admin/usage` 在查询时做最近 30 天按天 rollup，不回填升级前已丢弃的 usage
+- **LLM 用量归因**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 调用写一行，阶段值使用 prefilter / score / enrich，记录实际响应模型、prompt/completion token、item_id、输入条目数和输入字符规模；写入和聚合读取都走 `data/llm_usage.db`，`/admin/usage` 查询时再从主库补 item/source 展示元数据。首次初始化会把旧 `radar.db.llm_usage` 历史行复制到独立库，旧表保留但不再写入。
 - **Ruleset 版本**：格式 `YYYY-MM-DD.rN`，用于跟踪 prompt 和规则的变更。同一条目可以有不同 ruleset 版本的评估记录
 - **信源层级**：T1（官方一手源，乘数 1.25）/ T1.5（高质量聚合，乘数 1.0）/ T2（社区源，乘数 0.75）
 - **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。

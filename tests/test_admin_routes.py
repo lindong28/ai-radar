@@ -46,7 +46,8 @@ def _seed_admin_db(tmp_path: Path) -> Path:
 
 
 def _seed_usage_db(tmp_path: Path) -> Path:
-    db_path = _seed_admin_db(tmp_path)
+    db_path = tmp_path / "llm_usage.db"
+    migrate(db_path)
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
@@ -58,6 +59,20 @@ def _seed_usage_db(tmp_path: Path) -> Path:
         VALUES (
           'prefilter', 'deepseek', 'deepseek-v4-flash', 'item-1',
           100, 20, 120, 1, 4321, 0, '{"source":"test"}', ?
+        )
+        """,
+        (datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),),
+    )
+    conn.execute(
+        """
+        INSERT INTO llm_usage (
+          stage, provider, model, item_id, input_tokens, output_tokens,
+          total_tokens, input_item_count, input_char_count, cost_usd,
+          attribution_json, created_at
+        )
+        VALUES (
+          'interpret', 'ark', 'deepseek-v4-pro-260425', 'item-1',
+          1000, 200, 1200, 1, 12345, 0, '{"source":"summary-agent"}', ?
         )
         """,
         (datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),),
@@ -144,8 +159,14 @@ def test_admin_head_probe_uses_same_cloudflare_access_guard(tmp_path: Path) -> N
     assert client.head("/admin", headers={"Cf-Access-Jwt-Assertion": "test"}).status_code == 204
 
 
-def test_admin_usage_route_requires_admin_access_and_renders_usage(tmp_path: Path) -> None:
-    app = create_app(_seed_usage_db(tmp_path))
+def test_admin_usage_route_requires_admin_access_and_renders_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    main_db_path = _seed_admin_db(tmp_path)
+    usage_db_path = _seed_usage_db(tmp_path)
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
+    app = create_app(main_db_path)
     app.state.pipeline_log_dir = str(tmp_path / "logs")
     app.state.access_log_paths = []
     client = TestClient(app)
@@ -160,19 +181,23 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(tmp_path: Pat
     assert "LLM 用量" in page.text
     assert "deepseek-v4-flash" in page.text
     assert "prefilter" in page.text
+    assert "deepseek-v4-pro-260425" in page.text
+    assert "interpret" in page.text
     assert "Item 1" in page.text
     assert "4,321" in page.text
     assert api.status_code == 200
     data = api.json()["data"]
-    model_row = next(
-        row
-        for day in data["daily"]
-        for row in day["models"]
-        if row["model"] == "deepseek-v4-flash"
-    )
+    model_row = next(row for day in data["daily"] for row in day["models"] if row["model"] == "deepseek-v4-flash")
     assert model_row["calls"] == 1
     assert model_row["input_tokens"] == 100
     assert model_row["output_tokens"] == 20
+    interpret_model_row = next(
+        row for day in data["daily"] for row in day["models"] if row["model"] == "deepseek-v4-pro-260425"
+    )
+    interpret_stages = {stage["stage"]: stage for stage in interpret_model_row["stages"]}
+    assert set(interpret_stages) == {"interpret"}
+    assert interpret_stages["interpret"]["calls"] == 1
+    assert interpret_stages["interpret"]["input_tokens"] == 1000
 
 
 def test_admin_usage_is_not_linked_from_public_navigation() -> None:

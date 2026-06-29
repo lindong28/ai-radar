@@ -2,6 +2,7 @@
 
 ## 2026-06-24
 
+- Split LLM usage accounting into `data/llm_usage.db` (`AI_RADAR_LLM_USAGE_DB`) so prefilter / score / enrich token writes no longer contend with the main `radar.db` writer. Existing `radar.db.llm_usage` history is copied into the dedicated DB on migration/first use, `/admin/usage` reads the dedicated DB while still showing item/source metadata from the main DB, and A2 prefilter P95 now uses a recent 2-hour sliding window so recovered latency incidents do not keep firing until midnight.
 - Added an internal `/admin/usage` page and `/api/v1/admin/usage` endpoint for maintainers to inspect LLM usage attribution. DeepSeek/ARK `chat_json` calls now persist one `llm_usage` row per prefilter / score / enrich LLM call, including model, input/output tokens from `completion.usage`, item attribution, and input size. The page uses the same Cloudflare Access / dev-only local bypass guard as `/admin`, is not linked from public navigation, and rolls up the last 30 days by day, model, and pipeline stage.
 
 ## 2026-06-12

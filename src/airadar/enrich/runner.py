@@ -12,7 +12,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from ..llm_usage import db_path_from_connection, usage_db_path
 from ..provider.base import EnrichProvider, EnrichResult, ProviderItem
 from ..provider.deepseek_v4_flash import DeepSeekV4FlashEnricher
 from ..provider.deepseek_v4_pro import DeepSeekV4ProEnricher
@@ -225,11 +224,9 @@ def run_enrich(
     selected_workers = max(1, min(workers, total or 1))
     processed = 0
     errors = 0
-    usage_path = db_path_from_connection(conn)
 
     def evaluate_with_usage_context(item: ProviderItem) -> tuple[EnrichOutput | None, dict[str, Any], str | None, int]:
-        with usage_db_path(usage_path):
-            return _evaluate_item(selected_provider, item)
+        return _evaluate_item(selected_provider, item)
 
     def record(
         item: ProviderItem,

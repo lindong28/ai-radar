@@ -4,6 +4,17 @@
 
 ---
 
+## [open] shared Cloudflare tunnel has unstable origin-to-edge throughput for larger dynamic responses
+
+- Type: reliability
+- Priority: medium
+- Discovered: 2026-06-24 `/wechat` production latency incident
+- Description: Public requests through the shared `ai-radar` cloudflared tunnel showed response-size-correlated latency while local origins were fast. Before mitigation, `https://aiplanet.live/wechat` transferred 171 KB in 10-23s while `http://127.0.0.1:8000/wechat` returned in ~0.01s; `sjtu.aiplanet.live` showed the same pattern on a different local origin. cloudflared logs also contained QUIC `no recent network activity` timeouts and stream cancellations. Restarting cloudflared and temporarily switching `protocol: http2` did not resolve the underlying tunnel throughput problem.
+- Current mitigation: AI Radar now gzip-compresses large origin responses and keeps `/wechat` initial payload to 20 items, reducing `/wechat` from ~171 KB uncompressed to ~13 KB gzipped and bringing the public page under 3s in verification. This does not fix the shared tunnel for other unoptimized origins or larger pages.
+- Follow-up: Investigate Cloudflare Tunnel/network health outside app code: compare from an external client not on the local host, review Cloudflare tunnel diagnostics/status, consider a separate tunnel/connector, and decide whether Cloudflare account/network changes are needed. Preserve the shared `sjtu.aiplanet.live` ingress rules during any tunnel config work.
+
+---
+
 ## [resolved] interpret KB check-url hit drops metadata tags in regression test
 
 - Type: bug
@@ -232,3 +243,13 @@
 - Discovered: 2026-06-15 resolve-issues 全量验证时——`uv run pytest --ignore=tests/playwright -q` 偶发 `tests/test_no_write_endpoints.py::test_business_routes_are_read_only` 报 `sqlite3.OperationalError: database is locked`（`src/airadar/db.py:56`）；同轮重跑或换 `AI_RADAR_DB=/tmp/...` 即过，故为环境争用而非代码回归。
 - Resolution (2026-06-15): The test now migrates a temp DB, sets `AI_RADAR_DB` to that path, and imports/creates the web app only after that isolation is in place, so the test no longer needs the shared production SQLite file. Verified with `.venv/bin/python -m pytest tests/test_no_write_endpoints.py`.
 - Description: 该测试通过发写请求验证"业务路由只读"，但运行在共享的生产 `data/radar.db` 上——生产 serve（127.0.0.1:8000，aiplanet.live）+ 15min `score --since 24h` cron 写入时会拿到写锁，测试的写探针在短 busy_timeout 内撞锁即 fail。同族于 [[test_phase2 数据依赖 flaky]]：测试未隔离 DB，依赖运行环境。Fix 方向：测试改用隔离 DB（`AI_RADAR_DB` 指向 tmp 副本或 fixture 临时库），不写共享生产库。
+
+---
+
+## [open] codex (codeagent-wrapper) 无法中断前台长跑进程，只能 kill by PID
+
+- Type: improvement
+- Priority: low
+- Occurrences:
+  - 2026-06-29 11:48 | session `019f115e-a010-7f21-9631-935634590a3d` | backend `codex` | 在 interpret ark+计量任务的真实端到端验证中，codex 两次需要中断自己拉起的前台长跑进程（卡住的 interpret `--check-url` preflight、本地冒充 ark 的 429 server），尝试发送中断时报 `write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open`，无法交互式 Ctrl-C。codex 改用 `ps` 定位 PID + `kill <pid>` 绕过，任务未受阻但多花了诊断/重试步骤。
+- Description: 在 codeagent-wrapper 下跑的 codex，其 exec_command 会话 stdin 已关闭，无法对前台长时间运行的子进程发送中断信号（需 tty=true 才保持 stdin）。当 wrapped agent 自己启动需要手动停止的前台进程（本地测试服务器、卡住的命令）时，唯一可靠手段是 `kill by PID`。Fix 方向：要么 wrapper 暴露一个保持 stdin/tty 的执行模式，要么在 agent 指引里固化"前台长跑进程一律 background + kill by PID 收尾"的约定，避免每次重新踩 stdin-closed。属工具/config 缺口，非产品代码问题。

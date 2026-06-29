@@ -14,6 +14,7 @@ from .access_log import aggregate_access_log
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 STAGE_ORDER = ("fetch", "prefilter", "scoring", "enrich", "curate")
 DB_STAGES = ("prefilter", "scoring", "enrich")
+PREFILTER_P95_WINDOW = timedelta(hours=2)
 LOG_STAGE_TO_DASHBOARD = {"score": "scoring"}
 PIPELINE_FILE_RE = re.compile(r"pipeline-(?P<stamp>\d{8}-\d{6})\.log$")
 STAGE_EVENT_RE = re.compile(
@@ -50,6 +51,13 @@ def _today_bounds(now: datetime | None) -> tuple[datetime, datetime]:
     current = current.astimezone(SHANGHAI_TZ)
     start = current.replace(hour=0, minute=0, second=0, microsecond=0)
     return start, start + timedelta(days=1)
+
+
+def _normalize_now(now: datetime | None) -> datetime:
+    current = now or datetime.now(SHANGHAI_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=SHANGHAI_TZ)
+    return current.astimezone(SHANGHAI_TZ)
 
 
 def _in_window(value: object, start: datetime, end: datetime) -> bool:
@@ -210,15 +218,28 @@ def _base_stage_metrics() -> dict[str, dict[str, object]]:
     }
 
 
-def _evaluation_stage_metrics(db_path: str | Path | None, start: datetime, end: datetime) -> dict[str, dict[str, object]]:
+def _evaluation_stage_metrics(
+    db_path: str | Path | None,
+    start: datetime,
+    end: datetime,
+    current: datetime,
+) -> dict[str, dict[str, object]]:
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    prefilter_p95_latencies: list[int] = []
+    effective_end = min(end, current)
+    prefilter_p95_start = max(start, effective_end - PREFILTER_P95_WINDOW)
     with db.get_conn(db_path) as conn:
         rows = conn.execute(
             "SELECT stage, latency_ms, cost_usd, error, evaluated_at FROM item_evaluations ORDER BY evaluated_at"
         ).fetchall()
     for row in rows:
-        if _in_window(row["evaluated_at"], start, end):
-            grouped[str(row["stage"])].append(dict(row))
+        evaluated_at = _parse_dt(row["evaluated_at"])
+        if evaluated_at is None or not start <= evaluated_at < effective_end:
+            continue
+        row_dict = dict(row)
+        grouped[str(row["stage"])].append(row_dict)
+        if row["stage"] == "prefilter" and prefilter_p95_start <= evaluated_at < effective_end:
+            prefilter_p95_latencies.append(int(str(row["latency_ms"])))
 
     metrics: dict[str, dict[str, object]] = {}
     for stage in DB_STAGES:
@@ -235,7 +256,10 @@ def _evaluation_stage_metrics(db_path: str | Path | None, start: datetime, end: 
             "errors": errors,
             "error_rate": errors / processed if processed else 0.0,
             "p50_latency_ms": _percentile_ms(latencies, 0.5),
-            "p95_latency_ms": _percentile_ms(latencies, 0.95),
+            "p95_latency_ms": _percentile_ms(
+                prefilter_p95_latencies if stage == "prefilter" else latencies,
+                0.95,
+            ),
             "cost_usd": round(cost_total, 6),
         }
     return metrics
@@ -262,7 +286,8 @@ def collect_metrics(
     access_log_paths: list[str | Path] | None = None,
     now: datetime | None = None,
 ) -> dict[str, object]:
-    start, end = _today_bounds(now)
+    current = _normalize_now(now)
+    start, end = _today_bounds(current)
     log_dir = Path(pipeline_log_dir) if pipeline_log_dir is not None else db.PROJECT_ROOT / "logs"
     if access_log_paths is None:
         access_paths = [db.PROJECT_ROOT / "logs" / "serve-access.log", Path("/tmp/ai-radar-serve.log")]
@@ -284,7 +309,7 @@ def collect_metrics(
     latest_fetch = latest_fetch_obj if isinstance(latest_fetch_obj, dict) else default_fetch
 
     stages = _base_stage_metrics()
-    for stage, values in _evaluation_stage_metrics(db_path, start, end).items():
+    for stage, values in _evaluation_stage_metrics(db_path, start, end, current).items():
         stages[stage].update(values)
     if latest_run:
         latest_stages_obj = latest_run.get("stages", {})
@@ -304,7 +329,7 @@ def collect_metrics(
                 stages[stage]["p95_latency_ms"] = values.get("duration_ms")
 
     return {
-        "generated_at": (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ).isoformat(),
+        "generated_at": current.isoformat(),
         "timezone": "Asia/Shanghai",
         "window": {
             "today_start": start.isoformat(),

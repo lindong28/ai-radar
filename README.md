@@ -86,7 +86,7 @@ sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 | AI 日报 | `/daily` | 每日精选归档，支持 `?date=YYYY-MM-DD` |
 | 关于 | `/about` | 项目介绍和信源池 |
 | 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
-| LLM 用量 | `/admin/usage` | 内部页面，展示最近 30 天 prefilter / score / enrich 的按天、按模型 token 用量与输入归因；公网需 Cloudflare Access |
+| LLM 用量 | `/admin/usage` | 内部页面，展示最近 30 天 prefilter / score / enrich / interpret 的按天、按模型 token 用量与输入归因；公网需 Cloudflare Access |
 
 ## 数据流水线
 
@@ -149,7 +149,7 @@ AI_RADAR_SITE_X_URL=
 
 `interpret` 阶段只处理启用的微信公众号源（当前 `wx_mp2rss`）。该外部集成默认关闭：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时，`./run.sh interpret` 会输出 skipped 并成功退出，不读取任何外部路径。
 
-启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，并可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。AI Radar 会调用 `$AI_ASSISTANT_ROOT/agents/summary-agent/summarize.sh` / `run.sh`，将 `save_decision=1` 的文章展示到 `/wechat` 并回写外部知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约见 [`docs/operations/ai-assistant-integration.md`](docs/operations/ai-assistant-integration.md)，运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
+启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，并可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。AI Radar 会调用 `$AI_ASSISTANT_ROOT/agents/summary-agent/summarize.sh` / `run.sh`，调用 summarizer 时显式传入 `--model ai-radar-interpret-deepseek`，以便 interpret 单独走 ARK 优先、DeepSeek 官方 fallback 的路由；`save_decision=1` 的文章展示到 `/wechat` 并回写外部知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约见 [`docs/operations/ai-assistant-integration.md`](docs/operations/ai-assistant-integration.md)，运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
 
 ### LLM Provider
 
@@ -163,7 +163,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 也支持 `heuristics` 作为无 LLM 的纯规则后备方案。
 
-DeepSeek / ARK 的 `chat_json` 调用会把 `completion.usage` 写入 `llm_usage` 表，每次 LLM call 一行，记录阶段（prefilter / score / enrich）、模型、input/output token、item_id 和输入字符规模。内部 `/admin/usage` 页面按查询时聚合展示最近 30 天用量；可选设置 `AI_RADAR_LLM_PRICING_JSON` 为模型提供 per-million-token 价格，用于估算成本。
+DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent LLM usage，都会把 `completion.usage` 写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）中的 `llm_usage` 表，每次 LLM call 一行，记录阶段（prefilter / score / enrich / interpret）、provider、模型、input/output token、item_id 和输入字符规模。内部 `/admin/usage` 页面按查询时聚合展示最近 30 天用量；可选设置 `AI_RADAR_LLM_PRICING_JSON` 为模型提供 per-million-token 价格，用于估算成本。
 
 ## 测试
 

@@ -45,7 +45,10 @@ def collect_admin_metrics(request: Request) -> dict[str, object]:
 
 
 def collect_admin_usage(request: Request) -> dict[str, object]:
-    return collect_usage(db_path=getattr(request.app.state, "db_path", None))
+    return collect_usage(
+        db_path=getattr(request.app.state, "db_path", None),
+        usage_db_path=getattr(request.app.state, "usage_db_path", None),
+    )
 
 
 @router.get("/admin/metrics")

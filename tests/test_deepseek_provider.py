@@ -121,8 +121,10 @@ def test_chat_json_persists_completion_usage_for_attributed_call(monkeypatch, tm
 
 def test_deepseek_providers_tag_usage_by_pipeline_stage(monkeypatch, tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"
+    usage_db_path = tmp_path / "llm_usage.db"
     migrate(db_path)
     monkeypatch.setenv("AI_RADAR_DB", str(db_path))
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.delenv("ARK_API_KEY", raising=False)
 
@@ -181,10 +183,13 @@ def test_deepseek_providers_tag_usage_by_pipeline_stage(monkeypatch, tmp_path: P
     assert DeepSeekV4ProEnricher().enrich(item).title_zh == "中文标题"
 
     with sqlite3.connect(db_path) as conn:
+        main_usage_count = conn.execute("SELECT COUNT(*) FROM llm_usage").fetchone()[0]
+    with sqlite3.connect(usage_db_path) as conn:
         rows = conn.execute(
             "SELECT stage, item_id, input_item_count, input_char_count FROM llm_usage ORDER BY id"
         ).fetchall()
 
+    assert main_usage_count == 0
     assert [row[0] for row in rows] == ["prefilter", "score", "enrich"]
     assert {row[1] for row in rows} == {"item-abc"}
     assert all(row[2] == 1 for row in rows)

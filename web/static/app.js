@@ -119,6 +119,7 @@ const CHANNEL_URL_VALUES = {
 
 const CHANNEL_FROM_URL = Object.fromEntries(Object.entries(CHANNEL_URL_VALUES).map(([key, value]) => [value, key]));
 const WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601";
+const WECHAT_PAGE_LIMIT = 50;
 
 function currentParams() {
   return new URLSearchParams(location.search);
@@ -729,7 +730,7 @@ export async function initWechat() {
     renderTimelineLoading(list);
     if (pagination) pagination.hidden = true;
     try {
-      const data = await api(queryPath("/api/v1/wechat", { page, q, limit: 50 }));
+      const data = await api(queryPath("/api/v1/wechat", { page, q, limit: WECHAT_PAGE_LIMIT }));
       const responsePage = Number(data.page || page);
       currentPage = responsePage;
       if (responsePage !== page || pageFromUrl() !== responsePage) {

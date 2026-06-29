@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .. import db
+from ..llm_usage import migrate_usage_db
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -88,6 +89,35 @@ def _safe_json(value: object) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _item_metadata(db_path: str | Path | None, item_ids: set[str]) -> dict[str, dict[str, str]]:
+    if not item_ids:
+        return {}
+    main_path = db.resolve_db_path(db_path)
+    if not main_path.exists():
+        return {}
+    metadata: dict[str, dict[str, str]] = {}
+    ordered_ids = sorted(item_ids)
+    with db.get_conn(main_path) as conn:
+        for index in range(0, len(ordered_ids), 900):
+            batch = ordered_ids[index : index + 900]
+            placeholders = ",".join("?" for _ in batch)
+            rows = conn.execute(
+                f"""
+                SELECT i.id, i.title AS item_title, s.name AS source_name
+                FROM items i
+                LEFT JOIN sources s ON s.id = i.source_id
+                WHERE i.id IN ({placeholders})
+                """,
+                batch,
+            ).fetchall()
+            for row in rows:
+                metadata[str(row["id"])] = {
+                    "item_title": str(row["item_title"] or ""),
+                    "source_name": str(row["source_name"] or ""),
+                }
+    return metadata
+
+
 def _empty_totals() -> dict[str, int | float]:
     return {
         "calls": 0,
@@ -103,6 +133,7 @@ def _empty_totals() -> dict[str, int | float]:
 def collect_usage(
     *,
     db_path: str | Path | None = None,
+    usage_db_path: str | Path | None = None,
     days: int = 30,
     now: datetime | None = None,
 ) -> dict[str, object]:
@@ -113,22 +144,21 @@ def collect_usage(
     }
     model_maps: dict[str, dict[str, dict[str, Any]]] = {day: {} for day in day_order}
 
-    with db.get_conn(db_path) as conn:
+    active_usage_db_path = migrate_usage_db(usage_db_path=usage_db_path, main_db_path=db_path)
+    with db.get_conn(active_usage_db_path) as conn:
         rows = conn.execute(
             """
             SELECT
               u.id, u.stage, u.provider, u.model, u.item_id, u.input_tokens,
               u.output_tokens, u.total_tokens, u.input_item_count, u.input_char_count,
-              u.cost_usd, u.attribution_json, u.created_at,
-              i.title AS item_title, s.name AS source_name
+              u.cost_usd, u.attribution_json, u.created_at
             FROM llm_usage u
-            LEFT JOIN items i ON i.id = u.item_id
-            LEFT JOIN sources s ON s.id = i.source_id
             WHERE u.created_at >= ? AND u.created_at < ?
             ORDER BY u.created_at DESC, u.id DESC
             """,
             (_utc_iso(start), _utc_iso(end)),
         ).fetchall()
+    metadata = _item_metadata(db_path, {str(row["item_id"]) for row in rows if row["item_id"]})
 
     for row in rows:
         created = _parse_dt(row["created_at"])
@@ -197,11 +227,12 @@ def collect_usage(
         examples = stage_entry["examples"]
         if len(examples) < 5:
             attribution = _safe_json(row["attribution_json"])
+            item_meta = metadata.get(str(row["item_id"] or ""), {})
             examples.append(
                 {
                     "item_id": row["item_id"],
-                    "title": row["item_title"] or attribution.get("title") or row["item_id"] or "unknown input",
-                    "source_name": row["source_name"] or attribution.get("source_id") or "",
+                    "title": item_meta.get("item_title") or attribution.get("title") or row["item_id"] or "unknown input",
+                    "source_name": item_meta.get("source_name") or attribution.get("source_id") or "",
                     "created_at": created.isoformat(),
                 }
             )
