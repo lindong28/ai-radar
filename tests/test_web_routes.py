@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1381,3 +1382,19 @@ def test_search_query_treats_fts_syntax_as_literal_text(tmp_path: Path) -> None:
 
     conn = sqlite3.connect(db_path)
     assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 3
+
+
+def test_conn_from_request_closes_connection_on_exit(tmp_path: Path) -> None:
+    # Regression: `with conn_from_request(...)` must close the connection on exit.
+    # A bare sqlite3 connection returned to a `with` block is NOT closed by it,
+    # leaking a connection per request; leaked read connections pin WAL read-marks
+    # and cause the WAL to grow unbounded until read routes 500 with SQLITE_CANTOPEN.
+    db_path = _seed_db(tmp_path)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_path=str(db_path))))
+
+    with route_common.conn_from_request(request) as conn:  # type: ignore[arg-type]
+        assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 3
+        captured = conn
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        captured.execute("SELECT 1")
