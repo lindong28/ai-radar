@@ -14,7 +14,14 @@ ALERT_THRESHOLDS: dict[str, object] = {
             "enrich": 0.95,
         },
         "stage_p95_latency_ms": {
-            "prefilter": 8478,
+            # prefilter 是后台、非用户可见阶段，其 P95 是外部 LLM(ARK flash)单次调用的
+            # 尾延迟。2h 窗口里通常只有 ~15 个样本，P95 实质≈「最近 2h 最慢的 1–2 次
+            # 调用」，被单点尾延迟主导而反复贴线 flap（8478=旧「7日基线×3」，标定于
+            # 06-15，但 06-24 prefilter 路由切到 ARK-first flash 后该基线已失准）。
+            # 延迟本身无用户影响、且总能自愈，故抬到「真崩溃」地板 25000ms：只有大量
+            # 调用持续 25s+（真挂起）才触发。prefilter 真故障由 stage_error_rate 和
+            # no_success_minutes 兜底——不靠延迟分页。
+            "prefilter": 25000,
             "scoring": 16503,
             "enrich": 22569,
         },

@@ -158,7 +158,9 @@ def test_prefilter_p95_uses_recent_sliding_window_and_auto_clears(tmp_path: Path
     migrate(db_path)
     conn = sqlite3.connect(db_path)
     for item_id, latency_ms, evaluated_at in [
-        ("slow-lock-sample", 13_489, "2026-06-01T16:30:00Z"),  # 2026-06-02 00:30 Shanghai
+        # True-hang sample above the 25s prefilter breakage floor — within the 2h
+        # window it drives A2 firing; once it ages out, A2 must auto-clear.
+        ("slow-lock-sample", 26_000, "2026-06-01T16:30:00Z"),  # 2026-06-02 00:30 Shanghai
         ("fast-recovered-1", 1_000, "2026-06-01T18:10:00Z"),
         ("fast-recovered-2", 1_100, "2026-06-01T18:20:00Z"),
         ("fast-recovered-3", 1_200, "2026-06-01T18:30:00Z"),
@@ -190,7 +192,7 @@ def test_prefilter_p95_uses_recent_sliding_window_and_auto_clears(tmp_path: Path
 
     incident_prefilter = incident["pipeline"]["stages"]["prefilter"]
     recovered_prefilter = recovered["pipeline"]["stages"]["prefilter"]
-    assert incident_prefilter["p95_latency_ms"] == 13_489
+    assert incident_prefilter["p95_latency_ms"] == 26_000
     assert recovered_prefilter["p95_latency_ms"] == 1_200
     assert _a2_result_from_metrics(incident).firing is True
     assert _a2_result_from_metrics(recovered).firing is False

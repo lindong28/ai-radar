@@ -45,7 +45,7 @@ def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
 
     stage = _normal_signals()
     stage.stage_error_rate["scoring"] = 0.8
-    stage.stage_p95_latency_ms["prefilter"] = 20000
+    stage.stage_p95_latency_ms["prefilter"] = 26000
     stage.minutes_since_successful_pipeline = 60
     assert evaluate_rules(stage)[1].firing is True
 
@@ -76,6 +76,21 @@ def test_a2_heartbeat_tolerates_in_progress_runs_and_only_fires_on_real_stall() 
     assert a2.firing is True
     assert "130 分钟" in a2.detail
     assert "SKIP" in a2.detail
+
+
+def test_a2_prefilter_latency_below_breakage_floor_does_not_page() -> None:
+    # prefilter P95 是后台外部 LLM 调用的尾延迟，小样本下噪声大且总能自愈。
+    # 真实「变慢但无害」的水平（如上游 provider 抖动到 ~12s）绝不能分页——
+    # 只有持续到「真挂起」地板（25s）才触发。回归 8478 失准导致的反复贴线 flap。
+    elevated = _normal_signals()
+    elevated.stage_p95_latency_ms["prefilter"] = 12000
+    assert evaluate_rules(elevated)[1].firing is False
+
+    hung = _normal_signals()
+    hung.stage_p95_latency_ms["prefilter"] = 26000
+    a2 = evaluate_rules(hung)[1]
+    assert a2.firing is True
+    assert "prefilter P95" in a2.detail
 
 
 def test_a3_fires_on_server_error_rate_or_confirmed_healthz_failures() -> None:
