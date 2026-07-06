@@ -2,22 +2,25 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .. import db
 from ..sources.loader import SourceConfig, load_sources
 from ..sources.sync import load_enabled_sources_from_db, sync_to_db
 from .dedup import FetchedItem, _normalized_url, upsert_item
-from .http_client import fetch_feed
+from .http_client import FeedResponse, fetch_feed
 from .rss import parse_feed
 from .wechat import normalize_wechat_avatar_url, scrape_article
 
 logger = logging.getLogger(__name__)
 WECHAT_AVATAR_NEGATIVE_CACHE_TTL = timedelta(days=2)
 WECHAT_AVATAR_BACKFILL_LIMIT = 1
+SOURCE_FETCH_WORKERS = 12
+WECHAT_BODY_FETCH_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,39 @@ class FetchSummary:
     @property
     def failed(self) -> int:
         return sum(1 for source in self.sources if source.error)
+
+
+@dataclass(frozen=True)
+class _WechatBodyPlan:
+    item: FetchedItem
+    stored_text: str
+    stored_html: str | None
+    use_stored_body: bool
+    avatar_account: str | None
+    needs_scrape: bool
+
+
+@dataclass(frozen=True)
+class _SourceMetaUpdate:
+    source_id: str
+    meta_json: str
+
+
+@dataclass(frozen=True)
+class _SourceFeedResult:
+    source: SourceConfig
+    response: FeedResponse | None = None
+    items: list[FetchedItem] = field(default_factory=list)
+    meta_update: _SourceMetaUpdate | None = None
+    error: str | None = None
+
+
+class _SourceFeedMetaCapture:
+    def __init__(self) -> None:
+        self.meta_update: _SourceMetaUpdate | None = None
+
+    def execute(self, _sql: str, parameters: tuple[object, object]) -> None:
+        self.meta_update = _SourceMetaUpdate(source_id=str(parameters[1]), meta_json=str(parameters[0]))
 
 
 def default_sources_path() -> Path:
@@ -74,6 +110,72 @@ def fetch_source(conn: sqlite3.Connection, source: SourceConfig) -> SourceFetchS
     except Exception as exc:
         conn.rollback()
         return SourceFetchSummary(source_id=source.slug, error=f"{type(exc).__name__}: {exc}")
+
+
+def _fetch_source_feed(source: SourceConfig) -> _SourceFeedResult:
+    capture = _SourceFeedMetaCapture()
+    try:
+        response = fetch_feed(source, cast(sqlite3.Connection, capture))
+        if response.not_modified:
+            return _SourceFeedResult(source=source, response=response, meta_update=capture.meta_update)
+        items = parse_feed(source, response.body)
+        return _SourceFeedResult(source=source, response=response, items=items, meta_update=capture.meta_update)
+    except Exception as exc:
+        return _SourceFeedResult(source=source, error=f"{type(exc).__name__}: {exc}")
+
+
+def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResult) -> SourceFetchSummary:
+    source = result.source
+    if result.error is not None:
+        return SourceFetchSummary(source_id=source.slug, error=result.error)
+    response = result.response
+    if response is None:
+        return SourceFetchSummary(source_id=source.slug, error="RuntimeError: missing feed response")
+
+    try:
+        if result.meta_update is not None:
+            conn.execute(
+                "UPDATE sources SET meta_json=? WHERE id=?",
+                (result.meta_update.meta_json, result.meta_update.source_id),
+            )
+        if response.not_modified:
+            if source.kind == "wechat":
+                _backfill_wechat_avatar_cache(conn, source.slug)
+                conn.commit()
+            elif result.meta_update is not None:
+                conn.commit()
+            return SourceFetchSummary(source_id=source.slug)
+        items = result.items
+        if source.kind == "wechat":
+            items = _enrich_wechat_bodies(conn, items)
+        inserted = 0
+        for item in items:
+            inserted += 1 if upsert_item(conn, item) else 0
+        conn.commit()
+        return SourceFetchSummary(source_id=source.slug, fetched=len(items), inserted=inserted)
+    except Exception as exc:
+        conn.rollback()
+        return SourceFetchSummary(source_id=source.slug, error=f"{type(exc).__name__}: {exc}")
+
+
+def _fetch_and_apply_sources(conn: sqlite3.Connection, sources: list[SourceConfig]) -> list[SourceFetchSummary]:
+    if not sources:
+        return []
+    summaries: list[SourceFetchSummary | None] = [None] * len(sources)
+    workers = min(SOURCE_FETCH_WORKERS, len(sources))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(_fetch_source_feed, source): (index, source)
+            for index, source in enumerate(sources)
+        }
+        for future in as_completed(futures):
+            index, source = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = _SourceFeedResult(source=source, error=f"{type(exc).__name__}: {exc}")
+            summaries[index] = _apply_source_feed_result(conn, result)
+    return [summary for summary in summaries if summary is not None]
 
 
 def _stored_wechat_body(conn: sqlite3.Connection, item: FetchedItem) -> tuple[str, str | None] | None:
@@ -246,8 +348,8 @@ def _backfill_wechat_avatar_cache(
     return checked
 
 
-def _enrich_wechat_bodies(conn: sqlite3.Connection, items: list[FetchedItem]) -> list[FetchedItem]:
-    enriched: list[FetchedItem] = []
+def _plan_wechat_body_enrichment(conn: sqlite3.Connection, items: list[FetchedItem]) -> list[_WechatBodyPlan]:
+    plans: list[_WechatBodyPlan] = []
     attempted_avatar_accounts: set[str] = set()
     for item in items:
         stored_body = _stored_wechat_body(conn, item)
@@ -255,42 +357,96 @@ def _enrich_wechat_bodies(conn: sqlite3.Connection, items: list[FetchedItem]) ->
         stored_html = stored_body[1] if stored_body is not None else None
         use_stored_body = stored_body is not None and len(stored_text) > len(item.content_text)
         avatar_account = _wechat_avatar_account_to_fetch(conn, item, attempted_avatar_accounts)
-        if use_stored_body and avatar_account is None:
-            enriched.append(replace(item, content_text=stored_text, content_html=stored_html))
-            continue
-
-        article = scrape_article(item.url)
         if avatar_account is not None:
             attempted_avatar_accounts.add(avatar_account)
-            _cache_wechat_avatar_from_article(conn, avatar_account, article)
-        content_text = str(article.get("content_text") or "")
-        if article.get("success") is True and content_text and not use_stored_body:
-            enriched.append(
-                replace(
-                    item,
-                    content_text=content_text,
-                    content_html=str(article.get("content_html") or ""),
-                )
+        plans.append(
+            _WechatBodyPlan(
+                item=item,
+                stored_text=stored_text,
+                stored_html=stored_html,
+                use_stored_body=use_stored_body,
+                avatar_account=avatar_account,
+                needs_scrape=not (use_stored_body and avatar_account is None),
             )
-            continue
-        if use_stored_body:
-            enriched.append(replace(item, content_text=stored_text, content_html=stored_html))
-            continue
-
-        logger.warning(
-            "Failed to scrape WeChat article; using RSS item only source_id=%s url=%s error=%s",
-            item.source_id,
-            item.url,
-            article.get("error"),
         )
-        enriched.append(item)
+    return plans
+
+
+def _scrape_wechat_body_articles(plans: list[_WechatBodyPlan]) -> dict[int, dict[str, Any]]:
+    indexed_plans = [(index, plan) for index, plan in enumerate(plans) if plan.needs_scrape]
+    if not indexed_plans:
+        return {}
+    workers = min(WECHAT_BODY_FETCH_WORKERS, len(indexed_plans))
+    articles: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(scrape_article, plan.item.url): (index, plan.item.url)
+            for index, plan in indexed_plans
+        }
+        for future in as_completed(futures):
+            index, url = futures[future]
+            try:
+                articles[index] = future.result()
+            except Exception as exc:
+                articles[index] = {"success": False, "url": url, "error": f"{type(exc).__name__}: {exc}"}
+    return articles
+
+
+def _apply_wechat_body_article(
+    conn: sqlite3.Connection,
+    plan: _WechatBodyPlan,
+    article: dict[str, Any] | None,
+) -> FetchedItem:
+    if article is not None and plan.avatar_account is not None:
+        _cache_wechat_avatar_from_article(conn, plan.avatar_account, article)
+    if article is None:
+        if plan.use_stored_body:
+            return replace(plan.item, content_text=plan.stored_text, content_html=plan.stored_html)
+        return plan.item
+
+    content_text = str(article.get("content_text") or "")
+    if article.get("success") is True and content_text and not plan.use_stored_body:
+        return replace(
+            plan.item,
+            content_text=content_text,
+            content_html=str(article.get("content_html") or ""),
+        )
+    if plan.use_stored_body:
+        return replace(plan.item, content_text=plan.stored_text, content_html=plan.stored_html)
+
+    logger.warning(
+        "Failed to scrape WeChat article; using RSS item only source_id=%s url=%s error=%s",
+        plan.item.source_id,
+        plan.item.url,
+        article.get("error"),
+    )
+    return plan.item
+
+
+def _enrich_wechat_bodies(conn: sqlite3.Connection, items: list[FetchedItem]) -> list[FetchedItem]:
+    plans = _plan_wechat_body_enrichment(conn, items)
+    articles = _scrape_wechat_body_articles(plans)
+    enriched: list[FetchedItem] = []
+    for index, plan in enumerate(plans):
+        enriched.append(_apply_wechat_body_article(conn, plan, articles.get(index)))
     return enriched
+
+
+def _checkpoint_after_fetch(db_path: Path | None) -> None:
+    try:
+        db.checkpoint_db(db_path)
+    except Exception as exc:
+        logger.warning("Failed to checkpoint database after fetch round: %s", exc)
 
 
 def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSummary:
     db.migrate(db_path)
-    with db.get_conn(db_path) as conn:
+    conn = db.get_conn(db_path)
+    try:
         reload_sources(conn, path)
         sources = load_enabled_sources_from_db(conn)
-        summaries = [fetch_source(conn, source) for source in sources]
-    return FetchSummary(summaries)
+        summaries = _fetch_and_apply_sources(conn, sources)
+        return FetchSummary(summaries)
+    finally:
+        conn.close()
+        _checkpoint_after_fetch(db_path)

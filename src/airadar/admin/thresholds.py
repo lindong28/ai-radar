@@ -22,6 +22,8 @@ ALERT_THRESHOLDS: dict[str, object] = {
             # 调用持续 25s+（真挂起）才触发。prefilter 真故障由 stage_error_rate 和
             # no_success_minutes 兜底——不靠延迟分页。
             "prefilter": 25000,
+            # scoring/enrich 与 prefilter 使用同一个最近 2h P95 窗口，避免日内已恢复的
+            # 单轮外部阻塞继续污染告警；阈值仍沿用各自标定值，只改变评价窗口。
             "scoring": 16503,
             "enrich": 22569,
         },

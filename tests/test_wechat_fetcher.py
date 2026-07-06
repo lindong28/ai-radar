@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from airadar.fetcher.wechat import extract_round_head_img, parse_article_html, scrape_article
+from airadar.fetcher.wechat import WeChatScraper, extract_round_head_img, parse_article_html, scrape_article
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "wechat"
 SEED_CASES = [
@@ -22,6 +22,12 @@ SEED_CASES = [
         "十字路口 Crossing",
     ),
 ]
+
+
+def test_wechat_scraper_uses_conservative_failure_timeouts() -> None:
+    assert WeChatScraper.NAVIGATION_TIMEOUT_MS == 20_000
+    assert WeChatScraper.CONTENT_TIMEOUT_MS == 20_000
+    assert WeChatScraper.NETWORK_IDLE_TIMEOUT_MS == 5_000
 
 
 @pytest.mark.parametrize(("fixture_name", "url", "features", "author"), SEED_CASES)

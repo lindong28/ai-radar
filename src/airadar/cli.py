@@ -235,6 +235,10 @@ def _admin(args: argparse.Namespace) -> int:
         print(f"migrated {db.resolve_db_path()}")
         print(f"migrated llm_usage {usage_path}")
         return 0
+    if args.admin_command == "db" and args.db_command == "checkpoint":
+        result = db.checkpoint_db(args.db_path)
+        print(f"checkpoint busy={result.busy} log={result.log} checkpointed={result.checkpointed}")
+        return 0
     if args.admin_command == "sources":
         with db.get_conn() as conn:
             if args.sources_command == "reload":
@@ -342,6 +346,8 @@ def build_parser() -> argparse.ArgumentParser:
     db_parser = admin_subparsers.add_parser("db")
     db_subparsers = db_parser.add_subparsers(dest="db_command", required=True)
     db_subparsers.add_parser("migrate")
+    db_checkpoint = db_subparsers.add_parser("checkpoint")
+    db_checkpoint.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
     sources_parser = admin_subparsers.add_parser("sources")
     sources_subparsers = sources_parser.add_subparsers(dest="sources_command", required=True)
     sources_subparsers.add_parser("reload")

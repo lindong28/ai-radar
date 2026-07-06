@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -159,6 +161,36 @@ def test_enrich_wechat_bodies_degrades_to_rss_item_on_scrape_failure(tmp_path: P
         enriched = _enrich_wechat_bodies(conn, [item])
 
     assert enriched == [item]
+
+
+def test_enrich_wechat_bodies_scrapes_items_concurrently_and_keeps_failures(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    items = [
+        replace(_item(f"https://mp.weixin.qq.com/s/{index}"), author=f"RSS Author {index}")
+        for index in range(4)
+    ]
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def blocked_scrape(url: str) -> dict[str, object]:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.05)
+            return {"success": False, "url": url, "error": "blocked"}
+        finally:
+            with lock:
+                active -= 1
+
+    with patch("airadar.fetcher.runner.scrape_article", side_effect=blocked_scrape) as scrape:
+        enriched = _enrich_wechat_bodies(conn, items)
+
+    assert scrape.call_count == len(items)
+    assert max_active > 1
+    assert enriched == items
 
 
 def test_fetch_source_enriches_wechat_items_before_upsert(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ from .access_log import aggregate_access_log
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 STAGE_ORDER = ("fetch", "prefilter", "scoring", "enrich", "curate")
 DB_STAGES = ("prefilter", "scoring", "enrich")
-PREFILTER_P95_WINDOW = timedelta(hours=2)
+EVAL_P95_WINDOW = timedelta(hours=2)
 LOG_STAGE_TO_DASHBOARD = {"score": "scoring"}
 PIPELINE_FILE_RE = re.compile(r"pipeline-(?P<stamp>\d{8}-\d{6})\.log$")
 STAGE_EVENT_RE = re.compile(
@@ -225,9 +225,9 @@ def _evaluation_stage_metrics(
     current: datetime,
 ) -> dict[str, dict[str, object]]:
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
-    prefilter_p95_latencies: list[int] = []
+    p95_latencies: dict[str, list[int]] = defaultdict(list)
     effective_end = min(end, current)
-    prefilter_p95_start = max(start, effective_end - PREFILTER_P95_WINDOW)
+    p95_start = max(start, effective_end - EVAL_P95_WINDOW)
     with db.get_conn(db_path) as conn:
         rows = conn.execute(
             "SELECT stage, latency_ms, cost_usd, error, evaluated_at FROM item_evaluations ORDER BY evaluated_at"
@@ -237,9 +237,10 @@ def _evaluation_stage_metrics(
         if evaluated_at is None or not start <= evaluated_at < effective_end:
             continue
         row_dict = dict(row)
-        grouped[str(row["stage"])].append(row_dict)
-        if row["stage"] == "prefilter" and prefilter_p95_start <= evaluated_at < effective_end:
-            prefilter_p95_latencies.append(int(str(row["latency_ms"])))
+        stage = str(row["stage"])
+        grouped[stage].append(row_dict)
+        if stage in DB_STAGES and p95_start <= evaluated_at < effective_end:
+            p95_latencies[stage].append(int(str(row["latency_ms"])))
 
     metrics: dict[str, dict[str, object]] = {}
     for stage in DB_STAGES:
@@ -256,10 +257,7 @@ def _evaluation_stage_metrics(
             "errors": errors,
             "error_rate": errors / processed if processed else 0.0,
             "p50_latency_ms": _percentile_ms(latencies, 0.5),
-            "p95_latency_ms": _percentile_ms(
-                prefilter_p95_latencies if stage == "prefilter" else latencies,
-                0.95,
-            ),
+            "p95_latency_ms": _percentile_ms(p95_latencies.get(stage, []), 0.95),
             "cost_usd": round(cost_total, 6),
         }
     return metrics

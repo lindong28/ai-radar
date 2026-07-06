@@ -65,6 +65,24 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
     assert "A4 ok 文章摄取骤降" in output
 
 
+def test_admin_db_checkpoint_command_prints_passive_result(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001
+    db_path = tmp_path / "radar.db"
+    seen: dict[str, str] = {}
+
+    def fake_checkpoint(path: str):
+        seen["path"] = path
+        return cli.db.CheckpointResult(busy=0, log=42, checkpointed=41)
+
+    monkeypatch.setattr(cli.db, "checkpoint_db", fake_checkpoint)
+
+    args = cli.build_parser().parse_args(["admin", "db", "checkpoint", "--db-path", str(db_path)])
+
+    assert cli._admin(args) == 0
+    output = capsys.readouterr().out
+    assert seen == {"path": str(db_path)}
+    assert "checkpoint busy=0 log=42 checkpointed=41" in output
+
+
 def test_admin_wechat_avatar_refresh_command_updates_one_account(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001
     db_path = tmp_path / "radar.db"
     migrate(db_path)

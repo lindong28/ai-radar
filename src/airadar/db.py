@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "radar.db"
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+
+
+@dataclass(frozen=True)
+class CheckpointResult:
+    busy: int
+    log: int
+    checkpointed: int
 
 
 def resolve_db_path(path: str | Path | None = None) -> Path:
@@ -26,6 +34,17 @@ def get_conn(path: str | Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
+
+
+def checkpoint_db(path: str | Path | None = None) -> CheckpointResult:
+    conn = get_conn(path)
+    try:
+        row = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        if row is None:
+            return CheckpointResult(busy=0, log=0, checkpointed=0)
+        return CheckpointResult(busy=int(row[0]), log=int(row[1]), checkpointed=int(row[2]))
+    finally:
+        conn.close()
 
 
 def _execute_migration_idempotent(conn: sqlite3.Connection, sql: str) -> None:

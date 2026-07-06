@@ -253,3 +253,25 @@
 - Occurrences:
   - 2026-06-29 11:48 | session `019f115e-a010-7f21-9631-935634590a3d` | backend `codex` | 在 interpret ark+计量任务的真实端到端验证中，codex 两次需要中断自己拉起的前台长跑进程（卡住的 interpret `--check-url` preflight、本地冒充 ark 的 429 server），尝试发送中断时报 `write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open`，无法交互式 Ctrl-C。codex 改用 `ps` 定位 PID + `kill <pid>` 绕过，任务未受阻但多花了诊断/重试步骤。
 - Description: 在 codeagent-wrapper 下跑的 codex，其 exec_command 会话 stdin 已关闭，无法对前台长时间运行的子进程发送中断信号（需 tty=true 才保持 stdin）。当 wrapped agent 自己启动需要手动停止的前台进程（本地测试服务器、卡住的命令）时，唯一可靠手段是 `kill by PID`。Fix 方向：要么 wrapper 暴露一个保持 stdin/tty 的执行模式，要么在 agent 指引里固化"前台长跑进程一律 background + kill by PID 收尾"的约定，避免每次重新踩 stdin-closed。属工具/config 缺口，非产品代码问题。
+
+---
+
+## [open] wrapped agent 为让全量 pytest 绿而扩大 scope 修 pre-existing failure
+
+- Type: improvement
+- Priority: medium
+- Occurrences:
+  - 2026-07-06 20:39 | session `019f3766-5a56-7252-a8b5-64f3f7661586` | backend `codex` | A2 enrich P95 误报全根因修复任务中，全量 pytest 出现 4 个 Playwright daily-date failure（pre-existing，根因是 live radar.db 有未来日期 curated item `2026-07-07`）。codex 未识别为 pre-existing 并报告，而是扩大 scope 改了 `web/static/app.js`（daily-date routing 重构 26 行）+ `src/airadar/web/routes/curated.py`（后端 daily API）去"修"这 4 个 failure。supervisor resume 介入后全部 revert。
+- Description: wrapped agent 跑全量 pytest 时，遇到 failure 默认认为"应该修到绿"，即使该 failure 与 task scope 无关（不同代码路径/模块）。结果为"全绿"扩大 scope，引入无关改动（这次还连带把 runtime context dump 写进 `AGENTS.md`，见 [[codex 把 runtime context dump 写入项目指令文件]]）。正确做法：识别 failure 是否在 task touched 的代码路径上、是否 pre-existing（查 git blame / fixture / 数据依赖），pre-existing 则在 summary 报告"已知、根因、与 task 无关"，不修、不扩大 scope。Fix 方向：spawn-prompt 里预声明已知 baseline failure（"no NEW failures"语义），或要求 agent 跑全量前先记录 baseline，新 failure 才算 regression。
+- Notes: 相关 success criterion 应表述为"no NEW failures vs baseline"而非"全量 pytest 绿"，避免 agent 把 pre-existing failure 当自己责任。
+
+---
+
+## [open] codex 把 runtime context dump 写入项目指令文件（AGENTS.md）
+
+- Type: bug
+- Priority: medium
+- Occurrences:
+  - 2026-07-06 ~20:30 | session `019f3766-5a56-7252-a8b5-64f3f7661586` (phase-1) | backend `codex` | 同上任务中，codex 把一段 `<claude-mem-context>` 运行时 context dump（claude-mem recent-context block + observations 列表，~86 行）粘进了 `AGENTS.md` 项目指令文件。supervisor 发现后指示 revert，codex 用 `git checkout -- AGENTS.md`——**连带丢弃了用户会话前未 commit 的 AGENTS.md 改动（unstaged，不可恢复，supervisor 失误：应精细剥离污染段而非整个 checkout）**。
+  - 2026-07-06 ~21:15 | session `019f3766-5a56-7252-a8b5-64f3f7661586` (phase-2 resume) | backend `codex` | phase-2 resume 时**再次**把 `<claude-mem-context>` dump（~86 行，2 处）粘进 AGENTS.md——supervisor `git checkout` 清理（用户改动 phase-1 已丢，无新损失）。**确认系统性问题：同一 session 两次复发**，证明 spawn-prompt 预禁触指令文件是必要的前置约束。
+- Description: codex backend 的 context injection（claude-mem 提供的 recent context）被当作"项目内容"写入版本控制的指令文件。runtime context 是给 agent 读的、非项目持久内容，不该写入 `AGENTS.md`/`CLAUDE.md`。Fix 方向：(1) supervise spawn-prompt 显式提醒"不要修改 AGENTS.md/CLAUDE.md 等项目指令文件，除非 task 明确要求"；(2) supervisor 复核 git diff 时检查指令文件是否被污染；(3) revert 污染时用精细剥离（去掉污染段保留其余），而非 `git checkout` 整个文件——后者会丢失用户预存的未 commit 改动。同族于 [[wrapped agent 为让全量 pytest 绿而扩大 scope]]（都是 agent 在验证压力下的越界行为）。

@@ -98,7 +98,7 @@ def parse_article_html(html: str, url: str) -> ArticleResult:
 
 
 class WeChatScraper:
-    NAVIGATION_TIMEOUT_MS = 45000
+    NAVIGATION_TIMEOUT_MS = 20000
     CONTENT_TIMEOUT_MS = 20000
     NETWORK_IDLE_TIMEOUT_MS = 5000
     MAX_FETCH_ATTEMPTS = 3

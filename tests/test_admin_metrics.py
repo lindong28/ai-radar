@@ -196,3 +196,43 @@ def test_prefilter_p95_uses_recent_sliding_window_and_auto_clears(tmp_path: Path
     assert recovered_prefilter["p95_latency_ms"] == 1_200
     assert _a2_result_from_metrics(incident).firing is True
     assert _a2_result_from_metrics(recovered).firing is False
+
+
+def test_scoring_and_enrich_p95_use_recent_sliding_window_and_auto_clear(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    for stage, slow_latency_ms, recovered_latency_ms in [
+        ("scoring", 20_000, 2_000),
+        ("enrich", 24_122, 11_465),
+    ]:
+        for item_id, latency_ms, evaluated_at in [
+            (f"{stage}-old-stall", slow_latency_ms, "2026-06-01T16:30:00Z"),
+            (f"{stage}-fast-1", recovered_latency_ms - 100, "2026-06-01T18:10:00Z"),
+            (f"{stage}-fast-2", recovered_latency_ms, "2026-06-01T18:20:00Z"),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO item_evaluations (
+                  item_id, stage, ruleset_version, model_id, input_json, output_json,
+                  numeric_json, latency_ms, cost_usd, evaluated_at, error
+                )
+                VALUES (?, ?, 'test.r1', 'fake', '{}', '{}', '{}', ?, 0, ?, NULL)
+                """,
+                (item_id, stage, latency_ms, evaluated_at),
+            )
+    conn.commit()
+
+    metrics = collect_metrics(
+        db_path=db_path,
+        pipeline_log_dir=tmp_path / "logs",
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-06-02T03:00:00+08:00"),
+    )
+
+    stages = metrics["pipeline"]["stages"]
+    assert stages["scoring"]["processed"] == 3
+    assert stages["scoring"]["p95_latency_ms"] == 2_000
+    assert stages["enrich"]["processed"] == 3
+    assert stages["enrich"]["p95_latency_ms"] == 11_465
+    assert _a2_result_from_metrics(metrics).firing is False
