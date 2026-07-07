@@ -14,18 +14,18 @@ ALERT_THRESHOLDS: dict[str, object] = {
             "enrich": 0.95,
         },
         "stage_p95_latency_ms": {
-            # prefilter 是后台、非用户可见阶段，其 P95 是外部 LLM(ARK flash)单次调用的
-            # 尾延迟。2h 窗口里通常只有 ~15 个样本，P95 实质≈「最近 2h 最慢的 1–2 次
-            # 调用」，被单点尾延迟主导而反复贴线 flap（8478=旧「7日基线×3」，标定于
-            # 06-15，但 06-24 prefilter 路由切到 ARK-first flash 后该基线已失准）。
-            # 延迟本身无用户影响、且总能自愈，故抬到「真崩溃」地板 25000ms：只有大量
-            # 调用持续 25s+（真挂起）才触发。prefilter 真故障由 stage_error_rate 和
-            # no_success_minutes 兜底——不靠延迟分页。
+            # prefilter/scoring/enrich 都是后台、非用户可见阶段，其 P95 是外部 LLM 单次
+            # 调用的尾延迟。2h 窗口里样本少（~10–20 个），P95 实质≈「最近 2h 最慢的 1–2
+            # 次调用」，被单点尾延迟主导：那批慢调用随窗口滑动进/出，P95 反复穿越阈值 →
+            # firing/resolved 交替 flap。旧值（prefilter 8478、scoring 16503、enrich
+            # 22569）是 06-15「7日基线×3」标定，06-24 路由切到 ARK-first + flash scorer
+            # (08d580b) 后基线已失准，真实 P95 贴线抖（scoring ~33s、enrich ~24s）。
+            # 延迟本身无用户影响、且总能自愈，故三者统一抬到「真崩溃」地板：只有大量调用
+            # 持续到该量级（真挂起）才触发——地板卡在各自正常尾延迟与 LLM 超时(60–90s)之间。
+            # 真故障由 stage_error_rate 和 no_success_minutes 兜底，不靠延迟分页。
             "prefilter": 25000,
-            # scoring/enrich 与 prefilter 使用同一个最近 2h P95 窗口，避免日内已恢复的
-            # 单轮外部阻塞继续污染告警；阈值仍沿用各自标定值，只改变评价窗口。
-            "scoring": 16503,
-            "enrich": 22569,
+            "scoring": 45000,
+            "enrich": 40000,
         },
         "latency_multiplier": 3.0,
         "no_success_minutes": 120,
