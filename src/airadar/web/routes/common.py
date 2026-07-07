@@ -9,7 +9,7 @@ from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import Request
 from opencc import OpenCC
@@ -163,6 +163,12 @@ def matches_category(item: dict[str, Any], category: str | None) -> bool:
     return any(isinstance(tag, str) and tag in wanted for tag in tags)
 
 
+# WeChat (and many CMSes) lazy-load images: the real URL lives in a data-*
+# attribute while `src` holds a `data:image/svg` placeholder. Read those so the
+# real image is recovered instead of the useless placeholder.
+_LAZY_SRC_ATTRS = ("data-src", "data-original", "data-lazy-src")
+
+
 class _ImageSrcParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -173,8 +179,13 @@ class _ImageSrcParser(HTMLParser):
             return
         attr_map = {name.lower(): value for name, value in attrs if value}
         src = attr_map.get("src")
-        if src:
-            self.urls.append(unescape(src.strip()))
+        # Prefer a concrete src; fall back to the lazy-load URL when src is a
+        # data: placeholder (or absent).
+        chosen = src if src and not src.strip().lower().startswith("data:") else None
+        if chosen is None:
+            chosen = next((attr_map[a] for a in _LAZY_SRC_ATTRS if attr_map.get(a)), src)
+        if chosen:
+            self.urls.append(unescape(chosen.strip()))
 
 
 def _has_cjk(value: str | None) -> bool:
@@ -203,6 +214,31 @@ def _safe_media_url(value: str) -> str | None:
     return value
 
 
+# Hosts that block browser-side hotlinking but serve fine to a server-side fetch
+# (WeChat's image CDN). Only these are routed through the /img proxy; everything
+# else (Google favicons, ithome, etc.) loads directly and never hits our origin.
+PROXY_IMAGE_HOST_SUFFIXES = ("qpic.cn",)
+
+
+def image_host_needs_proxy(netloc: str) -> bool:
+    host = netloc.lower().split(":", 1)[0]
+    return any(host == suffix or host.endswith("." + suffix) for suffix in PROXY_IMAGE_HOST_SUFFIXES)
+
+
+def proxy_image_url(url: str | None) -> str | None:
+    """Route hotlink-blocked image hosts through the same-origin /img proxy.
+
+    Idempotent and selective: non-proxied hosts (and already-proxied relative
+    URLs) are returned unchanged.
+    """
+    if not url:
+        return url
+    parsed = urlparse(url)
+    if parsed.scheme in {"http", "https"} and image_host_needs_proxy(parsed.netloc):
+        return "/img?url=" + quote(url, safe="")
+    return url
+
+
 def _media_assets_from_html(value: str | None) -> list[dict[str, str]]:
     if not value:
         return []
@@ -215,7 +251,9 @@ def _media_assets_from_html(value: str | None) -> list[dict[str, str]]:
         if not url or url in seen:
             continue
         seen.add(url)
-        assets.append({"type": "image", "url": url})
+        proxied = proxy_image_url(url)
+        if proxied:
+            assets.append({"type": "image", "url": proxied})
     return assets
 
 
@@ -557,8 +595,8 @@ def item_summary(
         "source_name": row["source_name"],
         "source_kind": source_kind,
         "source_homepage_url": row["source_homepage_url"] if "source_homepage_url" in row_keys else None,
-        "source_icon_url": row["source_icon_url"] if "source_icon_url" in row_keys else None,
-        "author_avatar_url": row["author_avatar_url"] if "author_avatar_url" in row_keys else None,
+        "source_icon_url": proxy_image_url(row["source_icon_url"] if "source_icon_url" in row_keys else None),
+        "author_avatar_url": proxy_image_url(row["author_avatar_url"] if "author_avatar_url" in row_keys else None),
         "tier": row["tier"],
         "url": row["url"],
         "title": row["title"],

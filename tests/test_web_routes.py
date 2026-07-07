@@ -476,7 +476,10 @@ def test_timeline_api_includes_wechat_author_avatar_cache(tmp_path: Path) -> Non
     assert item["source_kind"] == "wechat"
     assert item["source_name"] == "微信公众号（Mp2RSS 合集）"
     assert item["author"] == "歸藏的AI工具箱"
-    assert item["author_avatar_url"] == "https://mmbiz.qpic.cn/guizang.png"
+    # WeChat CDN blocks browser hotlinking, so the cached avatar is routed
+    # through the same-origin /img proxy.
+    assert item["author_avatar_url"] == route_common.proxy_image_url("https://mmbiz.qpic.cn/guizang.png")
+    assert item["author_avatar_url"].startswith("/img?url=")
 
 
 def test_precomputed_curated_api_hydrates_wechat_author_avatar_cache(tmp_path: Path) -> None:
@@ -519,7 +522,8 @@ def test_precomputed_curated_api_hydrates_wechat_author_avatar_cache(tmp_path: P
     items = client.get("/api/v1/curated").json()["data"]["items"]
     wechat = next(item for item in items if item["id"] == "item-wechat")
 
-    assert wechat["author_avatar_url"] == "https://mmbiz.qpic.cn/kazike.png"
+    assert wechat["author_avatar_url"] == route_common.proxy_image_url("https://mmbiz.qpic.cn/kazike.png")
+    assert wechat["author_avatar_url"].startswith("/img?url=")
 
 
 def test_prepaint_uses_wechat_author_name_and_avatar_without_rss_suffix() -> None:

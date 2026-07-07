@@ -328,7 +328,7 @@ function articleMedia(item) {
   const label = `打开原文：${itemTitleText(item) || "查看媒体"}`;
   const images = assets.slice(0, 4).map((asset) => `
     <a class="article-media-link" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
-      <img class="article-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer">
+      <img class="article-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.article-media-link').hidden=true">
     </a>`).join("");
   return `<div class="article-media article-media-count-${Math.min(assets.length, 4)}">${images}</div>`;
 }

@@ -10,7 +10,13 @@ from markdown_it import MarkdownIt
 
 from ...wechat_text import normalize_wechat_title
 from ..envelope import ok
-from .common import conn_from_request, json_loads, like_patterns_for_query, whitespace_insensitive_sql
+from .common import (
+    conn_from_request,
+    json_loads,
+    like_patterns_for_query,
+    proxy_image_url,
+    whitespace_insensitive_sql,
+)
 
 router = APIRouter()
 
@@ -79,7 +85,7 @@ def _item_from_row(row: sqlite3.Row, *, page: int | None = None, q: str | None =
         "abstract": row["abstract"] or "",
         "tags": _tags(row["tags_json"]),
         "author": row["author"] or row["source_name"],
-        "avatar_url": row["avatar_url"],
+        "avatar_url": proxy_image_url(row["avatar_url"]),
         "published_at": row["published_at"],
         "url": row["url"],
         "detail_url": _detail_url(str(row["slug"]), page, q),

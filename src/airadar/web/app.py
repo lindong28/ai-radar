@@ -20,7 +20,7 @@ from uvicorn.config import LOGGING_CONFIG
 from .. import db
 from ..site_config import get_site_config
 from .cors import configure_cors
-from .routes import admin, curated, health, items, sources, timeline
+from .routes import admin, curated, health, items, media, sources, timeline
 from .routes import wechat as wechat_routes
 
 STATIC_DIR = db.PROJECT_ROOT / "web" / "static"
@@ -252,6 +252,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.include_router(sources.router, prefix=api_prefix)
     app.include_router(admin.router, prefix=api_prefix)
     app.include_router(wechat_routes.router, prefix=api_prefix)
+    # Image proxy lives at the root (frontend references /img?url=), not under
+    # the API prefix. Registered before the "/" static mount so it wins.
+    app.include_router(media.router)
 
     @app.get("/", include_in_schema=False)
     def index_page(

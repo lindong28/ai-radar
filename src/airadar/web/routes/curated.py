@@ -22,6 +22,7 @@ from .common import (
     json_loads,
     matches_category,
     parse_enrichment,
+    proxy_image_url,
     search_id_subquery,
     source_match_expression,
 )
@@ -195,7 +196,7 @@ def _load_precomputed(
     for row in rows:
         item: dict[str, Any] = json.loads(row["summary_json"])
         if row["author_avatar_url"]:
-            item["author_avatar_url"] = row["author_avatar_url"]
+            item["author_avatar_url"] = proxy_image_url(row["author_avatar_url"])
         if selected_date and _shanghai_date(item.get("published_at", "")) != selected_date:
             continue
         if not matches_category(item, category):
