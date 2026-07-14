@@ -28,7 +28,7 @@ def test_alert_launchd_template_runs_alert_check_every_five_minutes() -> None:
     services = (REPO_ROOT / "deploy/lib/services.sh").read_text(encoding="utf-8")
 
     assert "<string>live.aiplanet.ai-radar.alert</string>" in plist
-    assert "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin ./run.sh admin alert-check" in plist
+    assert 'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh admin alert-check' in plist
     assert "__AI_RADAR_ALERT_ENVIRONMENT__" in plist
     assert "FEISHU_GENERAL_ALERT_WEBHOOK" in services
     assert "AI_RADAR_DB" in services

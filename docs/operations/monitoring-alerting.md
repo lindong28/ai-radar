@@ -42,23 +42,24 @@ AI_RADAR_LLM_PRICING_JSON='{"deepseek-v4-pro":{"input_per_million_tokens_usd":0.
 
 告警状态存储在 `data/alert-state.json`。同一规则 firing 后有 30 分钟冷却；恢复时发送 resolved。
 
-## 飞书自定义机器人
+## `im-notify` 飞书告警通道
 
-1. 在飞书群里打开「群设置」→「机器人」→「添加机器人」→「自定义机器人」。
-2. 复制 webhook URL，写入项目根目录 `.env` 或 `~/.claude/.env`，不要提交真实 URL：
+1. 在 `ai-agent-config` 仓库运行 `./im-notify/install.sh`，确认部署机存在 `~/.local/bin/im-notify`。`alert` 的 tracked launchd 模板已把 `~/.local/bin` 加入作业 `PATH`。
+2. 在飞书群里打开「群设置」→「机器人」→「添加机器人」→「自定义机器人」。
+3. 复制 webhook URL，写入项目根目录 `.env` 或 `~/.claude/.env`，不要提交真实 URL：
 
 ```bash
 FEISHU_GENERAL_ALERT_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/...
 ```
 
-3. 在部署机执行 preflight：
+4. 在部署机执行 preflight：
 
 ```bash
 ./run.sh admin alert-check
 ```
 
-4. 确认群里收到以 `【AI Radar】` 开头、包含「故障类别」「具体故障对象/数值」「处置方向」的消息。该前缀来自 `alerts.py` 的 `ALERT_SOURCE` 常量，用于在多个项目共用同一 webhook 时让收件人区分告警来源。
-5. 安装周期告警服务：
+5. 确认群里收到以 `【AI Radar】` 开头、包含「故障类别」「具体故障对象/数值」「处置方向」的消息。该前缀来自 `alerts.py` 的 `ALERT_SOURCE` 常量，用于在多个项目共用同一 webhook 时让收件人区分告警来源。消息内容、firing / resolved 与 30 分钟冷却仍由 AI Radar 状态机负责；传输层调用 `im-notify --alert` 时不传 `--dedup-key`，避免双重去重。
+6. 安装周期告警服务：
 
 ```bash
 ./install.sh alert
@@ -79,7 +80,7 @@ plutil -p deploy/launchd/ai-radar-alert.plist | rg 'FEISHU_GENERAL_ALERT_WEBHOOK
 ./install.sh alert
 ```
 
-没有 `FEISHU_GENERAL_ALERT_WEBHOOK` 时，`alert-check` 只评估规则；触发告警时日志会显示 `send <rule> <type> skipped reason=FEISHU_GENERAL_ALERT_WEBHOOK is not set`，不会发送消息。
+没有 `FEISHU_GENERAL_ALERT_WEBHOOK`、找不到 `im-notify` 或 `im-notify` 发送失败时，触发告警的传输失败会写入 `logs/alert-check.err.log`，本轮状态机仍会完成，不会让周期告警进程崩溃。CLI 同时会显示 `send <rule> <type> skipped reason=...`。
 
 ## Cloudflare Access
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-13
+
+- A1-A4 告警的发送传输改为复用本机 `im-notify --alert`，不再由 AI Radar 直接调用飞书 webhook。原有 firing / resolved、debounce 与 30 分钟冷却状态机保持不变，且不叠加 `--dedup-key`；发送器失败会记录日志而不会终止周期告警检查。`alert` launchd 模板同时把 `~/.local/bin` 加入 `PATH`。
+
 ## 2026-06-24
 
 - Split LLM usage accounting into `data/llm_usage.db` (`AI_RADAR_LLM_USAGE_DB`) so prefilter / score / enrich token writes no longer contend with the main `radar.db` writer. Existing `radar.db.llm_usage` history is copied into the dedicated DB on migration/first use, `/admin/usage` reads the dedicated DB while still showing item/source metadata from the main DB, and A2 prefilter P95 now uses a recent 2-hour sliding window so recovered latency incidents do not keep firing until midnight.

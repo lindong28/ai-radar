@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from airadar.admin.alerts import (
     AlertSignals,
     evaluate_rules,
     run_alert_state_machine,
-    send_feishu_message,
+    send_alert_message,
 )
 
 
@@ -292,29 +293,32 @@ def test_a4_debounce_fires_after_sustained_outage_then_resolves(tmp_path: Path) 
     assert "✅ A4" in sent[1]
 
 
-def test_send_feishu_message_posts_text_payload(monkeypatch) -> None:  # noqa: ANN001
-    calls: list[tuple[str, dict[str, object], float]] = []
+def test_send_alert_message_calls_im_notify_alert_without_dedup(monkeypatch) -> None:  # noqa: ANN001
+    calls: list[tuple[list[str], bool, bool]] = []
 
-    class Response:
-        status_code = 200
-        text = "ok"
+    def fake_run(command: list[str], *, capture_output: bool, text: bool, timeout: float) -> CompletedProcess[str]:
+        assert timeout == 15.0
+        calls.append((command, capture_output, text))
+        return CompletedProcess(command, 0, stdout="sent\n", stderr="")
 
-        def raise_for_status(self) -> None:
-            return None
+    monkeypatch.setattr("airadar.admin.alerts.subprocess.run", fake_run)
 
-    def fake_post(url: str, json: dict[str, object], timeout: float) -> Response:
-        calls.append((url, json, timeout))
-        return Response()
+    result = send_alert_message("【AI Radar】\nhello")
 
-    monkeypatch.setattr("airadar.admin.alerts.httpx.post", fake_post)
+    assert result == {"skipped": False, "returncode": 0}
+    assert calls == [(["im-notify", "--alert", "【AI Radar】\nhello"], True, True)]
+    assert "--dedup-key" not in calls[0][0]
 
-    result = send_feishu_message("https://example.test/webhook", "hello")
 
-    assert result["status_code"] == 200
-    assert calls == [
-        (
-            "https://example.test/webhook",
-            {"msg_type": "text", "content": {"text": "hello"}},
-            10.0,
-        )
-    ]
+def test_send_alert_message_logs_failure_without_raising(monkeypatch, caplog) -> None:  # noqa: ANN001
+    def fake_run(command: list[str], *, capture_output: bool, text: bool, timeout: float) -> CompletedProcess[str]:
+        assert timeout == 15.0
+        return CompletedProcess(command, 7, stdout="", stderr="delivery unavailable\n")
+
+    monkeypatch.setattr("airadar.admin.alerts.subprocess.run", fake_run)
+
+    result = send_alert_message("hello")
+
+    assert result == {"skipped": True, "reason": "im-notify exited with status 7"}
+    assert "im-notify alert delivery failed" in caplog.text
+    assert "delivery unavailable" in caplog.text

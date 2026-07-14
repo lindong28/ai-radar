@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
+import logging
+import subprocess
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
@@ -27,6 +28,7 @@ DEFAULT_HEALTHZ_TIMEOUT_SECONDS = 2.0
 # Project label prefixed on every alert so a shared Feishu webhook (used by
 # multiple projects) lets the reader tell which project an alert came from.
 ALERT_SOURCE = "AI Radar"
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -305,7 +307,7 @@ def run_alert_state_machine(
     current = current.astimezone(SHANGHAI_TZ)
     path = Path(state_path)
     state = _load_state(path)
-    sender = send or (lambda text: send_feishu_message(os.environ.get("FEISHU_GENERAL_ALERT_WEBHOOK"), text))
+    sender = send or send_alert_message
     active_thresholds = thresholds or ALERT_THRESHOLDS
     healthz_consecutive_failures = _record_healthz_probe(
         state,
@@ -367,13 +369,19 @@ def run_alert_state_machine(
     }
 
 
-def send_feishu_message(webhook_url: str | None, text: str) -> dict[str, object]:
-    if not webhook_url:
-        return {"skipped": True, "reason": "FEISHU_GENERAL_ALERT_WEBHOOK is not set"}
-    payload = {"msg_type": "text", "content": {"text": text}}
-    response = httpx.post(webhook_url, json=payload, timeout=10.0)
-    response.raise_for_status()
-    return {"skipped": False, "status_code": response.status_code, "text": response.text}
+def send_alert_message(text: str) -> dict[str, object]:
+    command = ["im-notify", "--alert", text]
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=15.0)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        reason = f"im-notify failed: {type(exc).__name__}: {exc}"
+        LOGGER.error("im-notify alert delivery failed: %s", reason)
+        return {"skipped": True, "reason": reason}
+    if completed.returncode != 0:
+        reason = f"im-notify exited with status {completed.returncode}"
+        LOGGER.error("im-notify alert delivery failed: %s; stderr=%s", reason, completed.stderr.strip())
+        return {"skipped": True, "reason": reason}
+    return {"skipped": False, "returncode": completed.returncode}
 
 
 def _recent_upstream_stats(db_path: str | Path | None, since: datetime) -> tuple[int, float, float]:
