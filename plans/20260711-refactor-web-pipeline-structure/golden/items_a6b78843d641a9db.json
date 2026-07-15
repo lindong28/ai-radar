@@ -1,0 +1,102 @@
+{
+    "success": true,
+    "data": {
+        "item": {
+            "id": "a6b78843d641a9db",
+            "source_id": "hn_ai",
+            "source_name": "Hacker News AI/LLM",
+            "source_kind": "feed",
+            "source_homepage_url": "https://news.ycombinator.com/",
+            "source_icon_url": "https://www.google.com/s2/favicons?domain=news.ycombinator.com&sz=64",
+            "author_avatar_url": null,
+            "tier": "T2",
+            "url": "https://news.ycombinator.com/item?id=48903663",
+            "title": "Ask HN: Does anyone else find GPT-5.6 Sol in Codex slow?",
+            "title_zh": "\u5f00\u53d1\u8005\u5410\u69fd GPT-5.6 Sol \u5728 Codex \u4e2d\u54cd\u5e94\u8fdf\u7f13\uff0c\u65b0\u6a21\u578b\u63a8\u7406\u901f\u5ea6\u5f15\u70ed\u8bae",
+            "author": "linzhangrun",
+            "published_at": "2026-07-14T08:16:42Z",
+            "fetched_at": "2026-07-14T09:16:10Z",
+            "content_preview": "Comments URL: https://news.ycombinator.com/item?id=48903663 Points: 3 # Comments: 1",
+            "summary_zh": "\u4e00\u4f4d\u5f00\u53d1\u8005\u5728 Hacker News \u4e0a\u53d1\u5e16\u79f0\uff0cOpenAI \u6700\u65b0\u7684 GPT-5.6 Sol \u6a21\u578b\u5728 Codex \u7f16\u7a0b\u73af\u5883\u4e2d\u8fd0\u884c\u660e\u663e\u504f\u6162\uff0c\u5f15\u53d1\u793e\u533a\u8ba8\u8bba\u3002\u8be5\u5e16\u867d\u4e92\u52a8\u91cf\u4e0d\u9ad8\uff0c\u4f46\u89e6\u53ca\u4e86\u5f53\u524d\u5927\u6a21\u578b\u90e8\u7f72\u7684\u6838\u5fc3\u77db\u76fe\uff1a\u80fd\u529b\u8d8a\u5f3a\uff0c\u63a8\u7406\u5ef6\u8fdf\u548c\u8ba1\u7b97\u6210\u672c\u8d8a\u9ad8\u3002\u8fd9\u53cd\u6620\u51fa\u5f00\u53d1\u8005\u5bf9\u524d\u6cbf\u6a21\u578b\u5728\u771f\u5b9e\u5f00\u53d1\u573a\u666f\u4e2d\u53ef\u7528\u6027\u7684\u654f\u611f\u5ea6\u6b63\u5728\u4e0a\u5347\uff0c\u901f\u5ea6\u53ef\u80fd\u6210\u4e3a\u6bd4\u57fa\u51c6\u5206\u6570\u66f4\u5173\u952e\u7684\u4f53\u9a8c\u74f6\u9888\u3002",
+            "why_recommend": "\u4e00\u6761\u4f4e\u4e92\u52a8\u5e16\u5374\u6298\u5c04\u51fa\u5927\u6a21\u578b\u843d\u5730\u7684\u771f\u5b9e\u75db\u70b9\uff1a\u5f53\u6a21\u578b\u80fd\u529b\u5377\u5230\u6781\u81f4\uff0c\u54cd\u5e94\u901f\u5ea6\u6b63\u6210\u4e3a\u5f00\u53d1\u8005\u9009\u62e9\u5de5\u5177\u7684\u9996\u8981\u8003\u91cf\u3002",
+            "enriched_tags": [
+                "\u4ea7\u54c1\u66f4\u65b0",
+                "OpenAI",
+                "\u7f16\u7801",
+                "\u884c\u4e1a\u52a8\u6001"
+            ],
+            "topic_tags": [
+                "\u4ea7\u54c1\u66f4\u65b0",
+                "OpenAI",
+                "\u7f16\u7801",
+                "\u884c\u4e1a\u52a8\u6001"
+            ],
+            "reasoning": "\u4e00\u6761\u4f4e\u4e92\u52a8\u5e16\u5374\u6298\u5c04\u51fa\u5927\u6a21\u578b\u843d\u5730\u7684\u771f\u5b9e\u75db\u70b9\uff1a\u5f53\u6a21\u578b\u80fd\u529b\u5377\u5230\u6781\u81f4\uff0c\u54cd\u5e94\u901f\u5ea6\u6b63\u6210\u4e3a\u5f00\u53d1\u8005\u9009\u62e9\u5de5\u5177\u7684\u9996\u8981\u8003\u91cf\u3002",
+            "related_discussions": [
+                {
+                    "source_id": "ithome",
+                    "source_name": "IT\u4e4b\u5bb6",
+                    "source_kind": "feed",
+                    "author": null,
+                    "url": "https://www.ithome.com/0/976/452.htm"
+                },
+                {
+                    "source_id": "ithome",
+                    "source_name": "IT\u4e4b\u5bb6",
+                    "source_kind": "feed",
+                    "author": null,
+                    "url": "https://www.ithome.com/0/975/974.htm"
+                },
+                {
+                    "source_id": "simonw",
+                    "source_name": "Simon Willison's Weblog",
+                    "source_kind": "feed",
+                    "author": null,
+                    "url": "https://simonwillison.net/2026/Jul/13/datasette-code-frequency"
+                }
+            ],
+            "media_assets": []
+        },
+        "evaluations": [
+            {
+                "id": 69634,
+                "stage": "enrich",
+                "ruleset_version": "2026-05-13.r1",
+                "model_id": "deepseek-v4-pro",
+                "numeric": null,
+                "evaluated_at": "2026-07-14T09:00:22Z",
+                "error": null
+            },
+            {
+                "id": 69629,
+                "stage": "scoring",
+                "ruleset_version": "2026-05-13.r1",
+                "model_id": "deepseek-v4-flash",
+                "numeric": {
+                    "authority": 1.0,
+                    "density": 1.0,
+                    "engineering": 1.0,
+                    "reasoning": "Low-value anecdotal query with no data, benchmarks, or technical detail; minimal engineering insight.",
+                    "recency": 3.0,
+                    "relevance": 2.0,
+                    "topics": []
+                },
+                "evaluated_at": "2026-07-14T08:58:51Z",
+                "error": null
+            },
+            {
+                "id": 69624,
+                "stage": "prefilter",
+                "ruleset_version": "2026-05-13.r1",
+                "model_id": "deepseek-v4-flash",
+                "numeric": {
+                    "confidence": 1.0,
+                    "is_ai_related": true
+                },
+                "evaluated_at": "2026-07-14T08:58:01Z",
+                "error": null
+            }
+        ]
+    },
+    "error": null
+}

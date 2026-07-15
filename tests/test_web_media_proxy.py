@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from airadar.web.routes.common import _media_assets_from_html, proxy_image_url
+from airadar.presentation.media import _media_assets_from_html, proxy_image_url
 from airadar.web.routes.media import proxy_image
 
 WX = "https://mmbiz.qpic.cn/sz_mmbiz_png/abc123/640?wx_fmt=png"

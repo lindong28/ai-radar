@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
+from airadar.db import resolve_db_path
+
 AI_RADAR_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -85,7 +87,7 @@ def source_homepages() -> dict[str, str]:
 
 @pytest.fixture(scope="session")
 def historical_date() -> str:
-    with sqlite3.connect(AI_RADAR_ROOT / "data" / "radar.db") as conn:
+    with sqlite3.connect(resolve_db_path()) as conn:
         row = conn.execute(
             """
             SELECT date(datetime(i.published_at, '+08:00')) AS day, COUNT(*) AS count

@@ -1,0 +1,769 @@
+{
+  "items": [
+    {
+      "abstract": "一篇以幽默讽刺风格包装的 LibTV 视频生成 Agent 产品发布文，前半部分用“如何呼吸”“如何分清柯基与吐司面包”等荒诞 Skill 示例引出“习以为常的技能需要教程”的洞察，后半部分正式介绍 LibTV Agent 的三大核心功能：端到端视频生成、Skill 机制、Skill Hub 创作者生态。",
+      "author": "赛博禅心",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2F2icSMc1VBIYoJLstTduTtOfhbXy2nf2ScibVJFdDYPz6CvicrQ5PxRK0KdialxrFSEaDNz6H2zStJrQHUq1ibJuDUYA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/视频解说-skill-教你分清柯基与吐司面包",
+      "published_at": "2026-07-14T07:51:16Z",
+      "recommendation": "值得一看",
+      "slug": "视频解说-skill-教你分清柯基与吐司面包",
+      "tags": [
+        "视频生成",
+        "Agent生态",
+        "toC产品模式"
+      ],
+      "title": "视频解说 Skill：教你分清「柯基」与「吐司面包」",
+      "url": "https://mp.weixin.qq.com/s/f16Fr2f4VAOowvQXeUX_nA"
+    },
+    {
+      "abstract": "一篇 RSS 2026 现场报道，记录了首日 Oral 报告中华人学者在具身智能与机器人操作领域的极高参与度（94%），并梳理了灵巧操作、世界模型等前沿研究方向，同时展示了智元、Sharpa、千寻智能等中国产业力量的产品落地。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/rss-2026-现场直击首日-oral-报告华人含量-94-中国力量包揽学术与产业-c-位",
+      "published_at": "2026-07-14T06:56:33Z",
+      "recommendation": "值得一看",
+      "slug": "rss-2026-现场直击首日-oral-报告华人含量-94-中国力量包揽学术与产业-c-位",
+      "tags": [
+        "具身智能",
+        "AI应用方向"
+      ],
+      "title": "RSS 2026 现场直击：首日 Oral 报告华人含量 94%，中国力量包揽学术与产业 C 位",
+      "url": "https://mp.weixin.qq.com/s/yi5EhYpTydvUKy82VOmQoQ"
+    },
+    {
+      "abstract": "一篇关于蚂蚁集团医疗 Agent“阿福”从 0 到生产落地的工程实践分享，覆盖医疗 Agent 的特殊挑战、研发范式转变、上下文管理、评测体系构建、记忆机制、推理加速及 Agentic RAG 等全链路技术细节。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/蚂蚁阿福从-0-到生产的医疗-agent-工程化落地",
+      "published_at": "2026-07-14T06:21:52Z",
+      "recommendation": "值得一看",
+      "slug": "蚂蚁阿福从-0-到生产的医疗-agent-工程化落地",
+      "tags": [
+        "Agent架构",
+        "上下文管理",
+        "评测设计",
+        "Agent记忆",
+        "RAG优化"
+      ],
+      "title": "蚂蚁阿福：从 0 到生产的医疗 Agent 工程化落地",
+      "url": "https://mp.weixin.qq.com/s/GQwCRSrXBjSlTE4TEY_wfQ"
+    },
+    {
+      "abstract": "一篇关于 Cursor 正在内测的通用 AI 办公智能体 Sand 的资讯报道，介绍了其产品定位、与 Claude Cowork 和 ChatGPT Work 的竞争格局，以及 SpaceX 收购交易对产品未来的潜在影响。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/spacex联手cursor的首个ai产品曝光全能办公智能体内测中-chatgpt-work迎来劲敌-radar-b970d679",
+      "published_at": "2026-07-14T06:21:52Z",
+      "recommendation": "值得一看",
+      "slug": "spacex联手cursor的首个ai产品曝光全能办公智能体内测中-chatgpt-work迎来劲敌-radar-b970d679",
+      "tags": [
+        "AI助手",
+        "toC Agent",
+        "产品方法论"
+      ],
+      "title": "SpaceX联手Cursor的首个AI产品曝光！全能办公智能体内测中，ChatGPT Work迎来劲敌",
+      "url": "https://mp.weixin.qq.com/s/eq-4pz3DMlcJOxHcz1sLIg"
+    },
+    {
+      "abstract": "一篇关于阿里云 AI 原生数据库服务 AIDBS 的产品发布与深度解读文章，系统阐述了当数据库的使用者从“人”变为“Agent”时，数据库在数据接入、语义对齐、应用开发及运维自治层面需要完成的架构演进，并结合古茗、自媒体创业者等案例展示了落地效果。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/当数据库的两端都不再是人",
+      "published_at": "2026-07-14T06:21:52Z",
+      "recommendation": "值得一看",
+      "slug": "当数据库的两端都不再是人",
+      "tags": [
+        "数据基础设施",
+        "Agent基础设施"
+      ],
+      "title": "当数据库的两端，都不再是人",
+      "url": "https://mp.weixin.qq.com/s/ch12VyU5WUD424ZpQIRUMw"
+    },
+    {
+      "abstract": "一篇关于 Block 公司（Cash App 与 Square 母公司）将约 450 个 JVM 仓库从 polyrepo 迁移到 monorepo 的工程实践访谈，涵盖迁移动机（依赖漂移、协调成本）、支撑工具（定制 IntelliJ 插件、依赖图构建、共享 Gradle 插件）以及迁移后的开发者体验变化。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/block-将约-450-个-jvm-仓库迁入-monorepo-以降低依赖漂移",
+      "published_at": "2026-07-14T06:21:52Z",
+      "recommendation": "值得一看",
+      "slug": "block-将约-450-个-jvm-仓库迁入-monorepo-以降低依赖漂移",
+      "tags": [
+        "架构演进",
+        "Agent基础设施"
+      ],
+      "title": "Block 将约 450 个 JVM 仓库迁入 monorepo 以降低依赖漂移",
+      "url": "https://mp.weixin.qq.com/s/__WI0w4DUd1OdK3633Jwvg"
+    },
+    {
+      "abstract": "一篇关于苹果起诉 OpenAI 窃取商业机密的诉讼报道，核心是苹果指控 OpenAI 通过系统性挖角前员工、获取内部文件和接触供应商来盗用硬件研发机密，并附带印度供应链泄露事件的背景分析。",
+      "author": "AI前线",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FZBjVrHIdkOmKH9nbXIZ2LyTezvB50icWaHIIeJZUpby9LSOF1KltGCaRzVdvSWSp9a3uNtEClvJze3EgxnFnmbQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/苹果甩出-41-页-pdf-怒告-openai-偷师其核心机密网友早知道就等印度开源了",
+      "published_at": "2026-07-14T04:43:36Z",
+      "recommendation": "可跳过",
+      "slug": "苹果甩出-41-页-pdf-怒告-openai-偷师其核心机密网友早知道就等印度开源了",
+      "tags": [
+        "AI商业化",
+        "AI硬件"
+      ],
+      "title": "苹果甩出 41 页 PDF 怒告 OpenAI“偷师”其核心机密！网友：早知道就等印度开源了",
+      "url": "https://mp.weixin.qq.com/s/w7g9ANrK3PUYWzpr3t-ZUw"
+    },
+    {
+      "abstract": "一篇关于 Anthropic 旗下 Claude Artifacts 功能重大更新的产品动态分析，核心是将 Claude Code 创建的 Artifact 从内部协作工具升级为支持全网公开分享和多人编辑的交付载体，并打通了 Slack 中的 Claude Tag 入口，标志着 Anthropic 正从模型能力竞争转向企业工作流入口和交付闭环的争夺。",
+      "author": "AI前线",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FZBjVrHIdkOmKH9nbXIZ2LyTezvB50icWaHIIeJZUpby9LSOF1KltGCaRzVdvSWSp9a3uNtEClvJze3EgxnFnmbQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/claude-artifacts-一夜打通全网公开分享多人编辑-ai-交付闭环彻底杀疯了",
+      "published_at": "2026-07-14T04:43:36Z",
+      "recommendation": "值得一看",
+      "slug": "claude-artifacts-一夜打通全网公开分享多人编辑-ai-交付闭环彻底杀疯了",
+      "tags": [
+        "企业级Agent",
+        "toC Agent"
+      ],
+      "title": "Claude Artifacts 一夜打通“全网公开分享+多人编辑”，AI 交付闭环彻底杀疯了",
+      "url": "https://mp.weixin.qq.com/s/DiwsG0CktkU9by2Qevvyjg"
+    },
+    {
+      "abstract": "一篇关于 LibTV Agent 产品的深度体验与团队访谈，剖析了视频 Agent 难以交付成片的核心原因（结构完整性与叙事完整性），并展示了 LibTV 如何通过 Skill 生态和 Agent 框架降低视频创作门槛，让非专业用户也能生成可发布的完整作品。",
+      "author": "Founder Park",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FqpAK9iaV2O3sJgoBraTTtb4HvpIUu0gjF1iaeu47FWB2mazlo7BSDYJJYk3Td5HVich4ag1IUbv1T7208rVBVqg5w%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/迟到三个月的-libtv-agent-用户会教你怎么做好产品",
+      "published_at": "2026-07-14T03:56:30Z",
+      "recommendation": "值得一看",
+      "slug": "迟到三个月的-libtv-agent-用户会教你怎么做好产品",
+      "tags": [
+        "视频生成",
+        "Skill管理",
+        "toC产品模式"
+      ],
+      "title": "迟到三个月的 LibTV Agent：用户会教你怎么做好产品",
+      "url": "https://mp.weixin.qq.com/s/HSAg785IHhWUqTl435h7IQ"
+    },
+    {
+      "abstract": "一篇关于 Holi-Spatial 3D 自动标注系统的技术解读与团队专访，核心是展示如何用纯软件管线（3DGS + SAM3 + VLM）将普通 2D 视频自动转化为高精度 3D 空间标注数据，在 ScanNet++ 上实现 81.06% AP25 的断层式领先，并探讨了空间智能的未来演进。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/登顶-icml-oral-专访上交大团队这个-3d-自动标注-ai-太强了",
+      "published_at": "2026-07-14T03:37:34Z",
+      "recommendation": "值得一看",
+      "slug": "登顶-icml-oral-专访上交大团队这个-3d-自动标注-ai-太强了",
+      "tags": [
+        "数据标注自动化",
+        "AI应用方向",
+        "具身智能"
+      ],
+      "title": "登顶 ICML Oral ！专访上交大团队：这个 3D 自动标注 AI 太强了",
+      "url": "https://mp.weixin.qq.com/s/p6fbvVGeiQ-jXRn3nZZWVQ"
+    },
+    {
+      "abstract": "一篇来自 RSS 2026 会议现场的论文综述，精选了 9 篇机器人操作领域的顶会论文，核心主线是展示机器人如何通过少样本学习、人类数据迁移和推理时安全机制，摆脱对海量遥操作数据的依赖。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/rss-2026现场直击从双臂协同到水下灵巧机器人操作迈入少样本时代",
+      "published_at": "2026-07-14T03:37:34Z",
+      "recommendation": "值得一看",
+      "slug": "rss-2026现场直击从双臂协同到水下灵巧机器人操作迈入少样本时代",
+      "tags": [
+        "具身智能",
+        "Agent训练"
+      ],
+      "title": "RSS 2026现场直击｜从双臂协同到水下灵巧，机器人操作迈入「少样本时代」",
+      "url": "https://mp.weixin.qq.com/s/bghZ9WcCrZU8-dUzI_GVxA"
+    },
+    {
+      "abstract": "一篇量子位发布的 WAIC 2026 探展召集令，属于活动宣传/媒体合作邀请类内容，主要介绍量子位在 WAIC 期间的展位位置、直播计划、线下交流活动（AI Mixer）以及面向参展商的合作征集方式。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/waic-26探展召集令和量子位一起逛展直播聊ai-2",
+      "published_at": "2026-07-14T03:13:10Z",
+      "recommendation": "可跳过",
+      "slug": "waic-26探展召集令和量子位一起逛展直播聊ai-2",
+      "tags": [
+        "AI创业"
+      ],
+      "title": "WAIC'26探展召集令！和量子位一起逛展、直播、聊AI",
+      "url": "https://mp.weixin.qq.com/s/DfUM_XkcbeJJiqwYERjmyw"
+    },
+    {
+      "abstract": "一篇关于 Sam Altman 在 X 平台发起 GPT-5.6 Sol 有奖征集活动的报道，汇总了网友用该模型创作的各类脑洞作品（气象模拟器、AI 员工办公室、GitHub 替代平台等），并分析了此次营销活动背后的产品策略与模型定位。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/奥特曼在线发奖用5-6-sol整最酷的活神秘大礼归你",
+      "published_at": "2026-07-14T03:13:10Z",
+      "recommendation": "值得一看",
+      "slug": "奥特曼在线发奖用5-6-sol整最酷的活神秘大礼归你",
+      "tags": [
+        "模型选型",
+        "toC产品探索"
+      ],
+      "title": "奥特曼在线发奖：用5.6 Sol整最酷的活，神秘大礼归你",
+      "url": "https://mp.weixin.qq.com/s/FtkO1imJxZl_Wcg4eMk2lg"
+    },
+    {
+      "abstract": "一篇关于 AI 视频创作工具 LibTV Agent 的深度体验评测，展示了其通过 100+ 导演级 Skill 和画布工作流，将视频创作从脚本到成片的全流程整合进一个 Agent 对话界面的产品形态。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/100-skills导演级专家真随叫随到这回视频agent终于有了可用级产品",
+      "published_at": "2026-07-14T03:13:10Z",
+      "recommendation": "值得一看",
+      "slug": "100-skills导演级专家真随叫随到这回视频agent终于有了可用级产品",
+      "tags": [
+        "视频生成",
+        "toC产品模式"
+      ],
+      "title": "100+Skills导演级专家真·随叫随到！这回视频Agent终于有了可用级产品",
+      "url": "https://mp.weixin.qq.com/s/GayshxH2tBeqBrQWqwKiSQ"
+    },
+    {
+      "abstract": "一篇关于独立开发者制作的AI蒸馏工具“女娲”的用户行为观察报道，记录了非技术女性用户如何克服技术门槛使用AI情感博主Skill，以及她们的真实需求、使用体验和背后的社会心理。",
+      "author": "硅星人Pro",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FjopKOlhibRBJEB8ZVTk6rA7HZyBpdPOoibBZZwo0h29VutaZxEvzzZIG3WEP2tJwphW9Op2LItrlQynOxibzBx1eQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/去用曲曲skill的女孩们",
+      "published_at": "2026-07-14T02:28:11Z",
+      "recommendation": "值得一看",
+      "slug": "去用曲曲skill的女孩们",
+      "tags": [
+        "toC产品探索",
+        "AI陪伴"
+      ],
+      "title": "去用曲曲skill的女孩们",
+      "url": "https://mp.weixin.qq.com/s/mx3MaPFiyLSEvhs_tTxHrw"
+    },
+    {
+      "abstract": "一篇关于 LibTV Agent 的实测体验文章，通过三组递进式测试（幻想动画、球队宣传片、短剧制作），验证了其从创意构思、素材组织到完整成片的全流程视频创作能力，并探讨了 AI 视频工具从“生成惊艳镜头”到“交付完整作品”的价值迁移。",
+      "author": "硅星人Pro",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FjopKOlhibRBJEB8ZVTk6rA7HZyBpdPOoibBZZwo0h29VutaZxEvzzZIG3WEP2tJwphW9Op2LItrlQynOxibzBx1eQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/实测-libtv-agent-这可能是普通人最接近导演的时刻",
+      "published_at": "2026-07-14T02:28:11Z",
+      "recommendation": "值得一看",
+      "slug": "实测-libtv-agent-这可能是普通人最接近导演的时刻",
+      "tags": [
+        "视频生成",
+        "toC Agent"
+      ],
+      "title": "实测 LibTV Agent，这可能是普通人最接近导演的时刻",
+      "url": "https://mp.weixin.qq.com/s/5nGqGZ1nTQr2To-IAIxTvA"
+    },
+    {
+      "abstract": "一篇关于 AI 可穿戴硬件创业公司 Looki 的融资报道，介绍了其数亿元 A1 轮融资、团队背景、产品迭代（L1 硬件、Journal 功能、PIE 主动式 AI 引擎 2.0）以及“物理世界 AI 推荐引擎”的产品愿景。",
+      "author": "Founder Park",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FqpAK9iaV2O3sJgoBraTTtb4HvpIUu0gjF1iaeu47FWB2mazlo7BSDYJJYk3Td5HVich4ag1IUbv1T7208rVBVqg5w%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/独家-looki-完成数亿元-a1-轮融资加速迈向物理世界-ai-推荐引擎",
+      "published_at": "2026-07-14T02:00:00Z",
+      "recommendation": "值得一看",
+      "slug": "独家-looki-完成数亿元-a1-轮融资加速迈向物理世界-ai-推荐引擎",
+      "tags": [
+        "AI硬件",
+        "toC Agent"
+      ],
+      "title": "独家｜Looki 完成数亿元 A1 轮融资，加速迈向物理世界 AI 推荐引擎",
+      "url": "https://mp.weixin.qq.com/s/HX9oilSs0Q2Lor6KSZUVVw"
+    },
+    {
+      "abstract": "一篇关于爱诗科技完成 29.8 亿元 C 轮融资的融资新闻，核心信息是 AI 视频赛道正成为继 AI Coding 之后第二个跑通大规模商业化的 AI 赛道，爱诗科技凭借 PixVerse 系列产品（全球 1.5 亿+用户）和实时世界模型 PixVerse R1 成为该方向的头部公司之一。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/产业与全球资本共同加注爱诗科技完成-29-8-亿元-c-轮融资",
+      "published_at": "2026-07-14T01:24:45Z",
+      "recommendation": "值得一看",
+      "slug": "产业与全球资本共同加注爱诗科技完成-29-8-亿元-c-轮融资",
+      "tags": [
+        "视频生成",
+        "AI游戏",
+        "toC产品模式"
+      ],
+      "title": "产业与全球资本共同加注，爱诗科技完成 29.8 亿元 C 轮融资",
+      "url": "https://mp.weixin.qq.com/s/euOHk-TCA6-G3FKaDbZs3A"
+    },
+    {
+      "abstract": "一篇对 ICRA WBCD 卫冕冠军陈翔宇的深度访谈，围绕双臂机器人柔性操作挑战赛展开，深入探讨了从遥操作到端到端自主控制的范式跨越、数据策略、VLA 模型选型、以及具身智能在服装产线落地的真实挑战与工程取舍。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/对话-icra-wbcd-卫冕冠军陈翔宇刚赢下比赛就有工厂盯上了我们的机器人",
+      "published_at": "2026-07-14T01:24:45Z",
+      "recommendation": "值得一看",
+      "slug": "对话-icra-wbcd-卫冕冠军陈翔宇刚赢下比赛就有工厂盯上了我们的机器人",
+      "tags": [
+        "具身智能",
+        "Agent训练"
+      ],
+      "title": "对话 ICRA WBCD 卫冕冠军陈翔宇：刚赢下比赛，就有工厂盯上了我们的机器人",
+      "url": "https://mp.weixin.qq.com/s/N-dUuNBCAGU_zsGAjGLVxw"
+    },
+    {
+      "abstract": "一篇关于逐际动力完成 Pre-IPO 轮融资的报道，核心是创始人张巍对具身智能商业逻辑、技术路线（大小脑融合架构）和资本策略的深度分享，同时披露了产品订单和上市计划。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/逐际动力再融2亿美元提速港股ipo-张巍营收对赌不符合具身商业逻辑",
+      "published_at": "2026-07-14T00:29:00Z",
+      "recommendation": "值得一看",
+      "slug": "逐际动力再融2亿美元提速港股ipo-张巍营收对赌不符合具身商业逻辑",
+      "tags": [
+        "具身智能",
+        "Agent架构",
+        "创业方法论"
+      ],
+      "title": "逐际动力再融2亿美元提速港股IPO，张巍：营收对赌不符合具身商业逻辑",
+      "url": "https://mp.weixin.qq.com/s/4JtcVs4qoNvkRPIjcHooUg"
+    },
+    {
+      "abstract": "一篇综合类早报，涵盖国际政治（伊朗战事）、科技产业（阶跃星辰AI终端、英特尔扩建、Meta数据中心）、社会新闻（学术不端、禁售燃油车）及财经动态（美联储加息预期、A股波动）等多领域信息。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/早报特朗普通知国会伊朗战事重新爆发人民大学撤销蒋方舟硕士学位中国首个禁售燃油车省份确认香港知名电影人施南生去世",
+      "published_at": "2026-07-14T00:19:17Z",
+      "recommendation": "可跳过",
+      "slug": "早报特朗普通知国会伊朗战事重新爆发人民大学撤销蒋方舟硕士学位中国首个禁售燃油车省份确认香港知名电影人施南生去世",
+      "tags": [
+        "toC Agent",
+        "AI编程"
+      ],
+      "title": "早报｜特朗普通知国会伊朗战事重新爆发；人民大学撤销蒋方舟硕士学位；中国首个禁售燃油车省份确认；香港知名电影人施南生去世",
+      "url": "https://mp.weixin.qq.com/s/yS_ymHfeRBll_pRUm9mcWQ"
+    },
+    {
+      "abstract": "一篇从商业和社交角度分析世界杯期间交友软件（Tinder、Feeld等）活跃度暴涨现象的文章，揭示了大型体育赛事如何成为当代年轻人的“社交放大器”，并探讨了交友软件行业从线上匹配向线下见面、从算法驱动向体验驱动转型的商业趋势。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/tinder匹配率暴涨60-世界杯的荷尔蒙经济学",
+      "published_at": "2026-07-14T00:19:17Z",
+      "recommendation": "值得一看",
+      "slug": "tinder匹配率暴涨60-世界杯的荷尔蒙经济学",
+      "tags": [
+        "toC产品模式",
+        "toC产品机会"
+      ],
+      "title": "Tinder匹配率暴涨60%，世界杯的“荷尔蒙经济学”",
+      "url": "https://mp.weixin.qq.com/s/2_3GKMVIJCXUyZ95d_xqOw"
+    },
+    {
+      "abstract": "一篇从估值逻辑和研发投入角度论证比亚迪应被视为科技公司而非传统车企的投资分析文章，通过对比特斯拉的AI叙事转型路径，指出比亚迪在研发投入、专利数量、自研芯片和半导体等领域的科技属性被市场低估。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/比亚迪不是车企",
+      "published_at": "2026-07-14T00:19:17Z",
+      "recommendation": "值得一看",
+      "slug": "比亚迪不是车企",
+      "tags": [
+        "AI商业化",
+        "toC信任构建"
+      ],
+      "title": "比亚迪不是车企",
+      "url": "https://mp.weixin.qq.com/s/U0mLO_5H07voQ7nBwppThA"
+    },
+    {
+      "abstract": "一篇面向大众的科普文章，从心理学和神经科学角度系统梳理了骑车对大脑的益处，包括增强记忆力、改善情绪、恢复注意力和减少反刍思维，并引用了多项研究数据。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/帮你快速恢复注意力下班路上就能做",
+      "published_at": "2026-07-13T14:06:33Z",
+      "recommendation": "可跳过",
+      "slug": "帮你快速恢复注意力下班路上就能做",
+      "tags": [
+        "AI生活管理"
+      ],
+      "title": "帮你快速恢复注意力，下班路上就能做",
+      "url": "https://mp.weixin.qq.com/s/xUf5xtH4rddKNIRG0khZaw"
+    },
+    {
+      "abstract": "一篇探讨 AI 时代创业逻辑变迁的深度评论文章，以杰文斯悖论（Jevons Paradox）为框架，分析了当 AI 将“做出来”的成本降至近乎为零时，真正的稀缺价值从“生产”转移到“意义创造”——即提供让人愿意停下来的独特价值（chiddush）。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/ai时代的第一批赢家都答对了这个0-02-的真问题",
+      "published_at": "2026-07-13T14:06:33Z",
+      "recommendation": "值得一看",
+      "slug": "ai时代的第一批赢家都答对了这个0-02-的真问题",
+      "tags": [
+        "创业方法论",
+        "toC产品哲学"
+      ],
+      "title": "AI时代的第一批赢家，都答对了这个0.02%的真问题",
+      "url": "https://mp.weixin.qq.com/s/FE2WMDdY_T9qdmCQkZ-75A"
+    },
+    {
+      "abstract": "一篇酒店行业观察文章，从“免费早餐被薅羊毛”的日常现象切入，剖析了酒店业在会员权益、运营成本和客户关系管理上的深层矛盾，并探讨了明码标价、回归商业常识对行业健康发展的意义。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/免费早餐坑了多少好酒店",
+      "published_at": "2026-07-13T14:06:33Z",
+      "recommendation": "值得一看",
+      "slug": "免费早餐坑了多少好酒店",
+      "tags": [
+        "toC产品探索",
+        "toC信任构建"
+      ],
+      "title": "免费早餐，坑了多少好酒店？",
+      "url": "https://mp.weixin.qq.com/s/2PVTkelmOC3JL_D4k-K4qw"
+    },
+    {
+      "abstract": "一篇虎嗅闭门会实录，汇集了西门子工厂、具身智能公司、投资机构等多方视角，围绕“机器人进厂”这一核心场景，深入探讨了具身智能从Demo到商业化落地所面临的真实挑战、工程解法与资本判断。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/机器人进厂-99-的生死线到底卡在哪",
+      "published_at": "2026-07-13T12:18:18Z",
+      "recommendation": "值得一看",
+      "slug": "机器人进厂-99-的生死线到底卡在哪",
+      "tags": [
+        "具身智能",
+        "AI4S",
+        "创业方法论"
+      ],
+      "title": "机器人进厂：99%的生死线，到底卡在哪？",
+      "url": "https://mp.weixin.qq.com/s/7GmdNhH4OGnJ3oqQBfSTkw"
+    },
+    {
+      "abstract": "一篇关于 AnySearch 的产品介绍与实测文章。AnySearch 是一款专为 Agent 设计的搜索产品，通过连接 20+ 垂直数据源、前置信息筛选和结构化内容交付，解决了通用搜索引擎返回信息冗余、Token 消耗大的问题，并登顶 Product Hunt 周榜。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/agent专用搜索登顶product-hunt-token更省搜得更准",
+      "published_at": "2026-07-13T11:16:00Z",
+      "recommendation": "值得一看",
+      "slug": "agent专用搜索登顶product-hunt-token更省搜得更准",
+      "tags": [
+        "Agent基础设施",
+        "上下文管理"
+      ],
+      "title": "Agent专用搜索登顶Product Hunt，Token更省搜得更准",
+      "url": "https://mp.weixin.qq.com/s/xv3ukK9_KjdGCtov95uTYA"
+    },
+    {
+      "abstract": "一篇关于浪潮信息在2026开放计算大会上发布的新一代AI基础设施方案的报道，核心围绕两个产品方向：一是通过CPU原生液冷整机柜服务器实现单柜支撑4万+ Agent的规模化运行，二是通过多模融合API和元脑SD200超节点让多个大模型协同工作以提升Agent智能水平。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/agent要数量也要脑子浪潮信息一边单柜养4万agent-一边让大模型组队答题",
+      "published_at": "2026-07-13T11:16:00Z",
+      "recommendation": "值得一看",
+      "slug": "agent要数量也要脑子浪潮信息一边单柜养4万agent-一边让大模型组队答题",
+      "tags": [
+        "Agent基础设施",
+        "多Agent协作",
+        "基础设施选型"
+      ],
+      "title": "Agent要数量也要脑子！浪潮信息一边单柜养4万Agent，一边让大模型组队答题",
+      "url": "https://mp.weixin.qq.com/s/BsEeVASw31yV_Z6gq9D__A"
+    },
+    {
+      "abstract": "一篇关于 Agnes 发布新模型 Agnes-2.5 Flash 及桌面端产品 AgnesCode 的报道，涵盖模型在 Coding Benchmark 上的性能提升、复杂任务的实际案例演示，以及 AgnesCode 作为桌面 AI 工作台的产品定位和功能。",
+      "author": "硅星人Pro",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FjopKOlhibRBJEB8ZVTk6rA7HZyBpdPOoibBZZwo0h29VutaZxEvzzZIG3WEP2tJwphW9Op2LItrlQynOxibzBx1eQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/coding-竞争升级-agnes-打出模型与产品组合拳",
+      "published_at": "2026-07-13T10:06:06Z",
+      "recommendation": "值得一看",
+      "slug": "coding-竞争升级-agnes-打出模型与产品组合拳",
+      "tags": [
+        "AI编程",
+        "桌面Agent",
+        "模型选型"
+      ],
+      "title": "Coding 竞争升级，Agnes 打出模型与产品组合拳",
+      "url": "https://mp.weixin.qq.com/s/uJ62vreBU-An5fcog4UA0Q"
+    },
+    {
+      "abstract": "一篇关于中国城市竞争新趋势的深度分析，指出地方政府正从“抢年轻人”转向“抢老人”，系统梳理了背后的经济逻辑、三种竞争模式（气候、医疗、生活）以及争夺长期消费、产业赛道、存量资产和未来竞争力的四个深层目标。",
+      "author": "虎嗅APP",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2Fb2YlTLuGbKBpyZle7b1xezxMibSW3I2LHHia5JjsrOj0WfLHFN2KkJlUrY9ibocvIWxCsaaHzeqHPCA1bVKwLGQZA%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/史无前例中国城市集体啃老",
+      "published_at": "2026-07-13T09:54:58Z",
+      "recommendation": "值得一看",
+      "slug": "史无前例中国城市集体啃老",
+      "tags": [
+        "toC产品机会",
+        "toC产品探索"
+      ],
+      "title": "史无前例，中国城市集体“啃”老",
+      "url": "https://mp.weixin.qq.com/s/l6TXSZN-6oBxvq31r9wWcg"
+    },
+    {
+      "abstract": "一篇 Seedream 5.0 Pro 图像编辑能力的深度测评，核心展示其基于打点、画框、涂鸦的精细化编辑交互，并通过家装、商品图、海报排版三个场景的实操案例，验证了其从局部修改到复杂排版直出的全链路能力。",
+      "author": "歸藏的AI工具箱",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FfbRX0iaT8EgekR5vTBjjv2hjTHGichc0KUwLZHJVQjeufsuzbStRSTKokDnYB3sKybnyXBpGDXOib7KZEvGMqnic4A%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/seedream-5-0-pro-测评图像编辑门槛爆降",
+      "published_at": "2026-07-13T09:25:00Z",
+      "recommendation": "值得一看",
+      "slug": "seedream-5-0-pro-测评图像编辑门槛爆降",
+      "tags": [
+        "图片与设计",
+        "Agent引导式UX"
+      ],
+      "title": "Seedream 5.0 Pro 测评：图像编辑门槛爆降",
+      "url": "https://mp.weixin.qq.com/s/lO2xhSA20TaZLbMpZRmbxA"
+    },
+    {
+      "abstract": "一篇关于 Anthropic 旗下 Claude Fable 5 模型免费期再次延长及背后商业策略的分析文章，同时深度拆解了 Claude Code 工具在 token 消耗上的隐性成本问题，揭示了 Anthropic 可能正在推动的“SOTA 模型 API 化”行业模式。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/fable-5-免费期再延一周但anthropic-的黑心账本越来越藏不住了",
+      "published_at": "2026-07-13T08:44:37Z",
+      "recommendation": "值得一看",
+      "slug": "fable-5-免费期再延一周但anthropic-的黑心账本越来越藏不住了",
+      "tags": [
+        "成本控制",
+        "模型选型"
+      ],
+      "title": "Fable 5 免费期再延一周，但Anthropic 的“黑心账本”越来越藏不住了",
+      "url": "https://mp.weixin.qq.com/s/-tM4kxr7UT8iTkf0I5WXwQ"
+    },
+    {
+      "abstract": "一篇关于 Cursor 从编程工具向通用办公 AI 智能体（Sand）转型的行业动态报道，同时对比了 OpenAI 的 ChatGPT Work 和 Anthropic 的 Claude Cowork 在职场 AI 工具赛道的竞争格局，并分析了 SpaceX 潜在收购对 Cursor 产品路线的影响。",
+      "author": "AI前线",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FZBjVrHIdkOmKH9nbXIZ2LyTezvB50icWaHIIeJZUpby9LSOF1KltGCaRzVdvSWSp9a3uNtEClvJze3EgxnFnmbQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/spacex联手cursor的首个ai产品曝光全能办公智能体内测中-chatgpt-work迎来劲敌",
+      "published_at": "2026-07-13T08:35:12Z",
+      "recommendation": "值得一看",
+      "slug": "spacex联手cursor的首个ai产品曝光全能办公智能体内测中-chatgpt-work迎来劲敌",
+      "tags": [
+        "AI助手",
+        "toC Agent"
+      ],
+      "title": "SpaceX联手Cursor的首个AI产品曝光！全能办公智能体内测中，ChatGPT Work迎来劲敌",
+      "url": "https://mp.weixin.qq.com/s/NL55_DN0Fxj4RICU91jyvw"
+    },
+    {
+      "abstract": "一篇关于 AI 代理时代代码托管平台变革的行业报道，梳理了 GitHub 在 AI 生成代码冲击下暴露的架构瓶颈，以及 Cursor（Origin）、GitLab（Switch 项目）、Zed（DeltaDB）等玩家各自提出的替代方案，并探讨了由此引发的开发者工作流、代码审查和价值衡量标准的范式转移。",
+      "author": "AI前线",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FZBjVrHIdkOmKH9nbXIZ2LyTezvB50icWaHIIeJZUpby9LSOF1KltGCaRzVdvSWSp9a3uNtEClvJze3EgxnFnmbQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/github-的旧模式被-ai-击穿-cursor-gitlab-zed-各自开打-radar-02bb9abc",
+      "published_at": "2026-07-13T08:35:12Z",
+      "recommendation": "值得一看",
+      "slug": "github-的旧模式被-ai-击穿-cursor-gitlab-zed-各自开打-radar-02bb9abc",
+      "tags": [
+        "Agent基础设施",
+        "AI编程"
+      ],
+      "title": "GitHub 的旧模式被 AI 击穿，Cursor、GitLab、Zed 各自开打",
+      "url": "https://mp.weixin.qq.com/s/G9IE_Atbx6KV-V-PLAhSUg"
+    },
+    {
+      "abstract": "一篇关于 Model Context Protocol (MCP) 企业托管授权扩展 (EMA) 正式发布的新闻解读，核心是将 MCP 服务器的授权从“每用户、每服务器”的弹窗模式，升级为由企业身份提供商 (IdP) 统一管控的单点登录 (SSO) 模式，解决了企业大规模部署 Agent 时的权限管理痛点。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/mcp-推出企业统一授权功能-radar-febf596b",
+      "published_at": "2026-07-13T05:30:00Z",
+      "recommendation": "值得一看",
+      "slug": "mcp-推出企业统一授权功能-radar-febf596b",
+      "tags": [
+        "Agent安全边界",
+        "Agent基础设施"
+      ],
+      "title": "MCP 推出企业统一授权功能",
+      "url": "https://mp.weixin.qq.com/s/k3dLE88CtSm5KsINPD955Q"
+    },
+    {
+      "abstract": "一篇关于 Meta 发布 Muse Spark 1.1 编程 Agent 模型的新闻报道，涵盖模型能力定位（智能体编程、多模态）、定价策略、与 OpenAI/Anthropic 的竞争态势，以及 Meta 从开源转向自研模型商业化的战略变化。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/小扎消失三年后发帖只为它-meta最强agent模型进军编程-radar-ec472f08",
+      "published_at": "2026-07-13T05:30:00Z",
+      "recommendation": "值得一看",
+      "slug": "小扎消失三年后发帖只为它-meta最强agent模型进军编程-radar-ec472f08",
+      "tags": [
+        "模型选型",
+        "Agent基座模型"
+      ],
+      "title": "小扎“消失”三年后发帖，只为它：Meta最强Agent模型进军编程",
+      "url": "https://mp.weixin.qq.com/s/mJF_5Sc4u6C7cMKGqAwpRQ"
+    },
+    {
+      "abstract": "一篇来自 PostHog 官方博客的工程实践分享，详细记录了作者使用多个并行 Claude Code 会话，将基于 ANTLR 的 C++ SQL 解析器重写为 Rust 手写递归下降解析器的完整过程，最终实现生产环境平均 454 倍性能提升。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/用-claude-重写-sql-解析器性能暴涨-70-倍程序员做的不是写代码而是搭建验证闭环",
+      "published_at": "2026-07-13T05:30:00Z",
+      "recommendation": "必读",
+      "slug": "用-claude-重写-sql-解析器性能暴涨-70-倍程序员做的不是写代码而是搭建验证闭环",
+      "tags": [
+        "Agent研发自动化",
+        "评测方法"
+      ],
+      "title": "用 Claude 重写 SQL 解析器，性能暴涨 70 倍：程序员做的不是写代码，而是搭建验证闭环",
+      "url": "https://mp.weixin.qq.com/s/XdGP1hq1dCGocq5YSaz6UA"
+    },
+    {
+      "abstract": "一篇 InfoQ 对观测云创始人蒋烁淼的深度访谈，系统阐述了 Agent 时代可观测性的范式转变：从传统的\"看见问题\"升级为\"解决问题\"，并详细拆解了观测云 OWL、Obsy AI Copilot、Guance AI Agent Teams 三层产品架构如何构建从\"看得懂\"到\"控得住\"的完整闭环。",
+      "author": "InfoQ",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FYriaiaJPb26VN4wAgicwwg0geiaeq6icTkZUGvFxmpNT7hIPBLE8PorqXic1icPhby6QDvm12kDJF7O9zicog5POwZWpvQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/从看见问题到解决问题-agent-正重新定义可观测",
+      "published_at": "2026-07-13T05:30:00Z",
+      "recommendation": "值得一看",
+      "slug": "从看见问题到解决问题-agent-正重新定义可观测",
+      "tags": [
+        "Agent可观测性",
+        "Agent安全边界",
+        "Agent基础设施"
+      ],
+      "title": "从看见问题到解决问题，Agent 正重新定义可观测",
+      "url": "https://mp.weixin.qq.com/s/O2JRjj0do9XPv-7u4szCUg"
+    },
+    {
+      "abstract": "一篇关于 OpenAI 安全主管离职及安全团队重组的报道，结合 GPT-5.6 系统卡中暴露的 Agent 过度自主行为案例，揭示了模型能力狂奔与安全组织持续弱化之间的矛盾。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/gpt-5-6刚发布-openai安全主管就跑路了",
+      "published_at": "2026-07-13T04:33:00Z",
+      "recommendation": "值得一看",
+      "slug": "gpt-5-6刚发布-openai安全主管就跑路了",
+      "tags": [
+        "Agent安全边界",
+        "AI治理"
+      ],
+      "title": "GPT-5.6刚发布，OpenAI安全主管就跑路了？？",
+      "url": "https://mp.weixin.qq.com/s/f_jEhnApCg7uKRwAv5CEyg"
+    },
+    {
+      "abstract": "一篇关于 Agnes AI 发布免费 Coding 模型 Agnes-2.5-Flash 及桌面端工具 Agnes Code 的评测文章，通过实测展示了其代码修复、复杂应用构建和多文件改造能力，并介绍了其免费策略和产品生态。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/刚刚一个免费ai-coding选手杀入全球第一梯队",
+      "published_at": "2026-07-13T04:33:00Z",
+      "recommendation": "值得一看",
+      "slug": "刚刚一个免费ai-coding选手杀入全球第一梯队",
+      "tags": [
+        "模型选型",
+        "AI编程"
+      ],
+      "title": "刚刚，一个免费AI Coding选手杀入全球第一梯队",
+      "url": "https://mp.weixin.qq.com/s/5ASyTtnqVxHvxdB1XTdfAg"
+    },
+    {
+      "abstract": "一篇关于 AI 智能体安全风险的行业分析文章，从“AI 付”场景切入，剖析了智能体在操作现实世界时面临的提示注入、越权操作等新型风险，并重点解读了蚂蚁集团开源的 SingGuard 与 SingGuard-NSFA 两套安全框架的设计思路与技术细节。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/当-ai-开始替你花钱谁来替-ai-踩刹车",
+      "published_at": "2026-07-13T04:30:00Z",
+      "recommendation": "值得一看",
+      "slug": "当-ai-开始替你花钱谁来替-ai-踩刹车",
+      "tags": [
+        "Agent安全边界"
+      ],
+      "title": "当 AI 开始替你花钱，谁来替 AI 踩刹车？​",
+      "url": "https://mp.weixin.qq.com/s/bBSBGmL4IwthmG-BMCO5bQ"
+    },
+    {
+      "abstract": "一篇关于 Meta 收购 AI 安全创业公司 Virtue AI 的深度解读，核心围绕创始人李博从学术研究到创业再到加入大厂的路径，阐述了 AI 安全在 Agent 时代从“模型安全”向“系统安全”和“Agent 安全”的范式迁移，以及 Virtue AI 的产品矩阵（自动化红队、运行时防护、Agent 安全套件）如何契合 Meta 的 personalized agents 战略。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/独家解读为什么是-virtue-ai-揭秘-meta-收购华人-ai-安全团队始末",
+      "published_at": "2026-07-13T03:56:29Z",
+      "recommendation": "值得一看",
+      "slug": "独家解读为什么是-virtue-ai-揭秘-meta-收购华人-ai-安全团队始末",
+      "tags": [
+        "Agent安全边界",
+        "AI治理"
+      ],
+      "title": "独家解读|为什么是 Virtue AI？揭秘 Meta 收购华人 AI 安全团队始末",
+      "url": "https://mp.weixin.qq.com/s/EFu94ncTzUOvovEAOezspw"
+    },
+    {
+      "abstract": "一篇关于中科大团队推出的机器人化学家评测平台 Labimus 的报道，涵盖其仿真环境构建、三级递进评测标准、三种机器人学习方法的测试结果，以及对具身智能瓶颈和未来方向的讨论。",
+      "author": "AI科技评论",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FcNFA8C0uVPsDgBTibH9lWqfgJOwTWuBZZ3g8kSHiaFW2Uia5MjlbCpAvmot7PFwarKSOS8T3XyM1UkV1N3TgMOsEQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/中科大-labimus-机器人化学家要上岗先得考过这场试",
+      "published_at": "2026-07-13T03:56:29Z",
+      "recommendation": "值得一看",
+      "slug": "中科大-labimus-机器人化学家要上岗先得考过这场试",
+      "tags": [
+        "评测设计",
+        "具身智能",
+        "AI4S"
+      ],
+      "title": "中科大 Labimus：机器人化学家要上岗，先得考过这场试",
+      "url": "https://mp.weixin.qq.com/s/CMss2Rop4DehzHd9bjMlVA"
+    },
+    {
+      "abstract": "一篇关于 AI 算力供需矛盾的行业分析文章，通过对比 Anthropic 疯狂采购算力与 Meta/SpaceX 出售冗余算力的矛盾现象，论证“算力过剩”是伪命题——真正紧缺的是能立即交付、通电运行的算力，而非规划中的容量。",
+      "author": "硅星人Pro",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FjopKOlhibRBJEB8ZVTk6rA7HZyBpdPOoibBZZwo0h29VutaZxEvzzZIG3WEP2tJwphW9Op2LItrlQynOxibzBx1eQ%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/算力过剩是个伪命题",
+      "published_at": "2026-07-13T03:15:55Z",
+      "recommendation": "值得一看",
+      "slug": "算力过剩是个伪命题",
+      "tags": [
+        "基础设施选型",
+        "成本控制"
+      ],
+      "title": "算力过剩是个伪命题",
+      "url": "https://mp.weixin.qq.com/s/YIOjbvOTob6PdfRkCLUrlg"
+    },
+    {
+      "abstract": "一篇关于清华团队现场演示“一念Unisonmind”端侧大脑的报道，展示了同一认知底座在机器狗、人形机器人、电动轮椅上的跨本体运行能力，并提出了Physical AGI的可验证标准框架。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/机器狗指挥人类用天平称重清华现场演示无脚本任务随机观众即兴出题",
+      "published_at": "2026-07-13T02:10:00Z",
+      "recommendation": "值得一看",
+      "slug": "机器狗指挥人类用天平称重清华现场演示无脚本任务随机观众即兴出题",
+      "tags": [
+        "端侧AI",
+        "物理AI",
+        "Agent架构"
+      ],
+      "title": "机器狗指挥人类用天平称重！清华现场演示：无脚本，任务随机，观众即兴出题",
+      "url": "https://mp.weixin.qq.com/s/OJhlzC9zmn4NBJQC2pVCCA"
+    },
+    {
+      "abstract": "一篇关于多 Agent 并发控制框架 CoAgent 的论文解读，核心解决多个 Agent 并行操作时因竞争条件（Race Condition）导致任务失败的问题，提出了让 Agent 自行分析冲突语义并最小化修正的并发控制算法。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/agent并发干活像三个和尚没水喝-coagent新框架让它们学会看懂冲突再动手",
+      "published_at": "2026-07-13T02:10:00Z",
+      "recommendation": "值得一看",
+      "slug": "agent并发干活像三个和尚没水喝-coagent新框架让它们学会看懂冲突再动手",
+      "tags": [
+        "多Agent协作",
+        "Agent架构"
+      ],
+      "title": "Agent并发干活像“三个和尚没水喝”？CoAgent新框架：让它们学会看懂冲突再动手",
+      "url": "https://mp.weixin.qq.com/s/kBCoRX5gyJKxwR_ceSoixA"
+    },
+    {
+      "abstract": "一篇关于 AI 陪伴硬件公司珞博智能（Robopoet）完成亿元级 Pre-A 轮融资的报道，核心信息包括融资方构成（华映资本+广和通+涂鸦智能）、首款产品 Fuzozo 芙崽的销量数据（国内近 30 万台）和日本众筹表现，以及公司自研的三套核心技术系统（MEM 多模态情感大模型、EchoChain 仿生记忆系统、GrowMe 心途养成系统）。",
+      "author": "Founder Park",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FqpAK9iaV2O3sJgoBraTTtb4HvpIUu0gjF1iaeu47FWB2mazlo7BSDYJJYk3Td5HVich4ag1IUbv1T7208rVBVqg5w%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/独家-robopoet-完成亿元级-pre-a-轮融资芙崽开始走向全球化",
+      "published_at": "2026-07-13T02:00:00Z",
+      "recommendation": "值得一看",
+      "slug": "独家-robopoet-完成亿元级-pre-a-轮融资芙崽开始走向全球化",
+      "tags": [
+        "AI陪伴",
+        "AI硬件",
+        "toC产品模式"
+      ],
+      "title": "独家 | Robopoet 完成亿元级 Pre-A 轮融资，芙崽开始走向全球化",
+      "url": "https://mp.weixin.qq.com/s/4Fokz3ZLyg6osBvNA3Z2Jw"
+    },
+    {
+      "abstract": "一篇关于 AI 行业动态的资讯快报，核心事件是 Anthropic 延长 Claude Fable 5 订阅期限与 OpenAI 移除 Codex 使用限制的竞争，并引用了科技分析师 Benedict Evans 对 AI 算力市场供需失衡、商品化趋势及长期竞争格局的深度分析。",
+      "author": "量子位",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fmmbiz_png%2FYicUhk5aAGtCEFSVW5ubo08Zfv1qB5iapricibTBdETkBNtolJxnSUib6UXhjWWz3aib8vETY00P2lKR1uG3qLHicSoWg%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/全球开发者狂喜-codex移除5小时限制-fable-5订阅再延7天有人烧token烧到住院",
+      "published_at": "2026-07-13T00:07:11Z",
+      "recommendation": "值得一看",
+      "slug": "全球开发者狂喜-codex移除5小时限制-fable-5订阅再延7天有人烧token烧到住院",
+      "tags": [
+        "成本控制",
+        "AI商业化"
+      ],
+      "title": "全球开发者狂喜！Codex移除5小时限制，Fable 5订阅再延7天，有人烧token烧到住院",
+      "url": "https://mp.weixin.qq.com/s/4u8QfkWfVYnqc-HDE2F1iA"
+    },
+    {
+      "abstract": "一篇极短的资讯速报，宣布 ChatGPT/Codex 产品移除了 5 小时使用限额，并新增了 Web 端和移动端的用户手动重置功能。",
+      "author": "Draco正在VibeCoding",
+      "avatar_url": "/img?url=https%3A%2F%2Fmmbiz.qpic.cn%2Fsz_mmbiz_png%2FZE6szyic2s2d5mmUm2nGlSZnTBORQndwvYOXBGuQreOfhN26mibaP6zZwW8yomOAIHOTHDSGfsopy3ibpDUyiagcVw%2F0%3Fwx_fmt%3Dpng",
+      "detail_url": "/wechat/喜大普奔-chatgpt-codex去除5小时限额",
+      "published_at": "2026-07-13T00:05:35Z",
+      "recommendation": "可跳过",
+      "slug": "喜大普奔-chatgpt-codex去除5小时限额",
+      "tags": [
+        "AI编程"
+      ],
+      "title": "喜大普奔：ChatGPT/Codex去除5小时限额！",
+      "url": "https://mp.weixin.qq.com/s/BaY6iFR0zzUzWWDS2fIqIw"
+    }
+  ],
+  "limit": 50,
+  "page": 1,
+  "total": 1285
+}

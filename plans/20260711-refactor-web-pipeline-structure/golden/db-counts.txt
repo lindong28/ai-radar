@@ -1,0 +1,4 @@
+integrity_check|ok
+items|29242
+curated_items|208413
+curation_runs|5211

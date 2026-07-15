@@ -84,14 +84,6 @@ const CATEGORY_LABELS = {
   practice: "技巧",
 };
 
-const CATEGORY_TAGS = {
-  model: ["模型发布"],
-  product: ["产品更新", "MCP/工具"],
-  industry: ["行业动态", "安全/对齐", "现象/趋势"],
-  paper: ["论文/研究"],
-  practice: ["教程/实践", "部署/工程"],
-};
-
 const CATEGORY_URL_VALUES = {
   all: "",
   model: "ai-models",
@@ -173,18 +165,6 @@ function normalizeFeedUrl(path, params) {
   if (`${location.pathname}${location.search}` !== next) {
     history.replaceState({}, "", next);
   }
-}
-
-function itemMatchesCategory(item, category) {
-  if (!category || category === "all") return true;
-  const tags = Array.isArray(item.topic_tags) ? item.topic_tags : [];
-  const wanted = CATEGORY_TAGS[category] || [];
-  if (category === "model" && tags.includes("教程/实践")) return false;
-  if (category === "product" && tags.includes("模型发布") && !tags.includes("产品更新")) return false;
-  if (category === "practice" && !tags.includes("教程/实践") && tags.some((tag) => ["安全/对齐", "现象/趋势", "行业动态"].includes(tag))) {
-    return false;
-  }
-  return tags.some((tag) => wanted.includes(tag));
 }
 
 function updateCategoryControls(root, activeCategory, activeChannel = "all") {
@@ -958,8 +938,7 @@ export async function initCurated() {
   function renderView(rawItems, meta = {}) {
     syncCategoryControls(activeCategory);
     const q = search.value.trim();
-    const visibleItems = rawItems.filter((item) => itemMatchesCategory(item, activeCategory));
-    renderTimeline(list, visibleItems, {
+    renderTimeline(list, rawItems, {
       showScore: true,
       sortByScore: false,
       emptyTitle: q ? "没有匹配条目" : activeCategory === "all" ? "暂无精选条目" : `${CATEGORY_LABELS[activeCategory]}分类暂无精选`,

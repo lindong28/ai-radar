@@ -14,8 +14,12 @@ AI Radar 是一个 AI 信息流聚合站点。从 RSS 信源抓取内容，经 L
 src/airadar/
 ├── cli.py              # CLI 入口，argparse 子命令分发
 ├── db.py               # 数据库连接、迁移执行
+├── llm_usage.py        # LLM token 用量独立库记录
 ├── ruleset.py          # Ruleset 版本管理（日期.rev 格式）
+├── site_config.py      # 站点级环境配置
+├── stage_common.py     # Pipeline stage 共享原语（时间、ProviderItem、evaluation 写入）
 ├── topics.py           # 受控标签词表 + 确定性标签规则
+├── wechat_text.py      # 微信标题文本归一化
 ├── migrations/         # SQL 迁移脚本（001-012），幂等执行
 │
 ├── sources/            # 信源管理
@@ -33,9 +37,10 @@ src/airadar/
 │
 ├── provider/           # LLM Provider 抽象层
 │   ├── base.py         #   Protocol 定义：PrefilterProvider / ScoringProvider / EnrichProvider
-│   ├── deepseek_v32.py #   DeepSeek V3.2（prefilter）
-│   ├── deepseek_v4_pro.py  # DeepSeek V4 Pro（scoring / enrich / eval judge）
-│   ├── deepseek_v4_flash.py # DeepSeek V4 Flash（enrich 备选）
+│   ├── ark_breaker.py  #   ARK Provider 熔断器
+│   ├── deepseek_v32.py #   历史文件/selector 名；默认 prefilter，class model_id=deepseek-v4-flash
+│   ├── deepseek_v4_pro.py  # DeepSeek V4 Pro（scoring 备选 / 默认 enrich / eval judge）
+│   ├── deepseek_v4_flash.py # DeepSeek V4 Flash（默认 scoring / enrich 备选）
 │   ├── deepseek_chat.py    # 通用 DeepSeek / ARK chat JSON 封装
 │   ├── codex_gpt_mini.py   # Codex GPT Mini（scoring 备选）
 │   ├── glm.py          #   GLM（prefilter 备选）
@@ -57,6 +62,7 @@ src/airadar/
 │
 ├── curator/            # 阶段 4：精选
 │   ├── select.py       #   curate 主流程：加权评分 + 新鲜度配额 + 去重 + 排名校准
+│   ├── precompute.py   #   预计算最新精选轮的展示摘要
 │   ├── score.py        #   weighted_score 计算 + 信源层级乘数
 │   ├── dedup.py        #   候选去重（content_hash / URL）
 │   └── weights.py      #   五维权重定义（Weights dataclass）
@@ -69,17 +75,30 @@ src/airadar/
 │   ├── compare_renderer.py # HTML 对比页渲染
 │   └── distribution.py #   分数分布统计
 │
+├── presentation/       # 跨 Web/预计算的展示数据组装
+│   ├── summary.py      #   item summary、enrichment 解析与可见推荐理由
+│   ├── media.py        #   媒体资产提取与图片代理 URL
+│   └── related.py      #   关联讨论单条/批量查找
+│
 ├── web/                # Web 服务
 │   ├── app.py          #   FastAPI app 工厂 + uvicorn 启动
 │   ├── cors.py         #   CORS 配置（configured domain + localhost）
 │   ├── envelope.py     #   统一 API 响应包装 {success, data, error}
+│   ├── schemas.py      #   API 响应 schema 与 SSR preload 字段契约
 │   └── routes/
-│       ├── common.py   #   共享查询逻辑（item_summary、去重、分类过滤、FTS）
+│       ├── admin.py    #   内部运维页面与 API 路由
+│       ├── categories.py #  分类单一契约 + SQL/Python matcher + URL 去重子句
+│       ├── search.py   #   FTS/LIKE、简繁体与空白归一化搜索
+│       ├── request_db.py # 请求级 SQLite 连接生命周期
+│       ├── pagination.py # 版本化 LRU 计数缓存 + 页码 clamp
 │       ├── timeline.py #   GET /api/v1/timeline — 全量时间线
-│       ├── curated.py  #   GET /api/v1/curated — 精选内容
+│       ├── curated.py  #   GET /api/v1/curated — archive/digest 路由分派
+│       ├── curated_archive.py # 跨 run 去重归档、按日归档与真实计数
+│       ├── curated_digest.py # 指定 run 的单轮 digest
 │       ├── items.py    #   GET /api/v1/items/{id} — 单条详情
 │       ├── sources.py  #   GET /api/v1/sources — 信源列表
 │       ├── wechat.py   #   GET /api/v1/wechat — 微信文章解读列表 + markdown sanitize helper
+│       ├── media.py    #   GET /img — 受限微信 CDN 同源图片代理
 │       └── health.py   #   GET /api/v1/healthz — 健康检查
 │
 └── admin/              # 运维聚合：metrics、alerts、LLM usage
@@ -103,23 +122,26 @@ web/templates/          # Jinja2 SSR 页面模板
 
 ## Layers
 
-系统分三层，依赖方向严格向下：
+系统按主职责分三层，另有一个跨层的共享组合模块：
 
 ```
 ┌──────────────────────────────────┐
 │  CLI / Web（入口层）              │   cli.py, web/app.py
 ├──────────────────────────────────┤
-│  Pipeline（业务逻辑层）           │   fetcher/ prefilter/ scorer/ enrich/ curator/ eval/
+│  Pipeline（业务逻辑层）           │   fetcher/ prefilter/ scorer/ enrich/ curator/ interpret/ eval/
 ├──────────────────────────────────┤
-│  Infrastructure（基础设施层）      │   db.py, provider/, sources/, topics.py, ruleset.py
+│  Infrastructure（基础设施层）      │   db.py, provider/, sources/, stage_common.py, topics.py, ruleset.py
 └──────────────────────────────────┘
+
+共享组合：`presentation/`（Web routes 和 `curator/precompute.py` 共用）
 ```
 
 **边界规则**：
 
 - **入口层** 负责参数解析和请求路由，不包含业务逻辑
 - **Pipeline 层** 各阶段互相独立，通过数据库表（`items` + `item_evaluations`）传递数据，不直接调用彼此
-- **Infrastructure 层** 提供数据库连接、LLM 调用、信源配置等基础能力
+- **Infrastructure 层** 提供数据库连接、LLM 调用、信源配置与 stage 通用原语等基础能力
+- **`presentation/` 共享组合层** 是边界例外：它被 Web routes 与 `curator/precompute.py` 共用，同时 import `curator` 评分 helper 和 `enrich` schema，因此不是只能被单向依赖的底层 Infrastructure
 - Pipeline 阶段通过 `provider/base.py` 中的 Protocol 与具体 LLM 实现解耦
 
 ## Data Flow
@@ -242,7 +264,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | 端点 | 方法 | 用途 |
 |---|---|---|
 | `/api/v1/timeline` | GET | 全量时间线，支持页码分页（返回真实总数 COUNT）、channel 过滤（x/news/firstParty）、category 过滤、混合 FTS/LIKE 搜索 |
-| `/api/v1/curated` | GET | 精选内容。无 `run_id`/`date` 时进入归档模式（跨 run 去重的累积归档，页码分页 + 真实总数）；带 `run_id`/`date` 时为单轮/单日 digest（`/daily` 复用）。支持 category、混合 FTS/LIKE 搜索 |
+| `/api/v1/curated` | GET | 精选内容。无 `run_id`/`date` 时返回跨 run 去重的累积归档（页码分页 + 真实总数）；仅带 `date` 时返回该日的跨 run 归档（`/daily` 复用），带 `run_id` 时才返回单轮 digest（可再用 `date` 筛选）。支持 category、混合 FTS/LIKE 搜索 |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url |
 | `/api/v1/sources` | GET | 信源列表 |
@@ -284,23 +306,23 @@ SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"
 
 ### 分类系统
 
-前端的 category 过滤在后端 SQL 层实现。分类基于 enrich 阶段产生的标签，映射关系定义在 `web/routes/common.py` 的 `CATEGORY_TAGS`：
+前端的 category 过滤在后端 SQL 层实现。分类基于 enrich 阶段产生的标签，`web/routes/categories.py` 的 `CATEGORY_CONTRACT` 是分类规则的单一契约：SQL 谓词与 Python matcher 均由该契约生成，前端不再保留分类规则副本。
 
-| Category | 包含的标签 |
-|---|---|
-| `ai-models` | 模型发布 |
-| `ai-products` | 产品更新、MCP/工具 |
-| `industry` | 行业动态、安全/对齐、现象/趋势 |
-| `paper` | 论文/研究 |
-| `tip` | 教程/实践、部署/工程 |
+| Category | 包含的标签 | 冲突处理 |
+|---|---|---|
+| `ai-models` | 模型发布 | 同时是教程/实践时排除 |
+| `ai-products` | 产品更新、MCP/工具 | 含模型发布且无产品更新时排除，即使同时有 MCP/工具 |
+| `industry` | 行业动态、安全/对齐、现象/趋势 | 无 |
+| `paper` | 论文/研究 | 无 |
+| `tip` | 教程/实践、部署/工程 | 仅有部署/工程且同时属于行业类时排除 |
 
 ### 真实计数与分页
 
-`/`（精选归档）、`/all`（timeline）、`/wechat` 都用数字页码分页（首末页固定、当前页相邻页、… 省略），共用 `web/static/app.js` 的一套分页组件。这要求 API 返回真实总数以定位末页。三者共享同一"真实计数 + 数据版本缓存"骨架：独立 count 函数、过滤签名 + 数据版本作 LRU key（上限 64，带锁）、search 路径不缓存直接算、越界页 clamp 到真实末页、FastAPI lifespan 启动 prewarm 默认视图计数。决策与性能数据见 ADR-005（timeline）与 ADR-006（精选归档）。
+`/`（精选归档）、`/all`（timeline）、`/wechat` 都用数字页码分页（首末页固定、当前页相邻页、… 省略），共用 `web/static/app.js` 的一套分页组件，API 均返回真实总数并用 `web/routes/pagination.py` 的 `clamp_page()` 把越界页收敛到真实末页。Timeline 与精选归档另共用 `VersionedTotalCache`：过滤签名 + 数据版本作 LRU key（上限 64，带锁），search 路径不缓存，FastAPI lifespan 启动时预热两个默认视图计数。WeChat 列表每次直接计数，只共用 clamp，不使用数据版本缓存或 prewarm。决策与性能数据见 ADR-005（timeline）与 ADR-006（精选归档）。
 
 **Timeline（`/api/v1/timeline`）**：返回真实总数 COUNT（非 ADR-004 时期的前向估算）。计数与 rows 查询是**两套独立 SQL**：rows 用 EXISTS-per-row 子句判定每条 item 的最新 prefilter/scoring 评估，计数用 `latest_prefilter` / `latest_scoring` CTE + JOIN 的集合公式（`_count_timeline_items_with_prefilter()`），避免 per-row 子查询随数据量退化——改 timeline 过滤逻辑时两处需同步。计数缓存数据版本为 `_timeline_data_version()`（最新 curation_run id/ruleset、items 行数与 max rowid、max eval id）。CTE 计数依赖 migration `010` 的 `item_evaluations(stage,error,item_id,id DESC)` 索引。
 
-**精选归档（`/api/v1/curated` 无 `run_id`/`date`）**：跨 run 去重的累积归档——`_latest_curated_join()` 用 `c.run_id = (SELECT MAX(run_id) FROM curated_items WHERE item_id=i.id)` 相关子查询，每个 item 只保留其最近一次被精选的元数据。真实计数走 `_count_archive_items()` + `_cached_archive_total()`，数据版本为 `_curated_data_version()`（latest run_id、curated_items 计数/max rowid、items 计数/max rowid、max eval id）。归档每页用 `_compute_archive_page()` **现算 item_summary**（不依赖 `summary_json`——预计算只覆盖约 30%），enrichment 一次 `LEFT JOIN` 取出，关联讨论按页 `_batch_related_discussions()` 批量正/反查（`items_fts` 反查）。去重子查询依赖 migration `011` 的 `idx_curated_items_item_run(item_id, run_id)`。带 `run_id`/`date` 时走原单轮/单日 digest 路径（`/daily` 复用），不进归档逻辑。
+**精选归档（`/api/v1/curated` 无 `run_id`）**：跨 run 去重的累积归档——`curated_archive.py` 的 `_latest_curated_join()` 用 `c.run_id = (SELECT MAX(run_id) FROM curated_items WHERE item_id=i.id)` 相关子查询，每个 item 只保留其最近一次被精选的元数据。真实计数走 `_count_archive_items()` + `_cached_archive_total()`，数据版本为 `_curated_data_version()`（latest run_id、curated_items 计数/max rowid、items 计数/max rowid、max eval id）。归档每页用 `_compute_archive_page()` **现算 item_summary**（不依赖 `summary_json`——预计算只覆盖约 30%），enrichment 一次 `LEFT JOIN` 取出，关联讨论按页 `_batch_related_discussions()` 批量正/反查（`items_fts` 反查）。去重子查询依赖 migration `011` 的 `idx_curated_items_item_run(item_id, run_id)`。仅带 `date` 时仍走 `curated_archive.py` 的按日跨 run 归档（`/daily` 复用）；带 `run_id` 时才进 `curated_digest.py` 的单轮 digest，可再用 `date` 限定该轮内日期。
 
 ## Key Abstractions
 
@@ -358,7 +380,13 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | 添加新 LLM provider | `provider/base.py`（Protocol）+ 新实现文件 + 对应 runner 的 `_provider_from_env` |
 | 修改评分权重 | `curator/weights.py`（DEFAULT_WEIGHTS） |
 | 修改精选逻辑 | `curator/select.py`（curate 函数） |
+| 修改展示摘要、媒体或关联讨论 | `presentation/summary.py`, `presentation/media.py`, `presentation/related.py` |
 | 添加新 API 端点 | `web/routes/` 下新建路由文件 + `web/app.py` 注册 |
+| 修改精选 API 模式分派 | `web/routes/curated.py`, `web/routes/curated_archive.py`, `web/routes/curated_digest.py` |
+| 修改分类契约 | `web/routes/categories.py`（`CATEGORY_CONTRACT`） |
+| 修改 timeline/curated/wechat 搜索 | `web/routes/search.py` + 对应路由的查询字段 |
+| 修改真实计数缓存或页码 clamp | `web/routes/pagination.py`, `web/routes/timeline.py`, `web/routes/curated_archive.py`, `web/routes/wechat.py` |
+| 修改 pipeline stage 通用 evaluation 原语 | `stage_common.py` + `prefilter/runner.py`, `scorer/runner.py`, `enrich/runner.py` |
 | 修改数据库 schema | `migrations/` 下新建 SQL 文件 |
 | 修改标签词表 | `topics.py`（CONTROLLED_VOCABULARY） |
 | 前端页面修改 | `web/templates/`（`/`、`/all` SSR 首屏）+ `web/static/`（JS/CSS 与静态页面） |

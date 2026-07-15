@@ -56,3 +56,12 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Impact: 能力上 codex 完全够(resume 后完美),但"失败态静默结束"逼 supervisor 多一轮 resume + 自己重跑全量取证,才能判断失败是回归还是环境 flaky,徒增 wall-clock 与 supervisor 介入。
 - Root cause: `codex e` 是 one-shot exec,turn 预算耗在"实现→跑测试"序列,跑测试是规划的最后一步,exit≠0 后 turn 自然到边界结束;spawn-prompt 只说了"run the test suite before declaring done",没强约束"失败不得结束 turn"。
 - Suggested fix: supervise spawn-prompt 模板加硬约束——"Run the full suite as the FINAL step. If it fails, diagnose (baseline-isolate to separate regression from env flakiness), fix the real regression in the SAME turn, or emit an explicit blocked report naming the failing test + what you tried. Never end the turn in a red state." 与 H4 互补:H4 是 codex **过度**(改 scope 外代码强过无关失败),本条是**不足**(失败不处理就停)——同一根(codex 对测试失败的缺省策略不稳),spawn-prompt 应显式规定失败时的动作链:baseline-isolate → 判断回归 vs 环境 → 修真回归 / 报 blocked,既不强改也不静默停。
+
+## H7 — agent-browser daemon ignores configured timeout and repeatedly stalls on healthy local pages
+
+- Type: tooling / browser automation
+- Discovered: 2026-07-14, web refactor Batch 3 rollback-page category smoke test.
+- Symptom: the first named session opened `/index.html`, captured a snapshot with 40 cards, and clicked the model category; the server logged the expected filtered API request with HTTP 200. A stale daemon then sent later eval/get commands to `about:blank`. After `agent-browser close --all`, three consecutive `open`/`batch` attempts still timed out at about 25.5 seconds even with `AGENT_BROWSER_DEFAULT_TIMEOUT=60000` and `120000`. Server logs showed the HTML, API, and static assets all returning 200 throughout.
+- Impact: a healthy local UI cannot complete an agent-browser smoke test, and increasing the documented timeout does not affect the daemon's effective deadline. Repeated retries can waste unbounded wall-clock and leave product acceptance incomplete.
+- Workaround used: stop after three repeated failures; retain the successful first snapshot/click plus server request evidence, then use fresh golden HTTP comparison, focused Playwright, and static import/export contracts for the remaining product checks. Do not report the browser smoke as passed.
+- Suggested fix: make the daemon honor the configured default timeout for `open`, `batch`, and post-click evaluation; expose the effective timeout and active page/session in diagnostics; make stale-session recovery reset `about:blank` state deterministically.

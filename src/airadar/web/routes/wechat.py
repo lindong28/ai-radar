@@ -8,15 +8,13 @@ import nh3
 from fastapi import APIRouter, HTTPException, Query, Request
 from markdown_it import MarkdownIt
 
+from ...presentation.media import proxy_image_url
+from ...presentation.summary import json_loads
 from ...wechat_text import normalize_wechat_title
 from ..envelope import ok
-from .common import (
-    conn_from_request,
-    json_loads,
-    like_patterns_for_query,
-    proxy_image_url,
-    whitespace_insensitive_sql,
-)
+from .pagination import clamp_page
+from .request_db import conn_from_request
+from .search import like_patterns_for_query, whitespace_insensitive_sql
 
 router = APIRouter()
 
@@ -138,8 +136,7 @@ def list_wechat_items(
         """,
         search_params,
     ).fetchone()[0]
-    total_pages = max(1, (int(total) + limit - 1) // limit)
-    current_page = min(max(int(page), 1), total_pages)
+    current_page = clamp_page(page=int(page), total=int(total), limit=limit)
     offset = (current_page - 1) * limit
     order_sql = (
         f"{author_match_sql} DESC, i.published_at DESC, i.fetched_at DESC, i.id DESC"

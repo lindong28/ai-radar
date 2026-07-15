@@ -1,0 +1,225 @@
+{
+  "algorithm": "sha256-length-prefixed-sqlite-logical-v1",
+  "overall_sha256": "57042c1ca4e0a53ba662fdb58c3a97ede9c870d5b8fe3a4aa4c19185cb8bbc04",
+  "schema_sha256": "c7f54d9033436677cd57ae31e14e8d43bc3c1a35640e07eb1fd90adeed1f8231",
+  "tables": {
+    "_llm_usage_contention_probe": {
+      "columns": [
+        "id",
+        "worker",
+        "created_at"
+      ],
+      "rows": 30,
+      "sha256": "0fa22030fd22e517a0db3815d18b53aaa318852ab4971afd937324b3efd150d8"
+    },
+    "airadar_migrations": {
+      "columns": [
+        "id",
+        "applied_at"
+      ],
+      "rows": 1,
+      "sha256": "53c89ac38b7119d9d7c8c06a409a01d337e1e5c52110e0325a9542996d3504f5"
+    },
+    "airadar_usage_migrations": {
+      "columns": [
+        "id",
+        "applied_at"
+      ],
+      "rows": 1,
+      "sha256": "72d6c69dfa9f1ee8187c268657b55dc14e62b3e77b3ed9bffa12ee02bca9d7db"
+    },
+    "curated_items": {
+      "columns": [
+        "run_id",
+        "item_id",
+        "weighted_score",
+        "rank",
+        "reason_json",
+        "summary_json"
+      ],
+      "rows": 208413,
+      "sha256": "cea4c196aa5c8c66c0dfc72478e50e4629612daaa41c09854e65163ee6c08945"
+    },
+    "curation_runs": {
+      "columns": [
+        "id",
+        "ruleset_version",
+        "weights_json",
+        "threshold",
+        "input_eval_ids",
+        "output_curated_ids",
+        "created_at"
+      ],
+      "rows": 5211,
+      "sha256": "09a8b386b5157b3988ea0ebd08746f4c6b14a10ced4f7191a72fef13a299db27"
+    },
+    "feedback": {
+      "columns": [
+        "id",
+        "item_id",
+        "signal",
+        "body",
+        "ruleset_version",
+        "created_at"
+      ],
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "item_evaluations": {
+      "columns": [
+        "id",
+        "item_id",
+        "stage",
+        "ruleset_version",
+        "model_id",
+        "input_json",
+        "output_json",
+        "numeric_json",
+        "latency_ms",
+        "cost_usd",
+        "evaluated_at",
+        "error"
+      ],
+      "rows": 69201,
+      "sha256": "1265b25f407b711004e49e42c64c5fb3bb3726dadc2a495132f0d24e575af999"
+    },
+    "items": {
+      "columns": [
+        "id",
+        "source_id",
+        "url",
+        "title",
+        "author",
+        "published_at",
+        "fetched_at",
+        "content_text",
+        "content_html",
+        "content_hash",
+        "extra_json"
+      ],
+      "rows": 29242,
+      "sha256": "f951072224c2c7a9a53fccbababb11af17b2b7f4ce7d6477e37def0a9a6e135e"
+    },
+    "items_fts": {
+      "columns": [
+        "item_id",
+        "title",
+        "content_text",
+        "source_name",
+        "author",
+        "title_zh"
+      ],
+      "rows": 29242,
+      "sha256": "c270ad9c84b7989b106c1a88b8ad95efc1d160c5e84c1c8c7e4c944dcee408ee"
+    },
+    "items_fts_config": {
+      "columns": [
+        "k",
+        "v"
+      ],
+      "rows": 1,
+      "sha256": "a75fbfed40af0813cd606935a4a202915364635397ba1f4f51d3475e29223c6a"
+    },
+    "items_fts_content": {
+      "columns": [
+        "id",
+        "c0",
+        "c1",
+        "c2",
+        "c3",
+        "c4",
+        "c5"
+      ],
+      "rows": 29242,
+      "sha256": "ac83168bb271723889cbb37d2366d5248397680d55dec3775c3c28c5fd64b8bd"
+    },
+    "items_fts_data": {
+      "columns": [
+        "id",
+        "block"
+      ],
+      "rows": 38711,
+      "sha256": "15ed155e09bdc791cbd3a23032d857fad25473cd6df07fcdf106453a212875f2"
+    },
+    "items_fts_docsize": {
+      "columns": [
+        "id",
+        "sz"
+      ],
+      "rows": 29242,
+      "sha256": "e6d10219ce04f2aedda8bcf56b574edb8104147824cdd05fbde6a96458acbe64"
+    },
+    "items_fts_idx": {
+      "columns": [
+        "segid",
+        "term",
+        "pgno"
+      ],
+      "rows": 37457,
+      "sha256": "202d17b1420ad8de11b505d088d5338746d988b8c063727b843f68c9c9eff64a"
+    },
+    "llm_usage": {
+      "columns": [
+        "id",
+        "stage",
+        "provider",
+        "model",
+        "item_id",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "input_item_count",
+        "input_char_count",
+        "cost_usd",
+        "attribution_json",
+        "created_at"
+      ],
+      "rows": 67,
+      "sha256": "04af9c9043009f8e2f79c7e2604d5e261a8b8c14a5779c7b21b4553a2c9b1ed8"
+    },
+    "sources": {
+      "columns": [
+        "id",
+        "name",
+        "url",
+        "tier",
+        "enabled",
+        "meta_json",
+        "synced_at",
+        "kind",
+        "homepage_url",
+        "icon_url"
+      ],
+      "rows": 44,
+      "sha256": "9dd9240d03904eca34098cfe0b762f4cb9997d2d2d2fb1b8c180f2051158b7c5"
+    },
+    "wechat_account_avatars": {
+      "columns": [
+        "account",
+        "avatar_url",
+        "checked_at",
+        "updated_at"
+      ],
+      "rows": 15,
+      "sha256": "be6640b3874059b934417d30dd8a5f2ee290c0d6fd8dfd5c5ff36ed67a5f0377"
+    },
+    "wechat_interpretations": {
+      "columns": [
+        "item_id",
+        "slug",
+        "recommendation",
+        "save_decision",
+        "save_reason",
+        "abstract",
+        "tags_json",
+        "summary_md",
+        "model",
+        "kb_synced",
+        "processed_at",
+        "error"
+      ],
+      "rows": 1737,
+      "sha256": "13b65d41a645fb1e587b7ad21ee3ec8cdd0680a88d8a8c6152e99d8854396dda"
+    }
+  }
+}

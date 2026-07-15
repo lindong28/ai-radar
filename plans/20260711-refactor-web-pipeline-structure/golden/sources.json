@@ -1,0 +1,554 @@
+{
+    "success": true,
+    "data": {
+        "sources": [
+            {
+                "id": "anthropic_blog",
+                "name": "Claude Blog",
+                "url": "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_claude.xml",
+                "tier": "T1",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://claude.com/blog",
+                "icon_url": "https://www.google.com/s2/favicons?domain=www.anthropic.com&sz=64",
+                "meta": {
+                    "etag": "W/\"2bd65be372778311867af5e7a9950b1cdacdaa84a0a1c622c29edc03da3ca646\""
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "anthropic_news",
+                "name": "Anthropic News",
+                "url": "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml",
+                "tier": "T1",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://www.anthropic.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=anthropic.com&sz=64",
+                "meta": {
+                    "etag": "W/\"daae5e57e4e865b61ce62f9c4c140eb6aeeb8c208b245f2125c2b958e709698f\""
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "openai_blog",
+                "name": "OpenAI Blog",
+                "url": "https://openai.com/news/rss.xml",
+                "tier": "T1",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://openai.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=openai.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "openai_x",
+                "name": "OpenAI",
+                "url": "https://nitter.net/OpenAI/rss",
+                "tier": "T1",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/OpenAI",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "alibaba_cloud_x",
+                "name": "Alibaba Cloud",
+                "url": "https://nitter.net/alibaba_cloud/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/alibaba_cloud",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "ayi_ainotes_x",
+                "name": "\u963f\u7ece AYi",
+                "url": "https://nitter.net/AYi_AInotes/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/AYi_AInotes",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "berryxia_x",
+                "name": "Berryxia.AI",
+                "url": "https://nitter.net/berryxia/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/berryxia",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "claude_code_releases",
+                "name": "Claude Code GitHub Releases",
+                "url": "https://github.com/anthropics/claude-code/releases.atom",
+                "tier": "T1.5",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://github.com/anthropics/claude-code/releases",
+                "icon_url": "https://www.google.com/s2/favicons?domain=github.com&sz=64",
+                "meta": {
+                    "etag": "W/\"6d1d10dfba43864cfc47aacf7c936e9c\""
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "frxiaobei_x",
+                "name": "\u51e1\u4eba\u5c0f\u5317",
+                "url": "https://nitter.net/frxiaobei/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/frxiaobei",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "gemini_app_x",
+                "name": "Google Gemini",
+                "url": "https://nitter.net/GeminiApp/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/GeminiApp",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "googleaidevs_x",
+                "name": "Google AI Developers",
+                "url": "https://nitter.net/googleaidevs/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/googleaidevs",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "huggingface_blog",
+                "name": "Hugging Face Blog",
+                "url": "https://huggingface.co/blog/feed.xml",
+                "tier": "T1.5",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://huggingface.co/blog",
+                "icon_url": "https://www.google.com/s2/favicons?domain=huggingface.co&sz=64",
+                "meta": {
+                    "etag": "W/\"3b1bd-PgwA72pn0dlT/LxFQiDIoYfwp/A\""
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "importai",
+                "name": "Import AI (Jack Clark)",
+                "url": "https://importai.substack.com/feed",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://importai.substack.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=importai.substack.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "interconnects",
+                "name": "Interconnects (Nathan Lambert)",
+                "url": "https://www.interconnects.ai/feed",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://www.interconnects.ai/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=interconnects.ai&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "karpathy_x",
+                "name": "Andrej Karpathy",
+                "url": "https://nitter.net/karpathy/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/karpathy",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "kimmonismus_x",
+                "name": "Kimmonismus",
+                "url": "https://nitter.net/kimmonismus/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/kimmonismus",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "latent_space",
+                "name": "Latent Space",
+                "url": "https://www.latent.space/feed",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://www.latent.space/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=latent.space&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "lilianweng",
+                "name": "Lilian Weng's Log",
+                "url": "https://lilianweng.github.io/index.xml",
+                "tier": "T1.5",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://lilianweng.github.io/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=lilianweng.github.io&sz=64",
+                "meta": {
+                    "etag": "W/\"6a55d3e4-13718\"",
+                    "last_modified": "Tue, 14 Jul 2026 06:15:00 GMT"
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "luma_labs_x",
+                "name": "Luma",
+                "url": "https://nitter.net/LumaLabsAI/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/LumaLabsAI",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "minimax_x",
+                "name": "MiniMax",
+                "url": "https://nitter.net/MiniMax_AI/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/MiniMax_AI",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "msft_research_x",
+                "name": "Microsoft Research",
+                "url": "https://nitter.net/MSFTResearch/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/MSFTResearch",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "op7418_x",
+                "name": "\u6b78\u85cf",
+                "url": "https://nitter.net/op7418/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/op7418",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "openai_devs_x",
+                "name": "OpenAI Developers",
+                "url": "https://nitter.net/OpenAIDevs/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/OpenAIDevs",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "openrouter_x",
+                "name": "OpenRouter",
+                "url": "https://nitter.net/OpenRouter/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/OpenRouter",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "pixverse_x",
+                "name": "PixVerse",
+                "url": "https://nitter.net/PixVerse_/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/PixVerse_",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "replit_x",
+                "name": "Replit",
+                "url": "https://nitter.net/Replit/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/Replit",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "runway_news",
+                "name": "Runway News",
+                "url": "https://runwayml.com/news/rss.xml",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://runwayml.com/news",
+                "icon_url": "https://www.google.com/s2/favicons?domain=runwayml.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "sama_x",
+                "name": "Sam Altman",
+                "url": "https://nitter.net/sama/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/sama",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "sebastianraschka",
+                "name": "Ahead of AI (Sebastian Raschka)",
+                "url": "https://magazine.sebastianraschka.com/feed",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://magazine.sebastianraschka.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=magazine.sebastianraschka.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "sensetime_x",
+                "name": "SenseTime",
+                "url": "https://nitter.net/SenseTime_AI/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/SenseTime_AI",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "simonw",
+                "name": "Simon Willison's Weblog",
+                "url": "https://simonwillison.net/atom/everything/",
+                "tier": "T1.5",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://simonwillison.net/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=simonwillison.net&sz=64",
+                "meta": {
+                    "last_modified": "Tue, 14 Jul 2026 00:56:20 GMT"
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "simonw_mastodon",
+                "name": "Simon Willison (Mastodon)",
+                "url": "https://fedi.simonwillison.net/@simon.rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://fedi.simonwillison.net/@simon",
+                "icon_url": "https://www.google.com/s2/favicons?domain=fedi.simonwillison.net&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "swyx_x",
+                "name": "swyx",
+                "url": "https://nitter.net/swyx/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/swyx",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "tencent_hunyuan_x",
+                "name": "Tencent Hunyuan",
+                "url": "https://nitter.net/TencentHunyuan/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/TencentHunyuan",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "tomer_tunguz",
+                "name": "Tomer Tunguz",
+                "url": "https://tomtunguz.com/index.xml",
+                "tier": "T1.5",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://tomtunguz.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=tomtunguz.com&sz=64",
+                "meta": {
+                    "etag": "W/\"877fb7f5c8da04fe4e0a2a4be76c63cf\"",
+                    "last_modified": "Mon, 13 Jul 2026 16:11:02 UTC"
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "vista8_x",
+                "name": "\u5411\u9633\u4e54\u6728",
+                "url": "https://nitter.net/vista8/rss",
+                "tier": "T1.5",
+                "enabled": false,
+                "kind": "x",
+                "homepage_url": "https://x.com/vista8",
+                "icon_url": "https://www.google.com/s2/favicons?domain=x.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-12T00:45:16Z"
+            },
+            {
+                "id": "hn_ai",
+                "name": "Hacker News AI/LLM",
+                "url": "https://hnrss.org/newest?q=AI+OR+LLM+OR+GPT",
+                "tier": "T2",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://news.ycombinator.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=news.ycombinator.com&sz=64",
+                "meta": {
+                    "last_modified": "Tue, 14 Jul 2026 08:55:51 GMT"
+                },
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "ithome",
+                "name": "IT\u4e4b\u5bb6",
+                "url": "https://www.ithome.com/rss/",
+                "tier": "T2",
+                "enabled": true,
+                "kind": "feed",
+                "homepage_url": "https://www.ithome.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=www.ithome.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "last_week_ai",
+                "name": "Last Week in AI",
+                "url": "https://lastweekin.ai/feed",
+                "tier": "T2",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://lastweekin.ai/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=lastweekin.ai&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "lobsters_ai",
+                "name": "lobste.rs AI tag",
+                "url": "https://lobste.rs/t/ai.rss",
+                "tier": "T2",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://lobste.rs/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=lobste.rs&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "the_batch",
+                "name": "The Batch (deeplearning.ai)",
+                "url": "https://www.deeplearning.ai/the-batch/feed/",
+                "tier": "T2",
+                "enabled": false,
+                "kind": "feed",
+                "homepage_url": "https://www.deeplearning.ai/the-batch/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=deeplearning.ai&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            },
+            {
+                "id": "wx_crossing",
+                "name": "\u5341\u5b57\u8def\u53e3Crossing",
+                "url": "http://localhost:4000/feeds/MP_WXS_3010319264.rss?limit=200",
+                "tier": "T2",
+                "enabled": false,
+                "kind": "wechat",
+                "homepage_url": "https://mp.weixin.qq.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-02T09:45:19Z"
+            },
+            {
+                "id": "wx_guizang",
+                "name": "\u6b78\u85cf\u7684AI\u5de5\u5177\u7bb1",
+                "url": "http://localhost:4000/feeds/MP_WXS_3540975510.rss?limit=200",
+                "tier": "T2",
+                "enabled": false,
+                "kind": "wechat",
+                "homepage_url": "https://mp.weixin.qq.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-06-02T09:45:19Z"
+            },
+            {
+                "id": "wx_mp2rss",
+                "name": "\u5fae\u4fe1\u516c\u4f17\u53f7\uff08Mp2RSS \u5408\u96c6\uff09",
+                "url": "https://mp2rss.bugcode.dev/feed/c9da17932fdbbaf76eff104c9f687a75ae307a1df3d695f63bdc1f23f75aa72e/rss/all",
+                "tier": "T2",
+                "enabled": true,
+                "kind": "wechat",
+                "homepage_url": "https://mp.weixin.qq.com/",
+                "icon_url": "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64",
+                "meta": {},
+                "synced_at": "2026-07-14T09:15:31Z"
+            }
+        ]
+    },
+    "error": null
+}

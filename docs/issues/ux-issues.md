@@ -11,7 +11,7 @@
 
 - [done 2026-06-08] `/wechat` 搜索对空格敏感：`分享Claude Code`（库内无空格）能搜到，`分享 Claude Code`（带空格）搜不到
   - 背景：用户 2026-06-08 反馈带空格搜不到内容，体验不好。
-  - 根因：`src/airadar/web/routes/common.py` 的 `expand_st_variants` / `like_patterns_for_query` 只 `strip()` 首尾、不归一化内部空格，被匹配列（title/author/abstract/tags）也不归一化；LIKE pattern `%分享 Claude Code%` 命中不了存库的 `分享Claude Code`。
+  - 根因：当时搜索 helper（现位于 `src/airadar/web/routes/search.py` 的 `expand_st_variants` / `like_patterns_for_query`）只 `strip()` 首尾、不归一化内部空格，被匹配列（title/author/abstract/tags）也不归一化；LIKE pattern `%分享 Claude Code%` 命中不了存库的 `分享Claude Code`。
   - 影响面：同一搜索通道也服务 timeline/curated，修一处全局受益。
   - 修复：搜索做空格不敏感——查询 pattern 与被匹配列两侧都剥除空白（含全角空格）后比对，并补 FTS 路径（timeline/curated 长查询走 trigram FTS）。加回归测试复现该用例；89 测试通过、ruff clean。**需重启 serve 生效**（纯 Python web 层改动）。
 

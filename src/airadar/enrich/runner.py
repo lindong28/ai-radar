@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import ValidationError
@@ -16,6 +14,9 @@ from ..provider.base import EnrichProvider, EnrichResult, ProviderItem
 from ..provider.deepseek_v4_flash import DeepSeekV4FlashEnricher
 from ..provider.deepseek_v4_pro import DeepSeekV4ProEnricher
 from ..ruleset import current_version
+from ..stage_common import insert_evaluation
+from ..stage_common import parse_since as _parse_since
+from ..stage_common import provider_item_from_row as _to_provider_item
 from ..topics import topic_tags
 from .prompts import render_enrich_prompt
 from .schema import EnrichOutput
@@ -37,24 +38,6 @@ class EnrichProgress:
     latency_ms: int
 
 
-def _json(data: object) -> str:
-    return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _parse_since(value: str) -> datetime:
-    value = value.strip()
-    unit = value[-1:].lower()
-    if unit == "h":
-        return datetime.now(UTC) - timedelta(hours=float(value[:-1]))
-    if unit == "d":
-        return datetime.now(UTC) - timedelta(days=float(value[:-1]))
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-
-
 def _provider_from_env() -> EnrichProvider:
     name = os.environ.get("AI_RADAR_ENRICHER", "deepseek_v4_pro")
     if name == "deepseek_v4_flash":
@@ -62,19 +45,6 @@ def _provider_from_env() -> EnrichProvider:
     if name == "deepseek_v4_pro":
         return DeepSeekV4ProEnricher()
     raise ValueError(f"unknown AI_RADAR_ENRICHER provider: {name}")
-
-
-def _to_provider_item(row: sqlite3.Row | tuple[Any, ...]) -> ProviderItem:
-    return ProviderItem(
-        id=row[0],
-        title=row[1],
-        url=row[2],
-        source_id=row[3],
-        tier=row[4],
-        author=row[5],
-        published_at=row[6],
-        content_text=row[7],
-    )
 
 
 def _candidate_rows(
@@ -184,24 +154,17 @@ def _insert_evaluation(
     error: str | None,
     latency_ms: int,
 ) -> None:
-    conn.execute(
-        """
-        INSERT INTO item_evaluations (
-          item_id, stage, ruleset_version, model_id, input_json, output_json,
-          numeric_json, latency_ms, cost_usd, evaluated_at, error
-        )
-        VALUES (?, 'enrich', ?, ?, ?, ?, NULL, ?, 0, ?, ?)
-        """,
-        (
-            item.id,
-            ruleset_version,
-            provider.model_id,
-            _json(render_enrich_prompt(item)),
-            _json(enriched.model_dump() if enriched else output),
-            latency_ms,
-            _utc_now(),
-            error,
-        ),
+    insert_evaluation(
+        conn,
+        item_id=item.id,
+        stage="enrich",
+        ruleset_version=ruleset_version,
+        model_id=provider.model_id,
+        input_data=render_enrich_prompt(item),
+        output_data=enriched.model_dump() if enriched else output,
+        numeric_data=None,
+        latency_ms=latency_ms,
+        error=error,
     )
 
 

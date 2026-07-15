@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
@@ -15,6 +13,9 @@ from ..provider.base import PrefilterProvider, PrefilterResult, ProviderItem
 from ..provider.deepseek_v32 import DeepSeekV32Prefilter
 from ..provider.glm import GLMPrefilter
 from ..ruleset import current_version
+from ..stage_common import insert_evaluation
+from ..stage_common import parse_since as _parse_since
+from ..stage_common import provider_item_from_row as _to_provider_item
 from .prompts import render_prefilter_prompt
 
 
@@ -29,24 +30,6 @@ class PrefilterRunSummary:
     errors: int = 0
 
 
-def _json(data: object) -> str:
-    return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _parse_since(value: str) -> datetime:
-    value = value.strip()
-    unit = value[-1:].lower()
-    if unit == "h":
-        return datetime.now(UTC) - timedelta(hours=float(value[:-1]))
-    if unit == "d":
-        return datetime.now(UTC) - timedelta(days=float(value[:-1]))
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-
-
 def _provider_from_env() -> PrefilterProvider:
     name = os.environ.get("AI_RADAR_PREFILTER", "deepseek_v32")
     if name == "glm":
@@ -54,19 +37,6 @@ def _provider_from_env() -> PrefilterProvider:
     if name == "deepseek_v32":
         return DeepSeekV32Prefilter()
     raise ValueError(f"unknown AI_RADAR_PREFILTER provider: {name}")
-
-
-def _to_provider_item(row: sqlite3.Row | tuple[Any, ...]) -> ProviderItem:
-    return ProviderItem(
-        id=row[0],
-        title=row[1],
-        url=row[2],
-        source_id=row[3],
-        tier=row[4],
-        author=row[5],
-        published_at=row[6],
-        content_text=row[7],
-    )
 
 
 def _candidate_rows(
@@ -149,25 +119,17 @@ def _insert_evaluation(
     latency_ms: int,
 ) -> None:
     prompt = render_prefilter_prompt(item)
-    conn.execute(
-        """
-        INSERT INTO item_evaluations (
-          item_id, stage, ruleset_version, model_id, input_json, output_json,
-          numeric_json, latency_ms, cost_usd, evaluated_at, error
-        )
-        VALUES (?, 'prefilter', ?, ?, ?, ?, ?, ?, 0, ?, ?)
-        """,
-        (
-            item.id,
-            ruleset_version,
-            provider.model_id,
-            _json(prompt),
-            _json(output),
-            _json(numeric.model_dump()) if numeric else None,
-            latency_ms,
-            _utc_now(),
-            error,
-        ),
+    insert_evaluation(
+        conn,
+        item_id=item.id,
+        stage="prefilter",
+        ruleset_version=ruleset_version,
+        model_id=provider.model_id,
+        input_data=prompt,
+        output_data=output,
+        numeric_data=numeric.model_dump() if numeric else None,
+        latency_ms=latency_ms,
+        error=error,
     )
 
 

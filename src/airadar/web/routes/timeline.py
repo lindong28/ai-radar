@@ -1,32 +1,30 @@
 from __future__ import annotations
 
 import sqlite3
-from collections import OrderedDict
-from threading import Lock
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
-from ..envelope import ok
-from .common import (
-    CATEGORY_TAGS,
+from ...presentation.summary import (
     _visible_reason_from_payload,
-    category_filter_clause,
-    conn_from_request,
-    deduped_item_clause,
     item_summary,
     json_loads,
-    matches_category,
     parse_enrichment,
-    search_id_subquery,
-    source_match_expression,
 )
+from ..envelope import ok
+from .categories import (
+    CATEGORY_TAGS,
+    category_filter_clause,
+    deduped_item_clause,
+    matches_category,
+)
+from .pagination import VersionedTotalCache, clamp_page
+from .request_db import conn_from_request
+from .search import search_id_subquery, source_match_expression
 
 router = APIRouter()
 
-_TIMELINE_TOTAL_CACHE_MAX = 64
-_TIMELINE_TOTAL_CACHE: OrderedDict[tuple[Any, ...], int] = OrderedDict()
-_TIMELINE_TOTAL_CACHE_LOCK = Lock()
+_timeline_total_cache = VersionedTotalCache(maxsize=64)
 _PREFILTER_SCORING_CLAUSE = """
 EXISTS (
   SELECT 1 FROM item_evaluations pre
@@ -145,23 +143,13 @@ def _cached_timeline_total(
     use_prefilter_count: bool,
 ) -> int:
     count_fn = _count_timeline_items_with_prefilter if use_prefilter_count else _count_timeline_items
-    if not cacheable:
-        return count_fn(conn, where, params)
-
-    key = (*signature, _timeline_data_version(conn))
-    with _TIMELINE_TOTAL_CACHE_LOCK:
-        cached = _TIMELINE_TOTAL_CACHE.get(key)
-        if cached is not None:
-            _TIMELINE_TOTAL_CACHE.move_to_end(key)
-            return cached
-
-    total = count_fn(conn, where, params)
-    with _TIMELINE_TOTAL_CACHE_LOCK:
-        _TIMELINE_TOTAL_CACHE[key] = total
-        _TIMELINE_TOTAL_CACHE.move_to_end(key)
-        while len(_TIMELINE_TOTAL_CACHE) > _TIMELINE_TOTAL_CACHE_MAX:
-            _TIMELINE_TOTAL_CACHE.popitem(last=False)
-    return total
+    version = _timeline_data_version(conn) if cacheable else ()
+    return _timeline_total_cache.get_or_compute(
+        signature=signature,
+        version=version,
+        compute=lambda: count_fn(conn, where, params),
+        cacheable=cacheable,
+    )
 
 
 def prewarm_timeline_total_cache(db_path: object) -> None:
@@ -173,13 +161,11 @@ def prewarm_timeline_total_cache(db_path: object) -> None:
     try:
         has_prefilter = bool(conn.execute("SELECT 1 FROM item_evaluations WHERE stage='prefilter' LIMIT 1").fetchone())
         where = f"WHERE {deduped_item_clause('i')}"
-        _cached_timeline_total(
-            conn,
-            where,
-            (),
-            ("", "", False, False, has_prefilter),
-            cacheable=True,
-            use_prefilter_count=has_prefilter,
+        count_fn = _count_timeline_items_with_prefilter if has_prefilter else _count_timeline_items
+        _timeline_total_cache.prewarm(
+            signature=("", "", False, False, has_prefilter),
+            version=_timeline_data_version(conn),
+            compute=lambda: count_fn(conn, where, ()),
         )
     finally:
         conn.close()
@@ -268,7 +254,7 @@ def timeline(
             cacheable=not search_subquery and not cursor,
             use_prefilter_count=has_prefilter,
         )
-        response_page = 1 if cursor else min(max(page, 1), max(1, (total + limit - 1) // limit))
+        response_page = 1 if cursor else clamp_page(page=page, total=total, limit=limit)
         offset = 0 if cursor else (response_page - 1) * limit
         query_params = [*search_sort_params, *params, limit + 1, offset]
         rows = conn.execute(

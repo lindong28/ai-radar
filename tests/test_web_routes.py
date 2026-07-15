@@ -12,8 +12,11 @@ from fastapi.testclient import TestClient
 
 from airadar.db import migrate
 from airadar.enrich.schema import EnrichOutput
+from airadar.presentation import summary as presentation_summary
+from airadar.presentation.media import proxy_image_url
 from airadar.web.app import WECHAT_FALLBACK_ICON, _prepaint_items, create_app
-from airadar.web.routes import common as route_common
+from airadar.web.routes import request_db, search
+from airadar.web.routes import timeline as timeline_routes
 
 
 def _extract_preload(html: str) -> dict[str, Any]:
@@ -401,9 +404,9 @@ def test_item_summary_uses_preloaded_enrichment_without_lookup(tmp_path: Path, m
     def fail_latest_lookup(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("preloaded enrichment should skip latest_enrichment lookup")
 
-    monkeypatch.setattr(route_common, "latest_enrichment", fail_latest_lookup)
+    monkeypatch.setattr(presentation_summary, "latest_enrichment", fail_latest_lookup)
 
-    item = route_common.item_summary(row, conn=conn, include_related=False, enrichment=enrichment)
+    item = presentation_summary.item_summary(row, conn=conn, include_related=False, enrichment=enrichment)
 
     assert item["title_zh"] == "OpenAI API 产品更新"
     assert item["summary_zh"] == enrichment.summary_zh
@@ -436,8 +439,8 @@ def test_item_summary_suppresses_wechat_preview_and_full_text(tmp_path: Path) ->
         tags=["产品更新", "MCP/工具"],
     )
 
-    enriched = route_common.item_summary(row, conn=conn, include_related=False, enrichment=enrichment)
-    bare = route_common.item_summary(row, conn=conn, include_related=False, enrichment_loaded=True)
+    enriched = presentation_summary.item_summary(row, conn=conn, include_related=False, enrichment=enrichment)
+    bare = presentation_summary.item_summary(row, conn=conn, include_related=False, enrichment_loaded=True)
 
     assert enriched["source_kind"] == "wechat"
     assert enriched["content_preview"] is None
@@ -478,7 +481,7 @@ def test_timeline_api_includes_wechat_author_avatar_cache(tmp_path: Path) -> Non
     assert item["author"] == "歸藏的AI工具箱"
     # WeChat CDN blocks browser hotlinking, so the cached avatar is routed
     # through the same-origin /img proxy.
-    assert item["author_avatar_url"] == route_common.proxy_image_url("https://mmbiz.qpic.cn/guizang.png")
+    assert item["author_avatar_url"] == proxy_image_url("https://mmbiz.qpic.cn/guizang.png")
     assert item["author_avatar_url"].startswith("/img?url=")
 
 
@@ -522,7 +525,7 @@ def test_precomputed_curated_api_hydrates_wechat_author_avatar_cache(tmp_path: P
     items = client.get("/api/v1/curated").json()["data"]["items"]
     wechat = next(item for item in items if item["id"] == "item-wechat")
 
-    assert wechat["author_avatar_url"] == route_common.proxy_image_url("https://mmbiz.qpic.cn/kazike.png")
+    assert wechat["author_avatar_url"] == proxy_image_url("https://mmbiz.qpic.cn/kazike.png")
     assert wechat["author_avatar_url"].startswith("/img?url=")
 
 
@@ -627,6 +630,177 @@ def test_timeline_total_cache_invalidates_when_items_change(tmp_path: Path) -> N
     second = client.get("/api/v1/timeline", params={"limit": 50}).json()["data"]
     assert second["total"] == 4
     assert second["items"][0]["id"] == "item-new"
+
+
+def _seed_pagination_parity_db(tmp_path: Path) -> Path:
+    db_path = _seed_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    _insert_item(
+        conn,
+        "item-product",
+        "openai_blog",
+        "Alpha product update",
+        "Ada",
+        "Alpha product details for developers.",
+        "2026-05-08T07:30:00Z",
+    )
+    _insert_item(
+        conn,
+        "item-x-model",
+        "simonw_mastodon",
+        "Alpha model notes",
+        "Simon",
+        "Alpha model discussion.",
+        "2026-05-08T07:00:00Z",
+    )
+    _insert_item(
+        conn,
+        "item-openai-newer",
+        "openai_blog",
+        "Alpha API Release updated",
+        "Ada",
+        "Alpha duplicate URL should replace the older item.",
+        "2026-05-08T10:30:00Z",
+    )
+    conn.execute(
+        "UPDATE items SET url='https://example.com/api-release' WHERE id='item-openai-newer'"
+    )
+    conn.execute("UPDATE items SET title='Alpha Claude Notes' WHERE id='item-claude'")
+    conn.execute("UPDATE items SET title='Alpha SQLite discussion' WHERE id='item-x'")
+
+    enrichments = {
+        "item-openai": ("OpenAI 模型发布", ["模型发布", "OpenAI"]),
+        "item-openai-newer": ("OpenAI 模型发布更新", ["模型发布", "OpenAI"]),
+        "item-claude": ("Claude 研究笔记", ["论文/研究", "Anthropic"]),
+        "item-x": ("SQLite 研究实践", ["论文/研究", "教程/实践"]),
+        "item-product": ("Alpha 产品更新", ["产品更新", "MCP/工具"]),
+        "item-x-model": ("Alpha 模型动态", ["模型发布", "开源/仓库"]),
+    }
+    for item_id, (title, tags) in enrichments.items():
+        _insert_enrichment(conn, item_id, title, tags)
+
+    for rank, item_id in enumerate(
+        ("item-claude", "item-x", "item-product", "item-x-model", "item-openai-newer"),
+        start=2,
+    ):
+        conn.execute(
+            """
+            INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+            VALUES ('run-1', ?, 8.0, ?, '{}')
+            """,
+            (item_id, rank),
+        )
+
+    prefilter_pass = json.dumps({"is_ai_related": True, "confidence": 0.9})
+    prefilter_fail = json.dumps({"is_ai_related": False, "confidence": 0.9})
+    for item_id in ("item-openai", "item-openai-newer", "item-claude", "item-x", "item-product"):
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (
+              item_id, stage, ruleset_version, model_id, input_json, output_json,
+              numeric_json, latency_ms, cost_usd, evaluated_at, error
+            )
+            VALUES (?, 'prefilter', 'test.r1', 'fake', '{}', '{}', ?, 1, 0, '2026-05-08T10:08:00Z', NULL)
+            """,
+            (item_id, prefilter_pass),
+        )
+    conn.execute(
+        """
+        INSERT INTO item_evaluations (
+          item_id, stage, ruleset_version, model_id, input_json, output_json,
+          numeric_json, latency_ms, cost_usd, evaluated_at, error
+        )
+        VALUES ('item-x-model', 'prefilter', 'test.r1', 'fake', '{}', '{}', ?, 1, 0, '2026-05-08T10:08:00Z', NULL)
+        """,
+        (prefilter_fail,),
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _assert_total_matches_accumulated_pages(
+    client: TestClient,
+    endpoint: str,
+    filters: dict[str, str],
+) -> None:
+    limit = 2
+    first = client.get(endpoint, params={**filters, "limit": limit, "page": 1}).json()["data"]
+    total = int(first["total"])
+    complete = client.get(endpoint, params={**filters, "limit": 100, "page": 1}).json()["data"]
+    complete_item_ids = [str(item["id"]) for item in complete["items"]]
+    assert complete["page"] == 1, filters
+    assert len(complete_item_ids) == len(set(complete_item_ids)), filters
+    assert len(complete_item_ids) == total, filters
+
+    total_pages = max(1, (total + limit - 1) // limit)
+    pages = [
+        client.get(endpoint, params={**filters, "limit": limit, "page": page}).json()["data"]
+        for page in range(1, total_pages + 1)
+    ]
+    item_ids = [str(item["id"]) for data in pages for item in data["items"]]
+
+    assert [data["page"] for data in pages] == list(range(1, total_pages + 1)), filters
+    assert len(item_ids) == len(set(item_ids)), filters
+    assert len(item_ids) == total, filters
+
+    overflow = client.get(endpoint, params={**filters, "limit": limit, "page": 999}).json()["data"]
+    assert overflow["page"] == total_pages, filters
+    assert [item["id"] for item in overflow["items"]] == [item["id"] for item in pages[-1]["items"]], filters
+
+
+def test_total_rows_guard_rejects_timeline_count_underrun_at_full_page_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count_items = timeline_routes._count_timeline_items_with_prefilter
+
+    def undercount_items(
+        conn: sqlite3.Connection,
+        where: str,
+        params: tuple[object, ...],
+    ) -> int:
+        return max(0, count_items(conn, where, params) - 2)
+
+    monkeypatch.setattr(timeline_routes, "_count_timeline_items_with_prefilter", undercount_items)
+    client = TestClient(create_app(_seed_pagination_parity_db(tmp_path)))
+
+    with pytest.raises(AssertionError):
+        _assert_total_matches_accumulated_pages(client, "/api/v1/timeline", {})
+
+
+def test_timeline_total_matches_accumulated_rows_across_filter_and_page_combinations(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(_seed_pagination_parity_db(tmp_path)))
+
+    for filters in (
+        {},
+        {"channel": "news"},
+        {"channel": "x"},
+        {"category": "paper"},
+        {"q": "Alpha"},
+        {"channel": "news", "category": "ai-models", "q": "Alpha"},
+        {"channel": "x", "category": "paper", "q": "Alpha"},
+        {"channel": "x", "category": "ai-products", "q": "not-present"},
+    ):
+        _assert_total_matches_accumulated_pages(client, "/api/v1/timeline", filters)
+
+
+def test_curated_total_matches_accumulated_rows_across_filter_and_page_combinations(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(_seed_pagination_parity_db(tmp_path)))
+
+    for filters in (
+        {},
+        {"category": "paper"},
+        {"category": "ai-models"},
+        {"q": "Alpha"},
+        {"category": "ai-products", "q": "Alpha"},
+        {"category": "paper", "q": "not-present"},
+    ):
+        _assert_total_matches_accumulated_pages(client, "/api/v1/curated", filters)
 
 
 def test_timeline_exposes_default_score_for_unscored_items(tmp_path: Path) -> None:
@@ -785,14 +959,14 @@ def test_fts_triggers_sync_source_author_and_title_zh(tmp_path: Path) -> None:
 
 
 def test_search_id_subquery_switches_between_fts_like_and_noop() -> None:
-    assert route_common.search_id_subquery(None) == (None, [])
-    assert route_common.search_id_subquery("   ") == (None, [])
+    assert search.search_id_subquery(None) == (None, [])
+    assert search.search_id_subquery("   ") == (None, [])
 
-    fts_sql, fts_params = route_common.search_id_subquery("Ada")
+    fts_sql, fts_params = search.search_id_subquery("Ada")
     assert fts_sql == "SELECT item_id FROM items_fts WHERE items_fts MATCH ?"
     assert fts_params == ['"Ada"']
 
-    like_sql, like_params = route_common.search_id_subquery("%_")
+    like_sql, like_params = search.search_id_subquery("%_")
     assert like_sql is not None
     assert like_sql.count("LIKE ? ESCAPE '\\'") == 4
     assert "content_text LIKE" not in like_sql
@@ -800,9 +974,9 @@ def test_search_id_subquery_switches_between_fts_like_and_noop() -> None:
 
 
 def test_like_search_helpers_ignore_internal_whitespace() -> None:
-    assert route_common.like_patterns_for_query("分享 Claude\tCode\u3000") == ["%分享ClaudeCode%"]
+    assert search.like_patterns_for_query("分享 Claude\tCode\u3000") == ["%分享ClaudeCode%"]
 
-    sql, params = route_common.source_match_expression("分享 Claude Code", source_alias="src", item_alias="it")
+    sql, params = search.source_match_expression("分享 Claude Code", source_alias="src", item_alias="it")
 
     assert "REPLACE(" in sql
     assert "src.name LIKE" not in sql
@@ -811,24 +985,24 @@ def test_like_search_helpers_ignore_internal_whitespace() -> None:
 
 
 def test_expand_st_variants_uses_opencc_bidirectionally() -> None:
-    assert route_common.expand_st_variants("归藏") == ["归藏", "歸藏"]
-    assert route_common.expand_st_variants("歸藏") == ["歸藏", "归藏"]
-    assert route_common.expand_st_variants("openai") == ["openai"]
+    assert search.expand_st_variants("归藏") == ["归藏", "歸藏"]
+    assert search.expand_st_variants("歸藏") == ["歸藏", "归藏"]
+    assert search.expand_st_variants("openai") == ["openai"]
 
 
 def test_search_id_subquery_expands_simplified_traditional_variants() -> None:
-    fts_sql, fts_params = route_common.search_id_subquery("归藏工具")
+    fts_sql, fts_params = search.search_id_subquery("归藏工具")
     assert fts_sql == "SELECT item_id FROM items_fts WHERE items_fts MATCH ?"
     assert fts_params == ['"归藏工具" OR "歸藏工具"']
 
-    like_sql, like_params = route_common.search_id_subquery("归藏")
+    like_sql, like_params = search.search_id_subquery("归藏")
     assert like_sql is not None
     assert like_sql.count("LIKE ? ESCAPE '\\'") == 8
     assert like_params == ["%归藏%", "%归藏%", "%归藏%", "%归藏%", "%歸藏%", "%歸藏%", "%歸藏%", "%歸藏%"]
 
 
 def test_source_match_expression_reuses_like_escape() -> None:
-    sql, params = route_common.source_match_expression(r"100%_AI", source_alias="src", item_alias="it")
+    sql, params = search.source_match_expression(r"100%_AI", source_alias="src", item_alias="it")
 
     assert sql == (
         "CASE WHEN (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(src.name, ''), ' ', ''), "
@@ -1396,7 +1570,7 @@ def test_conn_from_request_closes_connection_on_exit(tmp_path: Path) -> None:
     db_path = _seed_db(tmp_path)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_path=str(db_path))))
 
-    with route_common.conn_from_request(request) as conn:  # type: ignore[arg-type]
+    with request_db.conn_from_request(request) as conn:  # type: ignore[arg-type]
         assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 3
         captured = conn
 

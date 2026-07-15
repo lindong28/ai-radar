@@ -92,24 +92,7 @@ def reload_sources(conn: sqlite3.Connection, path: Path | None = None) -> list[S
 
 
 def fetch_source(conn: sqlite3.Connection, source: SourceConfig) -> SourceFetchSummary:
-    try:
-        response = fetch_feed(source, conn)
-        if response.not_modified:
-            if source.kind == "wechat":
-                _backfill_wechat_avatar_cache(conn, source.slug)
-                conn.commit()
-            return SourceFetchSummary(source_id=source.slug)
-        items = parse_feed(source, response.body)
-        if source.kind == "wechat":
-            items = _enrich_wechat_bodies(conn, items)
-        inserted = 0
-        for item in items:
-            inserted += 1 if upsert_item(conn, item) else 0
-        conn.commit()
-        return SourceFetchSummary(source_id=source.slug, fetched=len(items), inserted=inserted)
-    except Exception as exc:
-        conn.rollback()
-        return SourceFetchSummary(source_id=source.slug, error=f"{type(exc).__name__}: {exc}")
+    return _apply_source_feed_result(conn, _fetch_source_feed(source))
 
 
 def _fetch_source_feed(source: SourceConfig) -> _SourceFeedResult:

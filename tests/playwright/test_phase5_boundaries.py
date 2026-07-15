@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, expect
 
@@ -194,7 +194,7 @@ def test_invalid_category_deeplinks_are_normalized(page: Page, base_url: str) ->
     expect(page.locator('[data-channel="x"]').first).to_have_class(re.compile("seg-item-active"))
 
 
-def test_home_product_and_tip_categories_use_semantic_filters(page: Page, base_url: str) -> None:
+def test_home_product_and_tip_categories_request_server_filtered_results(page: Page, base_url: str) -> None:
     _strip_ssr_preload(page)
     items = [
         {
@@ -233,18 +233,32 @@ def test_home_product_and_tip_categories_use_semantic_filters(page: Page, base_u
             "enriched_tags": ["部署/工程", "行业动态"],
         },
     ]
-    page.route(
-        "**/api/v1/curated*",
-        lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(_curated_payload(items))),
-    )
+    items_by_category = {
+        "ai-products": [items[1]],
+        "tip": [items[3], items[4]],
+    }
+    seen_categories: list[str] = []
+
+    def curated_response(route):
+        category = parse_qs(urlparse(route.request.url).query).get("category", ["all"])[0]
+        seen_categories.append(category)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_curated_payload(items_by_category.get(category, items))),
+        )
+
+    page.route("**/api/v1/curated*", curated_response)
 
     page.goto(f"{base_url}/?category=ai-products", wait_until="domcontentloaded")
     expect(page.locator(".timeline-card .item-title")).to_have_text("真实产品更新")
+    assert seen_categories[-1] == "ai-products"
 
     page.goto(f"{base_url}/?category=tip", wait_until="domcontentloaded")
     expect(page.locator(".timeline-card").first).to_be_visible()
     titles = page.locator(".timeline-card .item-title").all_inner_texts()
     assert titles == ["Transformer 实践课程", "部署工程实践"]
+    assert seen_categories[-1] == "tip"
 
 
 def test_home_search_request_keeps_active_category(page: Page, base_url: str) -> None:
@@ -273,10 +287,9 @@ def test_home_search_request_keeps_active_category(page: Page, base_url: str) ->
     assert any("q=Qwen" in url and "category=ai-models" in url for url in seen_urls)
 
 
-def test_home_category_sorts_by_visible_time_and_excludes_inference_only_items(page: Page, base_url: str) -> None:
+def test_home_category_requests_server_filter_and_sorts_by_visible_time(page: Page, base_url: str) -> None:
     _strip_ssr_preload(page)
-    payload = _curated_payload(
-        [
+    items = [
                 {
                     "id": "older-high-score",
                     "source_id": "openai_blog",
@@ -361,20 +374,27 @@ def test_home_category_sorts_by_visible_time_and_excludes_inference_only_items(p
                     "rank": 4,
                     "reasoning": "测试推荐理由。",
                 },
-        ]
-    )
-    page.route(
-        "**/api/v1/curated*",
-        lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(payload)),
-    )
+    ]
+    seen_categories: list[str] = []
+
+    def curated_response(route):
+        category = parse_qs(urlparse(route.request.url).query).get("category", ["all"])[0]
+        seen_categories.append(category)
+        response_items = items[:2] if category == "ai-models" else items
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_curated_payload(response_items)),
+        )
+
+    page.route("**/api/v1/curated*", curated_response)
 
     page.goto(f"{base_url}/?category=ai-models", wait_until="domcontentloaded")
     expect(page.locator(".timeline-card")).to_have_count(2)
+    assert seen_categories[-1] == "ai-models"
 
     titles = page.locator(".timeline-card .item-title").all_inner_texts()
     assert titles == ["较新的低分模型发布", "较早的高分模型发布"]
-    assert "推理优化课程" not in titles
-    assert "Transformer 实践课程" not in titles
 
 
 def test_mobile_closed_sidebar_is_not_in_tab_order(page: Page, base_url: str) -> None:

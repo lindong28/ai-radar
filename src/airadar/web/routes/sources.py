@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from ...presentation.summary import json_loads
 from ..envelope import ok
-from .common import conn_from_request, json_loads
+from .request_db import conn_from_request
 
 router = APIRouter()
 

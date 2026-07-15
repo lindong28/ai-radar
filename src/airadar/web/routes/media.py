@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 
-from .common import image_host_needs_proxy
+from ...presentation.media import image_host_needs_proxy
 
 router = APIRouter()
 

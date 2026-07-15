@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 STATIC = Path("web/static")
@@ -10,6 +11,17 @@ AIHOT_FONT_HREF = (
     "&amp;family=Noto+Serif+SC:wght@400;600;800"
     "&amp;family=Playfair+Display:wght@800&amp;display=swap"
 )
+BACKEND_CATEGORY_TAGS = {
+    "模型发布",
+    "产品更新",
+    "MCP/工具",
+    "行业动态",
+    "安全/对齐",
+    "现象/趋势",
+    "论文/研究",
+    "教程/实践",
+    "部署/工程",
+}
 
 
 def _read(name: str) -> str:
@@ -17,6 +29,31 @@ def _read(name: str) -> str:
     if static_path.exists():
         return static_path.read_text(encoding="utf-8")
     return (TEMPLATES / name).read_text(encoding="utf-8")
+
+
+def _app_import_names(html: str) -> set[str]:
+    matches = re.finditer(
+        r'import\s*\{(?P<names>[^}]+)\}\s*from\s*["\']/app\.js(?:\?[^"\']*)?["\']',
+        html,
+    )
+    imported_names = {
+        name.strip()
+        for match in matches
+        for name in match.group("names").split(",")
+    }
+    assert imported_names, "app.js module import not found"
+    return imported_names
+
+
+def test_app_import_names_collects_multiple_module_imports() -> None:
+    html = """
+    <script type="module">
+      import { initCurated } from "/app.js?v=one";
+      import { initTimeline, paginationState } from '/app.js?v=two';
+    </script>
+    """
+
+    assert _app_import_names(html) == {"initCurated", "initTimeline", "paginationState"}
 
 
 def test_static_pages_have_aihot_mobile_bar_and_no_search_button() -> None:
@@ -70,6 +107,45 @@ def test_app_js_declares_frontend_ux_behaviors() -> None:
     assert "LLM 5 维评分加权后得分" in js
     assert "initNavigation" in js
     assert "#refresh" not in js
+
+
+def test_app_js_has_no_client_side_category_semantics_copy() -> None:
+    js = _read("app.js")
+
+    assert "CATEGORY_TAGS" not in js
+    assert "itemMatchesCategory" not in js
+
+
+def test_app_js_has_no_backend_category_tag_literals_outside_daily_grouping() -> None:
+    js = _read("app.js")
+    marker = "const DAILY_SECTION_DEFS = ["
+    assert js.count(marker) == 1
+    daily_start = js.index(marker)
+    daily_end = js.index("\n];", daily_start) + len("\n];")
+    daily_grouping = js[daily_start:daily_end]
+    non_daily_js = js[:daily_start] + js[daily_end:]
+
+    for tag in BACKEND_CATEGORY_TAGS:
+        assert tag in daily_grouping
+        assert tag not in non_daily_js
+
+
+def test_rollback_pages_only_import_names_exported_by_app_js() -> None:
+    js = _read("app.js")
+    exported_names = set(
+        re.findall(r"^export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", js, re.MULTILINE)
+    )
+
+    imported_names = {
+        page: _app_import_names(_read(page))
+        for page in ("index.html", "all.html")
+    }
+
+    assert imported_names == {
+        "index.html": {"initCurated"},
+        "all.html": {"initTimeline"},
+    }
+    assert set().union(*imported_names.values()) <= exported_names
 
 
 def test_feed_controls_are_url_backed_like_aihot() -> None:

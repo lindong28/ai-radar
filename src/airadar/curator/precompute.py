@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 from .. import db
-from ..web.routes.common import item_summary, json_loads
+from ..presentation.summary import item_summary, json_loads
 
 
 def precompute_curated_summaries(conn: sqlite3.Connection, run_id: str) -> int:

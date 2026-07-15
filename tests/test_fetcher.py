@@ -6,6 +6,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from airadar.db import migrate
 from airadar.fetcher import http_client, runner
 from airadar.fetcher.dedup import FetchedItem, content_hash, upsert_item
@@ -33,6 +35,43 @@ RSS_BYTES = b"""<?xml version="1.0" encoding="UTF-8"?>
 
 def test_default_sources_path_points_to_repo_data_file() -> None:
     assert default_sources_path() == Path(__file__).resolve().parents[1] / "data" / "sources.toml"
+
+
+def test_fetch_source_delegates_to_fetch_then_apply(monkeypatch) -> None:  # noqa: ANN001
+    conn = sqlite3.connect(":memory:")
+    source = SourceConfig(
+        slug="example",
+        name="Example",
+        url="https://example.com/feed.xml",
+        tier="T2",
+    )
+    feed_result = object()
+    expected = runner.SourceFetchSummary(source_id=source.slug, fetched=3, inserted=2)
+    calls: list[tuple[object, ...]] = []
+
+    def fake_fetch_source_feed(received_source: SourceConfig) -> object:
+        calls.append(("fetch", received_source))
+        return feed_result
+
+    def fake_apply_source_feed_result(
+        received_conn: sqlite3.Connection,
+        received_result: object,
+    ) -> runner.SourceFetchSummary:
+        calls.append(("apply", received_conn, received_result))
+        return expected
+
+    monkeypatch.setattr(runner, "_fetch_source_feed", fake_fetch_source_feed)
+    monkeypatch.setattr(runner, "_apply_source_feed_result", fake_apply_source_feed_result)
+    monkeypatch.setattr(
+        runner,
+        "fetch_feed",
+        lambda *args, **kwargs: pytest.fail("fetch_source used the legacy inline fetch path"),
+    )
+
+    actual = runner.fetch_source(conn, source)
+
+    assert actual is expected
+    assert calls == [("fetch", source), ("apply", conn, feed_result)]
 
 
 def test_fetch_all_runs_passive_checkpoint_after_fetch_round(monkeypatch, tmp_path: Path) -> None:  # noqa: ANN001

@@ -22,34 +22,16 @@ from ..site_config import get_site_config
 from .cors import configure_cors
 from .routes import admin, curated, health, items, media, sources, timeline
 from .routes import wechat as wechat_routes
+from .schemas import FeedItem
 
 STATIC_DIR = db.PROJECT_ROOT / "web" / "static"
 TEMPLATES_DIR = db.PROJECT_ROOT / "web" / "templates"
-PRELOAD_ITEM_KEYS = {
-    "id",
-    "source_id",
-    "source_name",
-    "source_kind",
-    "source_homepage_url",
-    "source_icon_url",
-    "author_avatar_url",
-    "tier",
-    "url",
-    "title",
-    "title_zh",
-    "author",
-    "published_at",
-    "fetched_at",
-    "content_preview",
-    "summary_zh",
-    "enriched_tags",
-    "topic_tags",
-    "reasoning",
-    "related_discussions",
-    "media_assets",
-    "weighted_score",
-    "rank",
-}
+PRELOAD_ITEM_KEYS = set(FeedItem.model_fields)
+PRELOAD_ITEM_KEYS.difference_update(
+    name
+    for name, field in FeedItem.model_fields.items()
+    if isinstance(field.json_schema_extra, dict) and field.json_schema_extra.get("preload") is False
+)
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 PREPAINT_ITEM_LIMIT = 12
 WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601"

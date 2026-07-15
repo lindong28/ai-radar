@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 
 from ...ruleset import current_version
 from ..envelope import ok
-from .common import conn_from_request
+from .request_db import conn_from_request
 
 router = APIRouter()
 
