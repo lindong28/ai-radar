@@ -120,6 +120,8 @@ web/templates/          # Jinja2 SSR 页面模板
 └── wechat_detail.html  #   微信文章解读详情页（sanitized markdown HTML）
 ```
 
+仓库级验证工具：`scripts/web_contract_golden.py` 提供可复用的 Web contract capture、manifest 校验、JSON/HTML 比较和 SQLite 逻辑摘要。任务专用请求、adapter、快照与冻结库仅由执行工作区临时持有；任务完成后删除，只有最小且可独立维护的行为契约才提升到测试。使用触发与生命周期见 [Web Contract Golden 验证](references/web-contract-golden.md)。
+
 ## Layers
 
 系统按主职责分三层，另有一个跨层的共享组合模块：
@@ -391,3 +393,4 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | 修改标签词表 | `topics.py`（CONTROLLED_VOCABULARY） |
 | 前端页面修改 | `web/templates/`（`/`、`/all` SSR 首屏）+ `web/static/`（JS/CSS 与静态页面） |
 | 调整微信文章解读 | `interpret/runner.py`、`web/routes/wechat.py`、`web/templates/wechat*.html` |
+| 行为等价的 Web route / presentation / SSR 重构 | `scripts/web_contract_golden.py` + [Web Contract Golden 验证](references/web-contract-golden.md) |

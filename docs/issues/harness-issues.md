@@ -65,3 +65,12 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Impact: a healthy local UI cannot complete an agent-browser smoke test, and increasing the documented timeout does not affect the daemon's effective deadline. Repeated retries can waste unbounded wall-clock and leave product acceptance incomplete.
 - Workaround used: stop after three repeated failures; retain the successful first snapshot/click plus server request evidence, then use fresh golden HTTP comparison, focused Playwright, and static import/export contracts for the remaining product checks. Do not report the browser smoke as passed.
 - Suggested fix: make the daemon honor the configured default timeout for `open`, `batch`, and post-click evaluation; expose the effective timeout and active page/session in diagnostics; make stale-session recovery reset `about:blank` state deterministically.
+
+## H8 — `codeagent-wrapper` can lose a completed review result and delete its only log
+
+- Type: tooling / review-gate reliability
+- Discovered: 2026-07-15, extracting the reusable Web golden harness.
+- Symptom: two Codex review runs read their bounded target files, then stopped emitting progress. Their child processes later exited, the wrapper log under the temporary directory disappeared, and no final verdict reached the caller. Resuming the recorded Codex session eventually recovered a verdict, but required repeated polling and an explicit resume.
+- Impact: a blocking review gate can look permanently active or finish without an auditable result. Because “review unavailable” is not a pass, the main session must spend extra turns distinguishing slow inference from a lost completion.
+- Workaround used: retain the printed session ID, monitor the child process, then call `codeagent-wrapper resume <session_id> ...` in foreground lite mode until a final verdict is returned.
+- Suggested fix: persist the final structured event and log until the caller acknowledges it; emit an explicit terminal status when the child exits; expose last-event time so monitoring can distinguish inference from a stalled or lost review.

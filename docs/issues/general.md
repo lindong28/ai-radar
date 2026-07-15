@@ -275,3 +275,48 @@
   - 2026-07-06 ~20:30 | session `019f3766-5a56-7252-a8b5-64f3f7661586` (phase-1) | backend `codex` | 同上任务中，codex 把一段 `<claude-mem-context>` 运行时 context dump（claude-mem recent-context block + observations 列表，~86 行）粘进了 `AGENTS.md` 项目指令文件。supervisor 发现后指示 revert，codex 用 `git checkout -- AGENTS.md`——**连带丢弃了用户会话前未 commit 的 AGENTS.md 改动（unstaged，不可恢复，supervisor 失误：应精细剥离污染段而非整个 checkout）**。
   - 2026-07-06 ~21:15 | session `019f3766-5a56-7252-a8b5-64f3f7661586` (phase-2 resume) | backend `codex` | phase-2 resume 时**再次**把 `<claude-mem-context>` dump（~86 行，2 处）粘进 AGENTS.md——supervisor `git checkout` 清理（用户改动 phase-1 已丢，无新损失）。**确认系统性问题：同一 session 两次复发**，证明 spawn-prompt 预禁触指令文件是必要的前置约束。
 - Description: codex backend 的 context injection（claude-mem 提供的 recent context）被当作"项目内容"写入版本控制的指令文件。runtime context 是给 agent 读的、非项目持久内容，不该写入 `AGENTS.md`/`CLAUDE.md`。Fix 方向：(1) supervise spawn-prompt 显式提醒"不要修改 AGENTS.md/CLAUDE.md 等项目指令文件，除非 task 明确要求"；(2) supervisor 复核 git diff 时检查指令文件是否被污染；(3) revert 污染时用精细剥离（去掉污染段保留其余），而非 `git checkout` 整个文件——后者会丢失用户预存的未 commit 改动。同族于 [[wrapped agent 为让全量 pytest 绿而扩大 scope]]（都是 agent 在验证压力下的越界行为）。
+
+---
+
+## [open] SSR prepaint 与 hydrated JavaScript 卡片是两套并行 renderer
+
+- Type: refactor
+- Priority: medium
+- Discovered: 2026-07-11 Web / pipeline 结构重构审计
+- Description: 首屏 Jinja/prepaint 与 hydration 后 JavaScript 分别实现 feed 和 WeChat 卡片。字段、点击目标或展示规则只改一侧时，会产生闪烁或前后不一致。Fix 方向：先建立 feed/WeChat 的 SSR 与 hydrated DOM parity 契约，再决定共享模板输出或保留双 renderer。
+
+---
+
+## [open] `web/static/app.js` 承担全部页面行为，缺少页面级边界
+
+- Type: refactor
+- Priority: medium
+- Discovered: 2026-07-11 Web / pipeline 结构重构审计
+- Description: 单文件同时承载共享 DOM/API/date 工具、feed 卡片、分页及 `/`、`/all`、`/wechat`、`/daily`、`/about`、`/item` 初始化，页面级修改需要加载无关上下文。Fix 方向：按共享 core、feed/pagination 和页面 initializer 渐进拆成 ESM，并在过渡期保持现有公开 initializer。
+
+---
+
+## [open] `web/static/style.css` 的页面样式与响应式区段相互交叠
+
+- Type: refactor
+- Priority: medium
+- Discovered: 2026-07-11 Web / pipeline 结构重构审计
+- Description: 全局 shell、feed、daily、WeChat 与多个重叠 breakpoint 共用同一长 cascade，移动端修复容易依赖远距离覆盖顺序。Fix 方向：先统一 breakpoint 结构，再按页面/组件拆分；实施时配套桌面与移动端视觉回归。
+
+---
+
+## [open] `interpret/runner.py` 混合跨仓库 adapter、解析、持久化与编排
+
+- Type: refactor
+- Priority: medium
+- Discovered: 2026-07-11 Web / pipeline 结构重构审计
+- Description: runner 同时负责 ai-assistant 子进程协议、KB/index 查询、结果解析、slug 冲突、DB 写入、usage 记账与 stage loop，容易在清理时破坏 ADR-007 的串行 writeback 与单一 `save_decision` gate。Fix 方向：抽取 client/adapter、typed normalizer、KB lookup 与 repository；顶层编排继续保持串行。
+
+---
+
+## [open] Playwright 服务启动窗口小于大型数据库 migration 时间
+
+- Type: test-infrastructure
+- Priority: medium
+- Discovered: 2026-07-11 Web / pipeline 结构重构最终验证
+- Description: `tests/playwright/conftest.py` 的固定 30 秒 healthz 等待窗口，小于大型冻结数据库执行幂等 migration 003/FTS 重建所需时间，导致整套 Playwright 在 setup 共因失败。临时放宽到 120 秒可启动，但不应永久以大 timeout 掩盖 fixture 成本。Fix 方向：让 Playwright 使用预迁移的小型隔离 DB，或把一次性 migration 明确移出每次服务启动路径。

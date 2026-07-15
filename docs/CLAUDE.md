@@ -39,6 +39,7 @@
 | 文件 | 说明 |
 |---|---|
 | [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源添加流程（已停用，微信摄取现走 Mp2RSS，见 operations/wechat-ingestion.md） |
+| [web-contract-golden.md](references/web-contract-golden.md) | 行为等价 Web 重构的冻结 DB + HTTP golden 使用边界、命令与 re-baseline 规则 |
 
 ### docs/prd/ [Developer]
 
@@ -68,6 +69,7 @@
 | [ux-issues.md](issues/ux-issues.md) | 端到端测试发现的产品 UX 问题（contract 在实际产品中被 broken） |
 | [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时）；append-only queue |
 | [general.md](issues/general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
+| [harness-issues.md](issues/harness-issues.md) | Agent harness、wrapper、hook 或 skill 行为问题 |
 
 ### docs/adr/ [Developer]
 
@@ -144,6 +146,7 @@
 | 遇到报错或"感觉有坑"时 | experiences/（按文件名选 topic） |
 | 做新的架构或 API 设计决策前 | adr/README.md（索引）-> 相关 ADR |
 | 想知道"系统在跑什么 / 谁拉起的 / 怎么自启" | operations/services.md（服务清单总览） |
+| 修改 Web 输出但要求结构变化、行为等价 | references/web-contract-golden.md |
 
 ### 何时写 docs/
 

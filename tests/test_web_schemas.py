@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,13 +16,6 @@ from airadar.web.schemas import (
     TimelineResponse,
     WechatItem,
     WechatListResponse,
-)
-
-GOLDEN_DIR = (
-    Path(__file__).resolve().parents[1]
-    / "plans"
-    / "20260711-refactor-web-pipeline-structure"
-    / "golden"
 )
 
 MODEL_FIELD_SNAPSHOTS = {
@@ -110,9 +101,48 @@ PRELOAD_ITEM_KEY_SNAPSHOT = {
     "rank",
 }
 
+FEED_ITEM_FIXTURE = {
+    "id": "feed-item",
+    "source_id": "source",
+    "source_name": "Source",
+    "source_kind": "rss",
+    "source_homepage_url": "https://example.com",
+    "source_icon_url": "https://example.com/icon.png",
+    "author_avatar_url": "https://example.com/avatar.png",
+    "tier": "T1",
+    "url": "https://example.com/article",
+    "title": "Example article",
+    "title_zh": "示例文章",
+    "author": "Author",
+    "published_at": "2026-07-14T00:00:00Z",
+    "fetched_at": "2026-07-14T00:01:00Z",
+    "content_preview": "Preview",
+    "summary_zh": "摘要",
+    "why_recommend": "推荐理由",
+    "enriched_tags": ["AI"],
+    "topic_tags": ["模型"],
+    "reasoning": "Reasoning",
+    "related_discussions": [{"url": "https://example.com/discussion"}],
+    "media_assets": [{"url": "https://example.com/image.png"}],
+    "content_text": "Full text",
+    "weighted_score": 9.2,
+    "scores": {"relevance": 9.0},
+    "rank": 1,
+    "reason": {"weighted_score": 9.2},
+}
 
-def _golden_json(filename: str) -> Any:
-    return json.loads((GOLDEN_DIR / filename).read_text())
+WECHAT_ITEM_FIXTURE = {
+    "slug": "wechat-item",
+    "title": "微信文章",
+    "abstract": "摘要",
+    "tags": ["AI"],
+    "author": "测试公众号",
+    "avatar_url": "/wechat-icon.svg",
+    "published_at": "2026-07-14T00:00:00Z",
+    "url": "https://mp.weixin.qq.com/s/example",
+    "detail_url": "/wechat/wechat-item",
+    "recommendation": "推荐理由",
+}
 
 
 def test_response_model_field_sets_are_frozen() -> None:
@@ -121,33 +151,96 @@ def test_response_model_field_sets_are_frozen() -> None:
 
 
 @pytest.mark.parametrize(
-    ("pattern", "response_model"),
+    ("response_model", "payload"),
     [
-        ("timeline_*.json", TimelineResponse),
-        ("wechat*.json", WechatListResponse),
+        (
+            TimelineResponse,
+            {"items": [FEED_ITEM_FIXTURE], "next_cursor": None, "total": 1, "page": 1, "limit": 40},
+        ),
+        (
+            CuratedArchiveResponse,
+            {
+                "run_id": None,
+                "ruleset_version": None,
+                "items": [FEED_ITEM_FIXTURE],
+                "date": "2026-07-14",
+                "count": 1,
+                "total": 1,
+                "page": 1,
+                "limit": 40,
+            },
+        ),
+        (
+            CuratedDigestResponse,
+            {
+                "run_id": "20260714T000000Z-example",
+                "ruleset_version": "example",
+                "items": [FEED_ITEM_FIXTURE],
+                "date": "2026-07-14",
+                "count": 1,
+            },
+        ),
+        (
+            WechatListResponse,
+            {"items": [WECHAT_ITEM_FIXTURE], "total": 1, "page": 1, "limit": 50},
+        ),
     ],
 )
-def test_endpoint_golden_responses_validate(
-    pattern: str,
+def test_maintained_response_examples_validate(
     response_model: type[BaseModel],
+    payload: dict[str, object],
 ) -> None:
-    fixtures = sorted(GOLDEN_DIR.glob(pattern))
-    assert fixtures
-    for fixture in fixtures:
-        response_model.model_validate(_golden_json(fixture.name)["data"])
+    response_model.model_validate(payload)
 
 
-def test_curated_golden_responses_validate_both_contracts() -> None:
-    digest_fixtures = {
-        "curated_date_2026-07-14.json",
-        "curated_run_id_20260528T230502Z-5719.json",
-        "curated_run_id_20260714T090059Z-0c35.json",
-    }
-    fixtures = sorted(GOLDEN_DIR.glob("curated*.json"))
-    assert fixtures
-    for fixture in fixtures:
-        response_model = CuratedDigestResponse if fixture.name in digest_fixtures else CuratedArchiveResponse
-        response_model.model_validate(_golden_json(fixture.name)["data"])
+def test_real_feed_routes_match_declared_response_contracts(tmp_path: Path) -> None:
+    db_path = tmp_path / "feed-contract.db"
+    migrate(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            INSERT INTO sources (
+              id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, synced_at
+            )
+            VALUES (
+              'contract-source', 'Contract Source', 'https://example.com/feed.xml', 'T1', 1,
+              'feed', 'https://example.com/', 'https://example.com/icon.png', '{}',
+              '2026-07-14T00:00:00Z'
+            );
+            INSERT INTO items (
+              id, source_id, url, title, author, published_at, fetched_at,
+              content_text, content_hash, extra_json
+            )
+            VALUES (
+              'contract-item', 'contract-source', 'https://example.com/article',
+              'Contract article', 'Author', '2026-07-14T01:00:00Z',
+              '2026-07-14T01:01:00Z', 'Contract body', 'contract-hash', '{}'
+            );
+            INSERT INTO curation_runs (
+              id, ruleset_version, weights_json, threshold,
+              input_eval_ids, output_curated_ids, created_at
+            )
+            VALUES (
+              'contract-run', 'contract.r1', '{}', 6.5, '[]', '["contract-item"]',
+              '2026-07-14T01:02:00Z'
+            );
+            INSERT INTO curated_items (run_id, item_id, weighted_score, rank, reason_json)
+            VALUES ('contract-run', 'contract-item', 8.2, 1, '{}');
+            """
+        )
+
+    client = TestClient(create_app(db_path))
+    contracts = [
+        ("/api/v1/timeline", TimelineResponse),
+        ("/api/v1/curated", CuratedArchiveResponse),
+        ("/api/v1/curated?run_id=contract-run", CuratedDigestResponse),
+    ]
+    for path, response_model in contracts:
+        response = client.get(path)
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["items"]
+        response_model.model_validate(data)
 
 
 def test_historical_precomputed_feed_item_can_omit_author_avatar_url() -> None:
@@ -248,89 +341,12 @@ def test_preload_item_keys_match_the_pre_refactor_snapshot() -> None:
     assert PRELOAD_ITEM_KEYS == PRELOAD_ITEM_KEY_SNAPSHOT
 
 
-@pytest.mark.parametrize(
-    ("ssr_fixture", "expected_item_keys", "is_compact_feed"),
-    [
-        (
-            "ssr_index_preload.json",
-            {
-                "author",
-                "author_avatar_url",
-                "enriched_tags",
-                "fetched_at",
-                "id",
-                "media_assets",
-                "published_at",
-                "rank",
-                "reasoning",
-                "related_discussions",
-                "source_homepage_url",
-                "source_icon_url",
-                "source_id",
-                "source_kind",
-                "source_name",
-                "summary_zh",
-                "tier",
-                "title",
-                "title_zh",
-                "topic_tags",
-                "url",
-                "weighted_score",
-            },
-            True,
-        ),
-        (
-            "ssr_all_preload.json",
-            {
-                "author",
-                "author_avatar_url",
-                "enriched_tags",
-                "fetched_at",
-                "id",
-                "media_assets",
-                "published_at",
-                "rank",
-                "reasoning",
-                "source_homepage_url",
-                "source_icon_url",
-                "source_id",
-                "source_kind",
-                "source_name",
-                "summary_zh",
-                "tier",
-                "title",
-                "title_zh",
-                "topic_tags",
-                "url",
-                "weighted_score",
-            },
-            True,
-        ),
-        (
-            "ssr_wechat_preload.json",
-            {
-                "abstract",
-                "author",
-                "avatar_url",
-                "detail_url",
-                "published_at",
-                "recommendation",
-                "slug",
-                "tags",
-                "title",
-                "url",
-            },
-            False,
-        ),
-    ],
-)
-def test_ssr_preload_matches_the_pre_refactor_golden(
-    ssr_fixture: str,
-    expected_item_keys: set[str],
-    is_compact_feed: bool,
-) -> None:
-    preload = _golden_json(ssr_fixture)
-    actual_item_keys = {key for item in preload["items"] for key in item}
-    assert actual_item_keys == expected_item_keys
-    if is_compact_feed:
-        assert _compact_preload(preload) == preload
+def test_ssr_preload_compacts_the_maintained_feed_contract() -> None:
+    preload = {"items": [FEED_ITEM_FIXTURE], "total": 1, "page": 1, "limit": 40}
+
+    compact = _compact_preload(preload)
+
+    item = compact["items"][0]
+    assert set(item) == PRELOAD_ITEM_KEY_SNAPSHOT - {"content_preview"}
+    assert compact["total"] == 1
+    assert _compact_preload(compact) == compact
