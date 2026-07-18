@@ -18,6 +18,25 @@ from .enrich.runner import run_enrich
 from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
 from .fetcher.runner import fetch_all, refresh_wechat_avatar, reload_sources
 from .interpret.runner import run_interpret
+from .performance.journey_monitor import (
+    CRONTAB_SAMPLE,
+    DEFAULT_ALERT_STATE_PATH,
+    DEFAULT_BROWSER_LOCK_PATH,
+    DEFAULT_EVIDENCE_DIR,
+    DEFAULT_PIPELINE_LOCK_DIR,
+    DEFAULT_SAMPLE_PATH,
+    run_journey_monitor,
+)
+from .performance.remediation import (
+    DEFAULT_REMEDIATION_EVIDENCE_DIR,
+    DEFAULT_REMEDIATION_LOCK_PATH,
+    DEFAULT_REMEDIATION_ROOT,
+    DEFAULT_REMEDIATION_STATE_PATH,
+    DEFAULT_TIMEOUT_SECONDS,
+    REMEDIATION_CRONTAB_SAMPLE,
+    RemediationConfig,
+    remediate_confirmed_incident,
+)
 from .prefilter.runner import run_prefilter
 from .scorer.runner import run_scoring
 
@@ -58,6 +77,13 @@ def _load_item_ids(path: str) -> list[str]:
 def _not_implemented(name: str) -> int:
     print(f"{name}: not implemented")
     return 0
+
+
+def _remediation_timeout(value: str) -> int:
+    timeout = int(value)
+    if not 0 < timeout <= DEFAULT_TIMEOUT_SECONDS:
+        raise argparse.ArgumentTypeError(f"timeout must be between 1 and {DEFAULT_TIMEOUT_SECONDS} seconds")
+    return timeout
 
 
 def _fetch(args: argparse.Namespace) -> int:
@@ -204,10 +230,71 @@ def _eval(args: argparse.Namespace) -> int:
 
 
 def _serve(args: argparse.Namespace) -> int:
-    from .web.app import serve
+    pre_migrated_env = "AI_RADAR_PRE_MIGRATED_DB"
+    previous = os.environ.get(pre_migrated_env)
+    if args.pre_migrated_db:
+        os.environ[pre_migrated_env] = "1"
+    try:
+        from .web.app import serve
 
-    serve(port=args.port, host=args.host)
+        serve(port=args.port, host=args.host)
+    finally:
+        if args.pre_migrated_db:
+            if previous is None:
+                os.environ.pop(pre_migrated_env, None)
+            else:
+                os.environ[pre_migrated_env] = previous
     return 0
+
+
+def _performance_probe(args: argparse.Namespace) -> int:
+    result = run_journey_monitor(
+        origin_url=args.origin_url,
+        public_url=args.public_url,
+        sample_path=Path(args.samples_path),
+        state_path=Path(args.state_path),
+        evidence_dir=Path(args.evidence_dir),
+        pipeline_lock_dir=Path(args.pipeline_lock),
+        browser_lock_path=Path(args.browser_lock),
+        db_path=Path(args.db_path),
+    )
+    print(str(result["scope"]))
+    samples = result.get("samples", [])
+    if isinstance(samples, list):
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            print(
+                f"{sample.get('journey')} vantage={sample.get('vantage')} "
+                f"latency_ms={float(sample.get('value_ms', 0)):.3f} "
+                f"load_class={sample.get('load_class')} provisional=true"
+            )
+    alerts = result.get("alerts", {})
+    sent_count = alerts.get("sent_count", 0) if isinstance(alerts, dict) else 0
+    print(f"stored={len(samples) if isinstance(samples, list) else 0} alerts_sent={sent_count}")
+    return 0
+
+
+def _performance_remediate(args: argparse.Namespace) -> int:
+    result = remediate_confirmed_incident(
+        RemediationConfig(
+            main_checkout=Path(args.main_checkout),
+            alert_state_path=Path(args.alert_state_path),
+            performance_evidence_dir=Path(args.performance_evidence_dir),
+            worker_root=Path(args.worker_root),
+            remediation_state_path=Path(args.remediation_state_path),
+            lock_path=Path(args.lock_path),
+            remediation_evidence_dir=Path(args.remediation_evidence_dir),
+            production_db_path=Path(args.production_db_path),
+            codex_binary=args.codex_binary,
+            timeout_seconds=args.timeout_seconds,
+        )
+    )
+    print(f"status={result['status']}")
+    for key in ("candidate_commit", "worktree", "summary_path", "evidence_path", "reason"):
+        if key in result:
+            print(f"{key}={result[key]}")
+    return 0 if result["status"] != "failed" else 1
 
 
 def _format_alert_send_status(raw: object) -> str | None:
@@ -263,22 +350,25 @@ def _admin(args: argparse.Namespace) -> int:
         return _curate(args)
     if args.admin_command == "alert-check":
         signals = collect_alert_signals()
-        result = run_alert_state_machine(signals, state_path=args.state_path)
+        alert_result = run_alert_state_machine(signals, state_path=args.state_path)
         # One timestamp per run so the log is forensically usable (when did a
         # rule fire, how long it lasted, correlation with deploys).
         stamp = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S%z")
         emit = lambda line: print(f"[{stamp}] {line}")  # noqa: E731
-        ruleset = result.get("ruleset", [])
+        ruleset = alert_result.get("ruleset", [])
         if not isinstance(ruleset, list):
             ruleset = []
-        emit(f"alert-check ruleset={{{','.join(str(rule) for rule in ruleset)}}} sent={result.get('sent_count', 0)}")
-        sent = result.get("sent", [])
+        emit(
+            f"alert-check ruleset={{{','.join(str(rule) for rule in ruleset)}}} "
+            f"sent={alert_result.get('sent_count', 0)}"
+        )
+        sent = alert_result.get("sent", [])
         if isinstance(sent, list):
             for raw_sent in sent:
                 line = _format_alert_send_status(raw_sent)
                 if line:
                     emit(line)
-        results = result.get("results", [])
+        results = alert_result.get("results", [])
         if not isinstance(results, list):
             results = []
         for raw in results:
@@ -340,6 +430,42 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--pre-migrated-db", action="store_true", help=argparse.SUPPRESS)
+
+    performance_probe = subparsers.add_parser(
+        "performance-probe",
+        epilog=f"crontab example: {CRONTAB_SAMPLE}",
+    )
+    performance_probe.add_argument("--origin-url", default="http://127.0.0.1:8000")
+    performance_probe.add_argument("--public-url", default="https://aiplanet.live")
+    performance_probe.add_argument("--samples-path", default=str(DEFAULT_SAMPLE_PATH))
+    performance_probe.add_argument("--state-path", default=str(DEFAULT_ALERT_STATE_PATH))
+    performance_probe.add_argument("--evidence-dir", default=str(DEFAULT_EVIDENCE_DIR))
+    performance_probe.add_argument("--pipeline-lock", default=str(DEFAULT_PIPELINE_LOCK_DIR))
+    performance_probe.add_argument("--browser-lock", default=str(DEFAULT_BROWSER_LOCK_PATH))
+    performance_probe.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
+
+    performance_remediate = subparsers.add_parser(
+        "performance-remediate",
+        epilog=f"crontab example: {REMEDIATION_CRONTAB_SAMPLE}",
+    )
+    performance_remediate.add_argument("--main-checkout", default=str(db.PROJECT_ROOT))
+    performance_remediate.add_argument("--alert-state-path", default=str(DEFAULT_ALERT_STATE_PATH))
+    performance_remediate.add_argument("--performance-evidence-dir", default=str(DEFAULT_EVIDENCE_DIR))
+    performance_remediate.add_argument("--worker-root", default=str(DEFAULT_REMEDIATION_ROOT / "worktrees"))
+    performance_remediate.add_argument("--remediation-state-path", default=str(DEFAULT_REMEDIATION_STATE_PATH))
+    performance_remediate.add_argument("--lock-path", default=str(DEFAULT_REMEDIATION_LOCK_PATH))
+    performance_remediate.add_argument(
+        "--remediation-evidence-dir",
+        default=str(DEFAULT_REMEDIATION_EVIDENCE_DIR),
+    )
+    performance_remediate.add_argument("--production-db-path", default=str(db.DEFAULT_DB_PATH))
+    performance_remediate.add_argument("--codex-binary", default="codex")
+    performance_remediate.add_argument(
+        "--timeout-seconds",
+        type=_remediation_timeout,
+        default=DEFAULT_TIMEOUT_SECONDS,
+    )
 
     admin = subparsers.add_parser("admin")
     admin_subparsers = admin.add_subparsers(dest="admin_command", required=True)
@@ -392,6 +518,10 @@ def main() -> None:
         raise SystemExit(_eval(args))
     if args.command == "serve":
         raise SystemExit(_serve(args))
+    if args.command == "performance-probe":
+        raise SystemExit(_performance_probe(args))
+    if args.command == "performance-remediate":
+        raise SystemExit(_performance_remediate(args))
     if args.command == "admin":
         raise SystemExit(_admin(args))
     raise SystemExit(_not_implemented(args.command))

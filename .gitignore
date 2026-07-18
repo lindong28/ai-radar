@@ -30,3 +30,5 @@ deploy/wewe-rss/
 # Runtime logs
 logs/
 
+# Execution-plan workspace (audit trail is promoted to docs/plans/ after completion)
+/plans/

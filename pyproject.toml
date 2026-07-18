@@ -52,6 +52,7 @@ strict_optional = false
 pythonpath = ["src"]
 markers = [
     "integration: tests that hit external services",
+    "performance: deterministic production-shape performance tests",
 ]
 
 [tool.pyright]

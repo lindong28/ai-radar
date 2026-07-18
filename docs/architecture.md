@@ -20,7 +20,7 @@ src/airadar/
 ├── stage_common.py     # Pipeline stage 共享原语（时间、ProviderItem、evaluation 写入）
 ├── topics.py           # 受控标签词表 + 确定性标签规则
 ├── wechat_text.py      # 微信标题文本归一化
-├── migrations/         # SQL 迁移脚本（001-012），幂等执行
+├── migrations/         # SQL 迁移脚本（001-014），幂等执行
 │
 ├── sources/            # 信源管理
 │   ├── loader.py       #   解析 data/sources.toml -> SourceConfig
@@ -69,6 +69,11 @@ src/airadar/
 │
 ├── interpret/          # 阶段 5：微信公众号文章解读
 │   └── runner.py       #   调 ai-assistant summarize-article，写 wechat_interpretations + KB
+│
+├── performance/        # 用户旅程性能监控与候选修复
+│   ├── browser_probe.py #  Chromium 四旅程测量
+│   ├── journey_monitor.py # 样本、idle/busy 分类、PERF:* 规则与 14 天保留
+│   └── remediation.py  #   fail-closed 隔离 worktree candidate worker
 │
 ├── eval/               # 质量评估（与 AIHOT 对比）
 │   ├── judge.py        #   run_eval 主流程 + LLM judge + 报告生成
@@ -210,6 +215,12 @@ data/sources.toml
 
 每个阶段只处理尚未完成对应评估的新条目。`pipeline.sh` 按顺序调度全部阶段，`interpret` 位于最后且 preflight 缺 ai-assistant 依赖时跳过，不阻断前置抓取/精选。
 
+## Performance Monitoring and Remediation
+
+`performance-probe` 是 CLI 入口层下的只读浏览器探针：依次从同机 origin 与同机 public 测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定，按 `.pipeline.lock/pid` 把样本分为 idle、busy 或 unknown。`performance/journey_monitor.py` 将样本和 `PERF:*` 告警状态写入 `logs/performance/`，idle/busy 独立窗口判定，unknown 不进入合规窗口；样本和诊断证据保留 14 天。两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
+
+confirmed `PERF:*` incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
+
 ## Database
 
 主业务 SQLite 数据库路径为 `data/radar.db`（可通过 `AI_RADAR_DB` 环境变量覆盖）。LLM token 用量写入独立 SQLite 文件 `data/llm_usage.db`（可通过 `AI_RADAR_LLM_USAGE_DB` 覆盖），避免 prefilter/score/enrich 的 per-call usage 写入与主库 pipeline/serve 写锁竞争。两者均由 `db.get_conn()` 开启 WAL 模式、`busy_timeout=5000`。
@@ -324,7 +335,7 @@ SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"
 
 **Timeline（`/api/v1/timeline`）**：返回真实总数 COUNT（非 ADR-004 时期的前向估算）。计数与 rows 查询是**两套独立 SQL**：rows 用 EXISTS-per-row 子句判定每条 item 的最新 prefilter/scoring 评估，计数用 `latest_prefilter` / `latest_scoring` CTE + JOIN 的集合公式（`_count_timeline_items_with_prefilter()`），避免 per-row 子查询随数据量退化——改 timeline 过滤逻辑时两处需同步。计数缓存数据版本为 `_timeline_data_version()`（最新 curation_run id/ruleset、items 行数与 max rowid、max eval id）。CTE 计数依赖 migration `010` 的 `item_evaluations(stage,error,item_id,id DESC)` 索引。
 
-**精选归档（`/api/v1/curated` 无 `run_id`）**：跨 run 去重的累积归档——`curated_archive.py` 的 `_latest_curated_join()` 用 `c.run_id = (SELECT MAX(run_id) FROM curated_items WHERE item_id=i.id)` 相关子查询，每个 item 只保留其最近一次被精选的元数据。真实计数走 `_count_archive_items()` + `_cached_archive_total()`，数据版本为 `_curated_data_version()`（latest run_id、curated_items 计数/max rowid、items 计数/max rowid、max eval id）。归档每页用 `_compute_archive_page()` **现算 item_summary**（不依赖 `summary_json`——预计算只覆盖约 30%），enrichment 一次 `LEFT JOIN` 取出，关联讨论按页 `_batch_related_discussions()` 批量正/反查（`items_fts` 反查）。去重子查询依赖 migration `011` 的 `idx_curated_items_item_run(item_id, run_id)`。仅带 `date` 时仍走 `curated_archive.py` 的按日跨 run 归档（`/daily` 复用）；带 `run_id` 时才进 `curated_digest.py` 的单轮 digest，可再用 `date` 限定该轮内日期。
+**精选归档（`/api/v1/curated` 无 `run_id`）**：跨 run 去重的累积归档——`curated_archive.py` 的 `_latest_curated_join()` 用 `c.run_id = (SELECT MAX(run_id) FROM curated_items WHERE item_id=i.id)` 相关子查询，每个 item 只保留其最近一次被精选的元数据。真实计数走 `_count_archive_items()` + `_cached_archive_total()`，数据版本由 migration `013` 的 `archive_cache_generations` 双计数器提供：归档成员变化 bump `archive_generation`，影响分类的 enrich 变化 bump `category_generation`；migration `014` 进一步让同一 item 的后续 curate run 不再把非成员变化误判为失效。归档每页用 `_compute_archive_page()` **现算 item_summary**（不依赖 `summary_json`——预计算只覆盖约 30%），enrichment 一次 `LEFT JOIN` 取出，关联讨论按页 `_batch_related_discussions()` 批量正/反查（`items_fts` 反查）。去重子查询依赖 migration `011` 的 `idx_curated_items_item_run(item_id, run_id)`。仅带 `date` 时仍走 `curated_archive.py` 的按日跨 run 归档（`/daily` 复用）；带 `run_id` 时才进 `curated_digest.py` 的单轮 digest，可再用 `date` 限定该轮内日期。
 
 ## Key Abstractions
 

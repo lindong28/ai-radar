@@ -134,6 +134,16 @@ def test_admin_metrics_allows_cloudflare_header_from_loopback(tmp_path: Path, mo
     assert response.json()["success"] is True
 
 
+def test_public_response_exposes_machine_readable_server_timing(tmp_path: Path) -> None:
+    app = create_app(_seed_admin_db(tmp_path))
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["Server-Timing"].startswith("app;dur=")
+
+
 def test_admin_page_renders_four_dashboard_sections(tmp_path: Path) -> None:
     app = create_app(_seed_admin_db(tmp_path))
     app.state.pipeline_log_dir = str(tmp_path / "logs")
@@ -147,6 +157,25 @@ def test_admin_page_renders_four_dashboard_sections(tmp_path: Path) -> None:
     assert "文章摄取" in response.text
     assert "Pipeline 阶段健康" in response.text
     assert "当前告警" in response.text
+    assert "公开页面性能" in response.text
+
+
+def test_admin_performance_route_is_read_only_shared_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {"rows": [{"journey": "homepage.first_card", "is_green": True}], "completeness": True}
+    monkeypatch.setattr("airadar.web.routes.admin.collect_performance_status", lambda: expected)
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app)
+
+    assert client.get("/api/v1/admin/performance").status_code == 403
+    response = client.get("/api/v1/admin/performance", headers={"Cf-Access-Jwt-Assertion": "test"})
+
+    assert response.status_code == 200
+    assert response.json()["data"] == expected
 
 
 def test_admin_head_probe_uses_same_cloudflare_access_guard(tmp_path: Path) -> None:

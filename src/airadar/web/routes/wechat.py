@@ -173,7 +173,7 @@ def list_wechat_items(
 def get_wechat_detail(conn: sqlite3.Connection, slug: str) -> dict[str, Any]:
     row = conn.execute(
         """
-        SELECT wi.slug, wi.recommendation, wi.abstract, wi.tags_json, wi.summary_md,
+        SELECT i.id, wi.slug, wi.recommendation, wi.abstract, wi.tags_json, wi.summary_md,
                i.title, i.author, i.published_at, i.url,
                s.name AS source_name,
                wa.avatar_url
@@ -191,6 +191,7 @@ def get_wechat_detail(conn: sqlite3.Connection, slug: str) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="wechat interpretation not found")
     item = _item_from_row(row)
+    item["id"] = row["id"]
     item["summary_md"] = row["summary_md"]
     item["summary_html"] = render_summary_html(row["summary_md"])
     return item

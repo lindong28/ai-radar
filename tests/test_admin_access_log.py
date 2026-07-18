@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from airadar.admin.access_log import aggregate_access_log, parse_access_log_line
+from airadar.admin.access_log import AccessLogEntry, aggregate_access_log, is_bot_request, parse_access_log_line
 
 
 def test_parse_access_log_line_strips_public_ipv4_zero_port() -> None:
@@ -58,6 +58,42 @@ def test_parse_access_log_line_accepts_uvicorn_launchd_timestamp_format() -> Non
     assert entry.timestamp is not None
     assert entry.timestamp.isoformat() == "2026-06-02T08:22:26+08:00"
     assert entry.ip == "127.0.0.1"
+
+
+def test_parse_access_log_line_accepts_machine_readable_duration() -> None:
+    line = (
+        '2026-06-02T08:00:00+08:00 INFO:     203.0.113.9:0 - '
+        '"GET /wechat/fixture-slug HTTP/1.1" 200 OK duration_ms=12.75 "Mozilla/5.0"'
+    )
+
+    entry = parse_access_log_line(line)
+
+    assert entry is not None
+    assert entry.duration_ms == 12.75
+
+
+def test_wechat_journey_paths_are_public_metrics_paths() -> None:
+    for path in ("/wechat", "/api/v1/wechat?page=2", "/wechat/fixture-slug"):
+        entry = AccessLogEntry(ip="203.0.113.9", method="GET", path=path, status=200)
+        assert is_bot_request(entry) is False
+
+
+def test_wechat_api_route_matching_is_segment_aware() -> None:
+    secret = AccessLogEntry(ip="203.0.113.9", method="GET", path="/api/v1/wechat-secret", status=200)
+
+    assert is_bot_request(secret) is True
+
+
+def test_unwired_public_timing_records_are_ignored() -> None:
+    lines = [
+        'INFO:     203.0.113.9:0 - "GET /wechat HTTP/1.1" 200 OK "Mozilla/5.0"',
+        "INFO airadar.public-path: method=GET path=/wechat status=200 duration_ms=12.5",
+    ]
+
+    summary = aggregate_access_log(lines)
+
+    assert summary.pv == 1
+    assert summary.path_duration_ms == {}
 
 
 def test_aggregate_access_log_filters_bots_scanners_and_static_assets() -> None:

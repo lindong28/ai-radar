@@ -6,7 +6,7 @@
         {% endif %}
         <div class="timeline-entry">
           <div class="timeline-time"><time datetime="{{ item.iso_datetime }}" title="{{ item.date_bucket }}">{{ item.time_label }}</time><span></span></div>
-          <article class="item-row timeline-card{% if item.is_x %} x-card{% endif %}{% if item.clamp_summary %} clamped-card{% endif %}" data-source-id="{{ item.source_id }}" data-published-date="{{ item.date_bucket }}" data-published-at="{{ item.iso_datetime }}">
+          <article class="item-row timeline-card{% if item.is_x %} x-card{% endif %}{% if item.clamp_summary %} clamped-card{% endif %}" data-item-id="{{ item.item_id }}" data-source-id="{{ item.source_id }}" data-published-date="{{ item.date_bucket }}" data-published-at="{{ item.iso_datetime }}">
             <div class="card-topline">
               <div class="source-line">
                 <a class="source-link" href="{{ item.source_homepage_url }}" target="_blank" rel="noopener noreferrer">

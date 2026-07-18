@@ -1,0 +1,434 @@
+schema_version = 1
+
+[project]
+id = "ai-radar"
+owner = "ai-radar"
+
+[protocol]
+required_major = 1
+
+[scheduler]
+quick_cadence_seconds = 300
+browser_cadence_seconds = 3600
+window_seconds = 86400
+quick_minimum_samples = 12
+browser_minimum_samples = 6
+round_deadline_seconds = 240
+project_concurrency = 2
+browser_concurrency = 1
+
+[adapter]
+executable = "performance-adapter"
+capability = "observation.v1"
+executable_sha256 = "9bcb9395c5830d023c0ecf32d18f1488fd58c7a3071cc9171cfaa1657fe17874"
+
+[remediation]
+enabled = false
+
+[engineering_evaluation]
+percentile_estimator = "nearest-rank"
+warm_samples = 20
+
+[[engineering_metrics]]
+id = "homepage_ssr"
+unit = "ms"
+display_unit = "ms"
+median_budget_ms = 500
+p95_budget_ms = 1000
+
+[[engineering_metrics]]
+id = "curated_api"
+unit = "ms"
+display_unit = "ms"
+median_budget_ms = 500
+p95_budget_ms = 1000
+
+[[engineering_metrics]]
+id = "wechat_api"
+unit = "ms"
+display_unit = "ms"
+median_budget_ms = 300
+
+[[engineering_metrics]]
+id = "wechat_ssr"
+unit = "ms"
+display_unit = "ms"
+median_budget_ms = 300
+
+# Browser journeys use isolated contexts. Remote providers remain schema-only.
+[[journeys]]
+id = "homepage.first_card"
+target = "homepage"
+probe = "browser"
+hard_timeout_seconds = 20
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "east_asia"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "us"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+[[journeys.vantages]]
+id = "europe"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+
+[[journeys]]
+id = "wechat.list.first_card"
+target = "wechat_list"
+probe = "browser"
+hard_timeout_seconds = 20
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "east_asia"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "us"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+[[journeys.vantages]]
+id = "europe"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+
+[[journeys]]
+id = "wechat.detail.readable"
+target = "wechat_detail"
+probe = "browser"
+hard_timeout_seconds = 20
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "east_asia"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 2000
+p95_budget_ms = 3000
+[[journeys.vantages]]
+id = "us"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+[[journeys.vantages]]
+id = "europe"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+
+[[journeys]]
+id = "wechat.pagination.settle"
+target = "wechat_pagination"
+probe = "browser"
+hard_timeout_seconds = 20
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 1000
+p95_budget_ms = 1500
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 1000
+p95_budget_ms = 1500
+[[journeys.vantages]]
+id = "east_asia"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p75_budget_ms = 1000
+p95_budget_ms = 1500
+[[journeys.vantages]]
+id = "us"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+[[journeys.vantages]]
+id = "europe"
+provider = "reserved_remote"
+enabled = false
+provisional = false
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "duration"
+unit = "ms"
+display_unit = "s"
+p95_budget_ms = 5000
+
+# Quick HTTP components use the same tracked budgets and both same-host vantages.
+[[journeys]]
+id = "homepage.http_ttfb"
+target = "homepage_http"
+probe = "quick"
+hard_timeout_seconds = 5
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 500
+p95_budget_ms = 1000
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 500
+p95_budget_ms = 1000
+
+[[journeys]]
+id = "wechat.list.http_ttfb"
+target = "wechat_list_http"
+probe = "quick"
+hard_timeout_seconds = 5
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 300
+p95_budget_ms = 1000
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 300
+p95_budget_ms = 1000
+
+[[journeys]]
+id = "wechat.detail.http_ttfb"
+target = "wechat_detail_http"
+probe = "quick"
+hard_timeout_seconds = 5
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 300
+p95_budget_ms = 1000
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 300
+p95_budget_ms = 1000
+
+[[journeys]]
+id = "wechat.pagination.http_ttfb"
+target = "wechat_pagination_http"
+probe = "quick"
+hard_timeout_seconds = 5
+[[journeys.vantages]]
+id = "same_host_origin"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 300
+p95_budget_ms = 1000
+[[journeys.vantages]]
+id = "same_host_public"
+provider = "synthetic"
+enabled = true
+provisional = true
+allowed_load_classes = ["idle", "busy", "unknown"]
+[[journeys.vantages.metrics]]
+id = "ttfb"
+unit = "ms"
+display_unit = "ms"
+p75_budget_ms = 300
+p95_budget_ms = 1000

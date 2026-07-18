@@ -10,6 +10,8 @@
 - LLM 用量 API：`https://${AI_RADAR_SITE_DOMAIN}/api/v1/admin/usage`
 - 本地访问（需显式开启）：`AI_RADAR_ADMIN_ALLOW_LOCAL=1` 后 `http://127.0.0.1:8000/admin`
 - Alert 命令：`./run.sh admin alert-check`
+- 用户旅程探针：`./run.sh performance-probe`
+- 性能候选修复 CLI（当前禁用，启用 gate 见下）：`./run.sh performance-remediate --help`
 
 `/admin` 和 `/admin/usage` 是运维面板，不是公开页面，也不挂公开导航。公网访问必须通过 Cloudflare Access。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**——仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行，便于部署验证和故障排查；生产 serve 不设该变量，origin 仅认 Cloudflare Access 的 `Cf-Access-Jwt-Assertion`（存在性校验，验签为后续增强）。
 
@@ -41,6 +43,61 @@ AI_RADAR_LLM_PRICING_JSON='{"deepseek-v4-pro":{"input_per_million_tokens_usd":0.
 | A4 | 文章摄取骤降 | fetch 失败率高，**或**今日 items 增量低于**按当日已过时间缩放的**基线（`daily_inserted_floor` 按当日已过分钟 / 1440 缩放，避免清晨累积未满时假阳） | 查 RSS / X(fedi) / 微信 Mp2RSS 源可用性、`./run.sh fetch` 输出 |
 
 告警状态存储在 `data/alert-state.json`。同一规则 firing 后有 30 分钟冷却；恢复时发送 resolved。
+
+## 用户旅程性能监控
+
+`performance-probe` 用 Chromium 测量四条用户可感知旅程，并同时访问本机 origin 与经公网 tunnel 回到本站的 public URL。两个 vantage 都从部署主机发起，因此报告固定标为 **same-host provisional; not a regional SLO**，不能据此宣称 East Asia 或其他区域 SLO 达标。
+
+| `PERF:*` 旅程 | P75 预算 | P95 预算 |
+|---|---:|---:|
+| `homepage.first_card` | 2000ms | 3000ms |
+| `wechat.list.first_card` | 2000ms | 3000ms |
+| `wechat.detail.readable` | 2000ms | 3000ms |
+| `wechat.pagination.settle` | 1000ms | 1500ms |
+
+规则 key 为 `PERF:<journey>:<vantage>:<load_class>`。探针在每条旅程测量前后读取 `.pipeline.lock/pid`：两次都确认同一个运行中 pipeline 时记为 `busy`，两次都无锁时记为 `idle`，死 PID、坏锁或测量期间状态变化记为 `unknown`。idle 与 busy 独立评估，unknown 只留样本、不进入合规窗口。
+
+每个规则先积累 20 个样本，再用 nearest-rank P75/P95 评估最近窗口；P75/P95 任一超预算或窗口含 hard failure 都算该窗口违规，最近 3 个逐样本前进窗口都违规才进入 firing。按建议的每小时 cadence，且同一 `vantage × load_class` 每小时都恰好取得一个有效样本时，从零样本到 confirmed firing 的理论最短时间约 22 小时（20 个 warm samples + 2 个前进窗口）。idle/busy 分流或 unknown 样本会继续拉长确认时间，因此 22 小时不是检测延迟上界，更不能按分钟级告警理解。
+
+| 资产 | 默认路径 | 保留策略 |
+|---|---|---|
+| 旅程样本 | `logs/performance/journey-samples.jsonl` | 每次写入裁剪 14 天前样本 |
+| `PERF:*` 状态 | `logs/performance/alert-state.json` | firing / resolved、窗口 streak 与冷却状态 |
+| 性能诊断证据 | `logs/performance/evidence/` | 每次写入清理 14 天前 JSON 证据 |
+| remediation 状态/锁 | `logs/performance/remediation-state.json`、`logs/performance/remediation.lock` | 防止同一 firing episode 重复处理或并发启动 |
+| remediation 证据 | `logs/performance/remediation-evidence/` | worker 成功、失败与边界拒绝记录 |
+
+### 安装每小时调度
+
+先用 `--help` 核对当前版本内置的 cron 样例，再手工冒烟：
+
+```bash
+./run.sh performance-probe --help
+./run.sh performance-remediate --help
+./run.sh performance-probe
+```
+
+当前 U4 验收已确认 homepage 正常渲染也会被误标 `hard_failure=true`。这个缺陷会在成熟窗口产生假 firing，因此**现在只安装 probe，不启用 remediation cron**。下面命令通过 marker 替换旧 probe 行，重复执行保持幂等，并为 cron 显式设置 `uv` / `codex` 所需 PATH：
+
+```bash
+repo=$PWD
+{ crontab -l 2>/dev/null | sed '/# ai-radar-performance-probe$/d'
+  printf '17 * * * * cd "%s" && PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-probe >> logs/performance-probe-cron.log 2>&1 # ai-radar-performance-probe\n' "$repo"
+} | crontab -
+```
+
+修复 homepage expectation/browser ID 数量口径、用手工 probe 确认 homepage `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing 后，才先手工运行一次 remediation，再安装排在 probe 之后的 cron：
+
+```bash
+./run.sh performance-remediate
+
+repo=$PWD
+{ crontab -l 2>/dev/null | sed '/# ai-radar-performance-remediate$/d'
+  printf '25 * * * * cd "%s" && PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-remediate >> logs/performance-remediate-cron.log 2>&1 # ai-radar-performance-remediate\n' "$repo"
+} | crontab -
+```
+
+`performance-remediate` 读取状态机标为 confirmed 的 `PERF:*` incident；它不会判断上游探针的 hard failure 是否为假阳性，所以当前 homepage 缺陷关闭前必须保持手工执行与 cron 全部 disabled。worker 以 nonblocking lock 保证单 active，单次最长 3600 秒；Codex 固定使用 `--ignore-user-config --sandbox workspace-write` 和 `approval_policy="never"`，只允许隔离 worktree 写入。worker 不获得 push、deploy、launchctl 或生产数据库写入口；任何 preflight 无法证明边界时 fail closed、告警并留证。成功结果是 worktree 内的 detached 本地 candidate commit 和摘要，仍需站长审阅与显式授权后才能进入部署流程。
 
 ## `im-notify` 飞书告警通道
 
@@ -124,7 +181,9 @@ origin_fake_header_page=200
 ```bash
 ./status.sh serve tunnel pipeline alert
 ./run.sh admin alert-check
+./run.sh performance-probe
 tail -n 50 logs/serve-access.log
 tail -n 50 logs/alert-check.log
 tail -n 50 logs/alert-check.err.log
+tail -n 8 logs/performance/journey-samples.jsonl
 ```

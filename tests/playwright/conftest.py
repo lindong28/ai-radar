@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
+from airadar import db
 from airadar.db import resolve_db_path
 
 AI_RADAR_ROOT = Path(__file__).resolve().parents[2]
@@ -41,26 +42,64 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
     raise TimeoutError(f"server did not become healthy: {last_error!r}")
 
 
+def _prepare_session_db(source: Path, destination: Path) -> None:
+    source = source.resolve()
+    destination = destination.resolve()
+    if source == destination:
+        raise ValueError("Playwright session DB must not be the source database")
+    if not source.is_file():
+        raise FileNotFoundError(f"Playwright source database does not exist: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True) as source_connection:
+        with sqlite3.connect(destination) as destination_connection:
+            source_connection.backup(destination_connection)
+    db.migrate(destination)
+
+
+def _serve_environment(session_db: Path) -> dict[str, str]:
+    return {
+        **os.environ,
+        "AI_RADAR_DB": str(session_db.resolve()),
+        "TZ": "Asia/Shanghai",
+    }
+
+
 @pytest.fixture(scope="session")
-def base_url() -> Generator[str, None, None]:
+def playwright_db_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    session_db = tmp_path_factory.mktemp("playwright") / "radar.db"
+    _prepare_session_db(resolve_db_path(), session_db)
+    return session_db
+
+
+@pytest.fixture(scope="session")
+def base_url(playwright_db_path: Path) -> Generator[str, None, None]:
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
     process = subprocess.Popen(
-        [str(AI_RADAR_ROOT / "run.sh"), "serve", "--port", str(port)],
+        [
+            str(AI_RADAR_ROOT / "run.sh"),
+            "serve",
+            "--pre-migrated-db",
+            "--port",
+            str(port),
+        ],
         cwd=AI_RADAR_ROOT,
-        env={**os.environ, "TZ": "Asia/Shanghai"},
+        env=_serve_environment(playwright_db_path),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    _wait_for_health(url, process)
-    yield url
-    process.terminate()
     try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
+        _wait_for_health(url, process)
+        yield url
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
 
 
 @pytest.fixture(scope="session")
@@ -86,8 +125,8 @@ def source_homepages() -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def historical_date() -> str:
-    with sqlite3.connect(resolve_db_path()) as conn:
+def historical_date(playwright_db_path: Path) -> str:
+    with sqlite3.connect(playwright_db_path) as conn:
         row = conn.execute(
             """
             SELECT date(datetime(i.published_at, '+08:00')) AS day, COUNT(*) AS count

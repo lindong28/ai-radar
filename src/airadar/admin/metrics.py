@@ -288,7 +288,11 @@ def collect_metrics(
     start, end = _today_bounds(current)
     log_dir = Path(pipeline_log_dir) if pipeline_log_dir is not None else db.PROJECT_ROOT / "logs"
     if access_log_paths is None:
-        access_paths = [db.PROJECT_ROOT / "logs" / "serve-access.log", Path("/tmp/ai-radar-serve.log")]
+        access_paths = [
+            db.PROJECT_ROOT / "logs" / "serve-access.log",
+            db.PROJECT_ROOT / "logs" / "serve-access.err.log",
+            Path("/tmp/ai-radar-serve.log"),
+        ]
     else:
         access_paths = [Path(path) for path in access_log_paths]
 

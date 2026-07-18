@@ -11,6 +11,7 @@ ACCESS_LOG_RE = re.compile(
     r'^(?:(?P<timestamp>\d{4}-\d{2}-\d{2}[T ][^\s]+)\s+)?\S+:\s+(?P<client>.+?)\s+-\s+"(?P<method>[A-Z]+)\s+(?P<path>\S+)\s+HTTP/(?P<http_version>[^"]+)"\s+(?P<status>\d{3})(?:\s+(?P<tail>.*))?$'
 )
 USER_AGENT_TAIL_RE = re.compile(r'.*"(?P<user_agent>[^"]*)"\s*$')
+DURATION_TAIL_RE = re.compile(r"(?:^|\s)duration_ms=(?P<duration>\d+(?:\.\d+)?)")
 BOT_USER_AGENT_RE = re.compile(r"(bot|crawler|spider|slurp|bytespider|headless|monitoring)", re.IGNORECASE)
 BOT_PATH_PREFIXES = (
     "/.env",
@@ -37,8 +38,8 @@ STATIC_SUFFIXES = (
     ".woff2",
     ".map",
 )
-PUBLIC_PATHS = {"/", "/all", "/about", "/api/v1/curated", "/api/v1/timeline", "/api/v1/sources", "/api/v1/healthz"}
-PUBLIC_PATH_PREFIXES = ("/daily", "/api/v1/items/")
+PUBLIC_PATHS = {"/", "/all", "/about", "/wechat", "/api/v1/curated", "/api/v1/timeline", "/api/v1/sources", "/api/v1/healthz", "/api/v1/wechat"}
+PUBLIC_PATH_PREFIXES = ("/daily", "/wechat/", "/api/v1/items/")
 SCANNER_PATH_TOKENS = (
     "/.env",
     "/.git",
@@ -64,6 +65,7 @@ class AccessLogEntry:
     status: int
     user_agent: str | None = None
     timestamp: datetime | None = None
+    duration_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,7 @@ class AccessLogSummary:
     top_pages: list[tuple[str, int]] = field(default_factory=list)
     status_counts: dict[int, int] = field(default_factory=dict)
     status_class_counts: dict[str, int] = field(default_factory=dict)
+    path_duration_ms: dict[str, list[float]] = field(default_factory=dict)
 
 
 def strip_client_port(client: str) -> str:
@@ -91,6 +94,7 @@ def parse_access_log_line(line: str) -> AccessLogEntry | None:
         return None
     tail = match.group("tail") or ""
     user_agent_match = USER_AGENT_TAIL_RE.match(tail)
+    duration_match = DURATION_TAIL_RE.search(tail)
     raw_timestamp = match.group("timestamp")
     return AccessLogEntry(
         ip=strip_client_port(match.group("client")),
@@ -99,6 +103,7 @@ def parse_access_log_line(line: str) -> AccessLogEntry | None:
         status=int(match.group("status")),
         user_agent=user_agent_match.group("user_agent") if user_agent_match else None,
         timestamp=datetime.fromisoformat(raw_timestamp) if raw_timestamp else None,
+        duration_ms=float(duration_match.group("duration")) if duration_match else None,
     )
 
 
@@ -133,6 +138,7 @@ def aggregate_access_log(lines: Iterable[str]) -> AccessLogSummary:
     page_counts: Counter[str] = Counter()
     status_counts: Counter[int] = Counter()
     status_class_counts: Counter[str] = Counter()
+    path_durations: dict[str, list[float]] = {}
     bot_requests = 0
     pv = 0
 
@@ -159,4 +165,5 @@ def aggregate_access_log(lines: Iterable[str]) -> AccessLogSummary:
         top_pages=sorted(page_counts.items(), key=lambda item: (-item[1], item[0])),
         status_counts=dict(sorted(status_counts.items())),
         status_class_counts=dict(sorted(status_class_counts.items())),
+        path_duration_ms=dict(sorted(path_durations.items())),
     )

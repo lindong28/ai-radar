@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from time import perf_counter_ns
 from typing import cast
 from urllib.parse import urlencode
 
@@ -22,11 +24,13 @@ from ..site_config import get_site_config
 from .cors import configure_cors
 from .routes import admin, curated, health, items, media, sources, timeline
 from .routes import wechat as wechat_routes
+from .routes.request_db import conn_from_request
 from .schemas import FeedItem
 
 STATIC_DIR = db.PROJECT_ROOT / "web" / "static"
 TEMPLATES_DIR = db.PROJECT_ROOT / "web" / "templates"
 PRELOAD_ITEM_KEYS = set(FeedItem.model_fields)
+PRE_MIGRATED_DB_ENV = "AI_RADAR_PRE_MIGRATED_DB"
 PRELOAD_ITEM_KEYS.difference_update(
     name
     for name, field in FeedItem.model_fields.items()
@@ -140,6 +144,7 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
         show_reason = (selected if timeline_page else True) and bool(raw_item.get("reasoning"))
         prepaint.append(
             {
+                "item_id": raw_item.get("id") or "",
                 "source_id": raw_item.get("source_id") or "",
                 "source_name": display_source_name,
                 "source_homepage_url": raw_item.get("source_homepage_url") or raw_item.get("url") or "#",
@@ -183,7 +188,8 @@ def _wechat_back_href(page: int | None, q: str | None = None) -> str:
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
-    db.migrate(db_path)
+    if os.environ.get(PRE_MIGRATED_DB_ENV) != "1":
+        db.migrate(db_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -198,6 +204,14 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     configure_cors(app)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     api_prefix = "/api/v1"
+
+    @app.middleware("http")
+    async def public_path_timing(request: Request, call_next):  # noqa: ANN001
+        started = perf_counter_ns()
+        response = await call_next(request)
+        duration_ms = (perf_counter_ns() - started) / 1_000_000
+        response.headers["Server-Timing"] = f"app;dur={duration_ms:.3f}"
+        return response
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> HTMLResponse | JSONResponse:
@@ -280,7 +294,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/wechat", include_in_schema=False)
     def wechat_page(request: Request, q: str | None = None, page: int = 1, limit: int = WECHAT_PAGE_LIMIT) -> HTMLResponse:
-        with db.get_conn(request.app.state.db_path) as conn:
+        with conn_from_request(request) as conn:
             data = wechat_routes.list_wechat_items(conn, q=q, page=page, limit=limit)
         return templates.TemplateResponse(
             request,
@@ -295,7 +309,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         q: str | None = None,
         page: int | None = None,
     ) -> HTMLResponse:
-        with db.get_conn(request.app.state.db_path) as conn:
+        with conn_from_request(request) as conn:
             item = wechat_routes.get_wechat_detail(conn, slug)
         return templates.TemplateResponse(
             request,
@@ -309,7 +323,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "admin.html",
-            {"metrics": admin.collect_admin_metrics(request)},
+            {
+                "metrics": admin.collect_admin_metrics(request),
+                "performance": admin.collect_performance_status(),
+            },
         )
 
     @app.head("/admin", include_in_schema=False)
@@ -362,9 +379,6 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
-
-
-app = create_app()
 
 
 def serve(port: int = 8000, host: str = "127.0.0.1") -> None:

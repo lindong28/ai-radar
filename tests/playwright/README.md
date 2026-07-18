@@ -8,7 +8,7 @@ Run from the repository root:
 ./tests/run_user_verify.sh
 ```
 
-The fixture in `conftest.py` starts `./run.sh serve` on a free local port, opens Chromium, and runs the checks against the real local `data/radar.db`.
+The fixture in `conftest.py` creates a session-scoped SQLite backup of the configured `AI_RADAR_DB`, migrates only that temporary copy, starts `./run.sh serve` on a free local port with the copy explicitly selected as pre-migrated, and opens Chromium. The source database supplies meaningful local data but is never served or migrated by the suite.
 
 Coverage by file:
 

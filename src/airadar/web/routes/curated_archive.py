@@ -6,7 +6,7 @@ from typing import Any
 
 from ...presentation.related import _batch_related_discussions
 from ...presentation.summary import item_summary, json_loads, parse_enrichment
-from .categories import category_filter_clause, deduped_item_clause, matches_category
+from .categories import category_filter_clause, deduped_item_clause
 from .pagination import VersionedTotalCache, clamp_page
 from .search import search_id_subquery, source_match_expression
 
@@ -19,20 +19,25 @@ def _shanghai_date(published_at: str) -> str:
     return (dt + timedelta(hours=8)).strftime("%Y-%m-%d")
 
 
-def _curated_data_version(conn: sqlite3.Connection) -> tuple[Any, ...]:
+def _curated_data_version(
+    conn: sqlite3.Connection,
+    *,
+    include_enrichment: bool = False,
+) -> tuple[Any, ...]:
     db_info = conn.execute("PRAGMA database_list").fetchone()
     row = conn.execute(
         """
-        SELECT
-          COALESCE((SELECT MAX(run_id) FROM curated_items), '') AS latest_run_id,
-          COALESCE((SELECT COUNT(*) FROM curated_items), 0) AS curated_count,
-          COALESCE((SELECT MAX(rowid) FROM curated_items), 0) AS max_curated_rowid,
-          COALESCE((SELECT MAX(rowid) FROM items), 0) AS max_item_rowid,
-          COALESCE((SELECT COUNT(*) FROM items), 0) AS item_count,
-          COALESCE((SELECT MAX(id) FROM item_evaluations), 0) AS max_eval_id
+        SELECT archive_generation, category_generation
+        FROM archive_cache_generations
+        WHERE id=1
         """
     ).fetchone()
-    return (db_info["file"] if db_info is not None else "", *tuple(row))
+    if row is None:
+        raise RuntimeError("archive cache generation row is missing")
+    version = (db_info["file"] if db_info is not None else "", int(row[0]))
+    if not include_enrichment:
+        return version
+    return (*version, int(row[1]))
 
 
 def _latest_curated_join() -> str:
@@ -68,8 +73,13 @@ def _cached_archive_total(
     signature: tuple[object, ...],
     *,
     cacheable: bool,
+    include_enrichment: bool,
 ) -> int:
-    version = _curated_data_version(conn) if cacheable else ()
+    version = (
+        _curated_data_version(conn, include_enrichment=include_enrichment)
+        if cacheable
+        else ()
+    )
     return _curated_total_cache.get_or_compute(
         signature=signature,
         version=version,
@@ -111,27 +121,35 @@ def _compute_archive_page(
     normalized_category: str | None,
     q: str | None,
 ) -> tuple[list[dict[str, Any]], int, int]:
-    where, params, search_subquery = _archive_where(normalized_category, q)
-    total = _cached_archive_total(
-        conn,
-        where,
-        tuple(params),
-        (normalized_category or "", bool(search_subquery)),
-        cacheable=not search_subquery,
-    )
-    response_page = clamp_page(page=page, total=total, limit=limit)
-    offset = (response_page - 1) * limit
-    items = _archive_items(
-        conn,
-        where,
-        params,
-        search_subquery,
-        q=q,
-        normalized_category=normalized_category,
-        limit=limit,
-        offset=offset,
-    )
-    return items, total, response_page
+    started_read_transaction = not conn.in_transaction
+    if started_read_transaction:
+        conn.execute("BEGIN")
+    try:
+        where, params, search_subquery = _archive_where(normalized_category, q)
+        total = _cached_archive_total(
+            conn,
+            where,
+            tuple(params),
+            (normalized_category or "", bool(search_subquery)),
+            cacheable=not search_subquery,
+            include_enrichment=normalized_category is not None,
+        )
+        response_page = clamp_page(page=page, total=total, limit=limit)
+        offset = (response_page - 1) * limit
+        items = _archive_items(
+            conn,
+            where,
+            params,
+            search_subquery,
+            q=q,
+            normalized_category=normalized_category,
+            limit=limit,
+            offset=offset,
+        )
+        return items, total, response_page
+    finally:
+        if started_read_transaction:
+            conn.rollback()
 
 
 def _compute_archive_for_date(
@@ -235,8 +253,7 @@ def _archive_items(
         item["reason"] = json_loads(row["reason_json"], {})
         scores = item["reason"].get("scores", {})
         item["scores"] = scores
-        if matches_category(item, normalized_category):
-            items.append(item)
+        items.append(item)
     return items
 
 

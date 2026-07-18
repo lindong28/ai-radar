@@ -10,8 +10,10 @@
 | tunnel | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
 | ai-radar pipeline (15min) | cron (`*/15 * * * *`) | 在 user crontab | `./install.sh pipeline` / `./uninstall.sh pipeline` / `./status.sh pipeline` | [deploy/cron/ai-radar-pipeline](../../deploy/cron/ai-radar-pipeline) · launchd 替代模板见 [ai-radar-pipeline.plist.example](../../deploy/launchd/ai-radar-pipeline.plist.example) |
 | alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1-A4 应用级健康失败由状态机判定后调用 `im-notify --alert`，launchd 进程崩溃由 fleet watchdog 覆盖 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
+| performance probe (hourly) | cron（建议 `17 * * * *`） | 需按文档手动安装；`install.sh` / `status.sh` 不管理 | `./run.sh performance-probe` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
+| performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**：homepage hard-failure 误标关闭后才按文档手动安装 | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 
-不带服务名时，`./install.sh` / `./uninstall.sh` / `./status.sh` 对全部 4 个服务生效。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
+`./install.sh` / `./uninstall.sh` / `./status.sh` 仍只管理 serve、tunnel、pipeline、alert 这 4 个核心服务；performance cron job 用文档中的 crontab 样例手动管理，不出现在 `status.sh` 四行总览。当前只启用 probe；remediation 等 homepage hard-failure 误标关闭后再安装。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
 
 `./install.sh` 会逐服务检查依赖。缺少 `pipeline` 的 LLM key 时，交互式终端会询问 `DEEPSEEK_API_KEY` 并写入项目 `.env`；缺少 `alert` 的 `FEISHU_GENERAL_ALERT_WEBHOOK` 时同理询问 webhook。非交互环境不会等待输入，会跳过缺依赖的服务并在 summary 中列原因。`alert` 还要求部署机已从 `ai-agent-config` 安装 `~/.local/bin/im-notify`；tracked launchd 模板已把 `~/.local/bin` 加入该作业的 `PATH`。`tunnel` 缺少 `deploy/cloudflared/config.yml` 时不会询问密钥，需先从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置后重跑 `./install.sh tunnel`。依赖读取顺序为当前进程环境、项目 `.env`、`~/.claude/.env`。
 
@@ -53,8 +55,11 @@ curl -s -o /dev/null -w '%{http_code}\n' https://sjtu.aiplanet.live/admin
 curl -sf http://127.0.0.1:8000/api/v1/healthz && echo serve_ok
 curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok
 ./run.sh admin alert-check                         # 执行 alert 规则；仅在状态机决定 firing / resolved 时调用 im-notify
+./run.sh performance-probe                         # 同机 provisional 四旅程采样 + PERF:* 状态机
 ./run.sh fetch | tail -5                           # pipeline + Mp2RSS feed 联通性
 ```
+
+当前不要把 `performance-remediate` 当 bring-up smoke 执行：homepage hard-failure 误标可能已形成假 firing。只有该缺陷关闭、手工 probe 显示 homepage `hard_failure=false`，且 homepage `PERF:*` 状态已非 firing 后，才按 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) 的 gate 手工验证并安装 remediation cron。
 
 `./status.sh` 输出每个服务一行：是否 loaded / pid / crontab 状态（pipeline）/ 日志位置。`alert` 是周期任务，正常完成单次检查后可能显示 `loaded ✓ (no pid)`。
 

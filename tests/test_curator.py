@@ -168,7 +168,10 @@ def test_curate_prioritizes_latest_visible_date_for_reference_parity(tmp_path: P
     conn.execute(
         "INSERT INTO sources (id,name,url,tier,enabled,meta_json,synced_at) VALUES ('s','S','https://example.com','T1.5',1,'{}','2026-05-08T00:00:00Z')"
     )
-    fresh_at = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=2)
+    now = datetime.now(UTC).replace(microsecond=0)
+    fresh_at = now.replace(hour=4, minute=0, second=0)
+    if fresh_at > now:
+        fresh_at -= timedelta(days=1)
     old_at = fresh_at - timedelta(days=2)
 
     def insert_item(item_id: str, published_at: datetime, score: float) -> None:

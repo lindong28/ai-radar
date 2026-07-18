@@ -76,6 +76,40 @@ cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调
 sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 ```
 
+### 用户旅程性能监控与候选修复
+
+`performance-probe` 每次用浏览器从同机 origin 与同机 public 两个视角测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定四条旅程。样本按 pipeline 的 `idle` / `busy` / `unknown` 分类，写入 `logs/performance/`；所有结果均为 **same-host provisional**，不代表区域 SLO。确认退化后，`performance-remediate` 会在隔离 worktree 中启动一个 fail-closed Codex worker，最多生成一个仅供人工审阅的本地候选 commit；它不会 push、deploy、调用 launchctl 或写生产数据库。
+
+先核对两个 CLI，并只手工运行 probe 来确认浏览器、站点和告警配置可用：
+
+```bash
+./run.sh performance-probe --help
+./run.sh performance-remediate --help
+./run.sh performance-probe
+```
+
+两个命令不由 `install.sh` 管理。当前 U4 验收发现 homepage 正常渲染也会被误标 `hard_failure=true`；该缺陷会在样本窗口成熟后产生假 `PERF:*` firing，因此**现在只安装 probe，不要把 remediation 加入 cron**。下面命令按 marker 先删旧行再添加，重复执行不会制造重叠任务，并显式提供 cron 所需的 `uv` / `codex` PATH：
+
+```bash
+repo=$PWD
+{ crontab -l 2>/dev/null | sed '/# ai-radar-performance-probe$/d'
+  printf '17 * * * * cd "%s" && PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-probe >> logs/performance-probe-cron.log 2>&1 # ai-radar-performance-probe\n' "$repo"
+} | crontab -
+```
+
+修复 homepage hard-failure 口径、用手工 probe 确认 homepage 样本不再误标，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing 后，才先手工运行一次 remediation，再以同样的幂等方式把它安排在 probe 之后：
+
+```bash
+./run.sh performance-remediate
+
+repo=$PWD
+{ crontab -l 2>/dev/null | sed '/# ai-radar-performance-remediate$/d'
+  printf '25 * * * * cd "%s" && PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-remediate >> logs/performance-remediate-cron.log 2>&1 # ai-radar-performance-remediate\n' "$repo"
+} | crontab -
+```
+
+规则、预算、证据保留和处置边界见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md#用户旅程性能监控)。
+
 ## Web 页面
 
 | 页面 | URL | 说明 |
@@ -181,6 +215,8 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 | `tunnel` | launchd | Cloudflare tunnel 到你的公网域名 |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1-A4 状态机决定 firing / resolved 后，通过 `im-notify --alert` 发送飞书告警 |
+| `performance-probe` | cron（建议每小时 :17） | 测量四条浏览器旅程，按 idle/busy 留存样本并评估 `PERF:*` 告警 |
+| `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage hard-failure 误标修复前禁止启用 cron，修复后在 probe 后处理 confirmed `PERF:*` incident |
 
 ### 部署 / 移除 / 查状态
 

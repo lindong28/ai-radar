@@ -635,6 +635,7 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
 
     detail = client.get("/wechat/newer-slug")
     assert detail.status_code == 200
+    assert 'data-item-id="item-newer"' in detail.text
     assert "‹ 返回列表" in detail.text
     for heading in ("文章概况", "独特亮点", "可动手实践", "可复用认知", "关键词", "价值判断"):
         assert heading in detail.text
@@ -651,6 +652,50 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
     assert "微信文章解读" in skipped.text
     assert 'href="/wechat"' in skipped.text
     assert "side-link-active" in skipped.text
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [
+        ("/wechat", 200),
+        ("/wechat/newer-slug", 200),
+        ("/wechat/missing-slug", 404),
+    ],
+)
+def test_wechat_ssr_routes_close_request_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    path: str,
+    expected_status: int,
+) -> None:
+    db_path = _seed_wechat_db(tmp_path)
+    client = TestClient(create_app(db_path))
+    class TrackingConnection(sqlite3.Connection):
+        closed_by_route = False
+
+        def close(self) -> None:
+            self.closed_by_route = True
+            super().close()
+
+    opened: list[TrackingConnection] = []
+    original_connect = sqlite3.connect
+
+    def tracking_connect(*args: Any, **kwargs: Any) -> TrackingConnection:
+        kwargs.setdefault("check_same_thread", False)
+        conn = original_connect(*args, factory=TrackingConnection, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", tracking_connect)
+    try:
+        response = client.get(path)
+        assert response.status_code == expected_status
+        assert len(opened) == 1
+        assert opened[0].closed_by_route is True
+    finally:
+        for conn in opened:
+            if not conn.closed_by_route:
+                conn.close()
 
 
 def test_wechat_detail_and_list_render_visit_original_links(tmp_path: Path) -> None:
