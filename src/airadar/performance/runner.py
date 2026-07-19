@@ -29,11 +29,12 @@ class ProbeRuntime:
 
 
 def canonical_probe_runtime() -> ProbeRuntime:
-    runtime_env.load_runtime_env()
     state_root = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/continuous-performance/projects/ai-radar"
     return ProbeRuntime(
         origin_url="http://127.0.0.1:8000",
-        public_url=os.environ.get("AI_RADAR_PUBLIC_URL", ""),
+        # Single-key read without os.environ mutation: adapter children
+        # (browser drivers) must not inherit the full dotenv secret surface.
+        public_url=runtime_env.read_value("AI_RADAR_PUBLIC_URL"),
         stage_ledger_root=state_root / "stage-ledger",
         browser_lock_path=state_root / "browser.lock",
         db_path=db.resolve_db_path(),
@@ -214,9 +215,9 @@ def run_adapter(
     vantage = environ["CONTINUOUS_PERFORMANCE_VANTAGE"]
     base_url = runtime.origin_url if vantage == "same_host_origin" else runtime.public_url
     if not base_url:
-        raise ProbeInfrastructureError(
-            f"vantage_unconfigured: {vantage} has no base URL (set AI_RADAR_PUBLIC_URL)"
-        )
+        # Reason must stay wire-schema safe for the continuous-performance
+        # fleet (bare slug, no spaces); operator guidance lives in the docs.
+        raise ProbeInfrastructureError("vantage_unconfigured")
     ledger = StageLedger(runtime.stage_ledger_root)
     detail_slug = _detail_slug(runtime.db_path)
     expectation = _probe_expectation(runtime.db_path, target, detail_slug)

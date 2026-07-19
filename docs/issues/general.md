@@ -320,3 +320,12 @@
 - Priority: medium
 - Discovered: 2026-07-11 Web / pipeline 结构重构最终验证
 - Description: `tests/playwright/conftest.py` 的固定 30 秒 healthz 等待窗口，小于大型冻结数据库执行幂等 migration 003/FTS 重建所需时间，导致整套 Playwright 在 setup 共因失败。临时放宽到 120 秒可启动，但不应永久以大 timeout 掩盖 fixture 成本。Fix 方向：让 Playwright 使用预迁移的小型隔离 DB，或把一次性 migration 明确移出每次服务启动路径。
+
+---
+
+## [open] continuous-performance fleet 把 `incompatible` 计为 infra failure，public vantage 未配置时无法真正"干净跳过"
+
+- Type: integration
+- Priority: low（该集成当前休眠：registry 为空、checkout 无 `config/performance-adapter` 入口、历史 wrapper source-hash 与当前源码不符）
+- Discovered: 2026-07-19 规则审计的 review gate（`AI_RADAR_PUBLIC_URL` 中性化改造复核）
+- Description: `run_adapter` 现对未配置的 `same_host_public` vantage 以 `ProbeInfrastructureError("vantage_unconfigured")` 干净拒绝（wire-schema safe 的 bare slug reason，exit 78 → status=incompatible），不再用空 base URL 产生伪 hard_failure 样本——这是 repo 侧能做到的最干净语义。但外层 continuous-performance fleet 会把 `incompatible` 计为 infrastructure failure，令 `run-all` 失败并触发外层告警，因此"未配置 = 静默跳过"在 fleet 层面不成立。Fix 方向（激活该集成时执行）：在 fleet/journey 注册配置层面按 `AI_RADAR_PUBLIC_URL` 是否配置决定是否注册 `same_host_public` vantage（未配置就不调度，而不是调度后靠 incompatible 兜底）；或在 fleet 侧为 `vantage_unconfigured` reason 增加"配置性跳过"的非告警处置。在此之前不要在未配置 public URL 的环境注册 public vantage journeys。

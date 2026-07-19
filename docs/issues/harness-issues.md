@@ -21,7 +21,7 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Reproduced: 2026-07-15, a read-only nested Codex review launched through `codeagent-wrapper` appended the same block to an isolated candidate's tracked `AGENTS.md`; the reviewer prompt explicitly prohibited writes. The supervisor removed only the injected block and verified the file was byte-identical to `HEAD` before continuing.
 - Reproduced again: the clean Phase 0 canonical verifier passed when invoked with the candidate's `.venv/bin/python`, but each controller subcommand launched through `uv run ... verifier.py` observed a transient injected `AGENTS.md` and correctly failed repository identity with `candidate is dirty`; the block disappeared when the child process exited. The project verifier was changed to invoke its controller with the already validated Python runtime, while keeping canonical project checks under `uv run`.
 - Workaround used: `git restore AGENTS.md` before committing.
-- Update 2026-07-19: `AGENTS.md` is now a symlink to `CLAUDE.md`（规则加载断链修复）。claude-mem 的追加会穿透链接写入 `CLAUDE.md` 真身——git 表现为 `M CLAUDE.md`，清理命令相应改为 `git restore CLAUDE.md`（仍是一条命令；owner 已裁决维持此方向）。commit/publish 前的清洁校验对象同步改为 `CLAUDE.md`。
+- Update 2026-07-19: `AGENTS.md` is now a symlink to `CLAUDE.md`（规则加载断链修复，owner 已裁决维持此方向）。claude-mem 的追加会穿透链接写入 `CLAUDE.md` 真身——git 表现为 `M CLAUDE.md`，commit/publish 前的清洁校验对象同步改为 `CLAUDE.md`。**清理必须精细剥离 `<claude-mem-context>...</claude-mem-context>` 块**（如 sed 定界删除），而非整文件 `git restore`——后者会连带丢弃同文件的合法未暂存修改，`docs/issues/general.md` 已有该做法造成不可恢复数据丢失的记录；仅当确认无其它本地修改时才可整文件 restore。
 - Suggested fix (owner harness config): exclude `AGENTS.md` from claude-mem's injection target, or strip the `<claude-mem-context>` block pre-commit, or keep memory context in an untracked file. Until fixed, verify `CLAUDE.md` is clean before any commit/publish.
 
 ## H3 — codex backend validates "publicly visible" criteria only on local http, missing the deploy form (https/tunnel/mixed-content)
@@ -96,7 +96,7 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Workaround used: user sent a mid-execution steering instruction — batch remaining production actions into one sequence, allow reuse of unaffected canonical green lights for non-authority-path fixes (tests/fixtures/docs), one final full-chain rebuild before delivery; plus a standing policy pre-approving non-push local actions (eliminates receipt-expiry rounds).
 - Suggested fix: APPLIED at the durable carriers — `~/research/ai-agent-config/claude/references/plan-review-principles.md` new conditional principle 17 (Verification Machinery Operating Contract: incremental re-verification semantics, receipt windows matched to responder, review depth bounded by declared threat model, identity/anchor evolution contract) and `claude/skills/review-gate/SKILL.md` (feed declared threat model to reviewers; findings premised on excluded capabilities cap at MEDIUM). Both passed their specialty review gates (review-principles 3 rounds / review-skill 2 rounds + verification lens) and are committed in ai-agent-config as abd1f74.
 
-## H11 — review-plan 审查循环在事发时缺收敛边界（熔断条款为 7/19 事后新增、尚未 commit）
+## H11 — review-plan 审查循环在事发时缺收敛边界（熔断条款为 7/19 事后新增，已以 aeea37a 提交）
 
 - Type: agent-behavior / review-loop economics
 - Discovered: 2026-07-18，`plans/20260718-feedback-loop/` plan 审查（独立 Codex reviewer 走 `$custom-review-plan` 契约）。
@@ -105,4 +105,4 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Root cause: **事发时（2026-07-18）committed 的 `review-plan.md` 契约没有任何收敛/轮次预算机制**——"修订产生新 hash → 重新跑 final full review" 的循环入口对宏大 plan 供给无界。
 - 诊断时间线（本条目自身被改过两次，最终以 provenance 为准）：初版（7/18）诊断"契约缺收敛机制"——**正确**。7/19 上午第一次改写误把 ai-agent-config working tree 中**当日新增、未提交**的「收敛预算与停滞熔断」段（`git diff` 显示为 + 行，文件 mtime 2026-07-19 11:24）当作事发时已生效条款，错误改判为"机制存在但执行侧未触发"；同日规则审计的 review gate 抓出该 provenance 矛盾，本版更正回初版诊断并补全时间线。
 - Workaround used: 主 session 逐轮修订 + 用户决策批量代问压缩往返；owner 手动终止；plan 输入段如实记录"未获 clean 终态"。
-- Follow-up（条款已在 owner 侧补上，剩执行侧配套）: owner 已于 7/19 在 `~/.claude/commands/custom/review-plan.md` working tree 加入「收敛预算与停滞熔断」段（默认 2 轮完整循环预算 + 停滞判据 + AskUserQuestion 处置），待 commit。配套建议：(a) commit 该段并同步 `~/.agents/skills/custom-review-plan` wrapper；(b) create-plan「审查」节的 reviewer 初始/resume prompt 显式携带轮次预算状态，要求每轮终止报告先给停滞自检结论；(c) orchestrator 独立计数，预算耗尽即直接走停滞处置，不依赖 reviewer 自觉。
+- Follow-up（条款已补上并提交，剩执行侧配套）: 「收敛预算与停滞熔断」段（默认 2 轮完整循环预算 + 停滞判据 + AskUserQuestion 处置）已于 2026-07-19 以 ai-agent-config `aeea37a` 提交并刷新 `custom-review-plan` wrapper。剩余配套建议：(a) create-plan「审查」节的 reviewer 初始/resume prompt 显式携带轮次预算状态，要求每轮终止报告先给停滞自检结论；(b) orchestrator 独立计数，预算耗尽即直接走停滞处置，不依赖 reviewer 自觉。
