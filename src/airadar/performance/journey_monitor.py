@@ -158,6 +158,8 @@ def probe_journeys(
     *,
     observed_at: datetime | None = None,
 ) -> list[JourneySample]:
+    if not runtime.origin_url:
+        raise ValueError("origin_url is required for journey probes")
     observed = observed_at or datetime.now(UTC)
     observed_text = observed.astimezone(UTC).isoformat().replace("+00:00", "Z")
     detail_slug = _detail_slug(runtime.db_path)
@@ -166,6 +168,8 @@ def probe_journeys(
         ("same_host_origin", runtime.origin_url),
         ("same_host_public", runtime.public_url),
     ):
+        if vantage == "same_host_public" and not base_url:
+            continue
         for spec in JOURNEY_SPECS:
             before = classify_pipeline_load(runtime.pipeline_lock_dir)
             measurement = measure_browser_journey(
@@ -450,11 +454,36 @@ def run_performance_alerts(
     pipeline_lock_dir: Path,
     now: datetime | None = None,
     send: Callable[[str], object] | None = None,
+    enabled_vantages: frozenset[str] | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(UTC)
     samples = _load_samples(sample_path)
+    if enabled_vantages is not None:
+        samples = [sample for sample in samples if sample.get("vantage") in enabled_vantages]
     results = evaluate_performance_rules(samples)
     previous_state = _load_alert_state(state_path)
+    if enabled_vantages is not None:
+        # A vantage disabled after firing would otherwise leave its alert state
+        # stuck: retained samples age out, the rule stops appearing in results,
+        # and the state machine never resolves it. Emit an explicit non-firing
+        # result for such rules so they resolve instead of going stale.
+        known_rule_ids = {result.rule_id for result in results}
+        for rule_id, entry in previous_state.items():
+            if rule_id in known_rule_ids or not rule_id.startswith("PERF:"):
+                continue
+            if not isinstance(entry, dict) or entry.get("state") != "firing":
+                continue
+            parts = rule_id.split(":")
+            if len(parts) == 4 and parts[2] not in enabled_vantages:
+                results.append(
+                    AlertRuleResult(
+                        rule_id=rule_id,
+                        title=f"{parts[1]} {parts[2]} {parts[3]}",
+                        firing=False,
+                        detail="vantage disabled (public URL unset); auto-resolved",
+                        action="none",
+                    )
+                )
     evidenced: list[AlertRuleResult] = []
     for result in results:
         entry = previous_state.get(result.rule_id, {})
@@ -497,12 +526,16 @@ def run_journey_monitor(
     observed_at = datetime.now(UTC)
     samples = probe_journeys(runtime, observed_at=observed_at)
     store_samples(sample_path, samples, now=observed_at)
+    enabled = {"same_host_origin"}
+    if runtime.public_url:
+        enabled.add("same_host_public")
     alerts = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
         evidence_dir=evidence_dir,
         pipeline_lock_dir=pipeline_lock_dir,
         now=observed_at,
+        enabled_vantages=frozenset(enabled),
     )
     return {
         "scope": SAME_HOST_SCOPE,

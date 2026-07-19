@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from airadar import db
-from airadar.performance.browser_probe import BrowserMeasurement
+from airadar.performance.browser_probe import BrowserMeasurement, _measure_browser_journey_inner
 from airadar.performance.journey_monitor import (
     RETENTION_DAYS,
     JourneyMonitorRuntime,
@@ -32,6 +34,60 @@ def test_probe_expectation_does_not_import_app_or_run_migrations(
     monkeypatch.setattr(db, "migrate", forbidden_migration)
 
     assert _probe_expectation(db_path, "homepage", "unavailable") == {"item_ids": []}
+
+
+def test_homepage_browser_identity_accepts_expected_prepaint_prefix_when_more_rows_render(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    expected_ids = [str(item_id) for item_id in range(1, 13)]
+    rendered_ids = expected_ids + [str(item_id) for item_id in range(13, 41)]
+
+    locator = SimpleNamespace(
+        wait_for=lambda **_kwargs: None,
+        inner_text=lambda: "first card",
+        count=lambda: 1,
+        is_visible=lambda: True,
+    )
+    locators = SimpleNamespace(
+        first=locator,
+        evaluate_all=lambda _script: rendered_ids,
+    )
+    page = SimpleNamespace(
+        set_default_timeout=lambda _timeout: None,
+        goto=lambda *_args, **_kwargs: None,
+        locator=lambda _selector: locators,
+        evaluate=lambda *_args: True,
+    )
+    context = SimpleNamespace(new_page=lambda: page, close=lambda: None)
+    browser = SimpleNamespace(new_context=lambda: context, close=lambda: None)
+    playwright = SimpleNamespace(chromium=SimpleNamespace(launch=lambda **_kwargs: browser))
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: nullcontext(playwright))
+
+    measurement = _measure_browser_journey_inner(
+        base_url="https://public.invalid",
+        target="homepage",
+        detail_slug="unused",
+        timeout_seconds=1,
+        lock_path=tmp_path / "browser.lock",
+        expected={"item_ids": expected_ids},
+    )
+
+    assert measurement.outcome == "observed"
+    assert measurement.hard_failure is False
+
+    rendered_ids[0] = "unexpected"
+    mismatch = _measure_browser_journey_inner(
+        base_url="https://public.invalid",
+        target="homepage",
+        detail_slug="unused",
+        timeout_seconds=1,
+        lock_path=tmp_path / "browser.lock",
+        expected={"item_ids": expected_ids},
+    )
+
+    assert mismatch.outcome == "observed"
+    assert mismatch.hard_failure is True
 
 
 def test_pipeline_lock_classification_distinguishes_idle_busy_and_unknown(
@@ -97,6 +153,32 @@ def test_probe_runs_four_journeys_against_origin_and_public_and_stores_samples(
     stored = [json.loads(line) for line in sample_path.read_text(encoding="utf-8").splitlines()]
     assert len(stored) == 8
     assert {row["journey"] for row in stored} == {sample.journey for sample in samples}
+
+
+def test_probe_skips_public_vantage_when_public_url_empty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    runtime = JourneyMonitorRuntime(
+        origin_url="http://origin.invalid",
+        public_url="",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        browser_lock_path=tmp_path / "browser.lock",
+        db_path=tmp_path / "radar.db",
+    )
+
+    def fake_measure(**kwargs: object) -> BrowserMeasurement:
+        return BrowserMeasurement(
+            request_url=f"{kwargs['base_url']}/{kwargs['target']}",
+            value_ms=10.0,
+            hard_failure=False,
+        )
+
+    monkeypatch.setattr("airadar.performance.journey_monitor.measure_browser_journey", fake_measure)
+    samples = probe_journeys(runtime, observed_at=datetime(2026, 7, 18, tzinfo=UTC))
+
+    assert len(samples) == 4
+    assert {sample.vantage for sample in samples} == {"same_host_origin"}
 
 
 def test_store_samples_trims_rows_older_than_fourteen_days(tmp_path: Path) -> None:
@@ -287,3 +369,83 @@ def test_busy_and_idle_performance_compliance_streams_are_separate(tmp_path: Pat
     firing = [row for row in result["results"] if row["firing"]]
     assert len(firing) == 1
     assert firing[0]["values"]["load_class"] == "busy"
+
+
+def test_probe_requires_origin_url(tmp_path: Path) -> None:
+    runtime = JourneyMonitorRuntime(
+        origin_url="",
+        public_url="https://public.invalid",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        browser_lock_path=tmp_path / "browser.lock",
+        db_path=tmp_path / "radar.db",
+    )
+    try:
+        probe_journeys(runtime, observed_at=datetime(2026, 7, 18, tzinfo=UTC))
+    except ValueError as error:
+        assert "origin_url" in str(error)
+    else:
+        raise AssertionError("probe_journeys must reject empty origin_url")
+
+
+def test_disabled_public_vantage_resolves_stale_firing_state(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    sample_path = tmp_path / "journey-samples.jsonl"
+    state_path = tmp_path / "journey-alert-state.json"
+    evidence_dir = tmp_path / "evidence"
+    lock_dir = tmp_path / ".pipeline.lock"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    sent: list[str] = []
+
+    def sender(text: str) -> dict[str, object]:
+        sent.append(text)
+        return {"skipped": False}
+
+    monkeypatch.setattr("airadar.admin.alerts.send_alert_message", sender)
+
+    store_samples(
+        sample_path,
+        [_sample(observed_at=started + timedelta(minutes=index), value_ms=4000) for index in range(20)],
+    )
+    confirmed: dict[str, object] = {}
+    for now_minute in (20, 21, 22):
+        if now_minute > 20:
+            store_samples(
+                sample_path,
+                [_sample(observed_at=started + timedelta(minutes=now_minute - 1), value_ms=4000)],
+            )
+        confirmed = run_performance_alerts(
+            sample_path=sample_path,
+            state_path=state_path,
+            evidence_dir=evidence_dir,
+            pipeline_lock_dir=lock_dir,
+            now=started + timedelta(minutes=now_minute),
+        )
+    assert confirmed["sent_count"] == 1
+
+    # Public vantage is disabled afterwards (AI_RADAR_PUBLIC_URL unset): stale
+    # public samples must not keep the rule firing, and the stale firing state
+    # must resolve explicitly instead of going permanently stale.
+    resolved_round = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=evidence_dir,
+        pipeline_lock_dir=lock_dir,
+        now=started + timedelta(minutes=30),
+        enabled_vantages=frozenset({"same_host_origin"}),
+    )
+    synthetic = [
+        row
+        for row in resolved_round["results"]
+        if "same_host_public" in row["rule_id"] and not row["firing"]
+    ]
+    assert synthetic, "disabled vantage must emit an explicit non-firing result"
+    assert any("resolved" in entry["type"] for entry in resolved_round["sent"])
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    public_states = {
+        rule_id: entry.get("state")
+        for rule_id, entry in state.items()
+        if isinstance(entry, dict) and "same_host_public" in rule_id
+    }
+    assert public_states and all(value != "firing" for value in public_states.values())

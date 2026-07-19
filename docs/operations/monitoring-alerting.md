@@ -11,7 +11,7 @@
 - 本地访问（需显式开启）：`AI_RADAR_ADMIN_ALLOW_LOCAL=1` 后 `http://127.0.0.1:8000/admin`
 - Alert 命令：`./run.sh admin alert-check`
 - 用户旅程探针：`./run.sh performance-probe`
-- 性能候选修复 CLI（当前禁用，启用 gate 见下）：`./run.sh performance-remediate --help`
+- 性能候选修复 CLI（启用仍受下文 gate 约束）：`./run.sh performance-remediate --help`
 
 `/admin` 和 `/admin/usage` 是运维面板，不是公开页面，也不挂公开导航。公网访问必须通过 Cloudflare Access。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**——仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行，便于部署验证和故障排查；生产 serve 不设该变量，origin 仅认 Cloudflare Access 的 `Cf-Access-Jwt-Assertion`（存在性校验，验签为后续增强）。
 
@@ -46,7 +46,7 @@ AI_RADAR_LLM_PRICING_JSON='{"deepseek-v4-pro":{"input_per_million_tokens_usd":0.
 
 ## 用户旅程性能监控
 
-`performance-probe` 用 Chromium 测量四条用户可感知旅程，并同时访问本机 origin 与经公网 tunnel 回到本站的 public URL。两个 vantage 都从部署主机发起，因此报告固定标为 **same-host provisional; not a regional SLO**，不能据此宣称 East Asia 或其他区域 SLO 达标。
+`performance-probe` 用 Chromium 测量四条用户可感知旅程，并同时访问本机 origin 与经公网 tunnel 回到本站的 public URL（取 `AI_RADAR_PUBLIC_URL` 环境变量；未配置时跳过 public 视角，其历史告警状态会被自动 resolve 而非悬挂）。两个 vantage 都从部署主机发起，因此报告固定标为 **same-host provisional; not a regional SLO**，不能据此宣称 East Asia 或其他区域 SLO 达标。
 
 | `PERF:*` 旅程 | P75 预算 | P95 预算 |
 |---|---:|---:|
@@ -77,7 +77,7 @@ AI_RADAR_LLM_PRICING_JSON='{"deepseek-v4-pro":{"input_per_million_tokens_usd":0.
 ./run.sh performance-probe
 ```
 
-当前 U4 验收已确认 homepage 正常渲染也会被误标 `hard_failure=true`。这个缺陷会在成熟窗口产生假 firing，因此**现在只安装 probe，不启用 remediation cron**。下面命令通过 marker 替换旧 probe 行，重复执行保持幂等，并为 cron 显式设置 `uv` / `codex` 所需 PATH：
+U4 发现的 homepage `hard_failure=true` 假阳性已修复：浏览器现在把首 12 条 SSR/prepaint ID 当作完整渲染列表的前缀，不再要求两者长度相等。但这不代替部署后运维验证：在手工 probe 确认 homepage `hard_failure=false` 且 homepage `PERF:*` 非 firing 前，**只安装 probe，不启用 remediation cron**。下面命令通过 marker 替换旧 probe 行，重复执行保持幂等，并为 cron 显式设置 `uv` / `codex` 所需 PATH：
 
 ```bash
 repo=$PWD
@@ -86,7 +86,7 @@ repo=$PWD
 } | crontab -
 ```
 
-修复 homepage expectation/browser ID 数量口径、用手工 probe 确认 homepage `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing 后，才先手工运行一次 remediation，再安装排在 probe 之后的 cron：
+部署包含上述修复的版本后，用手工 probe 确认 homepage `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing；两项都满足后，才先手工运行一次 remediation，再安装排在 probe 之后的 cron：
 
 ```bash
 ./run.sh performance-remediate
@@ -97,7 +97,11 @@ repo=$PWD
 } | crontab -
 ```
 
-`performance-remediate` 读取状态机标为 confirmed 的 `PERF:*` incident；它不会判断上游探针的 hard failure 是否为假阳性，所以当前 homepage 缺陷关闭前必须保持手工执行与 cron 全部 disabled。worker 以 nonblocking lock 保证单 active，单次最长 3600 秒；Codex 固定使用 `--ignore-user-config --sandbox workspace-write` 和 `approval_policy="never"`，只允许隔离 worktree 写入。worker 不获得 push、deploy、launchctl 或生产数据库写入口；任何 preflight 无法证明边界时 fail closed、告警并留证。成功结果是 worktree 内的 detached 本地 candidate commit 和摘要，仍需站长审阅与显式授权后才能进入部署流程。
+`performance-remediate` 读取状态机标为 confirmed 的 `PERF:*` incident；它不会二次判断上游 hard failure 的真伪，所以即使 homepage 误标缺陷已修复，仍必须以部署后 `hard_failure=false` 且 homepage `PERF:*` 非 firing 作为启用条件。worker 以 nonblocking lock 保证单 active，单次最长 3600 秒；Codex 固定使用 `--ignore-user-config --sandbox workspace-write` 和 `approval_policy="never"`，只允许隔离 worktree 写入。worker 不获得 push、deploy、launchctl 或生产数据库写入口；任何 preflight 无法证明边界时 fail closed、告警并留证。成功结果是 worktree 内的 detached 本地 candidate commit 和摘要，仍需站长审阅与显式授权后才能进入部署流程。
+
+### 边缘缓存与旅程延迟
+
+public vantage 的旅程延迟受 Cloudflare 边缘缓存直接影响：`/`、`/wechat` 及其分页 API 的安全分页变体经 `AI Radar short public pagination TTL` Cache Rule 在边缘命中后，翻页 API 实测从 3-5s 降到 0.5-1.4s。注意这是 **API 层**改善——完整浏览器旅程 `wechat.pagination.settle` 的 settle 时间因还含渲染/交互开销，边缘缓存后单样本仍略高于 1500ms 预算，其 P95 是否达标待 hourly probe 积累样本确认；`homepage.first_card` 同理以样本为准，不因 API 提速即判定旅程达标。评估 public 样本回归前，先确认缓存仍在生效——冷缓存或规则失效会让 public 延迟整体回升，但不代表 origin 或 pipeline 退化。验证同一 URL 第二次请求为 `CF-Cache-Status: HIT`、`q=` 请求为 `DYNAMIC` + `private, no-store`；Cache Rule 配置、origin 头契约与完整验证命令见 [services.md §Cloudflare Cache Rule](services.md#cloudflare-cache-rulepublic-分页边缘缓存)。origin vantage 不经 CF，故不反映边缘缓存效果，可用来区分"缓存回退"与"真实后端退化"。
 
 ## `im-notify` 飞书告警通道
 

@@ -18,8 +18,11 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Type: plugin / open-source-cleanliness
 - Discovered: 2026-06-12, post-TASK-010; working tree showed `M AGENTS.md` re-introducing `aiplanet.live` and observation summaries via an injected `<claude-mem-context>` block.
 - Impact: `AGENTS.md` is a tracked file intended for the public open-source repo. The plugin re-pollutes it every session with memory context that can contain project/personal observations — a recurring leak risk that undermines sanitization. (The TASK-010 public clone was cut from the committed clean `AGENTS.md`, so it is unaffected; the pollution was uncommitted.)
+- Reproduced: 2026-07-15, a read-only nested Codex review launched through `codeagent-wrapper` appended the same block to an isolated candidate's tracked `AGENTS.md`; the reviewer prompt explicitly prohibited writes. The supervisor removed only the injected block and verified the file was byte-identical to `HEAD` before continuing.
+- Reproduced again: the clean Phase 0 canonical verifier passed when invoked with the candidate's `.venv/bin/python`, but each controller subcommand launched through `uv run ... verifier.py` observed a transient injected `AGENTS.md` and correctly failed repository identity with `candidate is dirty`; the block disappeared when the child process exited. The project verifier was changed to invoke its controller with the already validated Python runtime, while keeping canonical project checks under `uv run`.
 - Workaround used: `git restore AGENTS.md` before committing.
-- Suggested fix (owner harness config): exclude `AGENTS.md` from claude-mem's injection target, or strip the `<claude-mem-context>` block pre-commit, or keep memory context in an untracked file. Until fixed, verify `AGENTS.md` is clean before any commit/publish.
+- Update 2026-07-19: `AGENTS.md` is now a symlink to `CLAUDE.md`（规则加载断链修复）。claude-mem 的追加会穿透链接写入 `CLAUDE.md` 真身——git 表现为 `M CLAUDE.md`，清理命令相应改为 `git restore CLAUDE.md`（仍是一条命令；owner 已裁决维持此方向）。commit/publish 前的清洁校验对象同步改为 `CLAUDE.md`。
+- Suggested fix (owner harness config): exclude `AGENTS.md` from claude-mem's injection target, or strip the `<claude-mem-context>` block pre-commit, or keep memory context in an untracked file. Until fixed, verify `CLAUDE.md` is clean before any commit/publish.
 
 ## H3 — codex backend validates "publicly visible" criteria only on local http, missing the deploy form (https/tunnel/mixed-content)
 
@@ -74,3 +77,32 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Impact: a blocking review gate can look permanently active or finish without an auditable result. Because “review unavailable” is not a pass, the main session must spend extra turns distinguishing slow inference from a lost completion.
 - Workaround used: retain the printed session ID, monitor the child process, then call `codeagent-wrapper resume <session_id> ...` in foreground lite mode until a final verdict is returned.
 - Suggested fix: persist the final structured event and log until the caller acknowledges it; emit an explicit terminal status when the child exits; expose last-event time so monitoring can distinguish inference from a stalled or lost review.
+
+## H9 — post-commit skill-farm refresh uses an incompatible system Python
+
+- Type: hook / tooling
+- Discovered: 2026-07-15, committing skill fixes in `ai-agent-config`.
+- Symptom: the commit succeeds, but `codex/bin/post-commit` runs `python3 codex/bin/gen-agents-skills.py`; on the active macOS system Python 3.9.6, the script fails at import time on the Python 3.10 union annotation `list[str] | None` with `TypeError: unsupported operand type(s) for |`.
+- Impact: every affected commit reports a failed agents-skill farm refresh, so newly added or removed skill links may remain stale even though Git reports success.
+- Workaround used: none was needed for the two edited skills because their existing `~/.agents/skills/` symlinks already resolve to the canonical source files; verify those links explicitly after the commit.
+- Suggested fix: either keep `gen-agents-skills.py` compatible with the interpreter invoked by the hook, or make the hook select and validate a Python 3.10+ interpreter before running it; add a hook-level regression check using the oldest supported runtime.
+
+## H10 — Self-built verification machinery dominated wall-clock in the continuous-performance plan execution
+
+- Type: agent-behavior / plan-execution economics
+- Discovered: 2026-07-17, reviewing the codex session executing `plans/20260715-continuous-performance-loop/` (journal.md is the primary evidence).
+- Symptom: the product fix (archive count-cache invalidation + `/wechat` connection close) was complete with RED/GREEN evidence on day 1 (7/15 evening). The following ~2 days went almost entirely to the plan's self-built verification machinery: (1) the 7-node canonical chain was fully rebuilt at least 6 times, of which at least 2 were triggered by mechanical frozen-SHA identity syncs (2-line commits) and 2 failed on sandbox-environment issues (Seatbelt `.venv` ignore semantics, bash 3.2 heredoc temp files) unrelated to product or logic; (2) the production-action ledger anchor was hash-bound to the task-manifest file, so the first legitimate manifest evolution deadlocked the entire approval chain and required a new "manifest evolution contract" plus 3 review rounds; (3) an approval receipt had a ~16-minute expiry window against a human responder who answered 3h24m later — guaranteed expire-and-reprepare; (4) adversarial reviews of internal tooling ran 2-4 rounds per fix, repeatedly escalating findings premised on same-UID-attacker capabilities that the plan's locked trust model had explicitly excluded.
+- Impact: ~1.5 of 2 execution days spent on machinery self-verification rather than deliverable progress; the shipped performance fix sat undeployed the whole time.
+- Workaround used: user sent a mid-execution steering instruction — batch remaining production actions into one sequence, allow reuse of unaffected canonical green lights for non-authority-path fixes (tests/fixtures/docs), one final full-chain rebuild before delivery; plus a standing policy pre-approving non-push local actions (eliminates receipt-expiry rounds).
+- Suggested fix: APPLIED at the durable carriers — `~/research/ai-agent-config/claude/references/plan-review-principles.md` new conditional principle 17 (Verification Machinery Operating Contract: incremental re-verification semantics, receipt windows matched to responder, review depth bounded by declared threat model, identity/anchor evolution contract) and `claude/skills/review-gate/SKILL.md` (feed declared threat model to reviewers; findings premised on excluded capabilities cap at MEDIUM). Both passed their specialty review gates (review-principles 3 rounds / review-skill 2 rounds + verification lens) and are committed in ai-agent-config as abd1f74.
+
+## H11 — review-plan 审查循环在事发时缺收敛边界（熔断条款为 7/19 事后新增、尚未 commit）
+
+- Type: agent-behavior / review-loop economics
+- Discovered: 2026-07-18，`plans/20260718-feedback-loop/` plan 审查（独立 Codex reviewer 走 `$custom-review-plan` 契约）。
+- Symptom: 4 轮 full review 产出 12→12→15→10 条 findings（共 49 条全部修订落盘、含 12 项升级为用户拍板决策）；每轮修订后 reviewer 按契约"重新跑 final full review"，新一轮 findings 多为全新区域的更细粒度规格化（从"回滚会污染生产"级结构缺陷逐轮细化到"ballot 槽位未定义评分维度"级要求）且每轮新增 owner 决策；第 4 轮仍无 clean 迹象，owner 在第 5 轮发起后手动终止。
+- Impact: plan 阶段消耗 5 轮 reviewer 往返（每轮 5-15 分钟推理 + 主 session 修订 + AskUserQuestion 批次）；终态以 owner 裁决记录代替契约终止判据；无人值守会无限迭代。
+- Root cause: **事发时（2026-07-18）committed 的 `review-plan.md` 契约没有任何收敛/轮次预算机制**——"修订产生新 hash → 重新跑 final full review" 的循环入口对宏大 plan 供给无界。
+- 诊断时间线（本条目自身被改过两次，最终以 provenance 为准）：初版（7/18）诊断"契约缺收敛机制"——**正确**。7/19 上午第一次改写误把 ai-agent-config working tree 中**当日新增、未提交**的「收敛预算与停滞熔断」段（`git diff` 显示为 + 行，文件 mtime 2026-07-19 11:24）当作事发时已生效条款，错误改判为"机制存在但执行侧未触发"；同日规则审计的 review gate 抓出该 provenance 矛盾，本版更正回初版诊断并补全时间线。
+- Workaround used: 主 session 逐轮修订 + 用户决策批量代问压缩往返；owner 手动终止；plan 输入段如实记录"未获 clean 终态"。
+- Follow-up（条款已在 owner 侧补上，剩执行侧配套）: owner 已于 7/19 在 `~/.claude/commands/custom/review-plan.md` working tree 加入「收敛预算与停滞熔断」段（默认 2 轮完整循环预算 + 停滞判据 + AskUserQuestion 处置），待 commit。配套建议：(a) commit 该段并同步 `~/.agents/skills/custom-review-plan` wrapper；(b) create-plan「审查」节的 reviewer 初始/resume prompt 显式携带轮次预算状态，要求每轮终止报告先给停滞自检结论；(c) orchestrator 独立计数，预算耗尽即直接走停滞处置，不依赖 reviewer 自觉。

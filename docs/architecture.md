@@ -217,7 +217,7 @@ data/sources.toml
 
 ## Performance Monitoring and Remediation
 
-`performance-probe` 是 CLI 入口层下的只读浏览器探针：依次从同机 origin 与同机 public 测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定，按 `.pipeline.lock/pid` 把样本分为 idle、busy 或 unknown。`performance/journey_monitor.py` 将样本和 `PERF:*` 告警状态写入 `logs/performance/`，idle/busy 独立窗口判定，unknown 不进入合规窗口；样本和诊断证据保留 14 天。两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
+`performance-probe` 是 CLI 入口层下的只读浏览器探针：依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定，按 `.pipeline.lock/pid` 把样本分为 idle、busy 或 unknown。`performance/journey_monitor.py` 将样本和 `PERF:*` 告警状态写入 `logs/performance/`，idle/busy 独立窗口判定，unknown 不进入合规窗口；样本和诊断证据保留 14 天。两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
 
 confirmed `PERF:*` incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
 
@@ -336,6 +336,10 @@ SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"
 **Timeline（`/api/v1/timeline`）**：返回真实总数 COUNT（非 ADR-004 时期的前向估算）。计数与 rows 查询是**两套独立 SQL**：rows 用 EXISTS-per-row 子句判定每条 item 的最新 prefilter/scoring 评估，计数用 `latest_prefilter` / `latest_scoring` CTE + JOIN 的集合公式（`_count_timeline_items_with_prefilter()`），避免 per-row 子查询随数据量退化——改 timeline 过滤逻辑时两处需同步。计数缓存数据版本为 `_timeline_data_version()`（最新 curation_run id/ruleset、items 行数与 max rowid、max eval id）。CTE 计数依赖 migration `010` 的 `item_evaluations(stage,error,item_id,id DESC)` 索引。
 
 **精选归档（`/api/v1/curated` 无 `run_id`）**：跨 run 去重的累积归档——`curated_archive.py` 的 `_latest_curated_join()` 用 `c.run_id = (SELECT MAX(run_id) FROM curated_items WHERE item_id=i.id)` 相关子查询，每个 item 只保留其最近一次被精选的元数据。真实计数走 `_count_archive_items()` + `_cached_archive_total()`，数据版本由 migration `013` 的 `archive_cache_generations` 双计数器提供：归档成员变化 bump `archive_generation`，影响分类的 enrich 变化 bump `category_generation`；migration `014` 进一步让同一 item 的后续 curate run 不再把非成员变化误判为失效。归档每页用 `_compute_archive_page()` **现算 item_summary**（不依赖 `summary_json`——预计算只覆盖约 30%），enrichment 一次 `LEFT JOIN` 取出，关联讨论按页 `_batch_related_discussions()` 批量正/反查（`items_fts` 反查）。去重子查询依赖 migration `011` 的 `idx_curated_items_item_run(item_id, run_id)`。仅带 `date` 时仍走 `curated_archive.py` 的按日跨 run 归档（`/daily` 复用）；带 `run_id` 时才进 `curated_digest.py` 的单轮 digest，可再用 `date` 限定该轮内日期。
+
+### 公开分页的边缘缓存
+
+上面的进程内计数缓存之外，公开分页路径还叠了一层**边缘缓存**：`web/app.py` 的响应中间件对白名单路径（`/`、`/wechat`、`/api/v1/curated`、`/api/v1/wechat`）发 `Cache-Control`。判据 fail-closed——仅当请求是 GET/HEAD、响应 200、且查询参数是安全分页变体（子集 ⊆ `{page}`，API 再允许 `limit`）时发 `public, max-age=90, stale-while-revalidate=30`；带 `q=`/过滤/未知参数或非 200 一律回落 `private, no-store`，保证个性化与搜索结果不进共享缓存。据此 Cloudflare 侧配 respect-origin 模式的 Cache Rule 在边缘缓存 HTML/JSON（规则配置见 `operations/services.md` 的 Cloudflare Cache Rule 节，runbook 见 `operations/monitoring-alerting.md`）。前端 `web/static/app.js` 在 SSR preload 后预取下一页 API 并在点击时复用同一 promise，命中同一 90s 边缘窗口；search/category 请求绕过该 memo。
 
 ## Key Abstractions
 

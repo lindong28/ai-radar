@@ -81,6 +81,38 @@ def test_feed_pages_show_loading_state_while_fetching(page: Page, base_url: str)
         page.unroute(route_pattern, delay_response)
 
 
+def test_home_prefetches_next_api_page_and_reuses_it_on_click(page: Page, base_url: str) -> None:
+    _strip_ssr_preload(page)
+    requested_pages: list[int] = []
+
+    def curated_response(route):
+        requested_page = int(parse_qs(urlparse(route.request.url).query).get("page", ["1"])[0])
+        page_number = min(max(requested_page, 1), 2)
+        requested_pages.append(page_number)
+        item = _timeline_payload_item(
+            f"curated-page-{page_number}",
+            f"Curated page {page_number}",
+            f"2026-05-1{page_number}T10:00:00Z",
+        )
+        payload = _curated_payload([item])
+        payload["data"].update({"total": 80, "page": page_number, "limit": 40})
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    page.route("**/api/v1/curated*", curated_response)
+    with page.expect_response(lambda response: "/api/v1/curated" in response.url and "page=2" in response.url):
+        page.goto(f"{base_url}/", wait_until="domcontentloaded")
+
+    expect(page.locator(".timeline-card .item-title")).to_have_text("Curated page 1")
+    assert requested_pages.count(1) == 1
+    assert requested_pages.count(2) == 1
+
+    page.locator('#pagination .pagination-link[rel="next"]').click()
+
+    expect(page).to_have_url(f"{base_url}/?page=2")
+    expect(page.locator(".timeline-card .item-title")).to_have_text("Curated page 2")
+    assert requested_pages.count(2) == 1
+
+
 def test_feed_pages_show_error_state_when_fetch_fails(page: Page, base_url: str) -> None:
     _strip_ssr_preload(page)
     for path, endpoint in [("/", "/api/v1/curated"), ("/all", "/api/v1/timeline")]:

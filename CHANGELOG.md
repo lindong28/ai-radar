@@ -5,6 +5,8 @@
 - 修复精选归档计数缓存的过度失效和微信 SSR 请求连接生命周期，使首页与微信页面在 pipeline 写入期间保持稳定响应，同时保留精确总数和分页语义。
 - 新增 `performance-probe` 用户旅程监控：从同机 origin/public 测量首页、微信列表、详情和翻页，区分 pipeline idle/busy，以 `PERF:*` 规则告警并保留 14 天诊断证据。结果明确标为 same-host provisional，不作为区域 SLO。
 - 新增 `performance-remediate` 候选修复 worker：confirmed 性能退化可触发单个、最长 60 分钟的隔离 Codex worktree，生成未进入主分支且未部署的本地候选 commit；越界配置会 fail closed。
+- 修复 `performance-probe` 首页浏览器探针把正常样本误判为 `hard_failure` 的缺陷。此前它拿完整渲染卡片列表与 12 项期望做全等比较，导致每个健康首页样本都被标记 hard_failure；现改为按前缀匹配期望，前缀不符仍会 hard-fail。同时收紧 `performance-remediate` 的启用门槛说明：缺陷虽已修复，运维仍须先确认 hard_failure=false 且首页 `PERF:*` 未告警，再安装 remediate cron。
+- 为公开分页路径（`/`、`/wechat`、`/api/v1/curated`、`/api/v1/wechat`）在安全分页变体下让 origin 发 `Cache-Control: public, max-age=90, stale-while-revalidate=30`，而带 `q=`（含空 `q=`）、分类/日期/未知参数或非 200 响应一律 `private, no-store`（fail-closed 白名单，已验证这些路由无 cookie/会话变量）；前端 `app.js` 在 SSR 预载后预取下一页 API 并在点击翻页时复用同一 promise，搜索/分类请求绕过该 90 秒前端缓存。头部代码需重启 `serve` 生效。配套在 Cloudflare zone `aiplanet.live` 手动加了 Cache Rule「AI Radar short public pagination TTL」——这是 Cloudflare dashboard 侧配置、非 repo 代码，Edge TTL 与 Browser TTL 均 respect origin 头——使这些路径改由 CF 边缘缓存，实测翻页 API 从约 3-5s 的 DYNAMIC 回源降到约 0.5-1.4s 的 CF HIT。
 
 ## 2026-07-13
 

@@ -40,6 +40,23 @@ SHANGHAI_TZ = timezone(timedelta(hours=8))
 PREPAINT_ITEM_LIMIT = 12
 WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601"
 WECHAT_PAGE_LIMIT = 50
+PUBLIC_PAGINATION_CACHE_CONTROL = "public, max-age=90, stale-while-revalidate=30"
+PRIVATE_CACHE_CONTROL = "private, no-store"
+_PUBLIC_PAGINATION_QUERY_KEYS = {
+    "/": frozenset({"page"}),
+    "/wechat": frozenset({"page"}),
+    "/api/v1/curated": frozenset({"page", "limit"}),
+    "/api/v1/wechat": frozenset({"page", "limit"}),
+}
+
+
+def _public_pagination_cache_control(request: Request, status_code: int) -> str | None:
+    allowed_query_keys = _PUBLIC_PAGINATION_QUERY_KEYS.get(request.url.path)
+    if allowed_query_keys is None or request.method not in {"GET", "HEAD"}:
+        return None
+    if status_code != 200 or not set(request.query_params).issubset(allowed_query_keys):
+        return PRIVATE_CACHE_CONTROL
+    return PUBLIC_PAGINATION_CACHE_CONTROL
 
 
 def _uvicorn_log_config() -> dict[str, object]:
@@ -211,6 +228,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         response = await call_next(request)
         duration_ms = (perf_counter_ns() - started) / 1_000_000
         response.headers["Server-Timing"] = f"app;dur={duration_ms:.3f}"
+        cache_control = _public_pagination_cache_control(request, response.status_code)
+        if cache_control is not None:
+            response.headers["Cache-Control"] = cache_control
         return response
 
     @app.exception_handler(StarletteHTTPException)

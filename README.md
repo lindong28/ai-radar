@@ -78,7 +78,7 @@ sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 
 ### 用户旅程性能监控与候选修复
 
-`performance-probe` 每次用浏览器从同机 origin 与同机 public 两个视角测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定四条旅程。样本按 pipeline 的 `idle` / `busy` / `unknown` 分类，写入 `logs/performance/`；所有结果均为 **same-host provisional**，不代表区域 SLO。确认退化后，`performance-remediate` 会在隔离 worktree 中启动一个 fail-closed Codex worker，最多生成一个仅供人工审阅的本地候选 commit；它不会 push、deploy、调用 launchctl 或写生产数据库。
+`performance-probe` 每次用浏览器从同机 origin 与同机 public（由 `AI_RADAR_PUBLIC_URL` 环境变量配置；未配置时跳过 public 视角、仅测 origin）两个视角测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定四条旅程。样本按 pipeline 的 `idle` / `busy` / `unknown` 分类，写入 `logs/performance/`；所有结果均为 **same-host provisional**，不代表区域 SLO。确认退化后，`performance-remediate` 会在隔离 worktree 中启动一个 fail-closed Codex worker，最多生成一个仅供人工审阅的本地候选 commit；它不会 push、deploy、调用 launchctl 或写生产数据库。
 
 先核对两个 CLI，并只手工运行 probe 来确认浏览器、站点和告警配置可用：
 
@@ -88,7 +88,7 @@ sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 ./run.sh performance-probe
 ```
 
-两个命令不由 `install.sh` 管理。当前 U4 验收发现 homepage 正常渲染也会被误标 `hard_failure=true`；该缺陷会在样本窗口成熟后产生假 `PERF:*` firing，因此**现在只安装 probe，不要把 remediation 加入 cron**。下面命令按 marker 先删旧行再添加，重复执行不会制造重叠任务，并显式提供 cron 所需的 `uv` / `codex` PATH：
+两个命令不由 `install.sh` 管理。U4 发现的 homepage `hard_failure=true` 假阳性已修复：浏览器以首 12 条 SSR/prepaint ID 作为完整渲染列表的前缀校验，不再因后续正常卡片存在而误报。但 remediation 仍受运维 gate 约束：在部署该修复并手工验证 homepage `hard_failure=false` 且 homepage `PERF:*` 非 firing 前，**只安装 probe，不要把 remediation 加入 cron**。下面命令按 marker 先删旧行再添加，重复执行不会制造重叠任务，并显式提供 cron 所需的 `uv` / `codex` PATH：
 
 ```bash
 repo=$PWD
@@ -97,7 +97,7 @@ repo=$PWD
 } | crontab -
 ```
 
-修复 homepage hard-failure 口径、用手工 probe 确认 homepage 样本不再误标，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing 后，才先手工运行一次 remediation，再以同样的幂等方式把它安排在 probe 之后：
+部署包含上述修复的版本后，先用手工 probe 确认 homepage 样本 `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing；两项都满足后，才先手工运行一次 remediation，再以同样的幂等方式把它安排在 probe 之后：
 
 ```bash
 ./run.sh performance-remediate
@@ -216,7 +216,7 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1-A4 状态机决定 firing / resolved 后，通过 `im-notify --alert` 发送飞书告警 |
 | `performance-probe` | cron（建议每小时 :17） | 测量四条浏览器旅程，按 idle/busy 留存样本并评估 `PERF:*` 告警 |
-| `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage hard-failure 误标修复前禁止启用 cron，修复后在 probe 后处理 confirmed `PERF:*` incident |
+| `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
 
 ### 部署 / 移除 / 查状态
 
@@ -255,6 +255,10 @@ cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 ### 运维监控
 
 公网 `/admin` 需要 Cloudflare Access application + policy；飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 配置 `FEISHU_GENERAL_ALERT_WEBHOOK`。告警状态机自身负责冷却与恢复通知。具体步骤见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
+
+### Cloudflare 边缘缓存（可选）
+
+serve 会自动对公开分页路径（`/`、`/wechat` 及其 API）的安全变体（HTML 只认 `page`，API 认 `page`+`limit`）发 `Cache-Control` 缓存头——无需任何配置。要让翻页真正从 Cloudflare 边缘直接命中而非每次回源，还需在 Cloudflare dashboard 手动建一条名为 `AI Radar short public pagination TTL` 的 Cache Rule（origin 头是它的配套，缺一则边缘缓存不生效）。（前端 app.js 另会自动预取下一页，这是纯客户端优化，与 Cloudflare 缓存独立、同样无需配置。）规则表达式、Edge TTL 设置和 `CF-Cache-Status: HIT` 验证步骤见 [`docs/operations/services.md`](docs/operations/services.md) 的「Cloudflare Cache Rule」节。
 
 ### Docker / 其他平台
 

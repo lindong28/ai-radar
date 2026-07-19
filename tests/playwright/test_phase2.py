@@ -308,12 +308,14 @@ def test_wechat_card_body_click_opens_detail_and_back_preserves_page(page: Page,
 
 def test_wechat_pagination_renders_numeric_direct_links_and_arrow_boundaries(page: Page, base_url: str) -> None:
     _strip_wechat_preload(page)
+    requested_pages: list[int] = []
 
     def wechat_response(route):
         parsed = urlparse(route.request.url)
         params = parse_qs(parsed.query)
         requested_page = int(params.get("page", ["1"])[0])
         page_number = min(max(requested_page, 1), 4)
+        requested_pages.append(page_number)
         item = {
             "slug": f"wechat-page-{page_number}",
             "title": f"WeChat page {page_number}",
@@ -333,7 +335,8 @@ def test_wechat_pagination_renders_numeric_direct_links_and_arrow_boundaries(pag
         route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
 
     page.route("**/api/v1/wechat*", wechat_response)
-    page.goto(f"{base_url}/wechat", wait_until="domcontentloaded")
+    with page.expect_response(lambda response: "/api/v1/wechat" in response.url and "page=2" in response.url):
+        page.goto(f"{base_url}/wechat", wait_until="domcontentloaded")
 
     expect(page.locator(".wechat-card").first).to_be_visible(timeout=10_000)
     numeric_texts = page.locator("#pagination .pagination-link").evaluate_all(
@@ -341,19 +344,32 @@ def test_wechat_pagination_renders_numeric_direct_links_and_arrow_boundaries(pag
     )
     assert numeric_texts == ["1", "2", "3", "4"]
     assert page.locator('#pagination .pagination-link[rel="prev"]').count() == 0
+    assert requested_pages.count(1) == 1
+    assert requested_pages.count(2) == 1
 
     with page.expect_response(lambda response: "/api/v1/wechat" in response.url and "page=3" in response.url):
-        page.locator('#pagination .pagination-link[data-page="3"]').click()
+        page.locator('#pagination .pagination-link[rel="next"]').click()
+
+    expect(page).to_have_url(f"{base_url}/wechat?page=2")
+    expect(page.locator(".wechat-card .item-title")).to_have_text("WeChat page 2")
+    expect(page.locator('.pagination-link[aria-current="page"]')).to_have_text("2")
+    assert requested_pages.count(2) == 1
+    assert requested_pages.count(3) == 1
+
+    with page.expect_response(lambda response: "/api/v1/wechat" in response.url and "page=4" in response.url):
+        page.locator('#pagination .pagination-link[data-page="3"]').filter(has_text=re.compile(r"^3$")).click()
 
     expect(page).to_have_url(f"{base_url}/wechat?page=3")
     expect(page.locator(".wechat-card .item-title")).to_have_text("WeChat page 3")
     expect(page.locator('.pagination-link[aria-current="page"]')).to_have_text("3")
+    assert requested_pages.count(3) == 1
+    assert requested_pages.count(4) == 1
 
-    with page.expect_response(lambda response: "/api/v1/wechat" in response.url and "page=4" in response.url):
-        page.locator('#pagination .pagination-link[data-page="4"]').filter(has_text=re.compile(r"^4$")).click()
+    page.locator('#pagination .pagination-link[data-page="4"]').filter(has_text=re.compile(r"^4$")).click()
 
     expect(page).to_have_url(f"{base_url}/wechat?page=4")
     expect(page.locator(".wechat-card .item-title")).to_have_text("WeChat page 4")
+    assert requested_pages.count(4) == 1
     assert page.locator('#pagination .pagination-link[rel="next"]').count() == 0
 
 

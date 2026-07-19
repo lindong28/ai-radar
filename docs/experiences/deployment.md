@@ -37,3 +37,15 @@
 - Problem: 生产 serve 启动时执行 `db.migrate()`（FTS 表 / trigger 重建需要 `data/radar.db` 写锁）。cron 每 15 分钟跑一次 `pipeline.sh`（prefilter/score/enrich/interpret），运行时持有同一个 `data/radar.db` 写锁。若在 cron 任务正持锁时 `kickstart` 重启 serve，migrate 因 `database is locked` 崩溃 → launchd 重试窗口内站点 down。注：interpret stage 串行（并发 1），因复用的 ai-assistant KB 写入器非并发安全（见 docs/issues/general.md），pipeline 持锁时间不短。
 - Solution: 安全重启顺序——先暂停 cron（注释 crontab 里 `*/15 ... pipeline.sh` 那行）或等当前 pipeline 跑完锁释放，`ps` 确认无 `pipeline.sh` / `airadar.cli prefilter|score|enrich` 在跑，再 `launchctl kickstart -k "gui/$UID/<launchd-label-for-serve>"`。migrate 成功后再恢复 crontab。
 - Applies when: 重启 serve（应用迁移、改配置、升级）时——任何会触发 `db.migrate()` 的 serve 重启都要先确认没有调度任务正持 DB 写锁，否则 migrate 崩溃导致站点短暂 down。实际发生于 2026-06-02 上线 wechat 文章解读 pipeline 期间。
+
+## 2026-07-19 Cloudflare Free plan 建 Cache Rule 不要碰 Cache key section
+
+- Problem: 为给 `/`、`/wechat` 及对应 API 的无搜索分页按 `page` 参数分别缓存，在 dashboard 新建 Cache Rule 时显式设置了 Cache key -> Query string。点 Deploy 触发升级套餐弹层、规则保存失败，Cache Rules 列表显示 0 active（谓词看似正确但整条规则根本没生效）。根因：自定义 Cache key 是 Cloudflare 付费功能，Free plan 不可用。
+- Solution: Free plan 建 Cache Rule 时保持 Cache key 默认、完全不进入该 section。默认 cache key 本就包含**全部 query string**，所以「按 `page` 分别缓存」这类需求根本不需要自定义 cache key——不同 `page` 天然落不同缓存条目。去掉 Cache key 自定义后 Deploy 成功、规则 Active。
+- Applies when: 在 Cloudflare Free plan 上创建任何 Cache Rule 时——只配 Cache eligibility / Edge TTL / Browser TTL，别碰 Cache key。若确需按某 query 参数分缓存，确认默认 key 已覆盖（默认含全 query string），不要为此显式设 Cache key 而撞付费墙。
+
+## 2026-07-19 Cloudflare zone 默认 Browser Cache TTL 会覆盖 origin 的 Cache-Control
+
+- Problem: origin 对可缓存分页响应发 `Cache-Control: public, max-age=90`，但公网下游看到的却是 `max-age=14400`（4h）。edge 命中正常（edge TTL 早已 respect origin），问题只在 browser TTL 这一层：CF zone 级默认 Browser Cache TTL（4h）覆盖了 origin 的 `max-age`，下发给浏览器的是 zone 值而非 origin 的 90s。对每 15 分钟更新的站，浏览器缓存 4h 会让用户长时间看到陈旧内容。
+- Solution: 在 Cache Rule 里显式把 Browser TTL 设为 "Respect origin TTL"，让下游浏览器也用 origin 的 90s，而不是继承 zone 默认的 4h。edge TTL 保持 respect origin 不变。修复后公网 `max-age` 回到 90s、翻页 API `CF-Cache-Status: HIT`。
+- Applies when: 站点经 Cloudflare 暴露、origin 用短 `max-age` 控制客户端刷新频率时——不要假设 origin 的 `Cache-Control` 会原样透传到浏览器。分别核对 edge 与 browser 两层 TTL：edge 层 miss 看 zone/rule 的 Edge TTL，浏览器看到的 `max-age` 看 zone/rule 的 Browser TTL；zone 默认 Browser TTL 会静默覆盖 origin，需在 Cache Rule 里 respect origin 才透传。

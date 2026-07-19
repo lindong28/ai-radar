@@ -7,6 +7,25 @@ async function api(path) {
   return payload.data;
 }
 
+const PUBLIC_PREFETCH_TTL_MS = 90_000;
+
+function memoizedApi() {
+  const requests = new Map();
+  return (path, cacheable = true) => {
+    if (!cacheable) return api(path);
+    const cached = requests.get(path);
+    if (!cached || cached.expiresAt <= Date.now()) {
+      const request = api(path).catch((error) => {
+        requests.delete(path);
+        throw error;
+      });
+      requests.set(path, { request, expiresAt: Date.now() + PUBLIC_PREFETCH_TTL_MS });
+      return request;
+    }
+    return cached.request;
+  };
+}
+
 function readPreload() {
   const el = document.querySelector("#__PRELOAD__");
   if (!el) return null;
@@ -681,6 +700,21 @@ export async function initWechat() {
   const search = document.querySelector("#search");
   if (!search) return;
   let currentPage = pageFromUrl();
+  const loadWechatPage = memoizedApi();
+
+  function wechatApiPath(page) {
+    return queryPath("/api/v1/wechat", {
+      page,
+      q: search.value.trim(),
+      limit: WECHAT_PAGE_LIMIT,
+    });
+  }
+
+  function prefetchNextWechatPage(data) {
+    if (search.value.trim()) return;
+    const state = paginationState(data);
+    if (state.hasNext) void loadWechatPage(wechatApiPath(state.current + 1)).catch(() => {});
+  }
 
   function wechatUrlParams(page = currentPage) {
     return {
@@ -701,16 +735,16 @@ export async function initWechat() {
       hasQuery: Boolean(search.value.trim()),
     });
     renderWechatPagination(pagination, data, search.value.trim());
+    prefetchNextWechatPage(data);
   }
 
   async function load(page = pageFromUrl(), mode = "replace", updateUrl = true) {
     currentPage = page;
-    const q = search.value.trim();
     if (updateUrl) syncWechatUrl(page, mode);
     renderTimelineLoading(list);
     if (pagination) pagination.hidden = true;
     try {
-      const data = await api(queryPath("/api/v1/wechat", { page, q, limit: WECHAT_PAGE_LIMIT }));
+      const data = await loadWechatPage(wechatApiPath(page), !search.value.trim());
       const responsePage = Number(data.page || page);
       currentPage = responsePage;
       if (responsePage !== page || pageFromUrl() !== responsePage) {
@@ -912,6 +946,7 @@ export async function initCurated() {
   const runMeta = document.querySelector("#run-meta");
   let activeCategory = categoryFromUrl();
   let currentPage = pageFromUrl();
+  const loadCuratedPage = memoizedApi();
   if (runMeta) runMeta.textContent = "AI 自动挑选的高价值内容（日期为原文发布日，截至 2026 年）";
   const syncCategoryControls = bindCategoryControls((category) => {
     activeCategory = category;
@@ -930,6 +965,21 @@ export async function initCurated() {
       category: activeCategory,
       page: page > 1 ? String(page) : "",
     }, mode);
+  }
+
+  function curatedApiPath(page) {
+    return queryPath("/api/v1/curated", {
+      limit: 40,
+      page,
+      q: search.value.trim(),
+      category: CATEGORY_URL_VALUES[activeCategory] || "",
+    });
+  }
+
+  function prefetchNextCuratedPage(meta) {
+    if (search.value.trim() || activeCategory !== "all") return;
+    const state = paginationState(meta);
+    if (state.hasNext) void loadCuratedPage(curatedApiPath(state.current + 1)).catch(() => {});
   }
   search.value = searchFromUrl();
   normalizeFeedUrl("/", curatedUrlParams(currentPage));
@@ -952,22 +1002,24 @@ export async function initCurated() {
       category: activeCategory,
       path: "/",
     });
+    prefetchNextCuratedPage({
+      page: meta.page || currentPage,
+      total: meta.total || rawItems.length,
+      limit: meta.limit || 40,
+    });
   }
 
   async function load({ page = pageFromUrl(), mode = "replace", updateUrl = true } = {}) {
     currentPage = page;
-    const q = search.value.trim();
     if (updateUrl) syncCuratedUrl(page, mode);
     syncCategoryControls(activeCategory);
     renderTimelineLoading(list);
     if (pagination) pagination.hidden = true;
     try {
-      const data = await api(queryPath("/api/v1/curated", {
-        limit: 40,
-        page,
-        q,
-        category: CATEGORY_URL_VALUES[activeCategory] || "",
-      }));
+      const data = await loadCuratedPage(
+        curatedApiPath(page),
+        !search.value.trim() && activeCategory === "all",
+      );
       const responsePage = Number(data.page || page);
       currentPage = responsePage;
       if (responsePage !== page || pageFromUrl() !== responsePage) {

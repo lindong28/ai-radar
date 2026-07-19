@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import db
+from .. import db, runtime_env
 from .browser_probe import browser_runtime_available, measure_browser_journey
 from .context import collect_probe_context
 from .http_probe import measure_http_component
@@ -29,10 +29,11 @@ class ProbeRuntime:
 
 
 def canonical_probe_runtime() -> ProbeRuntime:
+    runtime_env.load_runtime_env()
     state_root = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/continuous-performance/projects/ai-radar"
     return ProbeRuntime(
         origin_url="http://127.0.0.1:8000",
-        public_url="https://aiplanet.live",
+        public_url=os.environ.get("AI_RADAR_PUBLIC_URL", ""),
         stage_ledger_root=state_root / "stage-ledger",
         browser_lock_path=state_root / "browser.lock",
         db_path=db.resolve_db_path(),
@@ -212,6 +213,10 @@ def run_adapter(
     timeout = float(raw_timeout)
     vantage = environ["CONTINUOUS_PERFORMANCE_VANTAGE"]
     base_url = runtime.origin_url if vantage == "same_host_origin" else runtime.public_url
+    if not base_url:
+        raise ProbeInfrastructureError(
+            f"vantage_unconfigured: {vantage} has no base URL (set AI_RADAR_PUBLIC_URL)"
+        )
     ledger = StageLedger(runtime.stage_ledger_root)
     detail_slug = _detail_slug(runtime.db_path)
     expectation = _probe_expectation(runtime.db_path, target, detail_slug)
@@ -280,7 +285,9 @@ def main() -> None:
         print(
             json.dumps(
                 {
-                    "status": "incompatible" if str(error).startswith("browser_runtime") else "skipped_overlap",
+                    "status": "incompatible"
+                    if str(error).startswith(("browser_runtime", "vantage_unconfigured"))
+                    else "skipped_overlap",
                     "reason": str(error),
                 },
                 sort_keys=True,

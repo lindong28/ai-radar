@@ -28,9 +28,10 @@
 
 | 文件 | 说明 |
 |---|---|
-| [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 |
-| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access 配置 runbook |
+| [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
+| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access、用户旅程性能监控与边缘缓存 runbook |
 | [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、真名头像 backfill、迁移留尾记录 |
+| [ai-assistant-integration.md](operations/ai-assistant-integration.md) | 可选外部 summary-agent 集成：启用条件、`./run.sh interpret` 契约、默认关闭语义 |
 
 ### docs/references/ [Developer]
 
@@ -57,7 +58,6 @@
 | 文件 | 说明 |
 |---|---|
 | [ux-contract.md](contracts/ux-contract.md) | AI Radar 对用户承诺的可观察行为：Personas、Surfaces、Journeys、Features、Quality Bar |
-| [aihot-parity-contract.md](contracts/aihot-parity-contract.md) | 与 AIHOT 的跨产品对比预期：Source Pool / Feed Reading / Algorithm Soundness Parity |
 
 ### docs/issues/ [Agent]
 
@@ -141,7 +141,7 @@
 |---|---|
 | 新 session 第一次接触项目 | 本文件（索引）-> architecture.md（系统结构）-> 按需深入 |
 | 设计新功能或架构变更前 | architecture.md（模块定位）+ prd/（需求边界）+ contracts/（行为承诺） |
-| 执行产品测试 / UX 测试前 | contracts/ux-contract.md + contracts/aihot-parity-contract.md |
+| 执行产品测试 / UX 测试前 | contracts/ux-contract.md |
 | 规划"接下来做什么" | issues/（待解决问题） |
 | 遇到报错或"感觉有坑"时 | experiences/（按文件名选 topic） |
 | 做新的架构或 API 设计决策前 | adr/README.md（索引）-> 相关 ADR |

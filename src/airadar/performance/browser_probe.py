@@ -133,7 +133,12 @@ def _measure_browser_journey_inner(
                     actual_ids = locators.evaluate_all(
                         "elements => elements.map(element => element.dataset.itemId || '')"
                     )
-                    hard_failure = hard_failure or actual_ids != expected_ids
+                    hard_failure = (
+                        hard_failure
+                        or not isinstance(expected_ids, list)
+                        or not expected_ids
+                        or actual_ids[: len(expected_ids)] != expected_ids
+                    )
                 if target == "wechat_pagination":
                     page_values = [
                         value

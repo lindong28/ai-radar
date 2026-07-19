@@ -7,9 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from time import monotonic
 
-from dotenv import dotenv_values
-
-from . import db
+from . import db, runtime_env
 from .admin.alerts import collect_alert_signals, run_alert_state_machine
 from .admin.metrics import SHANGHAI_TZ
 from .curator.select import curate
@@ -40,25 +38,7 @@ from .performance.remediation import (
 from .prefilter.runner import run_prefilter
 from .scorer.runner import run_scoring
 
-
-def _load_runtime_env(
-    *,
-    project_env: Path | None = None,
-    shared_env: Path | None = None,
-) -> None:
-    project_env = project_env or db.PROJECT_ROOT / ".env"
-    shared_env = shared_env or Path.home() / ".claude" / ".env"
-
-    values: dict[str, str] = {}
-    for env_path in (shared_env, project_env):
-        if not env_path.exists():
-            continue
-        for key, value in dotenv_values(env_path).items():
-            if value is not None:
-                values[key] = value
-
-    for key, value in values.items():
-        os.environ.setdefault(key, value)
+_load_runtime_env = runtime_env.load_runtime_env
 
 
 def _load_item_ids(path: str) -> list[str]:
@@ -437,7 +417,11 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=f"crontab example: {CRONTAB_SAMPLE}",
     )
     performance_probe.add_argument("--origin-url", default="http://127.0.0.1:8000")
-    performance_probe.add_argument("--public-url", default="https://aiplanet.live")
+    performance_probe.add_argument(
+        "--public-url",
+        default=os.environ.get("AI_RADAR_PUBLIC_URL", ""),
+        help="public site URL to probe; defaults to AI_RADAR_PUBLIC_URL, empty skips the public vantage",
+    )
     performance_probe.add_argument("--samples-path", default=str(DEFAULT_SAMPLE_PATH))
     performance_probe.add_argument("--state-path", default=str(DEFAULT_ALERT_STATE_PATH))
     performance_probe.add_argument("--evidence-dir", default=str(DEFAULT_EVIDENCE_DIR))

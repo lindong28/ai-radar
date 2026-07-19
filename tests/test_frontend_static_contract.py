@@ -269,7 +269,7 @@ def test_app_js_supports_wechat_search_url_state_and_empty_copy() -> None:
     assert "const WECHAT_PAGE_LIMIT = 50;" in js
     assert 'normalizeFeedUrl("/wechat"' in init_wechat
     assert 'queryPath("/api/v1/wechat"' in init_wechat
-    assert "q," in init_wechat
+    assert "q: search.value.trim()," in init_wechat
     assert "limit: WECHAT_PAGE_LIMIT" in init_wechat
     assert 'updateFeedUrl("/wechat"' in init_wechat
     assert "debounceInput(search, runSearch);" in init_wechat
