@@ -71,6 +71,7 @@ def test_journey_state_reader_sees_page_after_double_firing_state_is_projected(
     run_alert_results_state_machine(
         [],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         send=lambda text, *, severity="page": pytest.fail("normalization must not send"),
     )
     entry = _load_alert_state(state_path)["PERF:double"]
@@ -291,6 +292,7 @@ def test_writing_firing_evidence_removes_evidence_older_than_fourteen_days(
     run_performance_alerts(
         sample_path=sample_path,
         state_path=tmp_path / "state.json",
+        event_path=Path(tmp_path / "state.json").with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=now,
@@ -392,6 +394,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     first = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=lock_dir,
         now=started + timedelta(minutes=20),
@@ -402,6 +405,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     second = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=lock_dir,
         now=started + timedelta(minutes=21),
@@ -412,6 +416,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     confirmed = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=lock_dir,
         now=started + timedelta(minutes=22),
@@ -432,6 +437,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     unchanged = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=lock_dir,
         now=started + timedelta(minutes=23),
@@ -446,6 +452,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     resolved = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=lock_dir,
         now=started + timedelta(minutes=46),
@@ -470,6 +477,7 @@ def test_busy_and_idle_performance_compliance_streams_are_separate(tmp_path: Pat
     result = run_performance_alerts(
         sample_path=sample_path,
         state_path=tmp_path / "state.json",
+        event_path=Path(tmp_path / "state.json").with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(minutes=200),
@@ -485,6 +493,7 @@ def test_notice_busy_cells_roll_up_once_with_complete_values_and_most_severe_det
     tmp_path: Path,
 ) -> None:
     sample_path = tmp_path / "journey-samples.jsonl"
+    event_path = tmp_path / "alert-events.jsonl"
     started = datetime(2026, 7, 18, tzinfo=UTC)
     journeys = ("homepage.first_card", "wechat.pagination.settle")
     store_samples(sample_path, _notice_busy_batch(started, journeys), now=started + timedelta(days=1))
@@ -494,6 +503,7 @@ def test_notice_busy_cells_roll_up_once_with_complete_values_and_most_severe_det
         state_path=tmp_path / "state.json",
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        event_path=event_path,
         now=started + timedelta(days=1),
         send=lambda text, *, severity="page": {"skipped": False},
     )
@@ -525,6 +535,16 @@ def test_notice_busy_cells_roll_up_once_with_complete_values_and_most_severe_det
         },
     ]
     assert sum(cell.get("most_severe") is True for cell in rollup["values"]["cells"]) == 1
+    ledger_rows = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    assert len(ledger_rows) == 1
+    assert ledger_rows[0]["rule_id"] == "PERF:rollup:busy"
+    assert ledger_rows[0]["severity"] == "notice"
+    assert ledger_rows[0]["type"] == "firing"
+    assert ledger_rows[0]["values"]["cells"] == rollup["values"]["cells"]
+    assert not any(
+        row["rule_id"].endswith(":busy") and row["rule_id"] != "PERF:rollup:busy"
+        for row in ledger_rows
+    )
     assert "wechat.pagination.settle" in rollup["detail"]
     assert "wechat.pagination.settle [same_host_origin]：p95 实测 4000ms vs 预算 1500ms（最严重）" in rollup[
         "detail"
@@ -551,6 +571,7 @@ def test_notice_busy_rollup_does_not_merge_independent_idle_page(tmp_path: Path)
     result = run_performance_alerts(
         sample_path=sample_path,
         state_path=tmp_path / "state.json",
+        event_path=Path(tmp_path / "state.json").with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=1),
@@ -628,6 +649,7 @@ def test_notice_busy_rollup_keeps_real_page_gate_reasons_on_individual_keys(
     result = run_performance_alerts(
         sample_path=sample_path,
         state_path=tmp_path / "state.json",
+        event_path=Path(tmp_path / "state.json").with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=2),
@@ -669,6 +691,7 @@ def test_notice_busy_rollup_resolves_once_when_the_whole_batch_recovers(tmp_path
     first = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=1),
@@ -693,6 +716,7 @@ def test_notice_busy_rollup_resolves_once_when_the_whole_batch_recovers(tmp_path
     cleared = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=2),
@@ -723,6 +747,7 @@ def test_notice_busy_rollup_does_not_repeat_non_firing_after_second_clear(
     fired = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=1),
@@ -746,6 +771,7 @@ def test_notice_busy_rollup_does_not_repeat_non_firing_after_second_clear(
     first_clear = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=2),
@@ -759,6 +785,7 @@ def test_notice_busy_rollup_does_not_repeat_non_firing_after_second_clear(
     second_clear = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=2, minutes=1),
@@ -801,6 +828,7 @@ def test_rollup_migrates_announced_legacy_busy_key_once(
     migrated = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=1),
@@ -820,6 +848,7 @@ def test_rollup_migrates_announced_legacy_busy_key_once(
     repeated = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=1, minutes=1),
@@ -840,6 +869,7 @@ def test_rollup_evidence_uses_synthetic_episode_identity(tmp_path: Path) -> None
         run_performance_alerts(
             sample_path=sample_path,
             state_path=state_path,
+            event_path=Path(state_path).with_name("alert-events.jsonl"),
             evidence_dir=evidence_dir,
             pipeline_lock_dir=tmp_path / ".pipeline.lock",
             now=started + timedelta(days=1, minutes=minute),
@@ -871,6 +901,7 @@ def test_rollup_evidence_uses_synthetic_episode_identity(tmp_path: Path) -> None
     run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=2),
@@ -893,6 +924,7 @@ def test_rollup_evidence_uses_synthetic_episode_identity(tmp_path: Path) -> None
     run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(days=3),
@@ -1315,6 +1347,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
         confirmed = run_performance_alerts(
             sample_path=sample_path,
             state_path=state_path,
+            event_path=Path(state_path).with_name("alert-events.jsonl"),
             evidence_dir=evidence_dir,
             pipeline_lock_dir=lock_dir,
             now=started + timedelta(minutes=now_minute),
@@ -1327,6 +1360,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
     resolved_round = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=lock_dir,
         now=started + timedelta(minutes=30),
@@ -1355,6 +1389,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
     second_clear = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
         pipeline_lock_dir=lock_dir,
         now=started + timedelta(minutes=31),
@@ -1365,3 +1400,40 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
         receipt["type"] == "resolved" and "same_host_public" in receipt["rule_id"]
         for receipt in second_clear["sent"]
     )
+
+
+def test_performance_entry_persists_state_when_notification_ledger_is_corrupt(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    state_path = tmp_path / "journey-alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    original_ledger = "{not-json\n"
+    event_path.write_text(original_ledger, encoding="utf-8")
+    store_samples(
+        sample_path,
+        _notice_busy_batch(started, ("homepage.first_card",)),
+        now=started + timedelta(days=1),
+    )
+
+    result = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        event_path=event_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert [(receipt["rule_id"], receipt["type"]) for receipt in result["sent"]] == [
+        ("PERF:rollup:busy", "firing")
+    ]
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["PERF:rollup:busy"]["state"] == "firing"
+    assert state["PERF:rollup:busy"]["announced"] is True
+    assert event_path.read_text(encoding="utf-8") == original_ledger
+    assert str(event_path) in caplog.text
+    assert "JSONDecodeError" in caplog.text

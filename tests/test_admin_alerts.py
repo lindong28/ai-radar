@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import subprocess
+import sys
+import time
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,6 +16,7 @@ from types import MappingProxyType
 
 import pytest
 
+from airadar.admin import alerts as alerts_module
 from airadar.admin.alerts import (
     AlertRuleResult,
     AlertSignals,
@@ -215,6 +223,7 @@ def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) 
     first = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now,
         send=_recording_sender(deliveries),
         healthz_probe=healthz_down,
@@ -222,6 +231,7 @@ def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) 
     second = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=5),
         send=_recording_sender(deliveries),
         healthz_probe=healthz_down,
@@ -229,6 +239,7 @@ def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) 
     recovered = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=10),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -262,6 +273,7 @@ def test_fixed_page_rules_preserve_success_cooldown_and_resolve_timing(
     first = run_alert_state_machine(
         firing,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now,
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -269,6 +281,7 @@ def test_fixed_page_rules_preserve_success_cooldown_and_resolve_timing(
     second = run_alert_state_machine(
         firing,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=10),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -276,6 +289,7 @@ def test_fixed_page_rules_preserve_success_cooldown_and_resolve_timing(
     third = run_alert_state_machine(
         firing,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=31),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -283,6 +297,7 @@ def test_fixed_page_rules_preserve_success_cooldown_and_resolve_timing(
     resolved = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=40),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -341,6 +356,7 @@ def test_a4_branches_choose_severity_channel_and_operator_message(
     payload = run_alert_results_state_machine(
         [a4],
         state_path=tmp_path / f"a4-{expected_severity}.json",
+        event_path=Path(tmp_path / f"a4-{expected_severity}.json").with_name("alert-events.jsonl"),
         now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
         send=_recording_sender(calls),
         thresholds={
@@ -375,6 +391,7 @@ def test_a4_debounce_absorbs_transient_flap(tmp_path: Path) -> None:
     first = run_alert_state_machine(
         _a4_firing(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now,
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -382,6 +399,7 @@ def test_a4_debounce_absorbs_transient_flap(tmp_path: Path) -> None:
     recovered = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=15),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -402,6 +420,7 @@ def test_a4_debounce_fires_after_sustained_outage_then_resolves(tmp_path: Path) 
     first = run_alert_state_machine(
         _a4_firing(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now,
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -409,6 +428,7 @@ def test_a4_debounce_fires_after_sustained_outage_then_resolves(tmp_path: Path) 
     confirmed = run_alert_state_machine(
         _a4_firing(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=31),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -416,6 +436,7 @@ def test_a4_debounce_fires_after_sustained_outage_then_resolves(tmp_path: Path) 
     resolved = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=50),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -435,6 +456,7 @@ def test_a4_items_floor_pages_on_the_first_round(tmp_path: Path) -> None:
     first = run_alert_state_machine(
         _a4_items_floor_firing(),
         state_path=tmp_path / "items-floor.json",
+        event_path=Path(tmp_path / "items-floor.json").with_name("alert-events.jsonl"),
         now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
         send=_recording_sender(deliveries),
         healthz_probe=_healthz_ok,
@@ -494,11 +516,16 @@ def test_state_machine_routes_fire_and_resolve_on_persisted_episode_severity(
     )
 
     fired = run_alert_results_state_machine(
-        [firing], state_path=state_path, now=now, send=_recording_sender(calls)
+        [firing],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=now,
+        send=_recording_sender(calls),
     )
     resolved = run_alert_results_state_machine(
         [recovered],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=5),
         send=_recording_sender(calls),
     )
@@ -535,6 +562,7 @@ def test_legacy_flat_state_without_severity_recovers_with_page_resolved(tmp_path
     payload = run_alert_results_state_machine(
         [AlertRuleResult("TEST", "legacy", False, "ok", "none")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
         send=_recording_sender(calls),
     )
@@ -558,14 +586,28 @@ def test_failed_firing_retries_until_success_then_allows_resolve(tmp_path: Path)
     firing = AlertRuleResult("TEST", "retry", True, "detail", "action")
     recovered = AlertRuleResult("TEST", "retry", False, "ok", "action")
 
-    failed = run_alert_results_state_machine([firing], state_path=state_path, now=now, send=sender)
+    failed = run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=now,
+        send=sender,
+    )
     failed_state = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]
     retried = run_alert_results_state_machine(
-        [firing], state_path=state_path, now=now + timedelta(minutes=5), send=sender
+        [firing],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=now + timedelta(minutes=5),
+        send=sender,
     )
     successful_state = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]
     resolved = run_alert_results_state_machine(
-        [recovered], state_path=state_path, now=now + timedelta(minutes=6), send=sender
+        [recovered],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=now + timedelta(minutes=6),
+        send=sender,
     )
 
     assert failed["sent_count"] == retried["sent_count"] == resolved["sent_count"] == 1
@@ -598,6 +640,7 @@ def test_fixed_page_rules_retry_failed_firing_without_cooldown(
     first = run_alert_state_machine(
         signals,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now,
         send=sender,
         healthz_probe=_healthz_ok,
@@ -605,6 +648,7 @@ def test_fixed_page_rules_retry_failed_firing_without_cooldown(
     retried = run_alert_state_machine(
         signals,
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=5),
         send=sender,
         healthz_probe=_healthz_ok,
@@ -627,10 +671,17 @@ def test_unannounced_episode_closes_silently_and_failed_resolve_is_not_retried(t
         failed_calls.append((text, severity))
         return {"skipped": True}
 
-    run_alert_results_state_machine([firing], state_path=never_announced_path, now=now, send=failing_fire)
+    run_alert_results_state_machine(
+        [firing],
+        state_path=never_announced_path,
+        event_path=never_announced_path.with_name("alert-events.jsonl"),
+        now=now,
+        send=failing_fire,
+    )
     closed = run_alert_results_state_machine(
         [recovered],
         state_path=never_announced_path,
+        event_path=Path(never_announced_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=1),
         send=failing_fire,
     )
@@ -645,16 +696,24 @@ def test_unannounced_episode_closes_silently_and_failed_resolve_is_not_retried(t
         resolve_calls.append((text, severity))
         return {"skipped": False} if len(resolve_calls) == 1 else resolve_failure
 
-    run_alert_results_state_machine([firing], state_path=announced_path, now=now, send=success_then_fail)
+    run_alert_results_state_machine(
+        [firing],
+        state_path=announced_path,
+        event_path=announced_path.with_name("alert-events.jsonl"),
+        now=now,
+        send=success_then_fail,
+    )
     failed_resolve = run_alert_results_state_machine(
         [recovered],
         state_path=announced_path,
+        event_path=Path(announced_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=1),
         send=success_then_fail,
     )
     next_ok = run_alert_results_state_machine(
         [recovered],
         state_path=announced_path,
+        event_path=Path(announced_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=2),
         send=success_then_fail,
     )
@@ -714,7 +773,11 @@ def test_fresh_fixed_severity_delivery_outcome_matrix(
         return send_result
 
     attempted = run_alert_results_state_machine(
-        [incoming], state_path=state_path, now=current, send=sender
+        [incoming],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=current,
+        send=sender,
     )
     attempted_state = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]
     succeeded = outcome_case in {"success_dict", "success_mapping"}
@@ -739,6 +802,7 @@ def test_fresh_fixed_severity_delivery_outcome_matrix(
     followed = run_alert_results_state_machine(
         [followup_result],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=1),
         send=sender,
     )
@@ -785,12 +849,14 @@ def test_legacy_last_notified_uses_single_cooldown_before_retry(tmp_path: Path) 
     suppressed = run_alert_results_state_machine(
         [firing],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=10),
         send=_recording_sender(calls),
     )
     retried = run_alert_results_state_machine(
         [firing],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=31),
         send=_recording_sender(calls),
     )
@@ -868,11 +934,19 @@ def test_double_firing_current_state_projects_page_without_silent_healing(
     calls: list[tuple[str, str]] = []
 
     first = run_alert_results_state_machine(
-        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+        [],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=started + timedelta(minutes=5),
+        send=_recording_sender(calls),
     )
     first_saved = state_path.read_text(encoding="utf-8")
     second = run_alert_results_state_machine(
-        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+        [],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=started + timedelta(minutes=5),
+        send=_recording_sender(calls),
     )
     second_saved = state_path.read_text(encoding="utf-8")
     entry = json.loads(second_saved)["PERF:double"]
@@ -922,6 +996,7 @@ def test_pending_notice_to_page_closes_silently_and_pages_immediately(tmp_path: 
     pending = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=_recording_sender(calls),
         thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
@@ -929,6 +1004,7 @@ def test_pending_notice_to_page_closes_silently_and_pages_immediately(tmp_path: 
     upgraded = run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=15),
         send=_recording_sender(calls),
         thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
@@ -960,6 +1036,7 @@ def test_pending_notice_to_page_failed_send_retries_without_fake_resolve(tmp_pat
     pending = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=sender,
         thresholds=thresholds,
@@ -967,6 +1044,7 @@ def test_pending_notice_to_page_failed_send_retries_without_fake_resolve(tmp_pat
     failed_page = run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=15),
         send=sender,
         thresholds=thresholds,
@@ -975,6 +1053,7 @@ def test_pending_notice_to_page_failed_send_retries_without_fake_resolve(tmp_pat
     retried = run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=16),
         send=sender,
         thresholds=thresholds,
@@ -999,6 +1078,7 @@ def test_announced_notice_to_page_orders_resolve_before_firing(tmp_path: Path) -
     run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1006,6 +1086,7 @@ def test_announced_notice_to_page_orders_resolve_before_firing(tmp_path: Path) -
     announced = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=31),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1013,6 +1094,7 @@ def test_announced_notice_to_page_orders_resolve_before_firing(tmp_path: Path) -
     upgraded = run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=32),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1042,6 +1124,7 @@ def test_page_to_first_notice_orders_resolve_then_bypasses_notice_debounce(tmp_p
     run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1049,6 +1132,7 @@ def test_page_to_first_notice_orders_resolve_then_bypasses_notice_debounce(tmp_p
     transitioned = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=1),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1084,6 +1168,7 @@ def test_old_flat_announced_page_migrates_and_transitions_to_notice_in_order(
     transitioned = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=1),
         send=_recording_sender(calls),
         thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
@@ -1114,6 +1199,7 @@ def test_round_trip_severity_uses_only_target_cooldown(
     first = run_alert_results_state_machine(
         [_severity_result(first_severity)],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1122,6 +1208,7 @@ def test_round_trip_severity_uses_only_target_cooldown(
     second = run_alert_results_state_machine(
         [_severity_result(second_severity)],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=1),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1130,6 +1217,7 @@ def test_round_trip_severity_uses_only_target_cooldown(
     returned_early = run_alert_results_state_machine(
         [_severity_result(first_severity)],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=2),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1138,6 +1226,7 @@ def test_round_trip_severity_uses_only_target_cooldown(
     returned_after_cooldown = run_alert_results_state_machine(
         [_severity_result(first_severity)],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=31),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1200,6 +1289,7 @@ def test_clear_resolves_only_announced_lifecycle(tmp_path: Path) -> None:
     cleared = run_alert_results_state_machine(
         [_severity_result("page", firing=False)],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=5),
         send=_recording_sender(calls),
     )
@@ -1233,6 +1323,7 @@ def test_legacy_pending_a4_inherits_since_when_condition_becomes_notice(tmp_path
     pending = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=started + timedelta(minutes=15),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1241,6 +1332,7 @@ def test_legacy_pending_a4_inherits_since_when_condition_becomes_notice(tmp_path
     reloaded = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=started + timedelta(minutes=15),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1249,6 +1341,7 @@ def test_legacy_pending_a4_inherits_since_when_condition_becomes_notice(tmp_path
     announced = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=started + timedelta(minutes=31),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1286,6 +1379,7 @@ def test_legacy_unannounced_transition_does_not_fake_resolve_or_cross_throttle(
     upgraded = run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=started + timedelta(minutes=1),
         send=_recording_sender(calls),
     )
@@ -1321,11 +1415,19 @@ def test_load_save_normalizes_legacy_rule_entries_without_touching_healthz(tmp_p
     calls: list[tuple[str, str]] = []
 
     first = run_alert_results_state_machine(
-        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+        [],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=started + timedelta(minutes=5),
+        send=_recording_sender(calls),
     )
     first_saved = state_path.read_text(encoding="utf-8")
     second = run_alert_results_state_machine(
-        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+        [],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=started + timedelta(minutes=5),
+        send=_recording_sender(calls),
     )
     second_saved = state_path.read_text(encoding="utf-8")
     state = json.loads(second_saved)
@@ -1359,6 +1461,7 @@ def test_severity_debounce_map_falls_back_to_legacy_single_value(tmp_path: Path)
     pending = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1366,6 +1469,7 @@ def test_severity_debounce_map_falls_back_to_legacy_single_value(tmp_path: Path)
     announced = run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=11),
         send=_recording_sender(calls),
         thresholds=thresholds,
@@ -1395,12 +1499,14 @@ def test_failed_firing_after_severity_transition_retries_without_cooldown(tmp_pa
     run_alert_results_state_machine(
         [_severity_result("notice")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=sender,
     )
     transitioned = run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=1),
         send=sender,
     )
@@ -1408,6 +1514,7 @@ def test_failed_firing_after_severity_transition_retries_without_cooldown(tmp_pa
     retried = run_alert_results_state_machine(
         [_severity_result("page")],
         state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=2),
         send=sender,
     )
@@ -1443,15 +1550,27 @@ def test_legacy_fixed_page_cooldown_migrates_idempotently(tmp_path: Path, rule_i
     firing = AlertRuleResult(rule_id, "legacy", True, "still firing", "action")
 
     first = run_alert_results_state_machine(
-        [firing], state_path=state_path, now=current + timedelta(minutes=10), send=_recording_sender(calls)
+        [firing],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=current + timedelta(minutes=10),
+        send=_recording_sender(calls),
     )
     first_saved = state_path.read_text(encoding="utf-8")
     second = run_alert_results_state_machine(
-        [firing], state_path=state_path, now=current + timedelta(minutes=10), send=_recording_sender(calls)
+        [firing],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=current + timedelta(minutes=10),
+        send=_recording_sender(calls),
     )
     second_saved = state_path.read_text(encoding="utf-8")
     after_cooldown = run_alert_results_state_machine(
-        [firing], state_path=state_path, now=current + timedelta(minutes=31), send=_recording_sender(calls)
+        [firing],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=current + timedelta(minutes=31),
+        send=_recording_sender(calls),
     )
 
     assert first["sent_count"] == second["sent_count"] == 0
@@ -1505,3 +1624,674 @@ def test_send_alert_message_logs_failure_without_raising(monkeypatch, caplog) ->
     assert result == {"skipped": True, "reason": "im-notify exited with status 7"}
     assert "im-notify alert delivery failed" in caplog.text
     assert "delivery unavailable" in caplog.text
+
+
+def _read_ledger(path: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _ledger_result(
+    rule_id: str,
+    *,
+    firing: bool = True,
+    severity: str = "page",
+) -> AlertRuleResult:
+    return AlertRuleResult(
+        rule_id=rule_id,
+        title=f"{rule_id} title",
+        firing=firing,
+        detail=f"{rule_id} detail" if firing else f"{rule_id} recovered",
+        action="inspect evidence",
+        values={"identity": rule_id, "nested": [1, 2]},
+        severity=severity,  # type: ignore[arg-type]
+    )
+
+
+def test_notification_ledger_records_exact_successful_firing_resolved_cycle(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+
+    fired = run_alert_results_state_machine(
+        [_ledger_result("TEST", severity="notice")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    resolved = run_alert_results_state_machine(
+        [_ledger_result("TEST", firing=False)],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert _receipt_identities(fired) == [("TEST", "notice", "firing")]
+    assert _receipt_identities(resolved) == [("TEST", "notice", "resolved")]
+    rows = _read_ledger(event_path)
+    assert len(rows) == 2
+    assert [
+        (row["rule_id"], row["severity"], row["type"], row["channel"])
+        for row in rows
+    ] == [
+        ("TEST", "notice", "firing", "NOTIFICATION"),
+        ("TEST", "notice", "resolved", "NOTIFICATION"),
+    ]
+    assert all(set(row) == {"ts", "rule_id", "severity", "type", "detail", "values", "channel"} for row in rows)
+    assert rows[0]["detail"] == "TEST detail"
+    assert rows[0]["values"] == {"identity": "TEST", "nested": [1, 2]}
+    assert event_path.with_suffix(".lock").exists()
+
+
+def test_notification_ledger_success_adds_one_and_skipped_adds_zero(tmp_path: Path) -> None:
+    event_path = tmp_path / "alert-events.jsonl"
+    state_path = tmp_path / "state.json"
+    now = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    run_alert_results_state_machine(
+        [_ledger_result("DELIVERED")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    before = _read_ledger(event_path)
+
+    skipped = run_alert_results_state_machine(
+        [_ledger_result("SKIPPED")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=1),
+        send=lambda text, *, severity="page": {"skipped": True},
+    )
+
+    assert len(before) == len(_read_ledger(event_path)) == 1
+    assert skipped["sent"][0]["send_result"] == {"skipped": True}
+
+
+def test_a1_a4_public_path_writes_notification_ledger(tmp_path: Path) -> None:
+    signals = _normal_signals()
+    signals.upstream_error_rate = 0.8
+    event_path = tmp_path / "alert-events.jsonl"
+
+    payload = run_alert_state_machine(
+        signals,
+        state_path=tmp_path / "state.json",
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        send=lambda text, *, severity="page": {"skipped": False},
+        healthz_probe=_healthz_ok,
+    )
+
+    assert _receipt_identities(payload) == [("A1", "page", "firing")]
+    assert [(row["rule_id"], row["type"]) for row in _read_ledger(event_path)] == [
+        ("A1", "firing")
+    ]
+
+
+def test_notification_ledger_filters_sender_outcomes_by_success_receipt_multiset(
+    tmp_path: Path,
+) -> None:
+    event_path = tmp_path / "alert-events.jsonl"
+    outcomes: list[object] = [MappingProxyType({"skipped": False}), {"skipped": True}, None]
+
+    def sender(text: str, *, severity: str = "page") -> object:
+        return outcomes.pop(0)
+
+    payload = run_alert_results_state_machine(
+        [_ledger_result("ONE"), _ledger_result("TWO", severity="notice"), _ledger_result("THREE")],
+        state_path=tmp_path / "state.json",
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        send=sender,
+    )
+
+    successful_receipts = Counter(
+        (row["rule_id"], row["effective_severity"], row["type"])
+        for row in payload["sent"]
+        if isinstance(row["send_result"], Mapping) and row["send_result"].get("skipped") is False
+    )
+    actual = Counter(
+        (row["rule_id"], row["severity"], row["type"])
+        for row in _read_ledger(event_path)
+    )
+    assert len(payload["sent"]) == 3
+    assert successful_receipts == actual == Counter({("ONE", "page", "firing"): 1})
+
+
+@pytest.mark.parametrize(
+    ("from_severity", "to_severity"),
+    [("notice", "page"), ("page", "notice")],
+)
+def test_notification_ledger_preserves_both_successful_severity_transition_receipts(
+    tmp_path: Path,
+    from_severity: str,
+    to_severity: str,
+) -> None:
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    sender = lambda text, *, severity="page": {"skipped": False}  # noqa: E731
+    run_alert_results_state_machine(
+        [_ledger_result("A4", severity=from_severity)],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        send=sender,
+    )
+
+    before = len(_read_ledger(event_path))
+    transitioned = run_alert_results_state_machine(
+        [_ledger_result("A4", severity=to_severity)],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=1),
+        send=sender,
+    )
+    batch = _read_ledger(event_path)[before:]
+
+    assert _receipt_identities(transitioned) == [
+        ("A4", from_severity, "resolved"),
+        ("A4", to_severity, "firing"),
+    ]
+    assert [
+        (row["rule_id"], row["severity"], row["type"], row["channel"])
+        for row in batch
+    ] == [
+        (
+            "A4",
+            from_severity,
+            "resolved",
+            "NOTIFICATION" if from_severity == "notice" else "ALERT",
+        ),
+        (
+            "A4",
+            to_severity,
+            "firing",
+            "NOTIFICATION" if to_severity == "notice" else "ALERT",
+        ),
+    ]
+
+
+def test_notification_ledger_transition_writes_only_the_successful_invocation(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    run_alert_results_state_machine(
+        [_ledger_result("A4", severity="notice")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    outcomes = iter([{"skipped": False}, {"skipped": True}])
+
+    transitioned = run_alert_results_state_machine(
+        [_ledger_result("A4", severity="page")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=1),
+        send=lambda text, *, severity="page": next(outcomes),
+    )
+
+    assert len(transitioned["sent"]) == 2
+    assert [
+        (row["severity"], row["type"])
+        for row in _read_ledger(event_path)[1:]
+    ] == [("notice", "resolved")]
+
+
+def test_notification_ledger_retains_only_events_within_fourteen_days_on_write(
+    tmp_path: Path,
+) -> None:
+    event_path = tmp_path / "alert-events.jsonl"
+    now = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    existing = [
+        {
+            "ts": (now - timedelta(days=14, seconds=1)).isoformat(),
+            "rule_id": "OLD",
+            "severity": "page",
+            "type": "firing",
+            "detail": "old",
+            "values": {},
+            "channel": "ALERT",
+        },
+        {
+            "ts": (now - timedelta(days=14)).isoformat(),
+            "rule_id": "BOUNDARY",
+            "severity": "notice",
+            "type": "firing",
+            "detail": "new enough",
+            "values": {},
+            "channel": "NOTIFICATION",
+        },
+    ]
+    event_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in existing),
+        encoding="utf-8",
+    )
+
+    run_alert_results_state_machine(
+        [_ledger_result("NEW")],
+        state_path=tmp_path / "state.json",
+        event_path=event_path,
+        now=now,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert [row["rule_id"] for row in _read_ledger(event_path)] == ["BOUNDARY", "NEW"]
+
+
+def test_notification_ledger_two_process_writers_preserve_exact_identity_set(
+    tmp_path: Path,
+) -> None:
+    event_path = tmp_path / "alert-events.jsonl"
+    start_path = tmp_path / "start"
+    per_process = 20
+    script = """
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from airadar.admin.alerts import AlertRuleResult, run_alert_results_state_machine
+
+prefix, count, state_path, event_path, start_path = sys.argv[1:]
+while not Path(start_path).exists():
+    time.sleep(0.005)
+results = [
+    AlertRuleResult(f\"{prefix}-{index}\", \"concurrent\", True, \"detail\", \"action\", values={\"writer\": prefix})
+    for index in range(int(count))
+]
+run_alert_results_state_machine(
+    results,
+    state_path=Path(state_path),
+    event_path=Path(event_path),
+    now=datetime(2026, 7, 22, tzinfo=timezone.utc),
+    send=lambda text, *, severity=\"page\": {\"skipped\": False},
+)
+"""
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                prefix,
+                str(per_process),
+                str(tmp_path / f"{prefix}-state.json"),
+                str(event_path),
+                str(start_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    filter(None, (str(Path.cwd() / "src"), os.environ.get("PYTHONPATH")))
+                ),
+            },
+        )
+        for prefix in ("writer-a", "writer-b")
+    ]
+    start_path.touch()
+    completed = [process.communicate(timeout=10) for process in processes]
+
+    assert [(process.returncode, stderr) for process, (_stdout, stderr) in zip(processes, completed)] == [
+        (0, ""),
+        (0, ""),
+    ]
+    rows = _read_ledger(event_path)
+    expected = {
+        (f"{prefix}-{index}", "page", "firing")
+        for prefix in ("writer-a", "writer-b")
+        for index in range(per_process)
+    }
+    assert len(rows) == 2 * per_process
+    assert {(row["rule_id"], row["severity"], row["type"]) for row in rows} == expected
+
+
+def _assert_ledger_failure_isolated(
+    *,
+    state_path: Path,
+    event_path: Path,
+    now: datetime,
+) -> None:
+    payload = run_alert_results_state_machine(
+        [_ledger_result("FAIL-OPEN")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert _receipt_identities(payload) == [("FAIL-OPEN", "page", "firing")]
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))["FAIL-OPEN"]
+    assert persisted["state"] == "firing"
+    assert persisted["announced"] is True
+    repeated = run_alert_results_state_machine(
+        [_ledger_result("FAIL-OPEN")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=1),
+        send=lambda text, *, severity="page": pytest.fail("persisted state must prevent resend"),
+    )
+    assert repeated["sent"] == []
+
+
+def test_corrupt_notification_ledger_fails_open_without_overwrite(
+    tmp_path: Path,
+    caplog,
+) -> None:  # noqa: ANN001
+    event_path = tmp_path / "alert-events.jsonl"
+    original = b'{"ts": broken\n'
+    event_path.write_bytes(original)
+
+    _assert_ledger_failure_isolated(
+        state_path=tmp_path / "state.json",
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+    )
+
+    assert event_path.read_bytes() == original
+    assert str(event_path) in caplog.text
+    assert "JSONDecodeError" in caplog.text
+
+
+def test_oversized_notification_ledger_fails_open_without_read_or_overwrite(
+    tmp_path: Path,
+    caplog,
+) -> None:  # noqa: ANN001
+    event_path = tmp_path / "alert-events.jsonl"
+    with event_path.open("wb") as stream:
+        stream.truncate(64 * 1024 * 1024 + 1)
+    original_size = event_path.stat().st_size
+
+    _assert_ledger_failure_isolated(
+        state_path=tmp_path / "state.json",
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+    )
+
+    assert event_path.stat().st_size == original_size
+    assert str(event_path) in caplog.text
+    assert "LedgerOversizeError" in caplog.text
+
+
+def test_notification_ledger_lock_timeout_is_bounded_and_state_still_persists(
+    tmp_path: Path,
+    caplog,
+) -> None:  # noqa: ANN001
+    event_path = tmp_path / "alert-events.jsonl"
+    lock_path = tmp_path / "alert-events.lock"
+    original = b""
+    event_path.write_bytes(original)
+    locker = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl,sys,time; "
+                "f=open(sys.argv[1], 'a+'); "
+                "fcntl.flock(f.fileno(), fcntl.LOCK_EX); "
+                "print('locked', flush=True); time.sleep(2.5)"
+            ),
+            str(lock_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert locker.stdout is not None
+    assert locker.stdout.readline().strip() == "locked"
+    started = time.monotonic()
+    try:
+        _assert_ledger_failure_isolated(
+            state_path=tmp_path / "state.json",
+            event_path=event_path,
+            now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        )
+    finally:
+        locker.terminate()
+        locker.communicate(timeout=5)
+    elapsed = time.monotonic() - started
+
+    assert 0.9 <= elapsed < 1.6
+    assert event_path.read_bytes() == original
+    assert str(event_path) in caplog.text
+    assert "LedgerLockTimeoutError" in caplog.text
+
+
+def test_notification_ledger_replace_failure_preserves_original_and_state(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:  # noqa: ANN001
+    event_path = tmp_path / "alert-events.jsonl"
+    original = (
+        json.dumps(
+            {
+                "ts": "2026-07-22T07:00:00+08:00",
+                "rule_id": "ORIGINAL",
+                "severity": "page",
+                "type": "firing",
+                "detail": "original",
+                "values": {},
+                "channel": "ALERT",
+            }
+        )
+        + "\n"
+    ).encode()
+    event_path.write_bytes(original)
+
+    def fail_replace(source: object, destination: object) -> None:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr("airadar.admin.alerts.os.replace", fail_replace)
+    _assert_ledger_failure_isolated(
+        state_path=tmp_path / "state.json",
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+    )
+
+    assert event_path.read_bytes() == original
+    assert str(event_path) in caplog.text
+    assert "OSError" in caplog.text
+
+
+@pytest.mark.parametrize("skipped_values", [(True, False), (False, True)])
+def test_notification_ledger_snapshots_mutated_shared_sender_result_at_call_time(
+    tmp_path: Path,
+    skipped_values: tuple[bool, bool],
+) -> None:
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    run_alert_results_state_machine(
+        [_ledger_result("A4", severity="notice")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    before = len(_read_ledger(event_path))
+    shared_result: dict[str, object] = {}
+    outcomes = iter(skipped_values)
+
+    def mutating_sender(text: str, *, severity: str = "page") -> dict[str, object]:
+        shared_result["skipped"] = next(outcomes)
+        return shared_result
+
+    transitioned = run_alert_results_state_machine(
+        [_ledger_result("A4", severity="page")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=1),
+        send=mutating_sender,
+    )
+    batch = _read_ledger(event_path)[before:]
+    entry = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    expected_delivered = [skipped is False for skipped in skipped_values]
+
+    assert [receipt["send_result"] is shared_result for receipt in transitioned["sent"]] == [
+        True,
+        True,
+    ]
+    assert [receipt["delivered"] for receipt in transitioned["sent"]] == expected_delivered
+    assert entry["lifecycles"]["page"]["announced"] is expected_delivered[1]
+    expected_ledger = [
+        identity
+        for identity, delivered in zip(
+            [("A4", "notice", "resolved"), ("A4", "page", "firing")],
+            expected_delivered,
+        )
+        if delivered
+    ]
+    assert [(row["rule_id"], row["severity"], row["type"]) for row in batch] == expected_ledger
+
+
+def test_notification_ledger_fifo_returns_promptly_and_persists_state(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    os.mkfifo(event_path)
+    script = """
+import json
+import logging
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from airadar.admin.alerts import AlertRuleResult, run_alert_results_state_machine
+
+logging.basicConfig(level=logging.ERROR)
+state_path, event_path = map(Path, sys.argv[1:])
+payload = run_alert_results_state_machine(
+    [AlertRuleResult("FIFO", "fifo", True, "detail", "action")],
+    state_path=state_path,
+    event_path=event_path,
+    now=datetime(2026, 7, 22, tzinfo=timezone.utc),
+    send=lambda text, *, severity="page": {"skipped": False},
+)
+print(json.dumps({"sent": payload["sent_count"], "state_path": payload["state_path"]}))
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(state_path), str(event_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                filter(None, (str(Path.cwd() / "src"), os.environ.get("PYTHONPATH")))
+            ),
+        },
+    )
+    started = time.monotonic()
+    try:
+        stdout, stderr = process.communicate(timeout=1.5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate(timeout=5)
+        pytest.fail("FIFO ledger blocked the public alert entry beyond 1.5 seconds")
+    elapsed = time.monotonic() - started
+
+    assert process.returncode == 0, stderr
+    assert elapsed < 1.0
+    assert json.loads(stdout)["sent"] == 1
+    state = json.loads(state_path.read_text(encoding="utf-8"))["FIFO"]
+    assert state["state"] == "firing"
+    assert state["announced"] is True
+    assert str(event_path) in stderr
+    assert "LedgerNonRegularFileError" in stderr
+
+
+def test_notification_ledger_failure_survives_raising_logging_handler(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    class RaisingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            raise RuntimeError("hostile logging handler")
+
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    event_path.write_text("", encoding="utf-8")
+    hostile_logger = logging.Logger("phase6-hostile-ledger-logger")
+    hostile_logger.addHandler(RaisingHandler())
+
+    def fail_replace(source: object, destination: object) -> None:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(alerts_module.os, "replace", fail_replace)
+    monkeypatch.setattr(alerts_module, "LOGGER", hostile_logger)
+    payload = run_alert_results_state_machine(
+        [_ledger_result("LOGGER")],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert _receipt_identities(payload) == [("LOGGER", "page", "firing")]
+    state = json.loads(state_path.read_text(encoding="utf-8"))["LOGGER"]
+    assert state["state"] == "firing"
+    assert state["announced"] is True
+
+
+@pytest.mark.parametrize("alias_case", ["same", "state-is-lock", "event-is-own-lock"])
+def test_notification_ledger_rejects_state_event_and_lock_path_aliases(
+    tmp_path: Path,
+    alias_case: str,
+) -> None:
+    event_path = tmp_path / "alert-events.jsonl"
+    state_path = tmp_path / "state.json"
+    if alias_case == "same":
+        event_path = state_path
+    elif alias_case == "state-is-lock":
+        state_path = event_path.with_suffix(".lock")
+    else:
+        event_path = tmp_path / "alert-events.lock"
+    calls: list[tuple[str, str]] = []
+
+    with pytest.raises(ValueError, match="state_path, event_path, and ledger lock path must be distinct"):
+        run_alert_results_state_machine(
+            [_ledger_result("ALIAS")],
+            state_path=state_path,
+            event_path=event_path,
+            now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+            send=_recording_sender(calls),
+        )
+
+    assert calls == []
+    assert not state_path.exists()
+
+
+def test_a1_a4_entry_persists_state_when_notification_ledger_is_corrupt(
+    tmp_path: Path,
+    caplog,
+) -> None:  # noqa: ANN001
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    original = b'{"ts": broken\n'
+    event_path.write_bytes(original)
+    signals = _normal_signals()
+    signals.upstream_error_rate = 0.8
+
+    payload = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        send=lambda text, *, severity="page": {"skipped": False},
+        healthz_probe=_healthz_ok,
+    )
+
+    assert _receipt_identities(payload) == [("A1", "page", "firing")]
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["A1"]["state"] == "firing"
+    assert state["A1"]["announced"] is True
+    assert event_path.read_bytes() == original
+    assert str(event_path) in caplog.text
+    assert "JSONDecodeError" in caplog.text

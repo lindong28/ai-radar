@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import math
+import os
+import stat
 import subprocess
+import tempfile
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
@@ -19,7 +24,12 @@ from .thresholds import ALERT_THRESHOLDS
 
 RULESET = ("A1", "A2", "A3", "A4")
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
+DEFAULT_EVENT_PATH = db.PROJECT_ROOT / "data" / "alert-events.jsonl"
 COOLDOWN = timedelta(minutes=30)
+RETENTION_DAYS = 14
+MAX_LEDGER_BYTES = 64 * 1024 * 1024
+LEDGER_LOCK_TIMEOUT_SECONDS = 1.0
+LEDGER_LOCK_RETRY_SECONDS = 0.025
 MINUTES_PER_DAY = 24 * 60
 HEALTHZ_STATE_KEY = "healthz_probe"
 # src/airadar/web/routes/health.py registers /healthz and create_app mounts it
@@ -35,6 +45,18 @@ NOTICE_SEVERITY: Literal["notice"] = "notice"
 ALERT_CHANNEL = "ALERT"
 NOTIFICATION_CHANNEL = "NOTIFICATION"
 LOGGER = logging.getLogger(__name__)
+
+
+class LedgerOversizeError(RuntimeError):
+    pass
+
+
+class LedgerLockTimeoutError(TimeoutError):
+    pass
+
+
+class LedgerNonRegularFileError(RuntimeError):
+    pass
 
 
 class AlertSender(Protocol):
@@ -315,6 +337,13 @@ def _delivery_succeeded(send_result: object) -> bool:
     return isinstance(send_result, Mapping) and send_result.get("skipped") is False
 
 
+def _snapshot_delivery_succeeded(send_result: object) -> bool:
+    try:
+        return _delivery_succeeded(send_result)
+    except BaseException:  # A malformed sender result must not break state continuity.
+        return False
+
+
 def _entry_announced(entry: dict[str, object]) -> bool:
     if isinstance(entry.get("announced"), bool):
         return entry["announced"] is True
@@ -411,6 +440,7 @@ def _invoke_sender(
     sender: AlertSender,
 ) -> dict[str, object]:
     send_result = sender(text, severity=severity)
+    delivered = _snapshot_delivery_succeeded(send_result)
     return {
         "rule_id": result.rule_id,
         "type": event_type,
@@ -418,7 +448,197 @@ def _invoke_sender(
         "channel": _severity_channel(severity),
         "text": text,
         "send_result": send_result,
+        "delivered": delivered,
     }
+
+
+def _ledger_lock_path(event_path: Path) -> Path:
+    return event_path.with_suffix(".lock")
+
+
+def _validate_alert_paths(*, state_path: Path, event_path: Path) -> None:
+    paths = (state_path, event_path, _ledger_lock_path(event_path))
+    resolved = tuple(path.resolve(strict=False) for path in paths)
+    aliased = len(set(resolved)) != len(resolved)
+    if not aliased:
+        for index, left in enumerate(paths):
+            for right in paths[index + 1 :]:
+                try:
+                    if os.path.samefile(left, right):
+                        aliased = True
+                        break
+                except FileNotFoundError:
+                    continue
+            if aliased:
+                break
+    if aliased:
+        raise ValueError("state_path, event_path, and ledger lock path must be distinct")
+
+
+def _require_regular_file_if_present(path: Path, *, label: str) -> os.stat_result | None:
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise LedgerNonRegularFileError(f"notification ledger {label} is not a regular file: {path}")
+    return file_stat
+
+
+def _check_ledger_size(event_path: Path) -> None:
+    file_stat = _require_regular_file_if_present(event_path, label="path")
+    if file_stat is None:
+        return
+    size = file_stat.st_size
+    if size > MAX_LEDGER_BYTES:
+        raise LedgerOversizeError(
+            f"notification ledger is {size} bytes; limit is {MAX_LEDGER_BYTES} bytes"
+        )
+
+
+def _acquire_ledger_lock(lock_file: object, *, event_path: Path) -> None:
+    deadline = time.monotonic() + LEDGER_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            return
+        except BlockingIOError as exc:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LedgerLockTimeoutError(
+                    f"timed out locking notification ledger after "
+                    f"{LEDGER_LOCK_TIMEOUT_SECONDS:.1f}s: {event_path}"
+                ) from exc
+            time.sleep(min(LEDGER_LOCK_RETRY_SECONDS, remaining))
+
+
+def _read_ledger_rows(event_path: Path) -> list[dict[str, object]]:
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor: int | None = os.open(event_path, flags)
+    except FileNotFoundError:
+        return []
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise LedgerNonRegularFileError(
+                f"notification ledger path is not a regular file: {event_path}"
+            )
+        if file_stat.st_size > MAX_LEDGER_BYTES:
+            raise LedgerOversizeError(
+                f"notification ledger is {file_stat.st_size} bytes; "
+                f"limit is {MAX_LEDGER_BYTES} bytes"
+            )
+        with os.fdopen(descriptor, encoding="utf-8") as ledger_file:
+            descriptor = None
+            ledger_text = ledger_file.read()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(ledger_text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError(f"notification ledger line {line_number} is not an object")
+        rows.append(row)
+    return rows
+
+
+def _write_ledger_rows(event_path: Path, rows: list[dict[str, object]]) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=event_path.parent,
+            prefix=f".{event_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            for row in rows:
+                temporary.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        os.replace(temporary_path, event_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _record_notification_events(
+    event_path: str | Path,
+    *,
+    current: datetime,
+    delivered: list[tuple[dict[str, object], AlertRuleResult]],
+) -> None:
+    try:
+        successful = [
+            (receipt, result)
+            for receipt, result in delivered
+            if receipt.get("delivered") is True
+        ]
+        if not successful:
+            return
+        path = Path(event_path)
+        _check_ledger_size(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = _ledger_lock_path(path)
+        _require_regular_file_if_present(lock_path, label="lock path")
+        lock_flags = os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            lock_flags |= os.O_NOFOLLOW
+        lock_descriptor: int | None = os.open(lock_path, lock_flags, 0o666)
+        try:
+            lock_stat = os.fstat(lock_descriptor)
+            if not stat.S_ISREG(lock_stat.st_mode):
+                raise LedgerNonRegularFileError(
+                    f"notification ledger lock path is not a regular file: {lock_path}"
+                )
+            lock_file = os.fdopen(lock_descriptor, mode="r+")
+            lock_descriptor = None
+        finally:
+            if lock_descriptor is not None:
+                os.close(lock_descriptor)
+        with lock_file:
+            _acquire_ledger_lock(lock_file, event_path=path)
+            try:
+                _check_ledger_size(path)
+                rows = _read_ledger_rows(path)
+                rows.extend(
+                    {
+                        "ts": current.isoformat(),
+                        "rule_id": receipt["rule_id"],
+                        "severity": receipt["effective_severity"],
+                        "type": receipt["type"],
+                        "detail": result.detail,
+                        "values": result.values,
+                        "channel": receipt["channel"],
+                    }
+                    for receipt, result in successful
+                )
+                cutoff = current - timedelta(days=RETENTION_DAYS)
+                retained = [
+                    row
+                    for row in rows
+                    if (timestamp := _parse_dt(row.get("ts"))) is None or timestamp >= cutoff
+                ]
+                _write_ledger_rows(path, retained)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except BaseException as exc:  # The ledger must never block alert state persistence.
+        try:
+            LOGGER.error(
+                "notification ledger write failed event_path=%s exception=%s: %s",
+                event_path,
+                type(exc).__name__,
+                exc,
+            )
+        except BaseException:
+            pass
 
 
 def _load_state(path: Path) -> dict[str, dict[str, object]]:
@@ -500,8 +720,10 @@ def _apply_alert_results(
     current: datetime,
     sender: AlertSender,
     thresholds: dict[str, object],
+    event_path: str | Path,
 ) -> list[dict[str, object]]:
     sent: list[dict[str, object]] = []
+    delivered: list[tuple[dict[str, object], AlertRuleResult]] = []
     for result in results:
         entry = state.get(
             result.rule_id,
@@ -527,15 +749,15 @@ def _apply_alert_results(
                 if announced:
                     outgoing_announced = True
                     outgoing_since = lifecycle.get("since")
-                    sent.append(
-                        _invoke_sender(
-                            result=result,
-                            event_type="resolved",
-                            text=_format_resolved(result, str(lifecycle.get("since") or "")),
-                            severity=severity,
-                            sender=sender,
-                        )
+                    receipt = _invoke_sender(
+                        result=result,
+                        event_type="resolved",
+                        text=_format_resolved(result, str(lifecycle.get("since") or "")),
+                        severity=severity,
+                        sender=sender,
                     )
+                    sent.append(receipt)
+                    delivered.append((receipt, result))
                 elif pending_since is None:
                     pending_since = lifecycle.get("since")
                 lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
@@ -581,7 +803,8 @@ def _apply_alert_results(
                     sender=sender,
                 )
                 sent.append(receipt)
-                delivery_succeeded = _delivery_succeeded(receipt["send_result"])
+                delivered.append((receipt, result))
+                delivery_succeeded = receipt["delivered"] is True
             lifecycles[effective_severity] = {
                 "state": "firing",
                 "since": since,
@@ -601,15 +824,15 @@ def _apply_alert_results(
                 if lifecycle is None or lifecycle.get("state") != "firing":
                     continue
                 if _entry_announced(lifecycle):
-                    sent.append(
-                        _invoke_sender(
-                            result=result,
-                            event_type="resolved",
-                            text=_format_resolved(result, str(lifecycle.get("since") or "")),
-                            severity=severity,
-                            sender=sender,
-                        )
+                    receipt = _invoke_sender(
+                        result=result,
+                        event_type="resolved",
+                        text=_format_resolved(result, str(lifecycle.get("since") or "")),
+                        severity=severity,
+                        sender=sender,
                     )
+                    sent.append(receipt)
+                    delivered.append((receipt, result))
                 lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
             if projected_severity not in lifecycles:
                 projected_severity = _normalize_severity(result.severity)
@@ -623,6 +846,10 @@ def _apply_alert_results(
                 lifecycles,
                 preferred_severity=projected_severity,
             )
+    try:
+        _record_notification_events(event_path, current=current, delivered=delivered)
+    except BaseException:
+        pass
     return sent
 
 
@@ -630,6 +857,7 @@ def run_alert_results_state_machine(
     results: list[AlertRuleResult],
     *,
     state_path: str | Path,
+    event_path: str | Path = DEFAULT_EVENT_PATH,
     now: datetime | None = None,
     send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
@@ -639,6 +867,8 @@ def run_alert_results_state_machine(
         current = current.replace(tzinfo=SHANGHAI_TZ)
     current = current.astimezone(SHANGHAI_TZ)
     path = Path(state_path)
+    ledger_path = Path(event_path)
+    _validate_alert_paths(state_path=path, event_path=ledger_path)
     state = _load_state(path)
     sent = _apply_alert_results(
         state,
@@ -646,6 +876,7 @@ def run_alert_results_state_machine(
         current=current,
         sender=send or send_alert_message,
         thresholds=thresholds or {},
+        event_path=ledger_path,
     )
     _write_state(path, state)
     return {
@@ -661,6 +892,7 @@ def run_alert_state_machine(
     signals: AlertSignals,
     *,
     state_path: str | Path = DEFAULT_STATE_PATH,
+    event_path: str | Path = DEFAULT_EVENT_PATH,
     now: datetime | None = None,
     send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
@@ -671,6 +903,8 @@ def run_alert_state_machine(
         current = current.replace(tzinfo=SHANGHAI_TZ)
     current = current.astimezone(SHANGHAI_TZ)
     path = Path(state_path)
+    ledger_path = Path(event_path)
+    _validate_alert_paths(state_path=path, event_path=ledger_path)
     state = _load_state(path)
     sender = send or send_alert_message
     active_thresholds = thresholds or ALERT_THRESHOLDS
@@ -688,6 +922,7 @@ def run_alert_state_machine(
         current=current,
         sender=sender,
         thresholds=active_thresholds,
+        event_path=ledger_path,
     )
 
     _write_state(path, state)

@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from .. import db
-from ..admin.alerts import AlertRuleResult, AlertSender, run_alert_results_state_machine
+from ..admin.alerts import (
+    DEFAULT_EVENT_PATH,
+    AlertRuleResult,
+    AlertSender,
+    run_alert_results_state_machine,
+)
 from .browser_probe import measure_browser_journey
 
 WARM_SAMPLES = 20
@@ -647,6 +652,7 @@ def run_performance_alerts(
     state_path: Path,
     evidence_dir: Path,
     pipeline_lock_dir: Path,
+    event_path: Path = DEFAULT_EVENT_PATH,
     now: datetime | None = None,
     send: AlertSender | None = None,
     enabled_vantages: frozenset[str] | None = None,
@@ -696,6 +702,7 @@ def run_performance_alerts(
     return run_alert_results_state_machine(
         evidenced,
         state_path=state_path,
+        event_path=event_path,
         now=current,
         send=send,
     )
