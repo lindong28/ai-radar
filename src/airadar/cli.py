@@ -3,6 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import sqlite3
+import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
@@ -10,6 +14,13 @@ from time import monotonic
 from . import db, runtime_env
 from .admin.alerts import collect_alert_signals, run_alert_state_machine
 from .admin.metrics import SHANGHAI_TZ
+from .curator.precompute import (
+    DEFAULT_KEEP_DAYS,
+    RetentionStats,
+    curated_summary_retention_stats,
+    precompute_curated_summaries,
+    retain_curated_summaries,
+)
 from .curator.select import curate
 from .curator.weights import load_weights
 from .enrich.runner import run_enrich
@@ -64,6 +75,149 @@ def _remediation_timeout(value: str) -> int:
     if not 0 < timeout <= DEFAULT_TIMEOUT_SECONDS:
         raise argparse.ArgumentTypeError(f"timeout must be between 1 and {DEFAULT_TIMEOUT_SECONDS} seconds")
     return timeout
+
+
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a non-negative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
+@dataclass(frozen=True)
+class DbSlimResult:
+    retained: bool
+    compacted: bool
+    cleared_rows: int
+    reclaimed_file_bytes: int
+    error: str | None = None
+
+
+def _existing_db_path(path: str | Path | None) -> Path:
+    db_path = db.resolve_db_path(path)
+    if not db_path.is_file():
+        raise FileNotFoundError(f"database does not exist: {db_path}")
+    return db_path
+
+
+def _connect_existing_db(db_path: Path, *, readonly: bool) -> sqlite3.Connection:
+    mode = "ro" if readonly else "rw"
+    conn = sqlite3.connect(f"{db_path.as_uri()}?mode={mode}", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    if readonly:
+        conn.execute("PRAGMA query_only=ON")
+    return conn
+
+
+def _require_writable_db(db_path: Path) -> None:
+    if not db_path.stat().st_mode & 0o222 or not os.access(db_path, os.W_OK):
+        raise PermissionError(f"database is not writable: {db_path}")
+
+
+def _has_vacuum_space(db_path: Path) -> bool:
+    target = db_path.resolve(strict=True)
+    return shutil.disk_usage(target.parent).free >= target.stat().st_size * 2
+
+
+def _dry_run_retention_stats(db_path: Path, keep_days: int) -> RetentionStats:
+    conn = _connect_existing_db(db_path, readonly=True)
+    try:
+        return curated_summary_retention_stats(conn, keep_days)
+    finally:
+        conn.close()
+
+
+def _vacuum_database(conn: sqlite3.Connection) -> None:
+    conn.execute("VACUUM")
+
+
+def _slim_database(db_path: Path, keep_days: int) -> DbSlimResult:
+    _require_writable_db(db_path)
+    before_size = db_path.stat().st_size
+    conn = _connect_existing_db(db_path, readonly=False)
+    try:
+        cleared_rows = retain_curated_summaries(conn, keep_days)
+    except Exception:
+        conn.close()
+        raise
+
+    error: str | None = None
+    compacted = False
+    try:
+        if not _has_vacuum_space(db_path):
+            error = "insufficient disk space for VACUUM"
+        else:
+            _vacuum_database(conn)
+            compacted = True
+    except Exception as exc:
+        error = str(exc)
+    finally:
+        try:
+            conn.close()
+        except Exception as exc:
+            compacted = False
+            error = str(exc)
+
+    if not compacted:
+        return DbSlimResult(
+            retained=True,
+            compacted=False,
+            cleared_rows=cleared_rows,
+            reclaimed_file_bytes=0,
+            error=error,
+        )
+    try:
+        reclaimed = max(0, before_size - db_path.stat().st_size)
+    except Exception as exc:
+        return DbSlimResult(
+            retained=True,
+            compacted=False,
+            cleared_rows=cleared_rows,
+            reclaimed_file_bytes=0,
+            error=str(exc),
+        )
+    return DbSlimResult(
+        retained=True,
+        compacted=True,
+        cleared_rows=cleared_rows,
+        reclaimed_file_bytes=reclaimed,
+    )
+
+
+def _admin_db_retention(args: argparse.Namespace) -> int:
+    try:
+        if args.db_path is not None and not str(args.db_path).strip():
+            raise ValueError("database path must not be empty or blank")
+        db_path = _existing_db_path(args.db_path)
+        if args.dry_run:
+            stats = _dry_run_retention_stats(db_path, args.keep_days)
+            print(
+                f"eligible_rows={stats.eligible_rows} "
+                f"logical_summary_bytes={stats.logical_summary_bytes}"
+            )
+            return 0
+        if args.db_command == "retain":
+            _require_writable_db(db_path)
+            with _connect_existing_db(db_path, readonly=False) as conn:
+                cleared_rows = retain_curated_summaries(conn, args.keep_days)
+            print(f"retained=true cleared_rows={cleared_rows}")
+            return 0
+        result = _slim_database(db_path, args.keep_days)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        print(f"error={exc}", file=sys.stderr)
+        return 2
+    suffix = f" error={result.error}" if result.error else ""
+    print(
+        f"retained={str(result.retained).lower()} "
+        f"compacted={str(result.compacted).lower()} "
+        f"cleared_rows={result.cleared_rows} "
+        f"reclaimed_file_bytes={result.reclaimed_file_bytes}{suffix}"
+    )
+    return 0 if result.compacted else 1
 
 
 def _fetch(args: argparse.Namespace) -> int:
@@ -162,9 +316,8 @@ def _curate(args: argparse.Namespace) -> int:
             freshness_quota=args.freshness_quota,
             freshness_floor=args.freshness_floor,
         )
-        from .curator.precompute import precompute_curated_summaries
-
         precompute_curated_summaries(conn, run.id)
+        retain_curated_summaries(conn, DEFAULT_KEEP_DAYS)
     print(f"curate run_id={run.id} selected={len(run.output_curated_ids)} threshold={run.threshold}")
     return 0
 
@@ -306,6 +459,8 @@ def _admin(args: argparse.Namespace) -> int:
         result = db.checkpoint_db(args.db_path)
         print(f"checkpoint busy={result.busy} log={result.log} checkpointed={result.checkpointed}")
         return 0
+    if args.admin_command == "db" and args.db_command in {"retain", "slim"}:
+        return _admin_db_retention(args)
     if args.admin_command == "sources":
         with db.get_conn() as conn:
             if args.sources_command == "reload":
@@ -458,6 +613,11 @@ def build_parser() -> argparse.ArgumentParser:
     db_subparsers.add_parser("migrate")
     db_checkpoint = db_subparsers.add_parser("checkpoint")
     db_checkpoint.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
+    for command in ("retain", "slim"):
+        db_retention = db_subparsers.add_parser(command)
+        db_retention.add_argument("--keep-days", type=_non_negative_int, default=DEFAULT_KEEP_DAYS)
+        db_retention.add_argument("--dry-run", action="store_true")
+        db_retention.add_argument("--db-path")
     sources_parser = admin_subparsers.add_parser("sources")
     sources_subparsers = sources_parser.add_subparsers(dest="sources_command", required=True)
     sources_subparsers.add_parser("reload")
