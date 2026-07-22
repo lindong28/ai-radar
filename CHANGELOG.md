@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-22
+
+- 将运维告警从单一 page 级别升级为 page/notice 分级：需立即处置的事故发往 `ALERT`，低打扰退化发往 `NOTIFICATION`。pipeline busy 期间但同视角 idle 正常的 PERF 超预算会合并成一条 `PERF:rollup:busy` notice，而真实 idle/公网退化仍保留 page。新增 `data/alert-events.jsonl` 已送达通知历史，可按规则、severity、firing/resolved 与通道查询最近 14 天的成功投递。
+
 ## 2026-07-19
 
 - 修复精选归档计数缓存的过度失效和微信 SSR 请求连接生命周期，使首页与微信页面在 pipeline 写入期间保持稳定响应，同时保留精确总数和分页语义。

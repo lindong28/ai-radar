@@ -85,6 +85,8 @@
 | [005-timeline-exact-count-with-cached-cte.md](adr/005-timeline-exact-count-with-cached-cte.md) | Timeline 真实总数计数 + CTE 公式 + 进程内 LRU 缓存 |
 | [006-curated-archive-mode.md](adr/006-curated-archive-mode.md) | 精选页改为跨 run 去重的累积归档（复用 ADR-005 真实计数 pattern） |
 | [007-interpret-via-ai-assistant-summarizer.md](adr/007-interpret-via-ai-assistant-summarizer.md) | 微信文章解读复用 ai-assistant summarizer，save_decision 作单一闸门 |
+| [008-alert-severity-lifecycles.md](adr/008-alert-severity-lifecycles.md) | 告警按 severity 维护独立 lifecycle，并保留 page-preferring 兼容投影 |
+| [009-alert-notification-ledger.md](adr/009-alert-notification-ledger.md) | 用有界、fail-open 的 JSONL 记录已送达告警通知 |
 
 ### docs/experiences/ [Agent]
 

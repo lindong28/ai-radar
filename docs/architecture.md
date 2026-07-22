@@ -217,9 +217,30 @@ data/sources.toml
 
 ## Performance Monitoring and Remediation
 
-`performance-probe` 是 CLI 入口层下的只读浏览器探针：依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定，按 `.pipeline.lock/pid` 把样本分为 idle、busy 或 unknown。`performance/journey_monitor.py` 将样本和 `PERF:*` 告警状态写入 `logs/performance/`，idle/busy 独立窗口判定，unknown 不进入合规窗口；样本和诊断证据保留 14 天。两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
+`performance-probe` 是 CLI 入口层下的只读浏览器探针：依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定，按 `.pipeline.lock/pid` 把样本分为 idle、busy 或 unknown。`performance/journey_monitor.py` 将样本和 `PERF:*` 告警状态写入 `logs/performance/`，idle/busy 独立窗口判定，unknown 不进入合规窗口；样本和诊断证据保留 14 天。busy firing 只有在同 `(journey,vantage)` 的 idle 有足以形成三个完整窗口的 22 个样本且 not-firing 时降为 notice，否则 fail-closed 保留 page；notice busy 子项在进入状态机前合并为 `PERF:rollup:busy`。两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
 
-confirmed `PERF:*` incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
+### Alert state → delivery → ledger → remediation
+
+```text
+A1–A4 / PERF results
+        │
+        ▼
+per-rule lifecycles.page|notice   ──真源──▶ severity-aware sender
+        │                                      │
+        ├─▶ top-level flat projection                ├─▶ page: ALERT / --alert
+        │   (legacy readers; page-preferring)     └─▶ notice: NOTIFICATION
+        │                                      │ transport success only
+        │                                      ▼
+        │                              data/alert-events.jsonl
+        ▼
+performance remediation ──只读 lifecycles.page firing
+```
+
+`admin/alerts.py` 以每个 `rule_id` 下的 `lifecycles` map 作为状态真源；`page` 与 `notice` 分别保存 `state`、`since`、`last_notified`、`detail` 和 `announced`。无 `lifecycles` 的旧 flat entry 在读取时被规范化到其记录的 severity（缺失则保守视为 page），之后统一写新形状。顶层 `state/since/last_notified/detail/severity/announced` 仅是供旧 reader 使用的兼容投影；当异常 state 同时含 firing page 和 notice 时，投影优先 page，避免隐藏高严重度。
+
+状态机只在 firing transport 成功后更新 announced / `last_notified`；失败 firing 下轮重试。severity 转换时先关闭另一 firing lifecycle，已 announced 的旧 episode 先沿原 severity resolved，再尝试新 severity firing；pending 且未送达的旧 episode 静默关闭。每个 severity 保留自己的 debounce / cooldown 计时器。成功 sender invocation 同时以 `{ts,rule_id,severity,type,detail,values,channel}` 写入 notification-only JSONL ledger；它不是状态真源，写入失败 fail-open，不阻断 delivery 或 state 持久化。
+
+confirmed `PERF:*` incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 对新 state 直接以 `lifecycles.page` firing 为权威 incident，不依赖可能 stale 的顶层投影；仅对无 `lifecycles` 的旧 entry 回退为 flat page，所以 notice-only `PERF:rollup:busy` 不会触发 remediation。remediation 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
 
 ## Database
 
