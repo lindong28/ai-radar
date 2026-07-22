@@ -25,6 +25,7 @@ DEFAULT_ALERT_STATE_PATH = db.PROJECT_ROOT / "logs" / "performance" / "alert-sta
 DEFAULT_EVIDENCE_DIR = db.PROJECT_ROOT / "logs" / "performance" / "evidence"
 DEFAULT_BROWSER_LOCK_PATH = db.PROJECT_ROOT / "logs" / "performance" / "browser.lock"
 DEFAULT_PIPELINE_LOCK_DIR = db.PROJECT_ROOT / ".pipeline.lock"
+PERF_BUSY_ROLLUP_RULE_ID = "PERF:rollup:busy"
 CRONTAB_SAMPLE = (
     "17 * * * * cd /path/to/ai-radar && "
     "./run.sh performance-probe >> logs/performance-probe-cron.log 2>&1"
@@ -269,6 +270,12 @@ def _format_milliseconds(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.0f}ms"
 
 
+def _numeric_value(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("PERF result value must be numeric")
+    return float(value)
+
+
 def _with_firing_message(result: AlertRuleResult, *, gate_reason: str) -> AlertRuleResult:
     vantage = result.values["vantage"]
     if gate_reason == "idle_clean":
@@ -413,6 +420,105 @@ def _load_alert_state(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _announced_firing_entry(entry: object) -> bool:
+    if not isinstance(entry, dict) or entry.get("state") != "firing":
+        return False
+    last_notified = _parse_timestamp(entry.get("last_notified"))
+    since = _parse_timestamp(entry.get("since"))
+    return last_notified is not None and (since is None or last_notified >= since)
+
+
+def _roll_up_notice_busy_results(
+    results: list[AlertRuleResult],
+    *,
+    previous_state: dict[str, Any],
+) -> list[AlertRuleResult]:
+    notice_busy = [
+        result
+        for result in results
+        if result.firing
+        and result.severity == "notice"
+        and result.values.get("load_class") == "busy"
+    ]
+    suppressed_rule_ids = {result.rule_id for result in notice_busy}
+    rolled_up = [result for result in results if result.rule_id not in suppressed_rule_ids]
+
+    if notice_busy:
+        cells = [
+            {
+                "journey": result.values["journey"],
+                "vantage": result.values["vantage"],
+                "p75_ms": result.values["p75_ms"],
+                "p95_ms": result.values["p95_ms"],
+                "p75_budget_ms": result.values["p75_budget_ms"],
+                "p95_budget_ms": result.values["p95_budget_ms"],
+            }
+            for result in notice_busy
+        ]
+        most_severe = max(
+            range(len(cells)),
+            key=lambda index: _numeric_value(cells[index]["p95_ms"])
+            / max(_numeric_value(cells[index]["p95_budget_ms"]), 1.0),
+        )
+        cells[most_severe]["most_severe"] = True
+        itemized = []
+        for index, cell in enumerate(cells):
+            marker = "（最严重）" if index == most_severe else ""
+            itemized.append(
+                f"- {cell['journey']} [{cell['vantage']}]："
+                f"p95 实测 {_format_milliseconds(_numeric_value(cell['p95_ms']))} vs 预算 "
+                f"{_format_milliseconds(_numeric_value(cell['p95_budget_ms']))}{marker}"
+            )
+        impact = (
+            "同机合成探针，与 pipeline 并发、疑似主机 CPU 争用；"
+            "idle 视角正常，用户大概率无感"
+        )
+        rolled_up.append(
+            AlertRuleResult(
+                rule_id=PERF_BUSY_ROLLUP_RULE_ID,
+                title=f"性能自测：pipeline 运行期间 {len(cells)} 条 busy 旅程探针超预算",
+                firing=True,
+                detail=f"{impact}；明细：\n" + "\n".join(itemized),
+                action="查看 logs/performance/evidence/ 中最新合成证据，并核对主机 load。",
+                values={"load_class": "busy", "cells": cells},
+                severity="notice",
+                impact=impact,
+                urgency="否——除非 idle 视角也超标",
+            )
+        )
+    elif isinstance(previous_state.get(PERF_BUSY_ROLLUP_RULE_ID), dict) and previous_state[
+        PERF_BUSY_ROLLUP_RULE_ID
+    ].get("state") == "firing":
+        rolled_up.append(
+            AlertRuleResult(
+                rule_id=PERF_BUSY_ROLLUP_RULE_ID,
+                title="性能自测 busy 旅程探针",
+                firing=False,
+                detail="本轮已无 notice 级 busy PERF 子项；合成告警恢复",
+                action="none",
+                values={"load_class": "busy", "cells": []},
+                severity="notice",
+            )
+        )
+
+    for result in notice_busy:
+        entry = previous_state.get(result.rule_id)
+        if not _announced_firing_entry(entry):
+            continue
+        assert isinstance(entry, dict)
+        rolled_up.append(
+            AlertRuleResult(
+                rule_id=result.rule_id,
+                title=result.title,
+                firing=False,
+                detail="已迁移到 PERF:rollup:busy；旧个体 busy 告警恢复",
+                action="none",
+                severity="notice" if entry.get("severity") == "notice" else "page",
+            )
+        )
+    return rolled_up
+
+
 def _diagnostics(pipeline_lock_dir: Path) -> dict[str, object]:
     try:
         git_sha = subprocess.run(
@@ -471,20 +577,42 @@ def _write_firing_evidence(
     now: datetime,
 ) -> Path:
     values = result.values
-    recent = [
-        sample
-        for sample in samples
-        if sample.get("journey") == values["journey"]
-        and sample.get("vantage") == values["vantage"]
-        and sample.get("load_class") == values["load_class"]
-    ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
+    raw_cells = values.get("cells")
+    if result.rule_id == PERF_BUSY_ROLLUP_RULE_ID and isinstance(raw_cells, list):
+        cells = [cell for cell in raw_cells if isinstance(cell, dict)]
+        recent = []
+        for cell in cells:
+            recent.extend(
+                [
+                    sample
+                    for sample in samples
+                    if sample.get("journey") == cell.get("journey")
+                    and sample.get("vantage") == cell.get("vantage")
+                    and sample.get("load_class") == "busy"
+                ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
+            )
+        identity: dict[str, object] = {
+            "load_class": "busy",
+            "cells": cells,
+        }
+    else:
+        recent = [
+            sample
+            for sample in samples
+            if sample.get("journey") == values["journey"]
+            and sample.get("vantage") == values["vantage"]
+            and sample.get("load_class") == values["load_class"]
+        ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
+        identity = {
+            "journey": values["journey"],
+            "vantage": values["vantage"],
+            "load_class": values["load_class"],
+        }
     payload = {
         "schema_version": 1,
         "created_at": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "rule_id": result.rule_id,
-        "journey": values["journey"],
-        "vantage": values["vantage"],
-        "load_class": values["load_class"],
+        **identity,
         "provisional": True,
         "regional_slo_claim": False,
         "recent_samples": recent,
@@ -529,6 +657,7 @@ def run_performance_alerts(
         samples = [sample for sample in samples if sample.get("vantage") in enabled_vantages]
     results = evaluate_performance_rules(samples)
     previous_state = _load_alert_state(state_path)
+    results = _roll_up_notice_busy_results(results, previous_state=previous_state)
     if enabled_vantages is not None:
         # A vantage disabled after firing would otherwise leave its alert state
         # stuck: retained samples age out, the rule stops appearing in results,

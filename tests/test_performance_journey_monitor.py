@@ -275,6 +275,51 @@ def _sample(
     }
 
 
+def _cell_samples(
+    *,
+    started: datetime,
+    journey: str,
+    load_class: str,
+    value_ms: float,
+    minute_offset: int = 0,
+    vantage: str = "same_host_origin",
+) -> list[dict[str, object]]:
+    return [
+        _sample(
+            observed_at=started + timedelta(minutes=minute_offset + index),
+            value_ms=value_ms,
+            load_class=load_class,
+            journey=journey,
+            vantage=vantage,
+        )
+        for index in range(MIN_CONFIRMABLE_SAMPLES)
+    ]
+
+
+def _notice_busy_batch(started: datetime, journeys: tuple[str, ...]) -> list[dict[str, object]]:
+    samples: list[dict[str, object]] = []
+    for index, journey in enumerate(journeys):
+        samples.extend(
+            _cell_samples(
+                started=started,
+                journey=journey,
+                load_class="busy",
+                value_ms=4000,
+                minute_offset=index * 100,
+            )
+        )
+        samples.extend(
+            _cell_samples(
+                started=started,
+                journey=journey,
+                load_class="idle",
+                value_ms=100,
+                minute_offset=500 + index * 100,
+            )
+        )
+    return samples
+
+
 def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     monkeypatch,
     tmp_path: Path,
@@ -384,6 +429,426 @@ def test_busy_and_idle_performance_compliance_streams_are_separate(tmp_path: Pat
     firing = [row for row in result["results"] if row["firing"]]
     assert len(firing) == 1
     assert firing[0]["values"]["load_class"] == "busy"
+
+
+def test_notice_busy_cells_roll_up_once_with_complete_values_and_most_severe_detail(
+    tmp_path: Path,
+) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    journeys = ("homepage.first_card", "wechat.pagination.settle")
+    store_samples(sample_path, _notice_busy_batch(started, journeys), now=started + timedelta(days=1))
+
+    result = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=tmp_path / "state.json",
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert [receipt["rule_id"] for receipt in result["sent"]] == ["PERF:rollup:busy"]
+    assert result["sent"][0]["effective_severity"] == "notice"
+    assert not any(rule_id.endswith(":busy") and rule_id != "PERF:rollup:busy" for rule_id in result["ruleset"])
+    rollup = next(row for row in result["results"] if row["rule_id"] == "PERF:rollup:busy")
+    assert rollup["firing"] is True
+    assert rollup["severity"] == "notice"
+    assert rollup["values"]["load_class"] == "busy"
+    assert rollup["values"]["cells"] == [
+        {
+            "journey": "homepage.first_card",
+            "vantage": "same_host_origin",
+            "p75_ms": 4000.0,
+            "p95_ms": 4000.0,
+            "p75_budget_ms": 2000.0,
+            "p95_budget_ms": 3000.0,
+        },
+        {
+            "journey": "wechat.pagination.settle",
+            "vantage": "same_host_origin",
+            "p75_ms": 4000.0,
+            "p95_ms": 4000.0,
+            "p75_budget_ms": 1000.0,
+            "p95_budget_ms": 1500.0,
+            "most_severe": True,
+        },
+    ]
+    assert sum(cell.get("most_severe") is True for cell in rollup["values"]["cells"]) == 1
+    assert "wechat.pagination.settle" in rollup["detail"]
+    assert "wechat.pagination.settle [same_host_origin]：p95 实测 4000ms vs 预算 1500ms（最严重）" in rollup[
+        "detail"
+    ]
+    assert rollup["detail"].startswith(rollup["impact"])
+    assert "logs/performance/evidence/" in rollup["action"]
+
+
+def test_notice_busy_rollup_does_not_merge_independent_idle_page(tmp_path: Path) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = _notice_busy_batch(started, ("homepage.first_card", "wechat.list.first_card"))
+    samples.extend(
+        _cell_samples(
+            started=started,
+            journey="wechat.pagination.settle",
+            load_class="idle",
+            value_ms=4000,
+            minute_offset=900,
+        )
+    )
+    store_samples(sample_path, samples, now=started + timedelta(days=1))
+
+    result = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=tmp_path / "state.json",
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert {
+        (receipt["rule_id"], receipt["effective_severity"], receipt["type"])
+        for receipt in result["sent"]
+    } == {
+        ("PERF:rollup:busy", "notice", "firing"),
+        ("PERF:wechat.pagination.settle:same_host_origin:idle", "page", "firing"),
+    }
+    rollup = next(row for row in result["results"] if row["rule_id"] == "PERF:rollup:busy")
+    assert {cell["journey"] for cell in rollup["values"]["cells"]} == {
+        "homepage.first_card",
+        "wechat.list.first_card",
+    }
+
+
+def test_notice_busy_rollup_keeps_real_page_gate_reasons_on_individual_keys(
+    tmp_path: Path,
+) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = _notice_busy_batch(started, ("homepage.first_card",))
+    samples.extend(
+        _cell_samples(
+            started=started,
+            journey="wechat.list.first_card",
+            load_class="busy",
+            value_ms=4000,
+            minute_offset=1000,
+        )
+    )
+    samples.extend(
+        _cell_samples(
+            started=started,
+            journey="wechat.list.first_card",
+            load_class="idle",
+            value_ms=4000,
+            minute_offset=1100,
+        )
+    )
+    samples.extend(
+        _cell_samples(
+            started=started,
+            journey="wechat.detail.readable",
+            load_class="busy",
+            value_ms=4000,
+            minute_offset=1200,
+        )
+    )
+    samples.extend(
+        _cell_samples(
+            started=started,
+            journey="wechat.pagination.settle",
+            load_class="busy",
+            value_ms=4000,
+            minute_offset=1300,
+        )
+    )
+    samples.extend(
+        _sample(
+            observed_at=started + timedelta(minutes=1400 + index),
+            value_ms=100,
+            load_class="idle",
+            journey="wechat.pagination.settle",
+            vantage="same_host_origin",
+        )
+        for index in range(WARM_SAMPLES - 1)
+    )
+    store_samples(sample_path, samples, now=started + timedelta(days=2))
+
+    result = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=tmp_path / "state.json",
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=2),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert {
+        (receipt["rule_id"], receipt["effective_severity"], receipt["channel"])
+        for receipt in result["sent"]
+    } == {
+        ("PERF:rollup:busy", "notice", "NOTIFICATION"),
+        ("PERF:wechat.list.first_card:same_host_origin:busy", "page", "ALERT"),
+        ("PERF:wechat.list.first_card:same_host_origin:idle", "page", "ALERT"),
+        ("PERF:wechat.detail.readable:same_host_origin:busy", "page", "ALERT"),
+        ("PERF:wechat.pagination.settle:same_host_origin:busy", "page", "ALERT"),
+    }
+    firing_by_id = {row["rule_id"]: row for row in result["results"] if row["firing"]}
+    assert firing_by_id["PERF:wechat.list.first_card:same_host_origin:busy"]["values"][
+        "gate_reason"
+    ] == "idle_firing"
+    assert firing_by_id["PERF:wechat.detail.readable:same_host_origin:busy"]["values"][
+        "gate_reason"
+    ] == "idle_absent"
+    assert firing_by_id["PERF:wechat.pagination.settle:same_host_origin:busy"]["values"][
+        "gate_reason"
+    ] == "idle_insufficient"
+    assert [
+        cell["journey"]
+        for cell in firing_by_id["PERF:rollup:busy"]["values"]["cells"]
+    ] == ["homepage.first_card"]
+
+
+def test_notice_busy_rollup_resolves_once_when_the_whole_batch_recovers(tmp_path: Path) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    state_path = tmp_path / "state.json"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    journeys = ("homepage.first_card", "wechat.pagination.settle")
+    store_samples(sample_path, _notice_busy_batch(started, journeys), now=started + timedelta(days=1))
+    first = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert [(row["rule_id"], row["type"]) for row in first["sent"]] == [
+        ("PERF:rollup:busy", "firing")
+    ]
+
+    recovered: list[dict[str, object]] = []
+    for index, journey in enumerate(journeys):
+        recovered.extend(
+            _cell_samples(
+                started=started,
+                journey=journey,
+                load_class="busy",
+                value_ms=100,
+                minute_offset=1200 + index * 100,
+            )
+        )
+    store_samples(sample_path, recovered, now=started + timedelta(days=2))
+    cleared = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=2),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert [
+        (row["rule_id"], row["type"], row["effective_severity"], row["channel"])
+        for row in cleared["sent"]
+    ] == [
+        ("PERF:rollup:busy", "resolved", "notice", "NOTIFICATION")
+    ]
+    rollup = next(row for row in cleared["results"] if row["rule_id"] == "PERF:rollup:busy")
+    assert rollup["firing"] is False
+
+
+def test_notice_busy_rollup_does_not_repeat_non_firing_after_second_clear(
+    tmp_path: Path,
+) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    state_path = tmp_path / "state.json"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    store_samples(
+        sample_path,
+        _notice_busy_batch(started, ("homepage.first_card",)),
+        now=started + timedelta(days=1),
+    )
+    fired = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert [(row["rule_id"], row["type"]) for row in fired["sent"]] == [
+        ("PERF:rollup:busy", "firing")
+    ]
+
+    store_samples(
+        sample_path,
+        _cell_samples(
+            started=started,
+            journey="homepage.first_card",
+            load_class="busy",
+            value_ms=100,
+            minute_offset=1200,
+        ),
+        now=started + timedelta(days=2),
+    )
+    first_clear = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=2),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert [(row["rule_id"], row["type"]) for row in first_clear["sent"]] == [
+        ("PERF:rollup:busy", "resolved")
+    ]
+    assert sum(row["rule_id"] == "PERF:rollup:busy" for row in first_clear["results"]) == 1
+
+    second_clear = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=2, minutes=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert second_clear["sent"] == []
+    assert not any(row["rule_id"] == "PERF:rollup:busy" for row in second_clear["results"])
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["PERF:rollup:busy"]["state"] == "ok"
+
+
+@pytest.mark.parametrize(
+    ("legacy_severity", "expected_resolve_severity"),
+    [(None, "page"), ("notice", "notice")],
+)
+def test_rollup_migrates_announced_legacy_busy_key_once(
+    tmp_path: Path,
+    legacy_severity: str | None,
+    expected_resolve_severity: str,
+) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    state_path = tmp_path / "state.json"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    legacy_rule_id = "PERF:homepage.first_card:same_host_origin:busy"
+    legacy_entry = {
+        "state": "firing",
+        "since": (started - timedelta(hours=2)).isoformat(),
+        "last_notified": (started - timedelta(hours=1)).isoformat(),
+        "detail": "legacy individual busy",
+    }
+    if legacy_severity is not None:
+        legacy_entry["severity"] = legacy_severity
+    state_path.write_text(json.dumps({legacy_rule_id: legacy_entry}), encoding="utf-8")
+    store_samples(
+        sample_path,
+        _notice_busy_batch(started, ("homepage.first_card",)),
+        now=started + timedelta(days=1),
+    )
+
+    migrated = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+
+    assert {
+        (receipt["rule_id"], receipt["effective_severity"], receipt["type"])
+        for receipt in migrated["sent"]
+    } == {
+        ("PERF:rollup:busy", "notice", "firing"),
+        (legacy_rule_id, expected_resolve_severity, "resolved"),
+    }
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state[legacy_rule_id]["state"] == "ok"
+
+    repeated = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=tmp_path / "evidence",
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=1, minutes=1),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert repeated["sent"] == []
+
+
+def test_rollup_evidence_uses_synthetic_episode_identity(tmp_path: Path) -> None:
+    sample_path = tmp_path / "journey-samples.jsonl"
+    state_path = tmp_path / "state.json"
+    evidence_dir = tmp_path / "evidence"
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    journeys = ("homepage.first_card", "wechat.pagination.settle")
+    store_samples(sample_path, _notice_busy_batch(started, journeys), now=started + timedelta(days=1))
+
+    for minute in (0, 1):
+        run_performance_alerts(
+            sample_path=sample_path,
+            state_path=state_path,
+            evidence_dir=evidence_dir,
+            pipeline_lock_dir=tmp_path / ".pipeline.lock",
+            now=started + timedelta(days=1, minutes=minute),
+            send=lambda text, *, severity="page": {"skipped": False},
+        )
+        assert len(list(evidence_dir.glob("*.json"))) == 1
+
+    first_evidence = json.loads(next(evidence_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert first_evidence["rule_id"] == "PERF:rollup:busy"
+    assert len(first_evidence["cells"]) == 2
+    assert sum(cell.get("most_severe") is True for cell in first_evidence["cells"]) == 1
+    assert next(cell for cell in first_evidence["cells"] if cell.get("most_severe") is True)[
+        "journey"
+    ] == "wechat.pagination.settle"
+    assert len(first_evidence["recent_samples"]) == 2 * MIN_CONFIRMABLE_SAMPLES
+
+    recovered: list[dict[str, object]] = []
+    for index, journey in enumerate(journeys):
+        recovered.extend(
+            _cell_samples(
+                started=started,
+                journey=journey,
+                load_class="busy",
+                value_ms=100,
+                minute_offset=1200 + index * 100,
+            )
+        )
+    store_samples(sample_path, recovered, now=started + timedelta(days=2))
+    run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=evidence_dir,
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=2),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert len(list(evidence_dir.glob("*.json"))) == 1
+
+    refiring: list[dict[str, object]] = []
+    for index, journey in enumerate(journeys):
+        refiring.extend(
+            _cell_samples(
+                started=started,
+                journey=journey,
+                load_class="busy",
+                value_ms=4000,
+                minute_offset=1800 + index * 100,
+            )
+        )
+    store_samples(sample_path, refiring, now=started + timedelta(days=3))
+    run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=evidence_dir,
+        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        now=started + timedelta(days=3),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    assert len(list(evidence_dir.glob("*.json"))) == 2
 
 
 @pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
