@@ -7,17 +7,25 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from airadar import db
+from airadar.admin.alerts import AlertRuleResult
 from airadar.performance.browser_probe import BrowserMeasurement, _measure_browser_journey_inner
 from airadar.performance.journey_monitor import (
+    CONFIRMATION_WINDOWS,
     RETENTION_DAYS,
+    WARM_SAMPLES,
     JourneyMonitorRuntime,
     _probe_expectation,
     classify_pipeline_load,
+    evaluate_performance_rules,
     probe_journeys,
     run_performance_alerts,
     store_samples,
 )
+
+MIN_CONFIRMABLE_SAMPLES = WARM_SAMPLES + CONFIRMATION_WINDOWS - 1
 
 
 def test_probe_expectation_does_not_import_app_or_run_migrations(
@@ -247,17 +255,19 @@ def _sample(
     value_ms: float,
     load_class: str = "idle",
     journey: str = "homepage.first_card",
+    vantage: str = "same_host_public",
+    hard_failure: bool = False,
 ) -> dict[str, object]:
     return {
         "schema_version": 1,
         "observed_at": observed_at.isoformat().replace("+00:00", "Z"),
         "journey": journey,
         "target": "homepage",
-        "vantage": "same_host_public",
+        "vantage": vantage,
         "provisional": True,
         "load_class": load_class,
         "value_ms": value_ms,
-        "hard_failure": False,
+        "hard_failure": hard_failure,
         "outcome": "observed",
         "request_url": "https://public.invalid/",
     }
@@ -372,6 +382,210 @@ def test_busy_and_idle_performance_compliance_streams_are_separate(tmp_path: Pat
     firing = [row for row in result["results"] if row["firing"]]
     assert len(firing) == 1
     assert firing[0]["values"]["load_class"] == "busy"
+
+
+@pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
+@pytest.mark.parametrize(
+    ("idle_condition", "expected_severity", "expected_gate_reason"),
+    [
+        ("clean", "notice", "idle_clean"),
+        ("firing", "page", "idle_firing"),
+        ("absent", "page", "idle_absent"),
+        ("insufficient", "page", "idle_insufficient"),
+    ],
+)
+def test_busy_performance_severity_uses_same_vantage_idle_truth_table(
+    vantage: str,
+    idle_condition: str,
+    expected_severity: str,
+    expected_gate_reason: str,
+) -> None:
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = [
+        _sample(
+            observed_at=started + timedelta(minutes=index),
+            value_ms=4000,
+            load_class="busy",
+            vantage=vantage,
+        )
+        for index in range(WARM_SAMPLES + 2)
+    ]
+    idle_count = {
+        "clean": MIN_CONFIRMABLE_SAMPLES,
+        "firing": MIN_CONFIRMABLE_SAMPLES,
+        "absent": 0,
+        "insufficient": WARM_SAMPLES - 1,
+    }[idle_condition]
+    idle_value_ms = 4000 if idle_condition == "firing" else 100
+    samples.extend(
+        _sample(
+            observed_at=started + timedelta(minutes=100 + index),
+            value_ms=idle_value_ms,
+            load_class="idle",
+            vantage=vantage,
+        )
+        for index in range(idle_count)
+    )
+
+    if vantage == "same_host_public":
+        origin_value_ms = 4000 if idle_condition == "clean" else 100
+        origin_count = MIN_CONFIRMABLE_SAMPLES
+        samples.extend(
+            _sample(
+                observed_at=started + timedelta(minutes=200 + index),
+                value_ms=origin_value_ms,
+                load_class="idle",
+                vantage="same_host_origin",
+            )
+            for index in range(origin_count)
+        )
+
+    results = evaluate_performance_rules(samples)
+    busy = next(
+        result
+        for result in results
+        if result.rule_id == f"PERF:homepage.first_card:{vantage}:busy"
+    )
+
+    assert busy.firing is True
+    assert busy.severity == expected_severity
+    assert busy.values["gate_reason"] == expected_gate_reason
+
+
+def _evaluate_busy_with_idle(
+    *,
+    vantage: str,
+    idle_count: int,
+    idle_value_ms: float,
+    idle_hard_failure: bool = False,
+) -> tuple[AlertRuleResult, AlertRuleResult]:
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = [
+        _sample(
+            observed_at=started + timedelta(minutes=index),
+            value_ms=4000,
+            load_class="busy",
+            vantage=vantage,
+        )
+        for index in range(MIN_CONFIRMABLE_SAMPLES)
+    ]
+    samples.extend(
+        _sample(
+            observed_at=started + timedelta(minutes=100 + index),
+            value_ms=idle_value_ms,
+            load_class="idle",
+            vantage=vantage,
+            hard_failure=idle_hard_failure,
+        )
+        for index in range(idle_count)
+    )
+    results = evaluate_performance_rules(samples)
+    busy = next(
+        result
+        for result in results
+        if result.rule_id == f"PERF:homepage.first_card:{vantage}:busy"
+    )
+    idle = next(
+        result
+        for result in results
+        if result.rule_id == f"PERF:homepage.first_card:{vantage}:idle"
+    )
+    return busy, idle
+
+
+@pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
+@pytest.mark.parametrize("idle_count", [WARM_SAMPLES, MIN_CONFIRMABLE_SAMPLES - 1])
+def test_over_budget_idle_without_confirmation_windows_keeps_busy_page(
+    vantage: str,
+    idle_count: int,
+) -> None:
+    busy, idle = _evaluate_busy_with_idle(
+        vantage=vantage,
+        idle_count=idle_count,
+        idle_value_ms=4000,
+    )
+
+    assert idle.firing is False
+    assert busy.severity == "page"
+    assert busy.values["gate_reason"] == "idle_insufficient"
+
+
+@pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
+def test_hard_failure_idle_without_confirmation_windows_keeps_busy_page(vantage: str) -> None:
+    busy, idle = _evaluate_busy_with_idle(
+        vantage=vantage,
+        idle_count=WARM_SAMPLES,
+        idle_value_ms=100,
+        idle_hard_failure=True,
+    )
+
+    assert idle.firing is False
+    assert busy.severity == "page"
+    assert busy.values["gate_reason"] == "idle_insufficient"
+
+
+@pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
+def test_firing_capable_clean_idle_downgrades_busy_to_notice(vantage: str) -> None:
+    busy, idle = _evaluate_busy_with_idle(
+        vantage=vantage,
+        idle_count=MIN_CONFIRMABLE_SAMPLES + 3,
+        idle_value_ms=100,
+    )
+
+    assert idle.firing is False
+    assert busy.severity == "notice"
+    assert busy.values["gate_reason"] == "idle_clean"
+
+
+@pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
+@pytest.mark.parametrize(
+    ("idle_count", "expected_severity", "expected_gate_reason"),
+    [
+        (MIN_CONFIRMABLE_SAMPLES - 1, "page", "idle_insufficient"),
+        (MIN_CONFIRMABLE_SAMPLES, "notice", "idle_clean"),
+    ],
+)
+def test_idle_gate_uses_confirmation_window_sample_boundary(
+    vantage: str,
+    idle_count: int,
+    expected_severity: str,
+    expected_gate_reason: str,
+) -> None:
+    assert MIN_CONFIRMABLE_SAMPLES == WARM_SAMPLES + CONFIRMATION_WINDOWS - 1
+    busy, idle = _evaluate_busy_with_idle(
+        vantage=vantage,
+        idle_count=idle_count,
+        idle_value_ms=100,
+    )
+
+    assert idle.firing is False
+    assert busy.severity == expected_severity
+    assert busy.values["gate_reason"] == expected_gate_reason
+
+
+@pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
+def test_firing_idle_performance_cell_is_always_page(vantage: str) -> None:
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = [
+        _sample(
+            observed_at=started + timedelta(minutes=index),
+            value_ms=4000,
+            load_class="idle",
+            vantage=vantage,
+        )
+        for index in range(WARM_SAMPLES + 2)
+    ]
+
+    results = evaluate_performance_rules(samples)
+    idle = next(
+        result
+        for result in results
+        if result.rule_id == f"PERF:homepage.first_card:{vantage}:idle"
+    )
+
+    assert idle.firing is True
+    assert idle.severity == "page"
+    assert idle.values["gate_reason"] == "idle_cell"
 
 
 def test_probe_requires_origin_url(tmp_path: Path) -> None:

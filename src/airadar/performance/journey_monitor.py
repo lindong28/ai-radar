@@ -284,7 +284,7 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             continue
         grouped[(str(journey), str(vantage), str(load_class))].append(sample)
 
-    results: list[AlertRuleResult] = []
+    results_by_cell: dict[tuple[str, str, str], AlertRuleResult] = {}
     for (journey, vantage, load_class), rows in sorted(grouped.items()):
         spec = _SPEC_BY_JOURNEY[journey]
         available_windows = max(0, len(rows) - WARM_SAMPLES + 1)
@@ -309,29 +309,56 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             f"p95={p95 if p95 is not None else 'n/a'}ms/{spec.p95_budget_ms:g}ms, "
             f"advanced_window_streak={streak}/{CONFIRMATION_WINDOWS}; {SAME_HOST_SCOPE}"
         )
-        results.append(
-            AlertRuleResult(
-                rule_id=f"PERF:{journey}:{vantage}:{load_class}",
-                title=f"旅程性能退化 {journey}",
-                firing=firing,
-                detail=detail,
-                action="查看证据中的近期样本、CPU 与 pipeline 状态；该结果仅代表同机 provisional 观测。",
-                values={
-                    "journey": journey,
-                    "vantage": vantage,
-                    "load_class": load_class,
-                    "sample_count": len(rows),
-                    "warm_samples": WARM_SAMPLES,
-                    "advanced_window_streak": streak,
-                    "confirmation_windows": CONFIRMATION_WINDOWS,
-                    "p75_ms": p75,
-                    "p95_ms": p95,
-                    "p75_budget_ms": spec.p75_budget_ms,
-                    "p95_budget_ms": spec.p95_budget_ms,
-                    "provisional": True,
-                },
-            )
+        results_by_cell[(journey, vantage, load_class)] = AlertRuleResult(
+            rule_id=f"PERF:{journey}:{vantage}:{load_class}",
+            title=f"旅程性能退化 {journey}",
+            firing=firing,
+            detail=detail,
+            action="查看证据中的近期样本、CPU 与 pipeline 状态；该结果仅代表同机 provisional 观测。",
+            values={
+                "journey": journey,
+                "vantage": vantage,
+                "load_class": load_class,
+                "sample_count": len(rows),
+                "warm_samples": WARM_SAMPLES,
+                "advanced_window_streak": streak,
+                "confirmation_windows": CONFIRMATION_WINDOWS,
+                "p75_ms": p75,
+                "p95_ms": p95,
+                "p75_budget_ms": spec.p75_budget_ms,
+                "p95_budget_ms": spec.p95_budget_ms,
+                "provisional": True,
+            },
         )
+
+    minimum_firing_samples = WARM_SAMPLES + CONFIRMATION_WINDOWS - 1
+    results: list[AlertRuleResult] = []
+    for (journey, vantage, load_class), result in results_by_cell.items():
+        if not result.firing:
+            results.append(result)
+            continue
+        if load_class == "idle":
+            results.append(replace(result, values={**result.values, "gate_reason": "idle_cell"}))
+            continue
+
+        idle_key = (journey, vantage, "idle")
+        idle_result = results_by_cell.get(idle_key)
+        if idle_result is None:
+            gate_reason = "idle_absent"
+        elif len(grouped[idle_key]) < minimum_firing_samples:
+            gate_reason = "idle_insufficient"
+        elif idle_result.firing:
+            gate_reason = "idle_firing"
+        else:
+            results.append(
+                replace(
+                    result,
+                    severity="notice",
+                    values={**result.values, "gate_reason": "idle_clean"},
+                )
+            )
+            continue
+        results.append(replace(result, values={**result.values, "gate_reason": gate_reason}))
     return results
 
 
