@@ -8,6 +8,11 @@ ALERT_THRESHOLDS: dict[str, object] = {
     },
     "a2": {
         "window_minutes": 15,
+        "min_samples": {
+            "prefilter": 4,
+            "scoring": 4,
+            "enrich": 2,
+        },
         "stage_error_rate": {
             "prefilter": 0.3,
             "scoring": 0.3,
@@ -32,6 +37,7 @@ ALERT_THRESHOLDS: dict[str, object] = {
     },
     "a3": {
         "window_minutes": 15,
+        "min_pv": 20,
         "server_error_rate": 0.05,
         "healthz_url": "http://127.0.0.1:8000/api/v1/healthz",
         "healthz_timeout_seconds": 2.0,

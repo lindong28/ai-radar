@@ -9,7 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .. import db
-from .access_log import aggregate_access_log
+from .access_log import aggregate_access_log, parse_access_log_line
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 STAGE_ORDER = ("fetch", "prefilter", "scoring", "enrich", "curate")
@@ -223,33 +223,40 @@ def _evaluation_stage_metrics(
     start: datetime,
     end: datetime,
     current: datetime,
+    stage_since: datetime | None = None,
 ) -> dict[str, dict[str, object]]:
-    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    daily_grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    rate_grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
     p95_latencies: dict[str, list[int]] = defaultdict(list)
     effective_end = min(end, current)
     p95_start = max(start, effective_end - EVAL_P95_WINDOW)
+    rate_start = stage_since if stage_since is not None else start
     with db.get_conn(db_path) as conn:
         rows = conn.execute(
             "SELECT stage, latency_ms, cost_usd, error, evaluated_at FROM item_evaluations ORDER BY evaluated_at"
         ).fetchall()
     for row in rows:
         evaluated_at = _parse_dt(row["evaluated_at"])
-        if evaluated_at is None or not start <= evaluated_at < effective_end:
+        if evaluated_at is None:
             continue
         row_dict = dict(row)
         stage = str(row["stage"])
-        grouped[stage].append(row_dict)
+        if start <= evaluated_at < effective_end:
+            daily_grouped[stage].append(row_dict)
+        if rate_start <= evaluated_at < current:
+            rate_grouped[stage].append(row_dict)
         if stage in DB_STAGES and p95_start <= evaluated_at < effective_end:
             p95_latencies[stage].append(int(str(row["latency_ms"])))
 
     metrics: dict[str, dict[str, object]] = {}
     for stage in DB_STAGES:
-        rows_for_stage = grouped.get(stage, [])
-        latencies = [int(str(row["latency_ms"])) for row in rows_for_stage]
-        errors = sum(1 for row in rows_for_stage if row.get("error"))
-        processed = len(rows_for_stage)
+        daily_rows = daily_grouped.get(stage, [])
+        rate_rows = rate_grouped.get(stage, [])
+        latencies = [int(str(row["latency_ms"])) for row in daily_rows]
+        errors = sum(1 for row in rate_rows if row.get("error"))
+        processed = len(rate_rows)
         cost_total = 0.0
-        for row in rows_for_stage:
+        for row in daily_rows:
             cost = row.get("cost_usd")
             cost_total += float(str(cost)) if cost is not None else 0.0
         metrics[stage] = {
@@ -277,14 +284,33 @@ def _read_access_lines(paths: list[Path]) -> list[str]:
     return lines
 
 
+def _access_lines_in_window(lines: list[str], start: datetime, end: datetime) -> list[str]:
+    filtered: list[str] = []
+    for line in lines:
+        try:
+            entry = parse_access_log_line(line)
+        except ValueError:
+            continue
+        if entry is None:
+            continue
+        timestamp = _parse_dt(entry.timestamp)
+        if timestamp is not None and start <= timestamp < end:
+            filtered.append(line)
+    return filtered
+
+
 def collect_metrics(
     *,
     db_path: str | Path | None = None,
     pipeline_log_dir: str | Path | None = None,
     access_log_paths: list[str | Path] | None = None,
     now: datetime | None = None,
+    stage_since: datetime | None = None,
+    access_since: datetime | None = None,
 ) -> dict[str, object]:
     current = _normalize_now(now)
+    normalized_stage_since = _normalize_now(stage_since) if stage_since is not None else None
+    normalized_access_since = _normalize_now(access_since) if access_since is not None else None
     start, end = _today_bounds(current)
     log_dir = Path(pipeline_log_dir) if pipeline_log_dir is not None else db.PROJECT_ROOT / "logs"
     if access_log_paths is None:
@@ -296,7 +322,10 @@ def collect_metrics(
     else:
         access_paths = [Path(path) for path in access_log_paths]
 
-    access_summary = aggregate_access_log(_read_access_lines(access_paths))
+    access_lines = _read_access_lines(access_paths)
+    if normalized_access_since is not None:
+        access_lines = _access_lines_in_window(access_lines, normalized_access_since, current)
+    access_summary = aggregate_access_log(access_lines)
     runs = _load_pipeline_runs(log_dir)
     latest_run = next((run for run in reversed(runs) if not run.get("skip")), runs[-1] if runs else None)
     default_fetch: dict[str, object] = {
@@ -311,7 +340,13 @@ def collect_metrics(
     latest_fetch = latest_fetch_obj if isinstance(latest_fetch_obj, dict) else default_fetch
 
     stages = _base_stage_metrics()
-    for stage, values in _evaluation_stage_metrics(db_path, start, end, current).items():
+    for stage, values in _evaluation_stage_metrics(
+        db_path,
+        start,
+        end,
+        current,
+        normalized_stage_since,
+    ).items():
         stages[stage].update(values)
     if latest_run:
         latest_stages_obj = latest_run.get("stages", {})

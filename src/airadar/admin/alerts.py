@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -54,6 +55,8 @@ class AlertSignals:
     items_today: int
     minutes_elapsed_today: int = MINUTES_PER_DAY
     healthz_consecutive_failures: int = 0
+    stage_sample_count: dict[str, int] = field(default_factory=dict)
+    server_pv: int = 0
 
 
 @dataclass(frozen=True)
@@ -122,12 +125,20 @@ def evaluate_rules(
     a1_firing = signals.upstream_sample_size >= a1_min_samples and signals.upstream_error_rate > a1_rate
 
     stage_error_thresholds = a2.get("stage_error_rate", {})
+    stage_min_samples = a2.get("min_samples", {})
     stage_p95_thresholds = a2.get("stage_p95_latency_ms", {})
     stage_reasons: list[str] = []
     if isinstance(stage_error_thresholds, dict):
         for stage, observed in sorted(signals.stage_error_rate.items()):
             threshold = float(stage_error_thresholds.get(stage, 0.3))
-            if observed > threshold:
+            default_min_samples = math.ceil(1 / threshold) if threshold > 0 else 1
+            min_samples = (
+                int(stage_min_samples.get(stage, default_min_samples))
+                if isinstance(stage_min_samples, dict)
+                else default_min_samples
+            )
+            sample_count = signals.stage_sample_count.get(stage, 0)
+            if sample_count >= min_samples and observed > threshold:
                 stage_reasons.append(f"{stage} 错误率 {observed:.1%} > {threshold:.1%}")
     if isinstance(stage_p95_thresholds, dict):
         for stage, observed in sorted(signals.stage_p95_latency_ms.items()):
@@ -149,9 +160,10 @@ def evaluate_rules(
         )
 
     a3_rate = _float_threshold(a3, "server_error_rate", 0.05)
+    a3_min_pv = _int_threshold(a3, "min_pv", math.ceil(1 / a3_rate) if a3_rate > 0 else 1)
     a3_healthz_failure_threshold = _int_threshold(a3, "healthz_consecutive_failures", 2)
     a3_reasons: list[str] = []
-    if signals.server_error_rate > a3_rate:
+    if signals.server_pv >= a3_min_pv and signals.server_error_rate > a3_rate:
         a3_reasons.append(f"用户侧 5xx 率 {signals.server_error_rate:.1%} > {a3_rate:.1%}")
     if (
         a3_healthz_failure_threshold > 0
@@ -215,6 +227,7 @@ def evaluate_rules(
             action="查看 pipeline 最新日志，定位异常 stage；若无成功轮次或连续 SKIP，检查 pipeline 锁和长任务。",
             values={
                 "stage_error_rate": signals.stage_error_rate,
+                "stage_sample_count": signals.stage_sample_count,
                 "stage_p95_latency_ms": signals.stage_p95_latency_ms,
                 "minutes_since_successful_pipeline": signals.minutes_since_successful_pipeline,
                 "consecutive_skip_logs": signals.consecutive_skip_logs,
@@ -235,6 +248,7 @@ def evaluate_rules(
             action="先探测 /api/v1/healthz 与 serve 日志；若 healthz 正常但 5xx 上升，查看最近部署和 upstream API。",
             values={
                 "server_error_rate": signals.server_error_rate,
+                "server_pv": signals.server_pv,
                 "healthz_consecutive_failures": signals.healthz_consecutive_failures,
             },
         ),
@@ -735,8 +749,12 @@ def collect_alert_signals(
         current = current.replace(tzinfo=SHANGHAI_TZ)
     current = current.astimezone(SHANGHAI_TZ)
     a1 = _threshold_section(ALERT_THRESHOLDS, "a1")
-    window_minutes = _int_threshold(a1, "window_minutes", 15)
-    recent_since = current - timedelta(minutes=window_minutes)
+    a2 = _threshold_section(ALERT_THRESHOLDS, "a2")
+    a3 = _threshold_section(ALERT_THRESHOLDS, "a3")
+    a1_window_minutes = _int_threshold(a1, "window_minutes", 15)
+    recent_since = current - timedelta(minutes=a1_window_minutes)
+    stage_since = current - timedelta(minutes=_int_threshold(a2, "window_minutes", 15))
+    access_since = current - timedelta(minutes=_int_threshold(a3, "window_minutes", 15))
     sample_size, upstream_rate, schema_rate = _recent_upstream_stats(db_path, recent_since)
 
     metrics = collect_metrics(
@@ -744,18 +762,22 @@ def collect_alert_signals(
         pipeline_log_dir=pipeline_log_dir,
         access_log_paths=access_log_paths,
         now=current,
+        stage_since=stage_since,
+        access_since=access_since,
     )
     pipeline = metrics.get("pipeline", {})
     assert isinstance(pipeline, dict)
     stages = pipeline.get("stages", {})
     assert isinstance(stages, dict)
     stage_error_rate: dict[str, float] = {}
+    stage_sample_count: dict[str, int] = {}
     stage_p95_latency_ms: dict[str, int] = {}
     for stage in ("prefilter", "scoring", "enrich"):
         row = stages.get(stage, {})
         if not isinstance(row, dict):
             continue
         stage_error_rate[stage] = float(row.get("error_rate") or 0.0)
+        stage_sample_count[stage] = int(row.get("processed") or 0)
         p95 = row.get("p95_latency_ms")
         stage_p95_latency_ms[stage] = int(p95) if p95 is not None else 0
 
@@ -794,6 +816,8 @@ def collect_alert_signals(
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
         items_today=int(ingestion.get("items_today") or 0),
         minutes_elapsed_today=_minutes_elapsed_today(current),
+        stage_sample_count=stage_sample_count,
+        server_pv=int(users.get("pv") or 0),
     )
 
 

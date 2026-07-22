@@ -18,6 +18,7 @@ from airadar.admin.alerts import (
     run_alert_state_machine,
     send_alert_message,
 )
+from airadar.admin.thresholds import ALERT_THRESHOLDS
 
 
 def _normal_signals() -> AlertSignals:
@@ -32,6 +33,8 @@ def _normal_signals() -> AlertSignals:
         server_error_rate=0.0,
         fetch_failed_ratio=0.0,
         items_today=300,
+        stage_sample_count={"prefilter": 20, "scoring": 20, "enrich": 20},
+        server_pv=100,
     )
 
 
@@ -87,6 +90,7 @@ def test_a2_heartbeat_tolerates_in_progress_runs_and_only_fires_on_real_stall() 
     # A genuine stall (no successful pipeline far beyond normal cadence) fires,
     # and folds the skip count in as diagnostic context.
     stalled = _normal_signals()
+    stalled.stage_sample_count = {}
     stalled.minutes_since_successful_pipeline = 130
     stalled.consecutive_skip_logs = 8
     a2 = evaluate_rules(stalled)[1]
@@ -120,10 +124,61 @@ def test_a3_fires_on_server_error_rate_or_confirmed_healthz_failures() -> None:
     assert a3.firing is True
 
     healthz_down = _normal_signals()
+    healthz_down.server_pv = 0
     healthz_down.healthz_consecutive_failures = 2
     a3 = evaluate_rules(healthz_down)[2]
     assert a3.firing is True
     assert "healthz" in a3.detail
+
+
+def test_a2_a3_minimum_sample_thresholds_are_fixed_closed_form_values() -> None:
+    a2 = ALERT_THRESHOLDS["a2"]
+    a3 = ALERT_THRESHOLDS["a3"]
+
+    assert isinstance(a2, dict)
+    assert isinstance(a3, dict)
+    assert a2["min_samples"] == {"prefilter": 4, "scoring": 4, "enrich": 2}
+    assert a3["min_pv"] == 20
+
+
+@pytest.mark.parametrize(
+    ("stage", "below_count", "at_count", "below_rate", "at_rate"),
+    [
+        ("prefilter", 3, 4, 1 / 3, 2 / 4),
+        ("scoring", 3, 4, 1 / 3, 2 / 4),
+        ("enrich", 1, 2, 1 / 1, 2 / 2),
+    ],
+)
+def test_a2_stage_error_rate_requires_fixed_minimum_samples(
+    stage: str,
+    below_count: int,
+    at_count: int,
+    below_rate: float,
+    at_rate: float,
+) -> None:
+    below_gate = _normal_signals()
+    below_gate.stage_error_rate[stage] = below_rate
+    below_gate.stage_sample_count[stage] = below_count
+
+    at_gate = _normal_signals()
+    at_gate.stage_error_rate[stage] = at_rate
+    at_gate.stage_sample_count[stage] = at_count
+
+    assert evaluate_rules(below_gate)[1].firing is False
+    assert evaluate_rules(at_gate)[1].firing is True
+
+
+def test_a3_server_error_rate_requires_twenty_page_views() -> None:
+    below_gate = _normal_signals()
+    below_gate.server_pv = 19
+    below_gate.server_error_rate = 1 / 19
+
+    at_gate = _normal_signals()
+    at_gate.server_pv = 20
+    at_gate.server_error_rate = 2 / 20
+
+    assert evaluate_rules(below_gate)[2].firing is False
+    assert evaluate_rules(at_gate)[2].firing is True
 
 
 def test_a4_daily_insert_floor_is_time_proportional() -> None:
