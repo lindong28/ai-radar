@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -28,7 +28,16 @@ DEFAULT_HEALTHZ_TIMEOUT_SECONDS = 2.0
 # Project label prefixed on every alert so a shared Feishu webhook (used by
 # multiple projects) lets the reader tell which project an alert came from.
 ALERT_SOURCE = "AI Radar"
+AlertSeverity = Literal["page", "notice"]
+PAGE_SEVERITY: Literal["page"] = "page"
+NOTICE_SEVERITY: Literal["notice"] = "notice"
+ALERT_CHANNEL = "ALERT"
+NOTIFICATION_CHANNEL = "NOTIFICATION"
 LOGGER = logging.getLogger(__name__)
+
+
+class AlertSender(Protocol):
+    def __call__(self, text: str, *, severity: AlertSeverity = PAGE_SEVERITY) -> object: ...
 
 
 @dataclass
@@ -55,6 +64,9 @@ class AlertRuleResult:
     detail: str
     action: str
     values: dict[str, object] = field(default_factory=dict)
+    severity: AlertSeverity = PAGE_SEVERITY
+    impact: str = ""
+    urgency: str = ""
 
 
 def _threshold_section(thresholds: dict[str, object], key: str) -> dict[str, Any]:
@@ -218,17 +230,63 @@ def evaluate_rules(
 
 
 def _format_firing(result: AlertRuleResult) -> str:
-    return (
-        f"【{ALERT_SOURCE}】🔴 {result.rule_id} {result.title}\n"
-        f"故障类别：{result.title}\n"
-        f"具体故障对象/数值：{result.detail}\n"
-        f"处置方向：{result.action}"
+    severity = _normalize_severity(result.severity)
+    emoji = "🟡" if severity == NOTICE_SEVERITY else "🔴"
+    lines = [f"【{ALERT_SOURCE}】{emoji} {result.rule_id} {result.title}"]
+    if result.impact:
+        lines.append(f"影响：{result.impact}")
+    if result.urgency:
+        lines.append(f"需否立即处置：{result.urgency}")
+    lines.extend(
+        (
+            f"故障类别：{result.title}",
+            f"具体故障对象/数值：{result.detail}",
+            f"处置方向：{result.action}",
+        )
     )
+    return "\n".join(lines)
 
 
 def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
     suffix = f"（since {since}）" if since else ""
     return f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}"
+
+
+def _normalize_severity(value: object) -> AlertSeverity:
+    return NOTICE_SEVERITY if value == NOTICE_SEVERITY else PAGE_SEVERITY
+
+
+def _severity_channel(severity: AlertSeverity) -> str:
+    return NOTIFICATION_CHANNEL if severity == NOTICE_SEVERITY else ALERT_CHANNEL
+
+
+def _delivery_succeeded(send_result: object) -> bool:
+    return isinstance(send_result, Mapping) and send_result.get("skipped") is False
+
+
+def _entry_announced(entry: dict[str, object]) -> bool:
+    last_notified = _parse_dt(entry.get("last_notified"))
+    since = _parse_dt(entry.get("since"))
+    return last_notified is not None and (since is None or last_notified >= since)
+
+
+def _invoke_sender(
+    *,
+    result: AlertRuleResult,
+    event_type: Literal["firing", "resolved"],
+    text: str,
+    severity: AlertSeverity,
+    sender: AlertSender,
+) -> dict[str, object]:
+    send_result = sender(text, severity=severity)
+    return {
+        "rule_id": result.rule_id,
+        "type": event_type,
+        "effective_severity": severity,
+        "channel": _severity_channel(severity),
+        "text": text,
+        "send_result": send_result,
+    }
 
 
 def _load_state(path: Path) -> dict[str, dict[str, object]]:
@@ -297,56 +355,66 @@ def _apply_alert_results(
     results: list[AlertRuleResult],
     *,
     current: datetime,
-    sender: Callable[[str], object],
+    sender: AlertSender,
     thresholds: dict[str, object],
 ) -> list[dict[str, object]]:
     sent: list[dict[str, object]] = []
     for result in results:
         entry = state.get(result.rule_id, {"state": "ok"})
+        if not isinstance(entry, dict):
+            entry = {"state": "ok"}
         previous_state = str(entry.get("state", "ok"))
+        previously_announced = previous_state == "firing" and _entry_announced(entry)
         last_notified = _parse_dt(entry.get("last_notified"))
         debounce = _debounce_window(thresholds, result.rule_id)
         if result.firing:
+            effective_severity = _normalize_severity(result.severity)
             since = entry.get("since") if previous_state == "firing" else current.isoformat()
             since_dt = _parse_dt(since)
             confirmed = since_dt is None or current - since_dt >= debounce
-            should_notify = confirmed and (last_notified is None or current - last_notified >= COOLDOWN)
+            should_notify = confirmed and (
+                last_notified is None or current - last_notified >= COOLDOWN
+            )
+            delivery_succeeded = False
             if should_notify:
                 text = _format_firing(result)
-                send_result = sender(text)
-                sent.append(
-                    {
-                        "rule_id": result.rule_id,
-                        "type": "firing",
-                        "text": text,
-                        "send_result": send_result,
-                    }
+                receipt = _invoke_sender(
+                    result=result,
+                    event_type="firing",
+                    text=text,
+                    severity=effective_severity,
+                    sender=sender,
                 )
+                sent.append(receipt)
+                delivery_succeeded = _delivery_succeeded(receipt["send_result"])
             state[result.rule_id] = {
                 "state": "firing",
                 "since": since,
-                "last_notified": current.isoformat() if should_notify else entry.get("last_notified"),
+                "last_notified": current.isoformat() if delivery_succeeded else entry.get("last_notified"),
                 "detail": result.detail,
+                "severity": effective_severity,
+                "announced": previously_announced or delivery_succeeded,
             }
         else:
-            since_dt = _parse_dt(entry.get("since"))
-            announced = last_notified is not None and (since_dt is None or last_notified >= since_dt)
-            if previous_state == "firing" and announced:
+            effective_severity = _normalize_severity(entry.get("severity"))
+            if previous_state == "firing" and previously_announced:
                 text = _format_resolved(result, str(entry.get("since") or ""))
-                send_result = sender(text)
                 sent.append(
-                    {
-                        "rule_id": result.rule_id,
-                        "type": "resolved",
-                        "text": text,
-                        "send_result": send_result,
-                    }
+                    _invoke_sender(
+                        result=result,
+                        event_type="resolved",
+                        text=text,
+                        severity=effective_severity,
+                        sender=sender,
+                    )
                 )
             state[result.rule_id] = {
                 "state": "ok",
                 "since": None,
                 "last_notified": entry.get("last_notified"),
                 "detail": result.detail,
+                "severity": effective_severity,
+                "announced": False,
             }
     return sent
 
@@ -356,7 +424,7 @@ def run_alert_results_state_machine(
     *,
     state_path: str | Path,
     now: datetime | None = None,
-    send: Callable[[str], object] | None = None,
+    send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(SHANGHAI_TZ)
@@ -387,7 +455,7 @@ def run_alert_state_machine(
     *,
     state_path: str | Path = DEFAULT_STATE_PATH,
     now: datetime | None = None,
-    send: Callable[[str], object] | None = None,
+    send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
     healthz_probe: Callable[[str, float], bool] | None = None,
 ) -> dict[str, object]:
@@ -425,8 +493,11 @@ def run_alert_state_machine(
     }
 
 
-def send_alert_message(text: str) -> dict[str, object]:
-    command = ["im-notify", "--alert", text]
+def send_alert_message(text: str, *, severity: AlertSeverity = PAGE_SEVERITY) -> dict[str, object]:
+    effective_severity = _normalize_severity(severity)
+    command = ["im-notify", text]
+    if effective_severity == PAGE_SEVERITY:
+        command.insert(1, "--alert")
     try:
         completed = subprocess.run(command, capture_output=True, text=True, timeout=15.0)
     except (OSError, subprocess.TimeoutExpired) as exc:

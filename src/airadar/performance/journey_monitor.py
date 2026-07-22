@@ -7,14 +7,13 @@ import os
 import sqlite3
 import subprocess
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from .. import db
-from ..admin.alerts import AlertRuleResult, run_alert_results_state_machine
+from ..admin.alerts import AlertRuleResult, AlertSender, run_alert_results_state_machine
 from .browser_probe import measure_browser_journey
 
 WARM_SAMPLES = 20
@@ -453,7 +452,7 @@ def run_performance_alerts(
     evidence_dir: Path,
     pipeline_lock_dir: Path,
     now: datetime | None = None,
-    send: Callable[[str], object] | None = None,
+    send: AlertSender | None = None,
     enabled_vantages: frozenset[str] | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(UTC)

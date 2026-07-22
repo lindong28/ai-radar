@@ -223,7 +223,10 @@ def test_writing_firing_evidence_removes_evidence_older_than_fourteen_days(
         for index in range(22)
     ]
     store_samples(sample_path, rows, now=now)
-    monkeypatch.setattr("airadar.admin.alerts.send_alert_message", lambda text: {"skipped": False})
+    monkeypatch.setattr(
+        "airadar.admin.alerts.send_alert_message",
+        lambda text, *, severity="page": {"skipped": False},
+    )
 
     run_performance_alerts(
         sample_path=sample_path,
@@ -271,7 +274,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     started = datetime(2026, 7, 18, tzinfo=UTC)
     sent: list[str] = []
 
-    def sender(text: str) -> dict[str, object]:
+    def sender(text: str, *, severity: str = "page") -> dict[str, object]:
         sent.append(text)
         return {"skipped": False}
 
@@ -363,7 +366,7 @@ def test_busy_and_idle_performance_compliance_streams_are_separate(tmp_path: Pat
         evidence_dir=tmp_path / "evidence",
         pipeline_lock_dir=tmp_path / ".pipeline.lock",
         now=started + timedelta(minutes=200),
-        send=lambda text: {"skipped": False},
+        send=lambda text, *, severity="page": {"skipped": False},
     )
 
     firing = [row for row in result["results"] if row["firing"]]
@@ -398,7 +401,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
     started = datetime(2026, 7, 18, tzinfo=UTC)
     sent: list[str] = []
 
-    def sender(text: str) -> dict[str, object]:
+    def sender(text: str, *, severity: str = "page") -> dict[str, object]:
         sent.append(text)
         return {"skipped": False}
 

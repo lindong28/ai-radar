@@ -30,8 +30,12 @@ install_launchd_service() {
   ensure_plist "$plist_name"
 
   if is_launchd_loaded "$label"; then
-    echo "✓ $slug: already loaded (label=$label)"
-    return 0
+    if [[ "$slug" != "alert" ]]; then
+      echo "✓ $slug: already loaded (label=$label)"
+      return 0
+    fi
+    echo "  alert: reloading loaded job so regenerated webhook environment takes effect"
+    reload_alert_launchd_service "$label"
   fi
 
   launchctl bootstrap "gui/$UID" "$plist_path"
