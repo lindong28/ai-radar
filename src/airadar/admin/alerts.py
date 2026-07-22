@@ -84,8 +84,15 @@ def _int_threshold(section: dict[str, Any], key: str, default: int) -> int:
     return int(value) if value is not None else default
 
 
-def _debounce_window(thresholds: dict[str, object], rule_id: str) -> timedelta:
+def _debounce_window(
+    thresholds: dict[str, object],
+    rule_id: str,
+    severity: AlertSeverity,
+) -> timedelta:
     section = _threshold_section(thresholds, rule_id.lower())
+    by_severity = section.get("debounce_minutes_by_severity")
+    if isinstance(by_severity, dict) and severity in by_severity:
+        return timedelta(minutes=_int_threshold(by_severity, severity, 0))
     return timedelta(minutes=_int_threshold(section, "debounce_minutes", 0))
 
 
@@ -161,7 +168,29 @@ def evaluate_rules(
         daily_inserted_floor,
         signals.minutes_elapsed_today,
     )
-    a4_firing = signals.fetch_failed_ratio > a4_fetch_ratio or signals.items_today < daily_inserted_floor_elapsed
+    a4_fetch_failed = signals.fetch_failed_ratio > a4_fetch_ratio
+    a4_items_low = signals.items_today < daily_inserted_floor_elapsed
+    a4_firing = a4_fetch_failed or a4_items_low
+    a4_severity: AlertSeverity = (
+        PAGE_SEVERITY if a4_items_low or not a4_fetch_failed else NOTICE_SEVERITY
+    )
+    a4_reasons: list[str] = []
+    if a4_fetch_failed:
+        a4_reasons.append(f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%} > {a4_fetch_ratio:.1%}")
+    if a4_items_low:
+        a4_reasons.append(
+            f"今日 items 增量 {signals.items_today} < 按日内进度 floor "
+            f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}"
+        )
+    if a4_items_low:
+        a4_impact = "文章更新可能停滞"
+        a4_urgency = "是——需立即核查"
+    elif a4_fetch_failed:
+        a4_impact = "当前摄取量正常，fetch 失败主要反映结构性源站波动"
+        a4_urgency = "否——当前摄取量正常，无需立即处置"
+    else:
+        a4_impact = ""
+        a4_urgency = ""
 
     return [
         AlertRuleResult(
@@ -214,8 +243,13 @@ def evaluate_rules(
             title="文章摄取骤降",
             firing=a4_firing,
             detail=(
-                f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，今日 items 增量 {signals.items_today}，"
-                f"按日内进度 floor {daily_inserted_floor_elapsed}/{daily_inserted_floor}"
+                "；".join(a4_reasons)
+                if a4_reasons
+                else (
+                    f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，"
+                    f"今日 items 增量 {signals.items_today}，按日内进度 floor "
+                    f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}，均在阈值内"
+                )
             ),
             action="查看最近一轮各源健康并按 source error 分组：X(nitter) 源整批 SSL/超时多为公共实例瞬态（已加 30min 去抖，持续才告警）；微信源走 Mp2RSS；其余源按错误类型分别处理。",
             values={
@@ -225,6 +259,9 @@ def evaluate_rules(
                 "daily_inserted_floor": daily_inserted_floor,
                 "daily_inserted_floor_elapsed": daily_inserted_floor_elapsed,
             },
+            severity=a4_severity,
+            impact=a4_impact,
+            urgency=a4_urgency,
         ),
     ]
 
@@ -265,9 +302,90 @@ def _delivery_succeeded(send_result: object) -> bool:
 
 
 def _entry_announced(entry: dict[str, object]) -> bool:
+    if isinstance(entry.get("announced"), bool):
+        return entry["announced"] is True
     last_notified = _parse_dt(entry.get("last_notified"))
     since = _parse_dt(entry.get("since"))
     return last_notified is not None and (since is None or last_notified >= since)
+
+
+def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
+    state = "firing" if entry.get("state") == "firing" else "ok"
+    return {
+        "state": state,
+        "since": entry.get("since") if state == "firing" else None,
+        "last_notified": entry.get("last_notified"),
+        "detail": entry.get("detail"),
+        "announced": state == "firing" and _entry_announced(entry),
+    }
+
+
+def _normalize_lifecycles(entry: dict[str, object]) -> dict[AlertSeverity, dict[str, object]]:
+    raw_lifecycles = entry.get("lifecycles")
+    lifecycles: dict[AlertSeverity, dict[str, object]] = {}
+    if isinstance(raw_lifecycles, dict):
+        for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
+            raw = raw_lifecycles.get(severity)
+            if isinstance(raw, dict):
+                lifecycles[severity] = _normalized_lifecycle(raw)
+    if lifecycles:
+        return lifecycles
+    severity = _normalize_severity(entry.get("severity"))
+    lifecycles[severity] = _normalized_lifecycle(entry)
+    return lifecycles
+
+
+def _ok_lifecycle(lifecycle: dict[str, object], detail: str) -> dict[str, object]:
+    return {
+        "state": "ok",
+        "since": None,
+        "last_notified": lifecycle.get("last_notified"),
+        "detail": detail,
+        "announced": False,
+    }
+
+
+def _project_lifecycles(
+    lifecycles: dict[AlertSeverity, dict[str, object]],
+    *,
+    preferred_severity: AlertSeverity,
+) -> dict[str, object]:
+    # PAGE is the fail-closed projection whenever malformed state contains more
+    # than one firing lifecycle; preferred severity only breaks non-page ties.
+    active_severity = next(
+        (
+            severity
+            for severity in (PAGE_SEVERITY, preferred_severity, NOTICE_SEVERITY)
+            if severity in lifecycles and lifecycles[severity].get("state") == "firing"
+        ),
+        None,
+    )
+    projected_severity = active_severity or (
+        preferred_severity if preferred_severity in lifecycles else next(iter(lifecycles))
+    )
+    projected = lifecycles[projected_severity]
+    return {
+        "state": "firing" if active_severity is not None else "ok",
+        "since": projected.get("since") if active_severity is not None else None,
+        "last_notified": projected.get("last_notified"),
+        "detail": projected.get("detail"),
+        "severity": projected_severity,
+        "announced": active_severity is not None and _entry_announced(projected),
+        "lifecycles": lifecycles,
+    }
+
+
+def _transition_since(
+    *,
+    outgoing_since: object,
+    current: datetime,
+    debounce: timedelta,
+) -> str:
+    outgoing_since_dt = _parse_dt(outgoing_since)
+    confirmed_since = current - debounce
+    if outgoing_since_dt is not None and outgoing_since_dt <= confirmed_since:
+        return str(outgoing_since)
+    return confirmed_since.isoformat()
 
 
 def _invoke_sender(
@@ -296,7 +414,18 @@ def _load_state(path: Path) -> dict[str, dict[str, object]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    state = payload
+    for rule_id, entry in list(state.items()):
+        if rule_id == HEALTHZ_STATE_KEY or not isinstance(entry, dict):
+            continue
+        lifecycles = _normalize_lifecycles(entry)
+        state[rule_id] = _project_lifecycles(
+            lifecycles,
+            preferred_severity=_normalize_severity(entry.get("severity")),
+        )
+    return state
 
 
 def _write_state(path: Path, state: dict[str, dict[str, object]]) -> None:
@@ -360,18 +489,70 @@ def _apply_alert_results(
 ) -> list[dict[str, object]]:
     sent: list[dict[str, object]] = []
     for result in results:
-        entry = state.get(result.rule_id, {"state": "ok"})
+        entry = state.get(
+            result.rule_id,
+            {"state": "ok", "severity": _normalize_severity(result.severity)},
+        )
         if not isinstance(entry, dict):
-            entry = {"state": "ok"}
-        previous_state = str(entry.get("state", "ok"))
-        previously_announced = previous_state == "firing" and _entry_announced(entry)
-        last_notified = _parse_dt(entry.get("last_notified"))
-        debounce = _debounce_window(thresholds, result.rule_id)
+            entry = {"state": "ok", "severity": _normalize_severity(result.severity)}
+        lifecycles = _normalize_lifecycles(entry)
+        projected_severity = _normalize_severity(entry.get("severity"))
         if result.firing:
             effective_severity = _normalize_severity(result.severity)
-            since = entry.get("since") if previous_state == "firing" else current.isoformat()
+            debounce = _debounce_window(thresholds, result.rule_id, effective_severity)
+            outgoing_announced = False
+            outgoing_since: object = None
+            pending_since: object = None
+            for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
+                if severity == effective_severity:
+                    continue
+                lifecycle = lifecycles.get(severity)
+                if lifecycle is None or lifecycle.get("state") != "firing":
+                    continue
+                announced = _entry_announced(lifecycle)
+                if announced:
+                    outgoing_announced = True
+                    outgoing_since = lifecycle.get("since")
+                    sent.append(
+                        _invoke_sender(
+                            result=result,
+                            event_type="resolved",
+                            text=_format_resolved(result, str(lifecycle.get("since") or "")),
+                            severity=severity,
+                            sender=sender,
+                        )
+                    )
+                elif pending_since is None:
+                    pending_since = lifecycle.get("since")
+                lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+
+            lifecycle = lifecycles.get(
+                effective_severity,
+                {
+                    "state": "ok",
+                    "since": None,
+                    "last_notified": None,
+                    "detail": result.detail,
+                    "announced": False,
+                },
+            )
+            lifecycle_was_firing = lifecycle.get("state") == "firing"
+            previously_announced = lifecycle_was_firing and _entry_announced(lifecycle)
+            if lifecycle_was_firing:
+                since = lifecycle.get("since")
+            elif outgoing_announced:
+                since = _transition_since(
+                    outgoing_since=outgoing_since,
+                    current=current,
+                    debounce=debounce,
+                )
+            elif pending_since is not None:
+                since = pending_since
+            else:
+                since = current.isoformat()
             since_dt = _parse_dt(since)
             confirmed = since_dt is None or current - since_dt >= debounce
+            last_notified = _parse_dt(lifecycle.get("last_notified"))
             should_notify = confirmed and (
                 last_notified is None or current - last_notified >= COOLDOWN
             )
@@ -387,35 +568,47 @@ def _apply_alert_results(
                 )
                 sent.append(receipt)
                 delivery_succeeded = _delivery_succeeded(receipt["send_result"])
-            state[result.rule_id] = {
+            lifecycles[effective_severity] = {
                 "state": "firing",
                 "since": since,
-                "last_notified": current.isoformat() if delivery_succeeded else entry.get("last_notified"),
+                "last_notified": (
+                    current.isoformat() if delivery_succeeded else lifecycle.get("last_notified")
+                ),
                 "detail": result.detail,
-                "severity": effective_severity,
                 "announced": previously_announced or delivery_succeeded,
             }
+            state[result.rule_id] = _project_lifecycles(
+                lifecycles,
+                preferred_severity=effective_severity,
+            )
         else:
-            effective_severity = _normalize_severity(entry.get("severity"))
-            if previous_state == "firing" and previously_announced:
-                text = _format_resolved(result, str(entry.get("since") or ""))
-                sent.append(
-                    _invoke_sender(
-                        result=result,
-                        event_type="resolved",
-                        text=text,
-                        severity=effective_severity,
-                        sender=sender,
+            for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
+                lifecycle = lifecycles.get(severity)
+                if lifecycle is None or lifecycle.get("state") != "firing":
+                    continue
+                if _entry_announced(lifecycle):
+                    sent.append(
+                        _invoke_sender(
+                            result=result,
+                            event_type="resolved",
+                            text=_format_resolved(result, str(lifecycle.get("since") or "")),
+                            severity=severity,
+                            sender=sender,
+                        )
                     )
-                )
-            state[result.rule_id] = {
-                "state": "ok",
-                "since": None,
-                "last_notified": entry.get("last_notified"),
-                "detail": result.detail,
-                "severity": effective_severity,
-                "announced": False,
-            }
+                lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+            if projected_severity not in lifecycles:
+                projected_severity = _normalize_severity(result.severity)
+                lifecycles[projected_severity] = _ok_lifecycle({}, result.detail)
+            elif lifecycles[projected_severity].get("state") == "ok":
+                lifecycles[projected_severity] = {
+                    **lifecycles[projected_severity],
+                    "detail": result.detail,
+                }
+            state[result.rule_id] = _project_lifecycles(
+                lifecycles,
+                preferred_severity=projected_severity,
+            )
     return sent
 
 

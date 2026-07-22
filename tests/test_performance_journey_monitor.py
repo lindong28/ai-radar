@@ -11,13 +11,14 @@ from types import SimpleNamespace
 import pytest
 
 from airadar import db
-from airadar.admin.alerts import AlertRuleResult
+from airadar.admin.alerts import AlertRuleResult, run_alert_results_state_machine
 from airadar.performance.browser_probe import BrowserMeasurement, _measure_browser_journey_inner
 from airadar.performance.journey_monitor import (
     CONFIRMATION_WINDOWS,
     RETENTION_DAYS,
     WARM_SAMPLES,
     JourneyMonitorRuntime,
+    _load_alert_state,
     _probe_expectation,
     _with_firing_message,
     classify_pipeline_load,
@@ -28,6 +29,55 @@ from airadar.performance.journey_monitor import (
 )
 
 MIN_CONFIRMABLE_SAMPLES = WARM_SAMPLES + CONFIRMATION_WINDOWS - 1
+
+
+def test_journey_state_reader_sees_page_after_double_firing_state_is_projected(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "double-firing-alert-state.json"
+    started = "2026-07-22T08:00:00+08:00"
+    state_path.write_text(
+        json.dumps(
+            {
+                "PERF:double": {
+                    "state": "firing",
+                    "since": started,
+                    "last_notified": started,
+                    "detail": "notice projection",
+                    "severity": "notice",
+                    "announced": True,
+                    "lifecycles": {
+                        "page": {
+                            "state": "firing",
+                            "since": started,
+                            "last_notified": started,
+                            "detail": "confirmed page",
+                            "announced": True,
+                        },
+                        "notice": {
+                            "state": "firing",
+                            "since": started,
+                            "last_notified": started,
+                            "detail": "notice projection",
+                            "announced": True,
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_alert_results_state_machine(
+        [],
+        state_path=state_path,
+        send=lambda text, *, severity="page": pytest.fail("normalization must not send"),
+    )
+    entry = _load_alert_state(state_path)["PERF:double"]
+
+    assert entry["state"] == "firing"
+    assert entry["severity"] == "page"
+    assert entry["detail"] == "confirmed page"
 
 
 def test_probe_expectation_does_not_import_app_or_run_migrations(
@@ -1296,3 +1346,22 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
         if isinstance(entry, dict) and "same_host_public" in rule_id
     }
     assert public_states and all(value != "firing" for value in public_states.values())
+    assert all(
+        "lifecycles" in entry
+        for rule_id, entry in state.items()
+        if isinstance(entry, dict) and "same_host_public" in rule_id
+    )
+
+    second_clear = run_performance_alerts(
+        sample_path=sample_path,
+        state_path=state_path,
+        evidence_dir=evidence_dir,
+        pipeline_lock_dir=lock_dir,
+        now=started + timedelta(minutes=31),
+        enabled_vantages=frozenset({"same_host_origin"}),
+        send=sender,
+    )
+    assert not any(
+        receipt["type"] == "resolved" and "same_host_public" in receipt["rule_id"]
+        for receipt in second_clear["sent"]
+    )

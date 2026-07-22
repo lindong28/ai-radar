@@ -12,6 +12,7 @@ import pytest
 from airadar.admin.alerts import (
     AlertRuleResult,
     AlertSignals,
+    _project_lifecycles,
     evaluate_rules,
     run_alert_results_state_machine,
     run_alert_state_machine,
@@ -251,6 +252,63 @@ def _a4_firing() -> AlertSignals:
     return signals
 
 
+def _a4_items_floor_firing() -> AlertSignals:
+    signals = _normal_signals()
+    signals.items_today = 0
+    signals.minutes_elapsed_today = 720
+    return signals
+
+
+@pytest.mark.parametrize(
+    ("fetch_failed_ratio", "items_today", "expected_severity", "impact", "urgency", "detail"),
+    [
+        (0.8, 300, "notice", "当前摄取量正常", "无需立即处置", "fetch 失败率"),
+        (0.0, 0, "page", "文章更新可能停滞", "需立即核查", "items 增量"),
+        (0.8, 0, "page", "文章更新可能停滞", "需立即核查", "fetch 失败率"),
+    ],
+)
+def test_a4_branches_choose_severity_channel_and_operator_message(
+    tmp_path: Path,
+    fetch_failed_ratio: float,
+    items_today: int,
+    expected_severity: str,
+    impact: str,
+    urgency: str,
+    detail: str,
+) -> None:
+    signals = _normal_signals()
+    signals.fetch_failed_ratio = fetch_failed_ratio
+    signals.items_today = items_today
+    signals.minutes_elapsed_today = 720
+    a4 = evaluate_rules(signals)[3]
+    calls: list[tuple[str, str]] = []
+
+    payload = run_alert_results_state_machine(
+        [a4],
+        state_path=tmp_path / f"a4-{expected_severity}.json",
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        send=_recording_sender(calls),
+        thresholds={
+            "a4": {
+                "debounce_minutes_by_severity": {"page": 0, "notice": 0},
+            }
+        },
+    )
+
+    assert a4.firing is True
+    assert a4.severity == expected_severity
+    assert impact in a4.impact
+    assert urgency in a4.urgency
+    assert detail in a4.detail
+    assert "X(nitter)" in a4.action
+    assert "Mp2RSS" in a4.action
+    assert "evidence" not in a4.action.lower()
+    assert [(row["effective_severity"], row["channel"]) for row in payload["sent"]] == [
+        (expected_severity, "NOTIFICATION" if expected_severity == "notice" else "ALERT")
+    ]
+    assert calls[0][1] == expected_severity
+
+
 def test_a4_debounce_absorbs_transient_flap(tmp_path: Path) -> None:
     # nitter.net flaps for a single fetch round (~15 min) then recovers. With the
     # 30-min debounce, A4 must stay completely silent — no firing, no resolved —
@@ -311,8 +369,25 @@ def test_a4_debounce_fires_after_sustained_outage_then_resolves(tmp_path: Path) 
     assert first["sent_count"] == 0  # debounced
     assert confirmed["sent_count"] == 1  # sustained past 30 min → fires
     assert resolved["sent_count"] == 1  # resolved after a real firing
-    assert "🔴 A4" in deliveries[0][0]
+    assert "🟡 A4" in deliveries[0][0]
+    assert deliveries[0][1] == "notice"
     assert "✅ A4" in deliveries[1][0]
+
+
+def test_a4_items_floor_pages_on_the_first_round(tmp_path: Path) -> None:
+    deliveries: list[tuple[str, str]] = []
+
+    first = run_alert_state_machine(
+        _a4_items_floor_firing(),
+        state_path=tmp_path / "items-floor.json",
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    assert first["sent_count"] == 1
+    assert deliveries[0][1] == "page"
+    assert "🔴 A4" in deliveries[0][0]
 
 
 def test_alert_rule_result_is_frozen_and_serializable_with_message_slots() -> None:
@@ -670,36 +745,665 @@ def test_legacy_last_notified_uses_single_cooldown_before_retry(tmp_path: Path) 
     assert calls[0][1] == "page"
 
 
-def test_single_rule_cooldown_is_not_bypassed_by_severity_change(tmp_path: Path) -> None:
-    state_path = tmp_path / "single-cooldown.json"
+def _severity_result(severity: str, *, firing: bool = True) -> AlertRuleResult:
+    return AlertRuleResult(
+        "A4",
+        f"{severity} condition",
+        firing,
+        f"{severity} detail" if firing else "ok",
+        "action",
+        severity=severity,  # type: ignore[arg-type]
+    )
+
+
+def _receipt_identities(payload: dict[str, object]) -> list[tuple[str, str, str]]:
+    sent = payload["sent"]
+    assert isinstance(sent, list)
+    return [
+        (str(receipt["rule_id"]), str(receipt["effective_severity"]), str(receipt["type"]))
+        for receipt in sent
+    ]
+
+
+def _firing_lifecycle_severities(state_path: Path, rule_id: str = "A4") -> set[str]:
+    entry = json.loads(state_path.read_text(encoding="utf-8"))[rule_id]
+    return {
+        severity
+        for severity, lifecycle in entry["lifecycles"].items()
+        if lifecycle["state"] == "firing"
+    }
+
+
+def test_double_firing_current_state_projects_page_without_silent_healing(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "double-firing.json"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "PERF:double": {
+                    "state": "firing",
+                    "since": (started + timedelta(minutes=1)).isoformat(),
+                    "last_notified": (started + timedelta(minutes=1)).isoformat(),
+                    "detail": "notice projection",
+                    "severity": "notice",
+                    "announced": True,
+                    "lifecycles": {
+                        "page": {
+                            "state": "firing",
+                            "since": started.isoformat(),
+                            "last_notified": started.isoformat(),
+                            "detail": "confirmed page",
+                            "announced": True,
+                        },
+                        "notice": {
+                            "state": "firing",
+                            "since": (started + timedelta(minutes=1)).isoformat(),
+                            "last_notified": (started + timedelta(minutes=1)).isoformat(),
+                            "detail": "notice projection",
+                            "announced": True,
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    first = run_alert_results_state_machine(
+        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+    )
+    first_saved = state_path.read_text(encoding="utf-8")
+    second = run_alert_results_state_machine(
+        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+    )
+    second_saved = state_path.read_text(encoding="utf-8")
+    entry = json.loads(second_saved)["PERF:double"]
+
+    assert first["sent_count"] == second["sent_count"] == 0
+    assert calls == []
+    assert entry["state"] == "firing"
+    assert entry["severity"] == "page"
+    assert entry["detail"] == "confirmed page"
+    assert _firing_lifecycle_severities(state_path, "PERF:double") == {"page", "notice"}
+    assert entry["lifecycles"]["notice"]["state"] == "firing"
+    assert entry["lifecycles"]["notice"]["announced"] is True
+    assert first_saved == second_saved
+
+
+def test_flat_projection_prefers_firing_page_before_notice_preference() -> None:
+    projected = _project_lifecycles(
+        {
+            "page": {
+                "state": "firing",
+                "since": "2026-07-22T08:00:00+08:00",
+                "last_notified": "2026-07-22T08:00:00+08:00",
+                "detail": "confirmed page",
+                "announced": True,
+            },
+            "notice": {
+                "state": "firing",
+                "since": "2026-07-22T08:01:00+08:00",
+                "last_notified": "2026-07-22T08:01:00+08:00",
+                "detail": "notice preference",
+                "announced": True,
+            },
+        },
+        preferred_severity="notice",
+    )
+
+    assert projected["state"] == "firing"
+    assert projected["severity"] == "page"
+    assert projected["detail"] == "confirmed page"
+
+
+def test_pending_notice_to_page_closes_silently_and_pages_immediately(tmp_path: Path) -> None:
+    state_path = tmp_path / "pending-notice-to-page.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     calls: list[tuple[str, str]] = []
 
-    run_alert_results_state_machine(
-        [AlertRuleResult("TEST", "page", True, "firing", "action")],
+    pending = run_alert_results_state_machine(
+        [_severity_result("notice")],
         state_path=state_path,
         now=current,
         send=_recording_sender(calls),
+        thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
     )
-    suppressed = run_alert_results_state_machine(
-        [
-            AlertRuleResult(
-                "TEST",
-                "notice",
-                True,
-                "still firing",
-                "action",
-                severity="notice",
-            )
-        ],
+    upgraded = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=current + timedelta(minutes=15),
+        send=_recording_sender(calls),
+        thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
+    )
+
+    assert pending["sent_count"] == 0
+    assert _receipt_identities(upgraded) == [("A4", "page", "firing")]
+    assert len(calls) == 1
+    assert calls[0][1] == "page"
+    assert "✅" not in calls[0][0]
+    state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    assert state["state"] == "firing"
+    assert state["severity"] == "page"
+    assert state["lifecycles"]["notice"]["state"] == "ok"
+    assert state["lifecycles"]["page"]["state"] == "firing"
+
+
+def test_pending_notice_to_page_failed_send_retries_without_fake_resolve(tmp_path: Path) -> None:
+    state_path = tmp_path / "pending-notice-failed-page.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    calls: list[tuple[str, str]] = []
+    outcomes = iter([{"skipped": True}, {"skipped": False}])
+
+    def sender(text: str, *, severity: str = "page") -> dict[str, object]:
+        calls.append((text, severity))
+        return next(outcomes)
+
+    thresholds = {"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}}
+    pending = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=current,
+        send=sender,
+        thresholds=thresholds,
+    )
+    failed_page = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=current + timedelta(minutes=15),
+        send=sender,
+        thresholds=thresholds,
+    )
+    failed_state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    retried = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=current + timedelta(minutes=16),
+        send=sender,
+        thresholds=thresholds,
+    )
+
+    assert pending["sent_count"] == 0
+    assert _receipt_identities(failed_page) == [("A4", "page", "firing")]
+    assert failed_page["sent"][0]["send_result"] == {"skipped": True}
+    assert failed_state["announced"] is False
+    assert failed_state["lifecycles"]["notice"]["state"] == "ok"
+    assert failed_state["lifecycles"]["page"]["announced"] is False
+    assert _receipt_identities(retried) == [("A4", "page", "firing")]
+    assert all("✅" not in text for text, _severity in calls)
+
+
+def test_announced_notice_to_page_orders_resolve_before_firing(tmp_path: Path) -> None:
+    state_path = tmp_path / "announced-notice-to-page.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    calls: list[tuple[str, str]] = []
+    thresholds = {"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}}
+
+    run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=current,
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    announced = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=current + timedelta(minutes=31),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    upgraded = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=current + timedelta(minutes=32),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+
+    assert _receipt_identities(announced) == [("A4", "notice", "firing")]
+    assert _receipt_identities(upgraded) == [
+        ("A4", "notice", "resolved"),
+        ("A4", "page", "firing"),
+    ]
+    assert [receipt["channel"] for receipt in upgraded["sent"]] == [
+        "NOTIFICATION",
+        "ALERT",
+    ]
+    assert [(severity, "✅" in text) for text, severity in calls[-2:]] == [
+        ("notice", True),
+        ("page", False),
+    ]
+
+
+def test_page_to_first_notice_orders_resolve_then_bypasses_notice_debounce(tmp_path: Path) -> None:
+    state_path = tmp_path / "page-to-notice.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    calls: list[tuple[str, str]] = []
+    thresholds = {"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}}
+
+    run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=current,
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    transitioned = run_alert_results_state_machine(
+        [_severity_result("notice")],
         state_path=state_path,
         now=current + timedelta(minutes=1),
         send=_recording_sender(calls),
+        thresholds=thresholds,
     )
 
-    assert suppressed["sent_count"] == 0
+    assert _receipt_identities(transitioned) == [
+        ("A4", "page", "resolved"),
+        ("A4", "notice", "firing"),
+    ]
+    assert [severity for _text, severity in calls] == ["page", "page", "notice"]
+
+
+def test_old_flat_announced_page_migrates_and_transitions_to_notice_in_order(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "old-flat-page-to-notice.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "A4": {
+                    "state": "firing",
+                    "since": current.isoformat(),
+                    "last_notified": current.isoformat(),
+                    "detail": "legacy announced page",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    transitioned = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=current + timedelta(minutes=1),
+        send=_recording_sender(calls),
+        thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
+    )
+
+    assert _receipt_identities(transitioned) == [
+        ("A4", "page", "resolved"),
+        ("A4", "notice", "firing"),
+    ]
+    assert [(severity, "✅" in text) for text, severity in calls] == [
+        ("page", True),
+        ("notice", False),
+    ]
+    assert _firing_lifecycle_severities(state_path) == {"notice"}
+
+
+@pytest.mark.parametrize(("first_severity", "second_severity"), [("notice", "page"), ("page", "notice")])
+def test_round_trip_severity_uses_only_target_cooldown(
+    tmp_path: Path,
+    first_severity: str,
+    second_severity: str,
+) -> None:
+    state_path = tmp_path / f"{first_severity}-{second_severity}-{first_severity}.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    calls: list[tuple[str, str]] = []
+    thresholds = {"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 0}}}
+
+    first = run_alert_results_state_machine(
+        [_severity_result(first_severity)],
+        state_path=state_path,
+        now=current,
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    assert _firing_lifecycle_severities(state_path) == {first_severity}
+    second = run_alert_results_state_machine(
+        [_severity_result(second_severity)],
+        state_path=state_path,
+        now=current + timedelta(minutes=1),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    assert _firing_lifecycle_severities(state_path) == {second_severity}
+    returned_early = run_alert_results_state_machine(
+        [_severity_result(first_severity)],
+        state_path=state_path,
+        now=current + timedelta(minutes=2),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    assert _firing_lifecycle_severities(state_path) == {first_severity}
+    returned_after_cooldown = run_alert_results_state_machine(
+        [_severity_result(first_severity)],
+        state_path=state_path,
+        now=current + timedelta(minutes=31),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    assert _firing_lifecycle_severities(state_path) == {first_severity}
+
+    assert _receipt_identities(first) == [("A4", first_severity, "firing")]
+    assert _receipt_identities(second) == [
+        ("A4", first_severity, "resolved"),
+        ("A4", second_severity, "firing"),
+    ]
+    assert _receipt_identities(returned_early) == [("A4", second_severity, "resolved")]
+    assert _receipt_identities(returned_after_cooldown) == [("A4", first_severity, "firing")]
+    state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    assert set(state["lifecycles"]) == {"page", "notice"}
+    assert state["lifecycles"][first_severity]["last_notified"] == (
+        current + timedelta(minutes=31)
+    ).isoformat()
+    assert state["lifecycles"][second_severity]["last_notified"] == (
+        current + timedelta(minutes=1)
+    ).isoformat()
+
+
+def test_clear_resolves_only_announced_lifecycle(tmp_path: Path) -> None:
+    state_path = tmp_path / "clear-announced-only.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "A4": {
+                    "state": "firing",
+                    "since": current.isoformat(),
+                    "last_notified": current.isoformat(),
+                    "detail": "page announced",
+                    "severity": "page",
+                    "announced": True,
+                    "lifecycles": {
+                        "page": {
+                            "state": "firing",
+                            "since": current.isoformat(),
+                            "last_notified": current.isoformat(),
+                            "detail": "page announced",
+                            "announced": True,
+                        },
+                        "notice": {
+                            "state": "firing",
+                            "since": current.isoformat(),
+                            "last_notified": None,
+                            "detail": "notice pending",
+                            "announced": False,
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    cleared = run_alert_results_state_machine(
+        [_severity_result("page", firing=False)],
+        state_path=state_path,
+        now=current + timedelta(minutes=5),
+        send=_recording_sender(calls),
+    )
+
+    assert _receipt_identities(cleared) == [("A4", "page", "resolved")]
+    state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    assert state["state"] == "ok"
+    assert all(lifecycle["state"] == "ok" for lifecycle in state["lifecycles"].values())
+
+
+def test_legacy_pending_a4_inherits_since_when_condition_becomes_notice(tmp_path: Path) -> None:
+    state_path = tmp_path / "legacy-pending-a4.json"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "A4": {
+                    "state": "firing",
+                    "since": started.isoformat(),
+                    "last_notified": None,
+                    "detail": "legacy pending page",
+                    "announced": False,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+    thresholds = {"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}}
+
+    pending = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=started + timedelta(minutes=15),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    first_saved = state_path.read_text(encoding="utf-8")
+    reloaded = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=started + timedelta(minutes=15),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    second_saved = state_path.read_text(encoding="utf-8")
+    announced = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=started + timedelta(minutes=31),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+
+    assert pending["sent_count"] == reloaded["sent_count"] == 0
+    assert first_saved == second_saved
+    assert _receipt_identities(announced) == [("A4", "notice", "firing")]
+    state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    assert state["lifecycles"]["notice"]["since"] == started.isoformat()
+
+
+def test_legacy_unannounced_transition_does_not_fake_resolve_or_cross_throttle(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "legacy-unannounced-transition.json"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "A4": {
+                    "state": "firing",
+                    "since": started.isoformat(),
+                    "last_notified": started.isoformat(),
+                    "detail": "legacy failed notice",
+                    "severity": "notice",
+                    "announced": False,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    upgraded = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=started + timedelta(minutes=1),
+        send=_recording_sender(calls),
+    )
+
+    assert _receipt_identities(upgraded) == [("A4", "page", "firing")]
     assert len(calls) == 1
-    assert calls[0][1] == "page"
+    assert "✅" not in calls[0][0]
+
+
+def test_load_save_normalizes_legacy_rule_entries_without_touching_healthz(tmp_path: Path) -> None:
+    state_path = tmp_path / "normalize-all.json"
+    started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    healthz = {
+        "consecutive_failures": 1,
+        "last_checked": started.isoformat(),
+        "last_ok": False,
+        "url": "http://127.0.0.1:8000/api/v1/healthz",
+    }
+    state_path.write_text(
+        json.dumps(
+            {
+                "A4": {
+                    "state": "firing",
+                    "since": started.isoformat(),
+                    "last_notified": (started + timedelta(minutes=1)).isoformat(),
+                    "detail": "legacy announced page",
+                },
+                "healthz_probe": healthz,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    first = run_alert_results_state_machine(
+        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+    )
+    first_saved = state_path.read_text(encoding="utf-8")
+    second = run_alert_results_state_machine(
+        [], state_path=state_path, now=started + timedelta(minutes=5), send=_recording_sender(calls)
+    )
+    second_saved = state_path.read_text(encoding="utf-8")
+    state = json.loads(second_saved)
+
+    assert first["sent_count"] == second["sent_count"] == 0
+    assert calls == []
+    assert first_saved == second_saved
+    assert state["A4"]["severity"] == "page"
+    assert state["A4"]["announced"] is True
+    assert state["A4"]["lifecycles"]["page"] == {
+        "state": "firing",
+        "since": started.isoformat(),
+        "last_notified": (started + timedelta(minutes=1)).isoformat(),
+        "detail": "legacy announced page",
+        "announced": True,
+    }
+    assert state["healthz_probe"] == healthz
+
+
+def test_severity_debounce_map_falls_back_to_legacy_single_value(tmp_path: Path) -> None:
+    state_path = tmp_path / "debounce-fallback.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    calls: list[tuple[str, str]] = []
+    thresholds = {
+        "a4": {
+            "debounce_minutes": 10,
+            "debounce_minutes_by_severity": {"page": 0},
+        }
+    }
+
+    pending = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=current,
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+    announced = run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=current + timedelta(minutes=11),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+
+    assert pending["sent_count"] == 0
+    assert _receipt_identities(announced) == [("A4", "notice", "firing")]
+
+
+def test_failed_firing_after_severity_transition_retries_without_cooldown(tmp_path: Path) -> None:
+    state_path = tmp_path / "transition-retry.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    outcomes = iter(
+        [
+            {"skipped": False},
+            {"skipped": False},
+            {"skipped": True},
+            {"skipped": False},
+        ]
+    )
+    calls: list[tuple[str, str]] = []
+
+    def sender(text: str, *, severity: str = "page") -> dict[str, object]:
+        calls.append((text, severity))
+        return next(outcomes)
+
+    run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        now=current,
+        send=sender,
+    )
+    transitioned = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=current + timedelta(minutes=1),
+        send=sender,
+    )
+    failed_state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    retried = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        now=current + timedelta(minutes=2),
+        send=sender,
+    )
+
+    assert _receipt_identities(transitioned) == [
+        ("A4", "notice", "resolved"),
+        ("A4", "page", "firing"),
+    ]
+    assert transitioned["sent"][1]["send_result"] == {"skipped": True}
+    assert failed_state["lifecycles"]["page"]["announced"] is False
+    assert failed_state["lifecycles"]["page"]["last_notified"] is None
+    assert _receipt_identities(retried) == [("A4", "page", "firing")]
+
+
+@pytest.mark.parametrize("rule_id", ["A1", "A3"])
+def test_legacy_fixed_page_cooldown_migrates_idempotently(tmp_path: Path, rule_id: str) -> None:
+    state_path = tmp_path / f"legacy-{rule_id}.json"
+    current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                rule_id: {
+                    "state": "firing",
+                    "since": (current - timedelta(minutes=5)).isoformat(),
+                    "last_notified": current.isoformat(),
+                    "detail": "legacy announced",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+    firing = AlertRuleResult(rule_id, "legacy", True, "still firing", "action")
+
+    first = run_alert_results_state_machine(
+        [firing], state_path=state_path, now=current + timedelta(minutes=10), send=_recording_sender(calls)
+    )
+    first_saved = state_path.read_text(encoding="utf-8")
+    second = run_alert_results_state_machine(
+        [firing], state_path=state_path, now=current + timedelta(minutes=10), send=_recording_sender(calls)
+    )
+    second_saved = state_path.read_text(encoding="utf-8")
+    after_cooldown = run_alert_results_state_machine(
+        [firing], state_path=state_path, now=current + timedelta(minutes=31), send=_recording_sender(calls)
+    )
+
+    assert first["sent_count"] == second["sent_count"] == 0
+    assert first_saved == second_saved
+    assert _receipt_identities(after_cooldown) == [(rule_id, "page", "firing")]
+    state = json.loads(state_path.read_text(encoding="utf-8"))[rule_id]
+    assert set(state["lifecycles"]) == {"page"}
 
 
 def test_send_alert_message_calls_im_notify_alert_without_dedup(monkeypatch) -> None:  # noqa: ANN001
