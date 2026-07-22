@@ -265,6 +265,44 @@ def _window_violation(rows: list[dict[str, object]], spec: JourneySpec) -> tuple
     return hard_failure or p75 > spec.p75_budget_ms or p95 > spec.p95_budget_ms, p75, p95
 
 
+def _format_milliseconds(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0f}ms"
+
+
+def _with_firing_message(result: AlertRuleResult, *, gate_reason: str) -> AlertRuleResult:
+    vantage = result.values["vantage"]
+    if gate_reason == "idle_clean":
+        impact = (
+            "同机合成探针，与 pipeline 并发、疑似主机 CPU 争用；"
+            "idle 视角正常，用户大概率无感"
+        )
+        urgency = "否——除非 idle 视角也超标"
+    elif gate_reason == "idle_firing":
+        impact = "同机合成探针在 busy 与同视角 idle 均超标，已确认同视角真实退化，用户可能受影响"
+        urgency = "是"
+    elif gate_reason == "idle_cell" and vantage == "same_host_public":
+        impact = "同机公网路径 idle 合成探针超标，已确认公网路径退化，用户可能受影响"
+        urgency = "是"
+    elif gate_reason == "idle_cell":
+        impact = "同机 origin 路径 idle 合成探针超标，已确认同视角真实退化，用户可能受影响"
+        urgency = "是"
+    elif gate_reason in {"idle_absent", "idle_insufficient"}:
+        evidence_state = "当前无 idle 样本" if gate_reason == "idle_absent" else "当前 idle 样本不足"
+        impact = (
+            f"影响未知：缺少足量同视角 idle 背书（{evidence_state}），"
+            "无法排除用户影响，故保守 page；请补采/核查 idle evidence"
+        )
+        urgency = "是"
+    else:
+        raise ValueError(f"unrecognized PERF gate_reason: {gate_reason}")
+    return replace(
+        result,
+        impact=impact,
+        urgency=urgency,
+        values={**result.values, "gate_reason": gate_reason},
+    )
+
+
 def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRuleResult]:
     grouped: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     for sample in samples:
@@ -304,17 +342,21 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             streak += 1
         firing = streak >= CONFIRMATION_WINDOWS
         detail = (
-            f"{journey} {vantage} {load_class}: samples={len(rows)}, "
-            f"p75={p75 if p75 is not None else 'n/a'}ms/{spec.p75_budget_ms:g}ms, "
-            f"p95={p95 if p95 is not None else 'n/a'}ms/{spec.p95_budget_ms:g}ms, "
-            f"advanced_window_streak={streak}/{CONFIRMATION_WINDOWS}; {SAME_HOST_SCOPE}"
+            f"{journey} {vantage} {load_class}: "
+            f"p75 实测 {_format_milliseconds(p75)} vs 预算 "
+            f"{_format_milliseconds(spec.p75_budget_ms)}；"
+            f"p95 实测 {_format_milliseconds(p95)} vs 预算 "
+            f"{_format_milliseconds(spec.p95_budget_ms)}；{SAME_HOST_SCOPE}"
         )
         results_by_cell[(journey, vantage, load_class)] = AlertRuleResult(
             rule_id=f"PERF:{journey}:{vantage}:{load_class}",
             title=f"旅程性能退化 {journey}",
             firing=firing,
             detail=detail,
-            action="查看证据中的近期样本、CPU 与 pipeline 状态；该结果仅代表同机 provisional 观测。",
+            action=(
+                "查看 logs/performance/evidence/ 中最新证据，"
+                "核对近期样本、CPU、pipeline 与同视角 idle 观测。"
+            ),
             values={
                 "journey": journey,
                 "vantage": vantage,
@@ -338,7 +380,7 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             results.append(result)
             continue
         if load_class == "idle":
-            results.append(replace(result, values={**result.values, "gate_reason": "idle_cell"}))
+            results.append(_with_firing_message(result, gate_reason="idle_cell"))
             continue
 
         idle_key = (journey, vantage, "idle")
@@ -351,14 +393,13 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             gate_reason = "idle_firing"
         else:
             results.append(
-                replace(
-                    result,
-                    severity="notice",
-                    values={**result.values, "gate_reason": "idle_clean"},
+                _with_firing_message(
+                    replace(result, severity="notice"),
+                    gate_reason="idle_clean",
                 )
             )
             continue
-        results.append(replace(result, values={**result.values, "gate_reason": gate_reason}))
+        results.append(_with_firing_message(result, gate_reason=gate_reason))
     return results
 
 

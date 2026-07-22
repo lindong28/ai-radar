@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from airadar.performance.journey_monitor import (
     WARM_SAMPLES,
     JourneyMonitorRuntime,
     _probe_expectation,
+    _with_firing_message,
     classify_pipeline_load,
     evaluate_performance_rules,
     probe_journeys,
@@ -586,6 +588,169 @@ def test_firing_idle_performance_cell_is_always_page(vantage: str) -> None:
     assert idle.firing is True
     assert idle.severity == "page"
     assert idle.values["gate_reason"] == "idle_cell"
+
+
+def test_perf_firing_detail_uses_decision_precision_and_stable_evidence_action() -> None:
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = [
+        _sample(
+            observed_at=started + timedelta(minutes=index),
+            value_ms=2367.249083,
+            load_class="busy",
+            vantage="same_host_origin",
+        )
+        for index in range(MIN_CONFIRMABLE_SAMPLES)
+    ] + [
+        _sample(
+            observed_at=started + timedelta(minutes=100 + index),
+            value_ms=100,
+            load_class="idle",
+            vantage="same_host_origin",
+        )
+        for index in range(MIN_CONFIRMABLE_SAMPLES)
+    ]
+
+    busy = next(
+        result
+        for result in evaluate_performance_rules(samples)
+        if result.rule_id == "PERF:homepage.first_card:same_host_origin:busy"
+    )
+
+    assert re.search(r"\d+\.\d{3,}ms", busy.detail) is None
+    assert "samples=" not in busy.detail
+    assert "advanced_window_streak" not in busy.detail
+    assert "p75 实测 2367ms vs 预算 2000ms" in busy.detail
+    assert "p95 实测 2367ms vs 预算 3000ms" in busy.detail
+    assert "logs/performance/evidence/" in busy.action
+    assert busy.values["sample_count"] == MIN_CONFIRMABLE_SAMPLES
+    assert busy.values["advanced_window_streak"] == CONFIRMATION_WINDOWS
+
+
+@pytest.mark.parametrize("vantage", ["same_host_origin", "same_host_public"])
+def test_perf_notice_explains_host_contention_and_no_immediate_action(vantage: str) -> None:
+    busy, idle = _evaluate_busy_with_idle(
+        vantage=vantage,
+        idle_count=MIN_CONFIRMABLE_SAMPLES,
+        idle_value_ms=100,
+    )
+
+    assert idle.firing is False
+    assert busy.severity == "notice"
+    assert busy.values["gate_reason"] == "idle_clean"
+    assert busy.impact == (
+        "同机合成探针，与 pipeline 并发、疑似主机 CPU 争用；"
+        "idle 视角正常，用户大概率无感"
+    )
+    assert busy.urgency == "否——除非 idle 视角也超标"
+
+
+def test_firing_message_rejects_unrecognized_gate_reason() -> None:
+    result = AlertRuleResult(
+        rule_id="PERF:future",
+        title="future PERF gate",
+        firing=True,
+        detail="detail",
+        action="action",
+        values={"vantage": "same_host_origin"},
+    )
+
+    with pytest.raises(ValueError, match="unrecognized PERF gate_reason: future_reason"):
+        _with_firing_message(result, gate_reason="future_reason")
+
+
+def test_perf_page_with_firing_idle_states_confirmed_same_vantage_degradation() -> None:
+    busy, idle = _evaluate_busy_with_idle(
+        vantage="same_host_origin",
+        idle_count=MIN_CONFIRMABLE_SAMPLES,
+        idle_value_ms=4000,
+    )
+
+    assert idle.firing is True
+    assert busy.severity == "page"
+    assert busy.values["gate_reason"] == "idle_firing"
+    assert "已确认同视角真实退化" in busy.impact
+    assert "影响未知" not in busy.impact
+    assert busy.urgency == "是"
+
+
+@pytest.mark.parametrize(
+    ("idle_condition", "expected_evidence_state"),
+    [("absent", "当前无 idle 样本"), ("insufficient", "当前 idle 样本不足")],
+)
+def test_perf_page_without_enough_idle_evidence_states_unknown_conservative_impact(
+    idle_condition: str,
+    expected_evidence_state: str,
+) -> None:
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = [
+        _sample(
+            observed_at=started + timedelta(minutes=index),
+            value_ms=4000,
+            load_class="busy",
+            vantage="same_host_origin",
+        )
+        for index in range(MIN_CONFIRMABLE_SAMPLES)
+    ]
+    if idle_condition == "insufficient":
+        samples.extend(
+            _sample(
+                observed_at=started + timedelta(minutes=100 + index),
+                value_ms=100,
+                load_class="idle",
+                vantage="same_host_origin",
+            )
+            for index in range(WARM_SAMPLES - 1)
+        )
+
+    busy = next(
+        result
+        for result in evaluate_performance_rules(samples)
+        if result.rule_id == "PERF:homepage.first_card:same_host_origin:busy"
+    )
+
+    assert busy.severity == "page"
+    assert busy.values["gate_reason"] == f"idle_{idle_condition}"
+    assert "影响未知" in busy.impact
+    assert "缺少足量同视角 idle 背书" in busy.impact
+    assert expected_evidence_state in busy.impact
+    assert "无法排除用户影响，故保守 page" in busy.impact
+    assert "补采/核查 idle evidence" in busy.impact
+    assert "已确认" not in busy.impact
+    assert busy.urgency == "是"
+
+
+@pytest.mark.parametrize(
+    ("vantage", "expected_impact"),
+    [
+        ("same_host_origin", "已确认同视角真实退化"),
+        ("same_host_public", "已确认公网路径退化"),
+    ],
+)
+def test_firing_idle_cell_explains_path_impact_and_immediate_action(
+    vantage: str,
+    expected_impact: str,
+) -> None:
+    started = datetime(2026, 7, 18, tzinfo=UTC)
+    samples = [
+        _sample(
+            observed_at=started + timedelta(minutes=index),
+            value_ms=4000,
+            load_class="idle",
+            vantage=vantage,
+        )
+        for index in range(MIN_CONFIRMABLE_SAMPLES)
+    ]
+
+    idle = next(
+        result
+        for result in evaluate_performance_rules(samples)
+        if result.rule_id == f"PERF:homepage.first_card:{vantage}:idle"
+    )
+
+    assert idle.severity == "page"
+    assert idle.values["gate_reason"] == "idle_cell"
+    assert expected_impact in idle.impact
+    assert idle.urgency == "是"
 
 
 def test_probe_requires_origin_url(tmp_path: Path) -> None:
