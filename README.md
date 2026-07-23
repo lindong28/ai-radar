@@ -137,6 +137,17 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 - **curate** — 按阈值精选高价值内容（默认阈值 6.5）
 - **interpret** — 可选阶段，默认关闭；启用后对微信公众号文章调用 ai-assistant 兼容的 summary-agent 脚本，保存独立网站解读数据，并把值得阅读的文章回写外部知识库
 
+### 数据库维护
+
+精选 digest 的预计算缓存（`curated_items.summary_json`）会随每次 curate 增长；常驻保留已在 curate 后自动把超过 `keep_days`（默认 7 天）的历史缓存清空，使 `radar.db` 长期有界。也可手动运维：
+
+```bash
+./run.sh admin db retain [--keep-days N] [--dry-run]  # 只清超窗口的历史 summary 缓存
+./run.sh admin db slim   [--keep-days N] [--dry-run]  # 清缓存 + VACUUM 回收磁盘（DB 同步前跑）
+```
+
+`--dry-run` 零写、只报待清行数与字节。`slim` 显式返回 `retained`/`compacted` 两阶段结果，细节与生产 apply/回滚见 [docs/operations/db-slimming.md](docs/operations/db-slimming.md)。
+
 ## 配置
 
 ### 从零部署最小配置

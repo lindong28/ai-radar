@@ -32,6 +32,7 @@
 | [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access、用户旅程性能监控与边缘缓存 runbook |
 | [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、真名头像 backfill、迁移留尾记录 |
 | [ai-assistant-integration.md](operations/ai-assistant-integration.md) | 可选外部 summary-agent 集成：启用条件、`./run.sh interpret` 契约、默认关闭语义 |
+| [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留（随 curate 自动、keep_days 默认 7）、`admin db retain`/`admin db slim` 用法、VACUUM 时机、freelist 须在 `.backup` 副本测的坑、生产 apply+回滚 |
 
 ### docs/references/ [Developer]
 

@@ -285,6 +285,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/api/v1/admin/metrics` | GET | 内部运维指标；与 `/admin` 同一访问门控 |
 | `/api/v1/admin/usage` | GET | 内部 LLM 用量 rollup；与 `/admin` 同一访问门控 |
 
+`/api/v1/curated?run_id=X` 的历史 run digest 有 **TTL 语义**：常驻保留会把超过 `keep_days`（默认 7 天）且非最新 run 的 `curated_items.summary_json` 预计算缓存清空，此后该 run 的 digest 改由 `_compute_items` live 现算，内容反映**当前** enrichment 而非 curation 时的快照。最新 run 的 summary 永不清、字节一致；HTML 用户页只服务最新 run，不受影响。瘦身机制见 [operations/db-slimming.md](operations/db-slimming.md)。
+
 ### 页面路由
 
 | URL | 渲染方式 | 说明 |
