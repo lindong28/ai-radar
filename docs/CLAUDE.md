@@ -86,6 +86,7 @@
 | [005-timeline-exact-count-with-cached-cte.md](adr/005-timeline-exact-count-with-cached-cte.md) | Timeline 真实总数计数 + CTE 公式 + 进程内 LRU 缓存 |
 | [006-curated-archive-mode.md](adr/006-curated-archive-mode.md) | 精选页改为跨 run 去重的累积归档（复用 ADR-005 真实计数 pattern） |
 | [007-interpret-via-ai-assistant-summarizer.md](adr/007-interpret-via-ai-assistant-summarizer.md) | 微信文章解读复用 ai-assistant summarizer，save_decision 作单一闸门 |
+| [010-db-slimming-clear-regenerable-cache.md](adr/010-db-slimming-clear-regenerable-cache.md) | radar.db 瘦身选清可再生 summary 缓存（Option A）+ 常驻保留 + 历史 digest TTL |
 
 ### docs/experiences/ [Agent]
 
@@ -107,6 +108,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260720-db-slimming/](plans/20260720-db-slimming/) | radar.db 瘦身：清可再生 `summary_json` 缓存 + VACUUM + 常驻保留（Option A），生产 2.28GB→1.495GB |
 | [20260607-wechat-read-original-link/](plans/20260607-wechat-read-original-link/) | `/wechat` 详情页与列表卡片新增显式「访问原文」链接跳转公众号原文 |
 | [20260607-wechat-interpretation-search/](plans/20260607-wechat-interpretation-search/) | 微信文章解读页 `/wechat` 支持按标题、公众号、摘要和标签搜索 |
 | [20260604-2104-curated-archive-ux-test/](plans/20260604-2104-curated-archive-ux-test/) | 精选页改为累积归档 + 分页的 UX 契约测试与修复 |
