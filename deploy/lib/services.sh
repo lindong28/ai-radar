@@ -107,6 +107,24 @@ llm_provider_key_present() {
   return 1
 }
 
+alert_webhook_missing_keys() {
+  local key index
+  local -a missing=()
+  for key in FEISHU_GENERAL_ALERT_WEBHOOK FEISHU_GENERAL_NOTIFICATION_WEBHOOK; do
+    if ! runtime_env_value "$key" >/dev/null; then
+      missing+=("$key")
+    fi
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    return 1
+  fi
+  printf "%s" "${missing[0]}"
+  for ((index = 1; index < ${#missing[@]}; index++)); do
+    printf ", %s" "${missing[$index]}"
+  done
+  printf "\n"
+}
+
 service_dependency_missing_reason() {
   local slug="$1"
   case "$slug" in
@@ -121,10 +139,11 @@ service_dependency_missing_reason() {
       return 0
       ;;
     alert)
-      if runtime_env_value FEISHU_GENERAL_ALERT_WEBHOOK >/dev/null; then
+      local missing_webhooks
+      if ! missing_webhooks="$(alert_webhook_missing_keys)"; then
         return 1
       fi
-      echo "missing FEISHU_GENERAL_ALERT_WEBHOOK"
+      echo "missing $missing_webhooks"
       return 0
       ;;
     tunnel)
@@ -142,7 +161,9 @@ service_dependency_missing_reason() {
 
 ensure_install_dependency() {
   local slug="$1"
-  local reason key value
+  local reason key value index
+  local -a pending_keys=()
+  local -a pending_values=()
   SERVICE_DEPENDENCY_SKIP_REASON=""
 
   if ! reason="$(service_dependency_missing_reason "$slug")"; then
@@ -157,7 +178,33 @@ ensure_install_dependency() {
 
   case "$slug" in
     pipeline) key="DEEPSEEK_API_KEY" ;;
-    alert) key="FEISHU_GENERAL_ALERT_WEBHOOK" ;;
+    alert)
+      if [[ ! -t 0 ]]; then
+        SERVICE_DEPENDENCY_SKIP_REASON="$reason; stdin is not a TTY"
+        echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
+        return 1
+      fi
+      echo "⚠ $slug: $reason." >&2
+      for key in FEISHU_GENERAL_ALERT_WEBHOOK FEISHU_GENERAL_NOTIFICATION_WEBHOOK; do
+        runtime_env_value "$key" >/dev/null && continue
+        read -r -p "Enter $key to save to ./.env and install $slug, or press Enter to skip: " value
+        if [[ -z "$value" ]]; then
+          SERVICE_DEPENDENCY_SKIP_REASON="$reason; user skipped prompt"
+          echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
+          return 1
+        fi
+        pending_keys+=("$key")
+        pending_values+=("$value")
+      done
+      for ((index = 0; index < ${#pending_keys[@]}; index++)); do
+        key="${pending_keys[$index]}"
+        value="${pending_values[$index]}"
+        append_runtime_env_value "$key" "$value"
+        export "$key=$value"
+        echo "✓ $slug: saved $key to ./.env"
+      done
+      return 0
+      ;;
     *)
       SERVICE_DEPENDENCY_SKIP_REASON="$reason"
       echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
@@ -205,17 +252,19 @@ alert_environment_entry_xml() {
 }
 
 alert_environment_xml() {
-  local webhook db_path
-  webhook="$(runtime_env_value FEISHU_GENERAL_ALERT_WEBHOOK || true)"
-  if [[ -z "$webhook" ]]; then
-    echo "⚠ alert: FEISHU_GENERAL_ALERT_WEBHOOK not found in process env, .env, or ~/.claude/.env; launchd alert will dry-run only." >&2
-    return 0
+  local alert_webhook notification_webhook db_path missing_webhooks
+  if missing_webhooks="$(alert_webhook_missing_keys)"; then
+    echo "✗ alert: missing $missing_webhooks in process env, .env, or ~/.claude/.env; refusing partial launchd configuration." >&2
+    return 1
   fi
+  alert_webhook="$(runtime_env_value FEISHU_GENERAL_ALERT_WEBHOOK)"
+  notification_webhook="$(runtime_env_value FEISHU_GENERAL_NOTIFICATION_WEBHOOK)"
   db_path="$(runtime_env_value AI_RADAR_DB || true)"
   cat <<EOF
   <key>EnvironmentVariables</key>
   <dict>
-$(alert_environment_entry_xml FEISHU_GENERAL_ALERT_WEBHOOK "$webhook")
+$(alert_environment_entry_xml FEISHU_GENERAL_ALERT_WEBHOOK "$alert_webhook")
+$(alert_environment_entry_xml FEISHU_GENERAL_NOTIFICATION_WEBHOOK "$notification_webhook")
 $(alert_environment_entry_xml AI_RADAR_DB "$db_path")
   </dict>
 EOF
@@ -223,7 +272,7 @@ EOF
 
 # Generate deploy/launchd/<name>.plist from <name>.plist.example, replacing
 # the placeholder path with REPO_ROOT. Idempotent except alert, whose local
-# plist is regenerated so FEISHU_GENERAL_ALERT_WEBHOOK changes are picked up.
+# plist is regenerated so both Feishu webhook changes are picked up.
 ensure_plist() {
   local name="$1"
   local example="$REPO_ROOT/deploy/launchd/${name}.example"
@@ -235,7 +284,7 @@ ensure_plist() {
   local environment_xml
   environment_xml=""
   if [[ "$name" == "ai-radar-alert.plist" ]]; then
-    environment_xml="$(alert_environment_xml)"
+    environment_xml="$(alert_environment_xml)" || return 1
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" == "  <!-- __AI_RADAR_ALERT_ENVIRONMENT__ -->" ]]; then
@@ -251,6 +300,14 @@ ensure_plist() {
 
 is_launchd_loaded() {
   launchctl print "gui/$UID/$1" >/dev/null 2>&1
+}
+
+reload_alert_launchd_service() {
+  local label="$1"
+  # launchd snapshots EnvironmentVariables at bootstrap. Alert installation
+  # therefore must replace an already-loaded job after regenerating its plist,
+  # otherwise a newly required notification webhook never reaches live state.
+  launchctl bootout "gui/$UID/$label"
 }
 
 launchd_pid() {

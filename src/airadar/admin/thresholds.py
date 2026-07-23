@@ -8,6 +8,11 @@ ALERT_THRESHOLDS: dict[str, object] = {
     },
     "a2": {
         "window_minutes": 15,
+        "min_samples": {
+            "prefilter": 4,
+            "scoring": 4,
+            "enrich": 2,
+        },
         "stage_error_rate": {
             "prefilter": 0.3,
             "scoring": 0.3,
@@ -32,6 +37,7 @@ ALERT_THRESHOLDS: dict[str, object] = {
     },
     "a3": {
         "window_minutes": 15,
+        "min_pv": 20,
         "server_error_rate": 0.05,
         "healthz_url": "http://127.0.0.1:8000/api/v1/healthz",
         "healthz_timeout_seconds": 2.0,
@@ -40,11 +46,9 @@ ALERT_THRESHOLDS: dict[str, object] = {
     "a4": {
         "fetch_failed_ratio": 0.4,
         "daily_inserted_floor": 127,
-        # Fetch sources (esp. the X/nitter feeds) flap for a single round and
-        # self-heal within ~15 min, which fired/resolved A4 as pure noise. Only
-        # notify once an outage persists past this window (≈2 fetch rounds). Other
-        # rules omit this key and default to 0 = notify immediately.
-        "debounce_minutes": 30,
+        # Fetch sources (esp. the X/nitter feeds) can flap for one round, while
+        # a real items-floor breach must page immediately.
+        "debounce_minutes_by_severity": {"page": 0, "notice": 30},
     },
 }
 

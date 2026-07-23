@@ -71,6 +71,105 @@ def _config(tmp_path: Path, main: Path) -> RemediationConfig:
     )
 
 
+def test_confirmed_incident_reader_accepts_page_and_legacy_but_rejects_notice(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "PERF:page": {
+                    "state": "firing",
+                    "since": "2026-07-22T08:00:00+08:00",
+                    "detail": "confirmed page",
+                    "severity": "page",
+                    "lifecycles": {
+                        "page": {
+                            "state": "firing",
+                            "since": "2026-07-22T08:00:00+08:00",
+                            "last_notified": "2026-07-22T08:00:00+08:00",
+                            "detail": "confirmed page",
+                            "announced": True,
+                        }
+                    },
+                },
+                "PERF:legacy": {
+                    "state": "firing",
+                    "since": "2026-07-22T08:01:00+08:00",
+                    "detail": "legacy defaults to page",
+                },
+                "PERF:rollup:busy": {
+                    "state": "firing",
+                    "since": "2026-07-22T08:02:00+08:00",
+                    "detail": "host contention notice",
+                    "severity": "notice",
+                    "lifecycles": {
+                        "notice": {
+                            "state": "firing",
+                            "since": "2026-07-22T08:02:00+08:00",
+                            "last_notified": "2026-07-22T08:02:00+08:00",
+                            "detail": "host contention notice",
+                            "announced": True,
+                        }
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    incidents = remediation._load_confirmed_incidents(state_path)
+
+    assert [(incident.rule_id, incident.detail) for incident in incidents] == [
+        ("PERF:legacy", "legacy defaults to page"),
+        ("PERF:page", "confirmed page"),
+    ]
+
+
+def test_confirmed_incident_reader_sees_page_in_stale_top_level_double_firing_state(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "double-firing-alert-state.json"
+    started = "2026-07-22T08:00:00+08:00"
+    state_path.write_text(
+        json.dumps(
+            {
+                "PERF:double": {
+                    "state": "firing",
+                    "since": started,
+                    "last_notified": started,
+                    "detail": "notice projection",
+                    "severity": "notice",
+                    "announced": True,
+                    "lifecycles": {
+                        "page": {
+                            "state": "firing",
+                            "since": started,
+                            "last_notified": started,
+                            "detail": "confirmed page",
+                            "announced": True,
+                        },
+                        "notice": {
+                            "state": "firing",
+                            "since": started,
+                            "last_notified": started,
+                            "detail": "notice projection",
+                            "announced": True,
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    incidents = remediation._load_confirmed_incidents(state_path)
+
+    assert [(incident.rule_id, incident.detail) for incident in incidents] == [
+        ("PERF:double", "confirmed page")
+    ]
+
+
 def test_confirmed_incident_produces_candidate_commit_outside_main(
     tmp_path: Path,
 ) -> None:

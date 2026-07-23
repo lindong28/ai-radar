@@ -9,13 +9,20 @@
 | serve | launchd, KeepAlive=true | 已加载 | `./install.sh serve` / `./uninstall.sh serve` / `./status.sh serve` | [deploy/launchd/ai-radar-serve.plist.example](../../deploy/launchd/ai-radar-serve.plist.example) |
 | tunnel | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
 | ai-radar pipeline (15min) | cron (`*/15 * * * *`) | 在 user crontab | `./install.sh pipeline` / `./uninstall.sh pipeline` / `./status.sh pipeline` | [deploy/cron/ai-radar-pipeline](../../deploy/cron/ai-radar-pipeline) · launchd 替代模板见 [ai-radar-pipeline.plist.example](../../deploy/launchd/ai-radar-pipeline.plist.example) |
-| alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1-A4 应用级健康失败由状态机判定后调用 `im-notify --alert`，launchd 进程崩溃由 fleet watchdog 覆盖 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
+| alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1–A4 以 per-severity lifecycle 决定 firing / resolved，page 走 `im-notify --alert` 的 `ALERT` webhook，notice 走 `im-notify` 的 `NOTIFICATION` webhook；launchd 进程崩溃由 fleet watchdog 覆盖 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
 | performance probe (hourly) | cron（建议 `17 * * * *`） | 需按文档手动安装；`install.sh` / `status.sh` 不管理 | `./run.sh performance-probe` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 | performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**：homepage 误标缺陷已修复，但仍须部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing 才按文档手动安装 | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 
 `./install.sh` / `./uninstall.sh` / `./status.sh` 仍只管理 serve、tunnel、pipeline、alert 这 4 个核心服务；performance cron job 用文档中的 crontab 样例手动管理，不出现在 `status.sh` 四行总览。当前只启用 probe；remediation 等包含误标修复的版本部署，且手工 probe 与 `PERF:*` 状态通过上述 gate 后再安装。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
 
-`./install.sh` 会逐服务检查依赖。缺少 `pipeline` 的 LLM key 时，交互式终端会询问 `DEEPSEEK_API_KEY` 并写入项目 `.env`；缺少 `alert` 的 `FEISHU_GENERAL_ALERT_WEBHOOK` 时同理询问 webhook。非交互环境不会等待输入，会跳过缺依赖的服务并在 summary 中列原因。`alert` 还要求部署机已从 `ai-agent-config` 安装 `~/.local/bin/im-notify`；tracked launchd 模板已把 `~/.local/bin` 加入该作业的 `PATH`。`tunnel` 缺少 `deploy/cloudflared/config.yml` 时不会询问密钥，需先从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置后重跑 `./install.sh tunnel`。依赖读取顺序为当前进程环境、项目 `.env`、`~/.claude/.env`。
+`./install.sh` 会逐服务检查依赖。缺少 `pipeline` 的 LLM key 时，交互式终端会询问 `DEEPSEEK_API_KEY` 并写入项目 `.env`；`alert` 则要求 `FEISHU_GENERAL_ALERT_WEBHOOK` 和 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` **两者同时存在**，任缺一个都 fail-closed，不生成部分 launchd 配置。交互式终端会逐个询问缺失 webhook 并写入 `.env`；非交互环境跳过 alert 并在 summary 列出缺失 key。`alert` 运行时还需要部署机已从 `ai-agent-config` 安装 `~/.local/bin/im-notify`；tracked launchd 模板已把 `~/.local/bin` 加入该作业的 `PATH`。`tunnel` 缺少 `deploy/cloudflared/config.yml` 时不会询问密钥，需先从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置后重跑 `./install.sh tunnel`。依赖读取顺序为当前进程环境、项目 `.env`、`~/.claude/.env`。
+
+### Alert 判定与 lifecycle
+
+- A2 的 prefilter/scoring/enrich 错误率 numerator/denominator 各自只取最近 15 分钟，最小样本门为 `4/4/2`；`no_success_minutes=120` 是不受样本门影响的独立 page 支路，stage P95 仍用自己的 2 小时口径。
+- A3 的 5xx numerator 与 PV denominator 同取最近 15 分钟，只有 `PV >= 20` 才评估 5xx rate；healthz 连续失败 2 次是独立 page 支路。
+- A4 只有 fetch 失败率超阈且 items 正常时是 notice（30 分钟 debounce）；items 低于按日内进度缩放的 floor 时是 page（0 debounce），两分支同时命中也是 page。
+- 每个 `rule_id` 以 `lifecycles.page` / `lifecycles.notice` 分别保存 debounce、`since`、`last_notified`、announced 与 cooldown。severity 转换先在原通道 resolved 已 announced episode，再在新通道 firing；pending 未送达 episode 静默关闭。各 severity 的计时器不互相节流。
 
 > 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）。微信摄取走 Mp2RSS（见 [wechat-ingestion.md](wechat-ingestion.md)）。如需回滚到 WeWe RSS：`deploy/wewe-rss/`（docker-compose + RUNBOOK）仍在，launchd plist 与脚本 wiring 从 git 历史恢复（移除 commit 见 git log）。
 
@@ -28,7 +35,7 @@
 | cron 守护 | macOS 自带，默认运行 | `pgrep cron` |
 | launchd | 系统自带，登录后自动运行 | `launchctl print gui/$UID` |
 | pipeline LLM key | `DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` 任一 | `./install.sh pipeline` summary 显示 installed |
-| alert 发送器 | `~/.local/bin/im-notify` + `FEISHU_GENERAL_ALERT_WEBHOOK` | `test -x "$HOME/.local/bin/im-notify" && plutil -p deploy/launchd/ai-radar-alert.plist \| rg FEISHU_GENERAL_ALERT_WEBHOOK` |
+| alert 发送器 | `~/.local/bin/im-notify` + page 的 `FEISHU_GENERAL_ALERT_WEBHOOK` + notice 的 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`；两个 webhook 任缺一个都拒绝 alert 安装 | `test -x "$HOME/.local/bin/im-notify"` 后运行下文无发送 preflight；已安装时检查 plist 同时有两个 key |
 | Cloudflare tunnel | `deploy/cloudflared/config.yml` | `test -f deploy/cloudflared/config.yml` |
 | Cloudflare Cache Rule | zone `aiplanet.live` 上的 `AI Radar short public pagination TTL`（见下节） | 同一 public 分页 URL 第二次请求 `CF-Cache-Status: HIT` |
 
@@ -92,10 +99,15 @@ curl -s -o /dev/null -w '%{http_code}\n' https://sjtu.aiplanet.live/admin
 ./status.sh                                        # 4 行总览
 curl -sf http://127.0.0.1:8000/api/v1/healthz && echo serve_ok
 curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok
-./run.sh admin alert-check                         # 执行 alert 规则；仅在状态机决定 firing / resolved 时调用 im-notify
+test -x "$HOME/.local/bin/im-notify"
+bash -lc 'source deploy/lib/services.sh; if missing="$(alert_webhook_missing_keys)"; then echo "missing: $missing"; exit 1; else echo "both webhook keys configured"; fi'
+plutil -p deploy/launchd/ai-radar-alert.plist | rg -o 'FEISHU_GENERAL_(ALERT|NOTIFICATION)_WEBHOOK' | sort -u
+uv run pytest tests/test_admin_alerts.py -q -k 'send_alert_message_calls_im_notify_alert_without_dedup or send_alert_message_routes_notice_without_alert_flag'
 ./run.sh performance-probe                         # 同机 provisional 四旅程采样 + PERF:* 状态机
 ./run.sh fetch | tail -5                           # pipeline + Mp2RSS feed 联通性
 ```
+
+上述 alert 验证只检查可执行文件、两个配置 key 和 mock 投递路由，不显示 webhook URL，也不发送真实消息。`./run.sh admin alert-check` 不是无害 smoke：当前状态如果触发 firing / resolved，它会按 page/notice 实际调用 `im-notify`。
 
 当前不要把 `performance-remediate` 当 bring-up smoke 执行：homepage hard-failure 误标缺陷虽已修复，旧样本仍可能已形成假 firing。只有部署该修复、手工 probe 显示 homepage `hard_failure=false`，且 homepage `PERF:*` 状态已非 firing 后，才按 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) 的 gate 手工验证并安装 remediation cron。
 
@@ -119,12 +131,12 @@ curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok
 launchctl kickstart -k "gui/$UID/<launchd-label-for-serve|tunnel|alert>"
 ```
 
-告警消息由 `alert` 自己的 firing / resolved / 30 分钟冷却状态机决定；传输层只调用 `im-notify --alert`，**不使用** `--dedup-key`，避免双重去重吞掉状态机决定发送的真实通知。`im-notify` 非零退出或不可执行时，`alert-check` 会把失败写入错误日志并继续完成本轮，不会让告警循环崩溃。
+告警消息由 `alert` 自己的 per-severity firing / resolved / 30 分钟 cooldown 决定；page 调用 `im-notify --alert`，notice 调用不带 `--alert` 的 `im-notify`，两者都**不使用** `--dedup-key`，避免双重去重。`im-notify` 非零退出或不可执行时，`alert-check` 会把失败写入错误日志并继续完成本轮；失败 firing 不更新 announced / cooldown，下轮重试。
 
-⚠ 改了 alert 的 `FEISHU_GENERAL_ALERT_WEBHOOK`（或任何 launchd 服务的环境变量）后，`kickstart -k` 和"已加载时重跑 `./install.sh`"都**不会**让新值生效——plist 的 `<EnvironmentVariables>` 在生成时烘焙，launchd 持有 bootstrap 那一刻的快照。必须先 bootout 再 bootstrap：
+⚠ 改了 alert 的任一 webhook 后，单独 `kickstart -k` 不会刷新 launchd 烘焙的 `<EnvironmentVariables>`。重跑 alert 安装会重新生成 plist，并对已加载 job 执行 bootout/bootstrap：
 
 ```bash
-./uninstall.sh alert && ./install.sh alert    # 推荐：重新生成 plist 并干净重载
+./install.sh alert
 # 或手动：launchctl bootout "gui/$UID/<launchd-label-for-alert>" && launchctl bootstrap gui/$UID "$PWD/deploy/launchd/ai-radar-alert.plist"
 ```
 

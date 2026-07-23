@@ -5,7 +5,7 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 
-from airadar.admin.alerts import AlertSignals, evaluate_rules
+from airadar.admin.alerts import AlertSignals, collect_alert_signals, evaluate_rules
 from airadar.admin.metrics import collect_metrics
 from airadar.db import migrate
 
@@ -149,6 +149,11 @@ def _a2_result_from_metrics(metrics: dict[str, object]):
         server_error_rate=0.0,
         fetch_failed_ratio=0.0,
         items_today=300,
+        stage_sample_count={
+            stage: int(stages[stage]["processed"] or 0)
+            for stage in ("prefilter", "scoring", "enrich")
+        },
+        server_pv=0,
     )
     return evaluate_rules(signals)[1]
 
@@ -236,3 +241,95 @@ def test_scoring_and_enrich_p95_use_recent_sliding_window_and_auto_clear(tmp_pat
     assert stages["enrich"]["processed"] == 3
     assert stages["enrich"]["p95_latency_ms"] == 11_465
     assert _a2_result_from_metrics(metrics).firing is False
+
+
+def test_alert_windows_exclude_outside_and_unprovable_samples_without_changing_dashboard_metrics(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    for item_id, latency_ms, error, evaluated_at in [
+        ("outside", 26_000, "provider timeout", "2026-06-02T07:44:00+08:00"),
+        ("inside-error", 1_000, "provider timeout", "2026-06-02T07:46:00+08:00"),
+        ("inside-ok-1", 1_100, None, "2026-06-02T07:50:00+08:00"),
+        ("inside-ok-2", 1_200, None, "2026-06-02T07:55:00+08:00"),
+    ]:
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (
+              item_id, stage, ruleset_version, model_id, input_json, output_json,
+              numeric_json, latency_ms, cost_usd, evaluated_at, error
+            )
+            VALUES (?, 'prefilter', 'test.r1', 'fake', '{}', '{}', '{}', ?, 0.01, ?, ?)
+            """,
+            (item_id, latency_ms, evaluated_at, error),
+        )
+    conn.commit()
+    conn.close()
+
+    dashboard_access_log = tmp_path / "dashboard-access.log"
+    dashboard_access_log.write_text(
+        "\n".join(
+            [
+                '2026-06-02T07:44:00+08:00 INFO: 10.0.0.1:1 - "GET / HTTP/1.1" 500 Error "Mozilla/5.0"',
+                '2026-06-02T07:46:00+08:00 INFO: 10.0.0.2:2 - "GET / HTTP/1.1" 500 Error "Mozilla/5.0"',
+                '2026-06-02T07:50:00+08:00 INFO: 10.0.0.3:3 - "GET /all HTTP/1.1" 200 OK "Mozilla/5.0"',
+                'INFO: 10.0.0.4:4 - "GET /about HTTP/1.1" 200 OK "Mozilla/5.0"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    alert_access_log = tmp_path / "alert-access.log"
+    alert_access_log.write_text(
+        dashboard_access_log.read_text(encoding="utf-8")
+        + '\n2026-99-99T07:52:00+08:00 INFO: 10.0.0.5:5 - "GET / HTTP/1.1" 500 Error "Mozilla/5.0"',
+        encoding="utf-8",
+    )
+    now = datetime.fromisoformat("2026-06-02T08:00:00+08:00")
+    window_start = datetime.fromisoformat("2026-06-02T07:45:00+08:00")
+
+    dashboard = collect_metrics(
+        db_path=db_path,
+        pipeline_log_dir=tmp_path / "logs",
+        access_log_paths=[dashboard_access_log],
+        now=now,
+    )
+    alert_window = collect_metrics(
+        db_path=db_path,
+        pipeline_log_dir=tmp_path / "logs",
+        access_log_paths=[alert_access_log],
+        now=now,
+        stage_since=window_start,
+        access_since=window_start,
+    )
+    signals = collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=tmp_path / "logs",
+        access_log_paths=[alert_access_log],
+        now=now,
+    )
+
+    dashboard_stage = dashboard["pipeline"]["stages"]["prefilter"]
+    alert_stage = alert_window["pipeline"]["stages"]["prefilter"]
+    assert dashboard_stage["processed"] == 4
+    assert dashboard_stage["errors"] == 2
+    assert dashboard_stage["error_rate"] == 2 / 4
+    assert dashboard_stage["p50_latency_ms"] == 1_150
+    assert dashboard_stage["p95_latency_ms"] == 26_000
+    assert dashboard_stage["cost_usd"] == 0.04
+    assert alert_stage["processed"] == 3
+    assert alert_stage["errors"] == 1
+    assert alert_stage["error_rate"] == 1 / 3
+    assert alert_stage["p50_latency_ms"] == dashboard_stage["p50_latency_ms"]
+    assert alert_stage["p95_latency_ms"] == dashboard_stage["p95_latency_ms"]
+    assert alert_stage["cost_usd"] == dashboard_stage["cost_usd"]
+
+    assert dashboard["users"]["pv"] == 4
+    assert dashboard["users"]["status_counts"] == {200: 2, 500: 2}
+    assert alert_window["users"]["pv"] == 2
+    assert alert_window["users"]["status_counts"] == {200: 1, 500: 1}
+    assert signals.stage_sample_count["prefilter"] == 3
+    assert signals.stage_error_rate["prefilter"] == 1 / 3
+    assert signals.server_pv == 2
+    assert signals.server_error_rate == 1 / 2

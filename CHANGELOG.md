@@ -3,6 +3,7 @@
 ## 2026-07-22
 
 - 新增 `curated_items.summary_json` 精选 digest 缓存的常驻保留：每次 curate 后自动清空超过 `keep_days`（默认 7 天）且非最新 run 的可再生预计算缓存，使 `radar.db` 体量长期有界（此前约 8MB/天持续膨胀），生产库一次性瘦身实测由约 2.28GB 降到约 1.5GB（省约 785MB / 34%）。同时新增 `./run.sh admin db retain`（只清列）与 `./run.sh admin db slim`（清列 + VACUUM 回收磁盘、DB 同步前跑）子命令，`slim` 返回 `retained`/`compacted` 两阶段结果，`--dry-run` 零写只报待清量。唯一用户可感知的行为变化：`/api/v1/curated?run_id=X` 访问超窗口的历史 run 时，其 digest 改为 live 现算，内容反映当前 enrichment 而非 curation 时快照（TTL 语义）；所有 HTML 用户页只服务最新 run，字节一致、不受影响。
+- 将运维告警从单一 page 级别升级为 page/notice 分级：需立即处置的事故发往 `ALERT`，低打扰退化发往 `NOTIFICATION`。pipeline busy 期间但同视角 idle 正常的 PERF 超预算会合并成一条 `PERF:rollup:busy` notice，而真实 idle/公网退化仍保留 page。新增 `data/alert-events.jsonl` 已送达通知历史，可按规则、severity、firing/resolved 与通道查询最近 14 天的成功投递。
 
 ## 2026-07-19
 

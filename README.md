@@ -225,7 +225,7 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 | `serve` | launchd | FastAPI web server on :8000 |
 | `tunnel` | launchd | Cloudflare tunnel 到你的公网域名 |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
-| `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1-A4 状态机决定 firing / resolved 后，通过 `im-notify --alert` 发送飞书告警 |
+| `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A4 以 severity lifecycle 决定 firing / resolved，page 通过 `im-notify --alert` 发往 `ALERT`，notice 通过 `im-notify` 发往 `NOTIFICATION` |
 | `performance-probe` | cron（建议每小时 :17） | 测量四条浏览器旅程，按 idle/busy 留存样本并评估 `PERF:*` 告警 |
 | `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
 
@@ -245,7 +245,7 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 |---|---|---|
 | `serve` | 无 | 始终安装 |
 | `pipeline` | 至少一个 LLM key：`DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` | 交互式终端会询问 `DEEPSEEK_API_KEY` 并追加到 `./.env`；非交互环境自动跳过 |
-| `alert` | `~/.local/bin/im-notify` + `FEISHU_GENERAL_ALERT_WEBHOOK` | 先从 `ai-agent-config` 安装 `im-notify`；缺 webhook 时交互式终端会询问并追加到 `./.env`，非交互环境自动跳过 |
+| `alert` | `~/.local/bin/im-notify` + `FEISHU_GENERAL_ALERT_WEBHOOK` + `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | 先从 `ai-agent-config` 安装 `im-notify`；两个 webhook 分别承接 page/notice，任缺一个都拒绝部分安装。交互式终端逐个询问并追加到 `./.env`，非交互环境自动跳过 |
 | `tunnel` | `deploy/cloudflared/config.yml` | 提示从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置，本次跳过 |
 
 依赖查找顺序是当前进程环境、项目 `./.env`、`~/.claude/.env`。因此已有密钥放在 `~/.claude/.env` 的本机部署不会出现提示。任何自动跳过都会在命令末尾的 summary 中列出原因。
@@ -265,7 +265,7 @@ cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 
 ### 运维监控
 
-公网 `/admin` 需要 Cloudflare Access application + policy；飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 配置 `FEISHU_GENERAL_ALERT_WEBHOOK`。告警状态机自身负责冷却与恢复通知。具体步骤见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
+公网 `/admin` 需要 Cloudflare Access application + policy；飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 同时配置 `FEISHU_GENERAL_ALERT_WEBHOOK`（page → `ALERT`）与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`（notice → `NOTIFICATION`）。告警状态机按 severity 分别负责 debounce、cooldown 与恢复通知。具体步骤及无真实发送的配置 preflight 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
 
 ### Cloudflare 边缘缓存（可选）
 

@@ -3,6 +3,9 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/*.db.bak*
+data/alert-events.jsonl
+data/alert-events.lock
+data/alert-state.json
 
 # Python
 __pycache__/

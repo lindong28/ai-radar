@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import math
+import os
+import stat
 import subprocess
-from collections.abc import Callable
+import tempfile
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -18,7 +24,12 @@ from .thresholds import ALERT_THRESHOLDS
 
 RULESET = ("A1", "A2", "A3", "A4")
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
+DEFAULT_EVENT_PATH = db.PROJECT_ROOT / "data" / "alert-events.jsonl"
 COOLDOWN = timedelta(minutes=30)
+RETENTION_DAYS = 14
+MAX_LEDGER_BYTES = 64 * 1024 * 1024
+LEDGER_LOCK_TIMEOUT_SECONDS = 1.0
+LEDGER_LOCK_RETRY_SECONDS = 0.025
 MINUTES_PER_DAY = 24 * 60
 HEALTHZ_STATE_KEY = "healthz_probe"
 # src/airadar/web/routes/health.py registers /healthz and create_app mounts it
@@ -28,7 +39,28 @@ DEFAULT_HEALTHZ_TIMEOUT_SECONDS = 2.0
 # Project label prefixed on every alert so a shared Feishu webhook (used by
 # multiple projects) lets the reader tell which project an alert came from.
 ALERT_SOURCE = "AI Radar"
+AlertSeverity = Literal["page", "notice"]
+PAGE_SEVERITY: Literal["page"] = "page"
+NOTICE_SEVERITY: Literal["notice"] = "notice"
+ALERT_CHANNEL = "ALERT"
+NOTIFICATION_CHANNEL = "NOTIFICATION"
 LOGGER = logging.getLogger(__name__)
+
+
+class LedgerOversizeError(RuntimeError):
+    pass
+
+
+class LedgerLockTimeoutError(TimeoutError):
+    pass
+
+
+class LedgerNonRegularFileError(RuntimeError):
+    pass
+
+
+class AlertSender(Protocol):
+    def __call__(self, text: str, *, severity: AlertSeverity = PAGE_SEVERITY) -> object: ...
 
 
 @dataclass
@@ -45,6 +77,8 @@ class AlertSignals:
     items_today: int
     minutes_elapsed_today: int = MINUTES_PER_DAY
     healthz_consecutive_failures: int = 0
+    stage_sample_count: dict[str, int] = field(default_factory=dict)
+    server_pv: int = 0
 
 
 @dataclass(frozen=True)
@@ -55,6 +89,9 @@ class AlertRuleResult:
     detail: str
     action: str
     values: dict[str, object] = field(default_factory=dict)
+    severity: AlertSeverity = PAGE_SEVERITY
+    impact: str = ""
+    urgency: str = ""
 
 
 def _threshold_section(thresholds: dict[str, object], key: str) -> dict[str, Any]:
@@ -72,8 +109,15 @@ def _int_threshold(section: dict[str, Any], key: str, default: int) -> int:
     return int(value) if value is not None else default
 
 
-def _debounce_window(thresholds: dict[str, object], rule_id: str) -> timedelta:
+def _debounce_window(
+    thresholds: dict[str, object],
+    rule_id: str,
+    severity: AlertSeverity,
+) -> timedelta:
     section = _threshold_section(thresholds, rule_id.lower())
+    by_severity = section.get("debounce_minutes_by_severity")
+    if isinstance(by_severity, dict) and severity in by_severity:
+        return timedelta(minutes=_int_threshold(by_severity, severity, 0))
     return timedelta(minutes=_int_threshold(section, "debounce_minutes", 0))
 
 
@@ -103,12 +147,20 @@ def evaluate_rules(
     a1_firing = signals.upstream_sample_size >= a1_min_samples and signals.upstream_error_rate > a1_rate
 
     stage_error_thresholds = a2.get("stage_error_rate", {})
+    stage_min_samples = a2.get("min_samples", {})
     stage_p95_thresholds = a2.get("stage_p95_latency_ms", {})
     stage_reasons: list[str] = []
     if isinstance(stage_error_thresholds, dict):
         for stage, observed in sorted(signals.stage_error_rate.items()):
             threshold = float(stage_error_thresholds.get(stage, 0.3))
-            if observed > threshold:
+            default_min_samples = math.ceil(1 / threshold) if threshold > 0 else 1
+            min_samples = (
+                int(stage_min_samples.get(stage, default_min_samples))
+                if isinstance(stage_min_samples, dict)
+                else default_min_samples
+            )
+            sample_count = signals.stage_sample_count.get(stage, 0)
+            if sample_count >= min_samples and observed > threshold:
                 stage_reasons.append(f"{stage} 错误率 {observed:.1%} > {threshold:.1%}")
     if isinstance(stage_p95_thresholds, dict):
         for stage, observed in sorted(signals.stage_p95_latency_ms.items()):
@@ -130,9 +182,10 @@ def evaluate_rules(
         )
 
     a3_rate = _float_threshold(a3, "server_error_rate", 0.05)
+    a3_min_pv = _int_threshold(a3, "min_pv", math.ceil(1 / a3_rate) if a3_rate > 0 else 1)
     a3_healthz_failure_threshold = _int_threshold(a3, "healthz_consecutive_failures", 2)
     a3_reasons: list[str] = []
-    if signals.server_error_rate > a3_rate:
+    if signals.server_pv >= a3_min_pv and signals.server_error_rate > a3_rate:
         a3_reasons.append(f"用户侧 5xx 率 {signals.server_error_rate:.1%} > {a3_rate:.1%}")
     if (
         a3_healthz_failure_threshold > 0
@@ -149,7 +202,29 @@ def evaluate_rules(
         daily_inserted_floor,
         signals.minutes_elapsed_today,
     )
-    a4_firing = signals.fetch_failed_ratio > a4_fetch_ratio or signals.items_today < daily_inserted_floor_elapsed
+    a4_fetch_failed = signals.fetch_failed_ratio > a4_fetch_ratio
+    a4_items_low = signals.items_today < daily_inserted_floor_elapsed
+    a4_firing = a4_fetch_failed or a4_items_low
+    a4_severity: AlertSeverity = (
+        PAGE_SEVERITY if a4_items_low or not a4_fetch_failed else NOTICE_SEVERITY
+    )
+    a4_reasons: list[str] = []
+    if a4_fetch_failed:
+        a4_reasons.append(f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%} > {a4_fetch_ratio:.1%}")
+    if a4_items_low:
+        a4_reasons.append(
+            f"今日 items 增量 {signals.items_today} < 按日内进度 floor "
+            f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}"
+        )
+    if a4_items_low:
+        a4_impact = "文章更新可能停滞"
+        a4_urgency = "是——需立即核查"
+    elif a4_fetch_failed:
+        a4_impact = "当前摄取量正常，fetch 失败主要反映结构性源站波动"
+        a4_urgency = "否——当前摄取量正常，无需立即处置"
+    else:
+        a4_impact = ""
+        a4_urgency = ""
 
     return [
         AlertRuleResult(
@@ -174,6 +249,7 @@ def evaluate_rules(
             action="查看 pipeline 最新日志，定位异常 stage；若无成功轮次或连续 SKIP，检查 pipeline 锁和长任务。",
             values={
                 "stage_error_rate": signals.stage_error_rate,
+                "stage_sample_count": signals.stage_sample_count,
                 "stage_p95_latency_ms": signals.stage_p95_latency_ms,
                 "minutes_since_successful_pipeline": signals.minutes_since_successful_pipeline,
                 "consecutive_skip_logs": signals.consecutive_skip_logs,
@@ -194,6 +270,7 @@ def evaluate_rules(
             action="先探测 /api/v1/healthz 与 serve 日志；若 healthz 正常但 5xx 上升，查看最近部署和 upstream API。",
             values={
                 "server_error_rate": signals.server_error_rate,
+                "server_pv": signals.server_pv,
                 "healthz_consecutive_failures": signals.healthz_consecutive_failures,
             },
         ),
@@ -202,8 +279,13 @@ def evaluate_rules(
             title="文章摄取骤降",
             firing=a4_firing,
             detail=(
-                f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，今日 items 增量 {signals.items_today}，"
-                f"按日内进度 floor {daily_inserted_floor_elapsed}/{daily_inserted_floor}"
+                "；".join(a4_reasons)
+                if a4_reasons
+                else (
+                    f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，"
+                    f"今日 items 增量 {signals.items_today}，按日内进度 floor "
+                    f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}，均在阈值内"
+                )
             ),
             action="查看最近一轮各源健康并按 source error 分组：X(nitter) 源整批 SSL/超时多为公共实例瞬态（已加 30min 去抖，持续才告警）；微信源走 Mp2RSS；其余源按错误类型分别处理。",
             values={
@@ -213,22 +295,350 @@ def evaluate_rules(
                 "daily_inserted_floor": daily_inserted_floor,
                 "daily_inserted_floor_elapsed": daily_inserted_floor_elapsed,
             },
+            severity=a4_severity,
+            impact=a4_impact,
+            urgency=a4_urgency,
         ),
     ]
 
 
 def _format_firing(result: AlertRuleResult) -> str:
-    return (
-        f"【{ALERT_SOURCE}】🔴 {result.rule_id} {result.title}\n"
-        f"故障类别：{result.title}\n"
-        f"具体故障对象/数值：{result.detail}\n"
-        f"处置方向：{result.action}"
+    severity = _normalize_severity(result.severity)
+    emoji = "🟡" if severity == NOTICE_SEVERITY else "🔴"
+    lines = [f"【{ALERT_SOURCE}】{emoji} {result.rule_id} {result.title}"]
+    if result.impact:
+        lines.append(f"影响：{result.impact}")
+    if result.urgency:
+        lines.append(f"需否立即处置：{result.urgency}")
+    lines.extend(
+        (
+            f"故障类别：{result.title}",
+            f"具体故障对象/数值：{result.detail}",
+            f"处置方向：{result.action}",
+        )
     )
+    return "\n".join(lines)
 
 
 def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
     suffix = f"（since {since}）" if since else ""
     return f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}"
+
+
+def _normalize_severity(value: object) -> AlertSeverity:
+    return NOTICE_SEVERITY if value == NOTICE_SEVERITY else PAGE_SEVERITY
+
+
+def _severity_channel(severity: AlertSeverity) -> str:
+    return NOTIFICATION_CHANNEL if severity == NOTICE_SEVERITY else ALERT_CHANNEL
+
+
+def _delivery_succeeded(send_result: object) -> bool:
+    return isinstance(send_result, Mapping) and send_result.get("skipped") is False
+
+
+def _snapshot_delivery_succeeded(send_result: object) -> bool:
+    try:
+        return _delivery_succeeded(send_result)
+    except BaseException:  # A malformed sender result must not break state continuity.
+        return False
+
+
+def _entry_announced(entry: dict[str, object]) -> bool:
+    if isinstance(entry.get("announced"), bool):
+        return entry["announced"] is True
+    last_notified = _parse_dt(entry.get("last_notified"))
+    since = _parse_dt(entry.get("since"))
+    return last_notified is not None and (since is None or last_notified >= since)
+
+
+def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
+    state = "firing" if entry.get("state") == "firing" else "ok"
+    return {
+        "state": state,
+        "since": entry.get("since") if state == "firing" else None,
+        "last_notified": entry.get("last_notified"),
+        "detail": entry.get("detail"),
+        "announced": state == "firing" and _entry_announced(entry),
+    }
+
+
+def _normalize_lifecycles(entry: dict[str, object]) -> dict[AlertSeverity, dict[str, object]]:
+    raw_lifecycles = entry.get("lifecycles")
+    lifecycles: dict[AlertSeverity, dict[str, object]] = {}
+    if isinstance(raw_lifecycles, dict):
+        for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
+            raw = raw_lifecycles.get(severity)
+            if isinstance(raw, dict):
+                lifecycles[severity] = _normalized_lifecycle(raw)
+    if lifecycles:
+        return lifecycles
+    severity = _normalize_severity(entry.get("severity"))
+    lifecycles[severity] = _normalized_lifecycle(entry)
+    return lifecycles
+
+
+def _ok_lifecycle(lifecycle: dict[str, object], detail: str) -> dict[str, object]:
+    return {
+        "state": "ok",
+        "since": None,
+        "last_notified": lifecycle.get("last_notified"),
+        "detail": detail,
+        "announced": False,
+    }
+
+
+def _project_lifecycles(
+    lifecycles: dict[AlertSeverity, dict[str, object]],
+    *,
+    preferred_severity: AlertSeverity,
+) -> dict[str, object]:
+    # PAGE is the fail-closed projection whenever malformed state contains more
+    # than one firing lifecycle; preferred severity only breaks non-page ties.
+    active_severity = next(
+        (
+            severity
+            for severity in (PAGE_SEVERITY, preferred_severity, NOTICE_SEVERITY)
+            if severity in lifecycles and lifecycles[severity].get("state") == "firing"
+        ),
+        None,
+    )
+    projected_severity = active_severity or (
+        preferred_severity if preferred_severity in lifecycles else next(iter(lifecycles))
+    )
+    projected = lifecycles[projected_severity]
+    return {
+        "state": "firing" if active_severity is not None else "ok",
+        "since": projected.get("since") if active_severity is not None else None,
+        "last_notified": projected.get("last_notified"),
+        "detail": projected.get("detail"),
+        "severity": projected_severity,
+        "announced": active_severity is not None and _entry_announced(projected),
+        "lifecycles": lifecycles,
+    }
+
+
+def _transition_since(
+    *,
+    outgoing_since: object,
+    current: datetime,
+    debounce: timedelta,
+) -> str:
+    outgoing_since_dt = _parse_dt(outgoing_since)
+    confirmed_since = current - debounce
+    if outgoing_since_dt is not None and outgoing_since_dt <= confirmed_since:
+        return str(outgoing_since)
+    return confirmed_since.isoformat()
+
+
+def _invoke_sender(
+    *,
+    result: AlertRuleResult,
+    event_type: Literal["firing", "resolved"],
+    text: str,
+    severity: AlertSeverity,
+    sender: AlertSender,
+) -> dict[str, object]:
+    send_result = sender(text, severity=severity)
+    delivered = _snapshot_delivery_succeeded(send_result)
+    return {
+        "rule_id": result.rule_id,
+        "type": event_type,
+        "effective_severity": severity,
+        "channel": _severity_channel(severity),
+        "text": text,
+        "send_result": send_result,
+        "delivered": delivered,
+    }
+
+
+def _ledger_lock_path(event_path: Path) -> Path:
+    return event_path.with_suffix(".lock")
+
+
+def _validate_alert_paths(*, state_path: Path, event_path: Path) -> None:
+    paths = (state_path, event_path, _ledger_lock_path(event_path))
+    resolved = tuple(path.resolve(strict=False) for path in paths)
+    aliased = len(set(resolved)) != len(resolved)
+    if not aliased:
+        for index, left in enumerate(paths):
+            for right in paths[index + 1 :]:
+                try:
+                    if os.path.samefile(left, right):
+                        aliased = True
+                        break
+                except FileNotFoundError:
+                    continue
+            if aliased:
+                break
+    if aliased:
+        raise ValueError("state_path, event_path, and ledger lock path must be distinct")
+
+
+def _require_regular_file_if_present(path: Path, *, label: str) -> os.stat_result | None:
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise LedgerNonRegularFileError(f"notification ledger {label} is not a regular file: {path}")
+    return file_stat
+
+
+def _check_ledger_size(event_path: Path) -> None:
+    file_stat = _require_regular_file_if_present(event_path, label="path")
+    if file_stat is None:
+        return
+    size = file_stat.st_size
+    if size > MAX_LEDGER_BYTES:
+        raise LedgerOversizeError(
+            f"notification ledger is {size} bytes; limit is {MAX_LEDGER_BYTES} bytes"
+        )
+
+
+def _acquire_ledger_lock(lock_file: object, *, event_path: Path) -> None:
+    deadline = time.monotonic() + LEDGER_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
+            return
+        except BlockingIOError as exc:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LedgerLockTimeoutError(
+                    f"timed out locking notification ledger after "
+                    f"{LEDGER_LOCK_TIMEOUT_SECONDS:.1f}s: {event_path}"
+                ) from exc
+            time.sleep(min(LEDGER_LOCK_RETRY_SECONDS, remaining))
+
+
+def _read_ledger_rows(event_path: Path) -> list[dict[str, object]]:
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor: int | None = os.open(event_path, flags)
+    except FileNotFoundError:
+        return []
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise LedgerNonRegularFileError(
+                f"notification ledger path is not a regular file: {event_path}"
+            )
+        if file_stat.st_size > MAX_LEDGER_BYTES:
+            raise LedgerOversizeError(
+                f"notification ledger is {file_stat.st_size} bytes; "
+                f"limit is {MAX_LEDGER_BYTES} bytes"
+            )
+        with os.fdopen(descriptor, encoding="utf-8") as ledger_file:
+            descriptor = None
+            ledger_text = ledger_file.read()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(ledger_text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError(f"notification ledger line {line_number} is not an object")
+        rows.append(row)
+    return rows
+
+
+def _write_ledger_rows(event_path: Path, rows: list[dict[str, object]]) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=event_path.parent,
+            prefix=f".{event_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            for row in rows:
+                temporary.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        os.replace(temporary_path, event_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _record_notification_events(
+    event_path: str | Path,
+    *,
+    current: datetime,
+    delivered: list[tuple[dict[str, object], AlertRuleResult]],
+) -> None:
+    try:
+        successful = [
+            (receipt, result)
+            for receipt, result in delivered
+            if receipt.get("delivered") is True
+        ]
+        if not successful:
+            return
+        path = Path(event_path)
+        _check_ledger_size(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = _ledger_lock_path(path)
+        _require_regular_file_if_present(lock_path, label="lock path")
+        lock_flags = os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            lock_flags |= os.O_NOFOLLOW
+        lock_descriptor: int | None = os.open(lock_path, lock_flags, 0o666)
+        try:
+            lock_stat = os.fstat(lock_descriptor)
+            if not stat.S_ISREG(lock_stat.st_mode):
+                raise LedgerNonRegularFileError(
+                    f"notification ledger lock path is not a regular file: {lock_path}"
+                )
+            lock_file = os.fdopen(lock_descriptor, mode="r+")
+            lock_descriptor = None
+        finally:
+            if lock_descriptor is not None:
+                os.close(lock_descriptor)
+        with lock_file:
+            _acquire_ledger_lock(lock_file, event_path=path)
+            try:
+                _check_ledger_size(path)
+                rows = _read_ledger_rows(path)
+                rows.extend(
+                    {
+                        "ts": current.isoformat(),
+                        "rule_id": receipt["rule_id"],
+                        "severity": receipt["effective_severity"],
+                        "type": receipt["type"],
+                        "detail": result.detail,
+                        "values": result.values,
+                        "channel": receipt["channel"],
+                    }
+                    for receipt, result in successful
+                )
+                cutoff = current - timedelta(days=RETENTION_DAYS)
+                retained = [
+                    row
+                    for row in rows
+                    if (timestamp := _parse_dt(row.get("ts"))) is None or timestamp >= cutoff
+                ]
+                _write_ledger_rows(path, retained)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except BaseException as exc:  # The ledger must never block alert state persistence.
+        try:
+            LOGGER.error(
+                "notification ledger write failed event_path=%s exception=%s: %s",
+                event_path,
+                type(exc).__name__,
+                exc,
+            )
+        except BaseException:
+            pass
 
 
 def _load_state(path: Path) -> dict[str, dict[str, object]]:
@@ -238,7 +648,18 @@ def _load_state(path: Path) -> dict[str, dict[str, object]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    state = payload
+    for rule_id, entry in list(state.items()):
+        if rule_id == HEALTHZ_STATE_KEY or not isinstance(entry, dict):
+            continue
+        lifecycles = _normalize_lifecycles(entry)
+        state[rule_id] = _project_lifecycles(
+            lifecycles,
+            preferred_severity=_normalize_severity(entry.get("severity")),
+        )
+    return state
 
 
 def _write_state(path: Path, state: dict[str, dict[str, object]]) -> None:
@@ -297,57 +718,138 @@ def _apply_alert_results(
     results: list[AlertRuleResult],
     *,
     current: datetime,
-    sender: Callable[[str], object],
+    sender: AlertSender,
     thresholds: dict[str, object],
+    event_path: str | Path,
 ) -> list[dict[str, object]]:
     sent: list[dict[str, object]] = []
+    delivered: list[tuple[dict[str, object], AlertRuleResult]] = []
     for result in results:
-        entry = state.get(result.rule_id, {"state": "ok"})
-        previous_state = str(entry.get("state", "ok"))
-        last_notified = _parse_dt(entry.get("last_notified"))
-        debounce = _debounce_window(thresholds, result.rule_id)
+        entry = state.get(
+            result.rule_id,
+            {"state": "ok", "severity": _normalize_severity(result.severity)},
+        )
+        if not isinstance(entry, dict):
+            entry = {"state": "ok", "severity": _normalize_severity(result.severity)}
+        lifecycles = _normalize_lifecycles(entry)
+        projected_severity = _normalize_severity(entry.get("severity"))
         if result.firing:
-            since = entry.get("since") if previous_state == "firing" else current.isoformat()
+            effective_severity = _normalize_severity(result.severity)
+            debounce = _debounce_window(thresholds, result.rule_id, effective_severity)
+            outgoing_announced = False
+            outgoing_since: object = None
+            pending_since: object = None
+            for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
+                if severity == effective_severity:
+                    continue
+                lifecycle = lifecycles.get(severity)
+                if lifecycle is None or lifecycle.get("state") != "firing":
+                    continue
+                announced = _entry_announced(lifecycle)
+                if announced:
+                    outgoing_announced = True
+                    outgoing_since = lifecycle.get("since")
+                    receipt = _invoke_sender(
+                        result=result,
+                        event_type="resolved",
+                        text=_format_resolved(result, str(lifecycle.get("since") or "")),
+                        severity=severity,
+                        sender=sender,
+                    )
+                    sent.append(receipt)
+                    delivered.append((receipt, result))
+                elif pending_since is None:
+                    pending_since = lifecycle.get("since")
+                lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+
+            lifecycle = lifecycles.get(
+                effective_severity,
+                {
+                    "state": "ok",
+                    "since": None,
+                    "last_notified": None,
+                    "detail": result.detail,
+                    "announced": False,
+                },
+            )
+            lifecycle_was_firing = lifecycle.get("state") == "firing"
+            previously_announced = lifecycle_was_firing and _entry_announced(lifecycle)
+            if lifecycle_was_firing:
+                since = lifecycle.get("since")
+            elif outgoing_announced:
+                since = _transition_since(
+                    outgoing_since=outgoing_since,
+                    current=current,
+                    debounce=debounce,
+                )
+            elif pending_since is not None:
+                since = pending_since
+            else:
+                since = current.isoformat()
             since_dt = _parse_dt(since)
             confirmed = since_dt is None or current - since_dt >= debounce
-            should_notify = confirmed and (last_notified is None or current - last_notified >= COOLDOWN)
+            last_notified = _parse_dt(lifecycle.get("last_notified"))
+            should_notify = confirmed and (
+                last_notified is None or current - last_notified >= COOLDOWN
+            )
+            delivery_succeeded = False
             if should_notify:
                 text = _format_firing(result)
-                send_result = sender(text)
-                sent.append(
-                    {
-                        "rule_id": result.rule_id,
-                        "type": "firing",
-                        "text": text,
-                        "send_result": send_result,
-                    }
+                receipt = _invoke_sender(
+                    result=result,
+                    event_type="firing",
+                    text=text,
+                    severity=effective_severity,
+                    sender=sender,
                 )
-            state[result.rule_id] = {
+                sent.append(receipt)
+                delivered.append((receipt, result))
+                delivery_succeeded = receipt["delivered"] is True
+            lifecycles[effective_severity] = {
                 "state": "firing",
                 "since": since,
-                "last_notified": current.isoformat() if should_notify else entry.get("last_notified"),
+                "last_notified": (
+                    current.isoformat() if delivery_succeeded else lifecycle.get("last_notified")
+                ),
                 "detail": result.detail,
+                "announced": previously_announced or delivery_succeeded,
             }
+            state[result.rule_id] = _project_lifecycles(
+                lifecycles,
+                preferred_severity=effective_severity,
+            )
         else:
-            since_dt = _parse_dt(entry.get("since"))
-            announced = last_notified is not None and (since_dt is None or last_notified >= since_dt)
-            if previous_state == "firing" and announced:
-                text = _format_resolved(result, str(entry.get("since") or ""))
-                send_result = sender(text)
-                sent.append(
-                    {
-                        "rule_id": result.rule_id,
-                        "type": "resolved",
-                        "text": text,
-                        "send_result": send_result,
-                    }
-                )
-            state[result.rule_id] = {
-                "state": "ok",
-                "since": None,
-                "last_notified": entry.get("last_notified"),
-                "detail": result.detail,
-            }
+            for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
+                lifecycle = lifecycles.get(severity)
+                if lifecycle is None or lifecycle.get("state") != "firing":
+                    continue
+                if _entry_announced(lifecycle):
+                    receipt = _invoke_sender(
+                        result=result,
+                        event_type="resolved",
+                        text=_format_resolved(result, str(lifecycle.get("since") or "")),
+                        severity=severity,
+                        sender=sender,
+                    )
+                    sent.append(receipt)
+                    delivered.append((receipt, result))
+                lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+            if projected_severity not in lifecycles:
+                projected_severity = _normalize_severity(result.severity)
+                lifecycles[projected_severity] = _ok_lifecycle({}, result.detail)
+            elif lifecycles[projected_severity].get("state") == "ok":
+                lifecycles[projected_severity] = {
+                    **lifecycles[projected_severity],
+                    "detail": result.detail,
+                }
+            state[result.rule_id] = _project_lifecycles(
+                lifecycles,
+                preferred_severity=projected_severity,
+            )
+    try:
+        _record_notification_events(event_path, current=current, delivered=delivered)
+    except BaseException:
+        pass
     return sent
 
 
@@ -355,8 +857,9 @@ def run_alert_results_state_machine(
     results: list[AlertRuleResult],
     *,
     state_path: str | Path,
+    event_path: str | Path = DEFAULT_EVENT_PATH,
     now: datetime | None = None,
-    send: Callable[[str], object] | None = None,
+    send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(SHANGHAI_TZ)
@@ -364,6 +867,8 @@ def run_alert_results_state_machine(
         current = current.replace(tzinfo=SHANGHAI_TZ)
     current = current.astimezone(SHANGHAI_TZ)
     path = Path(state_path)
+    ledger_path = Path(event_path)
+    _validate_alert_paths(state_path=path, event_path=ledger_path)
     state = _load_state(path)
     sent = _apply_alert_results(
         state,
@@ -371,6 +876,7 @@ def run_alert_results_state_machine(
         current=current,
         sender=send or send_alert_message,
         thresholds=thresholds or {},
+        event_path=ledger_path,
     )
     _write_state(path, state)
     return {
@@ -386,8 +892,9 @@ def run_alert_state_machine(
     signals: AlertSignals,
     *,
     state_path: str | Path = DEFAULT_STATE_PATH,
+    event_path: str | Path = DEFAULT_EVENT_PATH,
     now: datetime | None = None,
-    send: Callable[[str], object] | None = None,
+    send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
     healthz_probe: Callable[[str, float], bool] | None = None,
 ) -> dict[str, object]:
@@ -396,6 +903,8 @@ def run_alert_state_machine(
         current = current.replace(tzinfo=SHANGHAI_TZ)
     current = current.astimezone(SHANGHAI_TZ)
     path = Path(state_path)
+    ledger_path = Path(event_path)
+    _validate_alert_paths(state_path=path, event_path=ledger_path)
     state = _load_state(path)
     sender = send or send_alert_message
     active_thresholds = thresholds or ALERT_THRESHOLDS
@@ -413,6 +922,7 @@ def run_alert_state_machine(
         current=current,
         sender=sender,
         thresholds=active_thresholds,
+        event_path=ledger_path,
     )
 
     _write_state(path, state)
@@ -425,8 +935,11 @@ def run_alert_state_machine(
     }
 
 
-def send_alert_message(text: str) -> dict[str, object]:
-    command = ["im-notify", "--alert", text]
+def send_alert_message(text: str, *, severity: AlertSeverity = PAGE_SEVERITY) -> dict[str, object]:
+    effective_severity = _normalize_severity(severity)
+    command = ["im-notify", text]
+    if effective_severity == PAGE_SEVERITY:
+        command.insert(1, "--alert")
     try:
         completed = subprocess.run(command, capture_output=True, text=True, timeout=15.0)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -471,8 +984,12 @@ def collect_alert_signals(
         current = current.replace(tzinfo=SHANGHAI_TZ)
     current = current.astimezone(SHANGHAI_TZ)
     a1 = _threshold_section(ALERT_THRESHOLDS, "a1")
-    window_minutes = _int_threshold(a1, "window_minutes", 15)
-    recent_since = current - timedelta(minutes=window_minutes)
+    a2 = _threshold_section(ALERT_THRESHOLDS, "a2")
+    a3 = _threshold_section(ALERT_THRESHOLDS, "a3")
+    a1_window_minutes = _int_threshold(a1, "window_minutes", 15)
+    recent_since = current - timedelta(minutes=a1_window_minutes)
+    stage_since = current - timedelta(minutes=_int_threshold(a2, "window_minutes", 15))
+    access_since = current - timedelta(minutes=_int_threshold(a3, "window_minutes", 15))
     sample_size, upstream_rate, schema_rate = _recent_upstream_stats(db_path, recent_since)
 
     metrics = collect_metrics(
@@ -480,18 +997,22 @@ def collect_alert_signals(
         pipeline_log_dir=pipeline_log_dir,
         access_log_paths=access_log_paths,
         now=current,
+        stage_since=stage_since,
+        access_since=access_since,
     )
     pipeline = metrics.get("pipeline", {})
     assert isinstance(pipeline, dict)
     stages = pipeline.get("stages", {})
     assert isinstance(stages, dict)
     stage_error_rate: dict[str, float] = {}
+    stage_sample_count: dict[str, int] = {}
     stage_p95_latency_ms: dict[str, int] = {}
     for stage in ("prefilter", "scoring", "enrich"):
         row = stages.get(stage, {})
         if not isinstance(row, dict):
             continue
         stage_error_rate[stage] = float(row.get("error_rate") or 0.0)
+        stage_sample_count[stage] = int(row.get("processed") or 0)
         p95 = row.get("p95_latency_ms")
         stage_p95_latency_ms[stage] = int(p95) if p95 is not None else 0
 
@@ -530,6 +1051,8 @@ def collect_alert_signals(
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
         items_today=int(ingestion.get("items_today") or 0),
         minutes_elapsed_today=_minutes_elapsed_today(current),
+        stage_sample_count=stage_sample_count,
+        server_pv=int(users.get("pv") or 0),
     )
 
 

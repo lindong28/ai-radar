@@ -461,13 +461,31 @@ def _load_confirmed_incidents(path: Path) -> list[ConfirmedIncident]:
         entry = payload[rule_id]
         if not str(rule_id).startswith("PERF:") or not isinstance(entry, dict):
             continue
-        if entry.get("state") != "firing" or not entry.get("since"):
-            continue
+        lifecycles = entry.get("lifecycles")
+        if isinstance(lifecycles, dict) and lifecycles:
+            page_lifecycle = lifecycles.get("page")
+            if (
+                not isinstance(page_lifecycle, dict)
+                or page_lifecycle.get("state") != "firing"
+                or not page_lifecycle.get("since")
+            ):
+                continue
+            incident_entry = page_lifecycle
+        else:
+            if entry.get("state") != "firing" or not entry.get("since"):
+                continue
+            if entry.get("severity", "page") != "page":
+                continue
+            incident_entry = entry
         incidents.append(
             ConfirmedIncident(
                 rule_id=str(rule_id),
-                since=str(entry["since"]),
-                detail=str(entry.get("detail") or "confirmed performance regression"),
+                since=str(incident_entry["since"]),
+                detail=str(
+                    incident_entry.get("detail")
+                    or entry.get("detail")
+                    or "confirmed performance regression"
+                ),
             )
         )
     return incidents

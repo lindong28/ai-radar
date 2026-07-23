@@ -7,14 +7,18 @@ import os
 import sqlite3
 import subprocess
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from .. import db
-from ..admin.alerts import AlertRuleResult, run_alert_results_state_machine
+from ..admin.alerts import (
+    DEFAULT_EVENT_PATH,
+    AlertRuleResult,
+    AlertSender,
+    run_alert_results_state_machine,
+)
 from .browser_probe import measure_browser_journey
 
 WARM_SAMPLES = 20
@@ -26,6 +30,7 @@ DEFAULT_ALERT_STATE_PATH = db.PROJECT_ROOT / "logs" / "performance" / "alert-sta
 DEFAULT_EVIDENCE_DIR = db.PROJECT_ROOT / "logs" / "performance" / "evidence"
 DEFAULT_BROWSER_LOCK_PATH = db.PROJECT_ROOT / "logs" / "performance" / "browser.lock"
 DEFAULT_PIPELINE_LOCK_DIR = db.PROJECT_ROOT / ".pipeline.lock"
+PERF_BUSY_ROLLUP_RULE_ID = "PERF:rollup:busy"
 CRONTAB_SAMPLE = (
     "17 * * * * cd /path/to/ai-radar && "
     "./run.sh performance-probe >> logs/performance-probe-cron.log 2>&1"
@@ -266,6 +271,50 @@ def _window_violation(rows: list[dict[str, object]], spec: JourneySpec) -> tuple
     return hard_failure or p75 > spec.p75_budget_ms or p95 > spec.p95_budget_ms, p75, p95
 
 
+def _format_milliseconds(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0f}ms"
+
+
+def _numeric_value(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("PERF result value must be numeric")
+    return float(value)
+
+
+def _with_firing_message(result: AlertRuleResult, *, gate_reason: str) -> AlertRuleResult:
+    vantage = result.values["vantage"]
+    if gate_reason == "idle_clean":
+        impact = (
+            "同机合成探针，与 pipeline 并发、疑似主机 CPU 争用；"
+            "idle 视角正常，用户大概率无感"
+        )
+        urgency = "否——除非 idle 视角也超标"
+    elif gate_reason == "idle_firing":
+        impact = "同机合成探针在 busy 与同视角 idle 均超标，已确认同视角真实退化，用户可能受影响"
+        urgency = "是"
+    elif gate_reason == "idle_cell" and vantage == "same_host_public":
+        impact = "同机公网路径 idle 合成探针超标，已确认公网路径退化，用户可能受影响"
+        urgency = "是"
+    elif gate_reason == "idle_cell":
+        impact = "同机 origin 路径 idle 合成探针超标，已确认同视角真实退化，用户可能受影响"
+        urgency = "是"
+    elif gate_reason in {"idle_absent", "idle_insufficient"}:
+        evidence_state = "当前无 idle 样本" if gate_reason == "idle_absent" else "当前 idle 样本不足"
+        impact = (
+            f"影响未知：缺少足量同视角 idle 背书（{evidence_state}），"
+            "无法排除用户影响，故保守 page；请补采/核查 idle evidence"
+        )
+        urgency = "是"
+    else:
+        raise ValueError(f"unrecognized PERF gate_reason: {gate_reason}")
+    return replace(
+        result,
+        impact=impact,
+        urgency=urgency,
+        values={**result.values, "gate_reason": gate_reason},
+    )
+
+
 def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRuleResult]:
     grouped: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     for sample in samples:
@@ -285,7 +334,7 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             continue
         grouped[(str(journey), str(vantage), str(load_class))].append(sample)
 
-    results: list[AlertRuleResult] = []
+    results_by_cell: dict[tuple[str, str, str], AlertRuleResult] = {}
     for (journey, vantage, load_class), rows in sorted(grouped.items()):
         spec = _SPEC_BY_JOURNEY[journey]
         available_windows = max(0, len(rows) - WARM_SAMPLES + 1)
@@ -305,34 +354,64 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             streak += 1
         firing = streak >= CONFIRMATION_WINDOWS
         detail = (
-            f"{journey} {vantage} {load_class}: samples={len(rows)}, "
-            f"p75={p75 if p75 is not None else 'n/a'}ms/{spec.p75_budget_ms:g}ms, "
-            f"p95={p95 if p95 is not None else 'n/a'}ms/{spec.p95_budget_ms:g}ms, "
-            f"advanced_window_streak={streak}/{CONFIRMATION_WINDOWS}; {SAME_HOST_SCOPE}"
+            f"{journey} {vantage} {load_class}: "
+            f"p75 实测 {_format_milliseconds(p75)} vs 预算 "
+            f"{_format_milliseconds(spec.p75_budget_ms)}；"
+            f"p95 实测 {_format_milliseconds(p95)} vs 预算 "
+            f"{_format_milliseconds(spec.p95_budget_ms)}；{SAME_HOST_SCOPE}"
         )
-        results.append(
-            AlertRuleResult(
-                rule_id=f"PERF:{journey}:{vantage}:{load_class}",
-                title=f"旅程性能退化 {journey}",
-                firing=firing,
-                detail=detail,
-                action="查看证据中的近期样本、CPU 与 pipeline 状态；该结果仅代表同机 provisional 观测。",
-                values={
-                    "journey": journey,
-                    "vantage": vantage,
-                    "load_class": load_class,
-                    "sample_count": len(rows),
-                    "warm_samples": WARM_SAMPLES,
-                    "advanced_window_streak": streak,
-                    "confirmation_windows": CONFIRMATION_WINDOWS,
-                    "p75_ms": p75,
-                    "p95_ms": p95,
-                    "p75_budget_ms": spec.p75_budget_ms,
-                    "p95_budget_ms": spec.p95_budget_ms,
-                    "provisional": True,
-                },
+        results_by_cell[(journey, vantage, load_class)] = AlertRuleResult(
+            rule_id=f"PERF:{journey}:{vantage}:{load_class}",
+            title=f"旅程性能退化 {journey}",
+            firing=firing,
+            detail=detail,
+            action=(
+                "查看 logs/performance/evidence/ 中最新证据，"
+                "核对近期样本、CPU、pipeline 与同视角 idle 观测。"
+            ),
+            values={
+                "journey": journey,
+                "vantage": vantage,
+                "load_class": load_class,
+                "sample_count": len(rows),
+                "warm_samples": WARM_SAMPLES,
+                "advanced_window_streak": streak,
+                "confirmation_windows": CONFIRMATION_WINDOWS,
+                "p75_ms": p75,
+                "p95_ms": p95,
+                "p75_budget_ms": spec.p75_budget_ms,
+                "p95_budget_ms": spec.p95_budget_ms,
+                "provisional": True,
+            },
+        )
+
+    minimum_firing_samples = WARM_SAMPLES + CONFIRMATION_WINDOWS - 1
+    results: list[AlertRuleResult] = []
+    for (journey, vantage, load_class), result in results_by_cell.items():
+        if not result.firing:
+            results.append(result)
+            continue
+        if load_class == "idle":
+            results.append(_with_firing_message(result, gate_reason="idle_cell"))
+            continue
+
+        idle_key = (journey, vantage, "idle")
+        idle_result = results_by_cell.get(idle_key)
+        if idle_result is None:
+            gate_reason = "idle_absent"
+        elif len(grouped[idle_key]) < minimum_firing_samples:
+            gate_reason = "idle_insufficient"
+        elif idle_result.firing:
+            gate_reason = "idle_firing"
+        else:
+            results.append(
+                _with_firing_message(
+                    replace(result, severity="notice"),
+                    gate_reason="idle_clean",
+                )
             )
-        )
+            continue
+        results.append(_with_firing_message(result, gate_reason=gate_reason))
     return results
 
 
@@ -344,6 +423,105 @@ def _load_alert_state(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _announced_firing_entry(entry: object) -> bool:
+    if not isinstance(entry, dict) or entry.get("state") != "firing":
+        return False
+    last_notified = _parse_timestamp(entry.get("last_notified"))
+    since = _parse_timestamp(entry.get("since"))
+    return last_notified is not None and (since is None or last_notified >= since)
+
+
+def _roll_up_notice_busy_results(
+    results: list[AlertRuleResult],
+    *,
+    previous_state: dict[str, Any],
+) -> list[AlertRuleResult]:
+    notice_busy = [
+        result
+        for result in results
+        if result.firing
+        and result.severity == "notice"
+        and result.values.get("load_class") == "busy"
+    ]
+    suppressed_rule_ids = {result.rule_id for result in notice_busy}
+    rolled_up = [result for result in results if result.rule_id not in suppressed_rule_ids]
+
+    if notice_busy:
+        cells = [
+            {
+                "journey": result.values["journey"],
+                "vantage": result.values["vantage"],
+                "p75_ms": result.values["p75_ms"],
+                "p95_ms": result.values["p95_ms"],
+                "p75_budget_ms": result.values["p75_budget_ms"],
+                "p95_budget_ms": result.values["p95_budget_ms"],
+            }
+            for result in notice_busy
+        ]
+        most_severe = max(
+            range(len(cells)),
+            key=lambda index: _numeric_value(cells[index]["p95_ms"])
+            / max(_numeric_value(cells[index]["p95_budget_ms"]), 1.0),
+        )
+        cells[most_severe]["most_severe"] = True
+        itemized = []
+        for index, cell in enumerate(cells):
+            marker = "（最严重）" if index == most_severe else ""
+            itemized.append(
+                f"- {cell['journey']} [{cell['vantage']}]："
+                f"p95 实测 {_format_milliseconds(_numeric_value(cell['p95_ms']))} vs 预算 "
+                f"{_format_milliseconds(_numeric_value(cell['p95_budget_ms']))}{marker}"
+            )
+        impact = (
+            "同机合成探针，与 pipeline 并发、疑似主机 CPU 争用；"
+            "idle 视角正常，用户大概率无感"
+        )
+        rolled_up.append(
+            AlertRuleResult(
+                rule_id=PERF_BUSY_ROLLUP_RULE_ID,
+                title=f"性能自测：pipeline 运行期间 {len(cells)} 条 busy 旅程探针超预算",
+                firing=True,
+                detail=f"{impact}；明细：\n" + "\n".join(itemized),
+                action="查看 logs/performance/evidence/ 中最新合成证据，并核对主机 load。",
+                values={"load_class": "busy", "cells": cells},
+                severity="notice",
+                impact=impact,
+                urgency="否——除非 idle 视角也超标",
+            )
+        )
+    elif isinstance(previous_state.get(PERF_BUSY_ROLLUP_RULE_ID), dict) and previous_state[
+        PERF_BUSY_ROLLUP_RULE_ID
+    ].get("state") == "firing":
+        rolled_up.append(
+            AlertRuleResult(
+                rule_id=PERF_BUSY_ROLLUP_RULE_ID,
+                title="性能自测 busy 旅程探针",
+                firing=False,
+                detail="本轮已无 notice 级 busy PERF 子项；合成告警恢复",
+                action="none",
+                values={"load_class": "busy", "cells": []},
+                severity="notice",
+            )
+        )
+
+    for result in notice_busy:
+        entry = previous_state.get(result.rule_id)
+        if not _announced_firing_entry(entry):
+            continue
+        assert isinstance(entry, dict)
+        rolled_up.append(
+            AlertRuleResult(
+                rule_id=result.rule_id,
+                title=result.title,
+                firing=False,
+                detail="已迁移到 PERF:rollup:busy；旧个体 busy 告警恢复",
+                action="none",
+                severity="notice" if entry.get("severity") == "notice" else "page",
+            )
+        )
+    return rolled_up
 
 
 def _diagnostics(pipeline_lock_dir: Path) -> dict[str, object]:
@@ -404,20 +582,42 @@ def _write_firing_evidence(
     now: datetime,
 ) -> Path:
     values = result.values
-    recent = [
-        sample
-        for sample in samples
-        if sample.get("journey") == values["journey"]
-        and sample.get("vantage") == values["vantage"]
-        and sample.get("load_class") == values["load_class"]
-    ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
+    raw_cells = values.get("cells")
+    if result.rule_id == PERF_BUSY_ROLLUP_RULE_ID and isinstance(raw_cells, list):
+        cells = [cell for cell in raw_cells if isinstance(cell, dict)]
+        recent = []
+        for cell in cells:
+            recent.extend(
+                [
+                    sample
+                    for sample in samples
+                    if sample.get("journey") == cell.get("journey")
+                    and sample.get("vantage") == cell.get("vantage")
+                    and sample.get("load_class") == "busy"
+                ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
+            )
+        identity: dict[str, object] = {
+            "load_class": "busy",
+            "cells": cells,
+        }
+    else:
+        recent = [
+            sample
+            for sample in samples
+            if sample.get("journey") == values["journey"]
+            and sample.get("vantage") == values["vantage"]
+            and sample.get("load_class") == values["load_class"]
+        ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
+        identity = {
+            "journey": values["journey"],
+            "vantage": values["vantage"],
+            "load_class": values["load_class"],
+        }
     payload = {
         "schema_version": 1,
         "created_at": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "rule_id": result.rule_id,
-        "journey": values["journey"],
-        "vantage": values["vantage"],
-        "load_class": values["load_class"],
+        **identity,
         "provisional": True,
         "regional_slo_claim": False,
         "recent_samples": recent,
@@ -452,8 +652,9 @@ def run_performance_alerts(
     state_path: Path,
     evidence_dir: Path,
     pipeline_lock_dir: Path,
+    event_path: Path = DEFAULT_EVENT_PATH,
     now: datetime | None = None,
-    send: Callable[[str], object] | None = None,
+    send: AlertSender | None = None,
     enabled_vantages: frozenset[str] | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(UTC)
@@ -462,6 +663,7 @@ def run_performance_alerts(
         samples = [sample for sample in samples if sample.get("vantage") in enabled_vantages]
     results = evaluate_performance_rules(samples)
     previous_state = _load_alert_state(state_path)
+    results = _roll_up_notice_busy_results(results, previous_state=previous_state)
     if enabled_vantages is not None:
         # A vantage disabled after firing would otherwise leave its alert state
         # stuck: retained samples age out, the rule stops appearing in results,
@@ -500,6 +702,7 @@ def run_performance_alerts(
     return run_alert_results_state_machine(
         evidenced,
         state_path=state_path,
+        event_path=event_path,
         now=current,
         send=send,
     )
