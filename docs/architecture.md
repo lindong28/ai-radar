@@ -72,7 +72,7 @@ src/airadar/
 │
 ├── performance/        # 用户旅程性能监控与候选修复
 │   ├── browser_probe.py #  Chromium 四旅程测量
-│   ├── journey_monitor.py # 样本、idle/busy 分类、PERF:* 规则与 14 天保留
+│   ├── journey_monitor.py # idle-only 样本、PERF:* 规则与 14 天保留
 │   └── remediation.py  #   fail-closed 隔离 worktree candidate worker
 │
 ├── eval/               # 质量评估（与 AIHOT 对比）
@@ -217,7 +217,7 @@ data/sources.toml
 
 ## Performance Monitoring and Remediation
 
-`performance-probe` 是 CLI 入口层下的只读浏览器探针：依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定，按 `.pipeline.lock/pid` 把样本分为 idle、busy 或 unknown。`performance/journey_monitor.py` 将样本和 `PERF:*` 告警状态写入 `logs/performance/`，idle/busy 独立窗口判定，unknown 不进入合规窗口；样本和诊断证据保留 14 天。busy firing 只有在同 `(journey,vantage)` 的 idle 有足以形成三个完整窗口的 22 个样本且 not-firing 时降为 notice，否则 fail-closed 保留 page；notice busy 子项在进入状态机前合并为 `PERF:rollup:busy`。两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
+`performance-probe` 是 CLI 入口层下的只读浏览器探针：专属 per-file LaunchAgent 以 `StartInterval=300` 经 `./run.sh performance-probe` 启动，依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定。每条旅程测量前后都读取 `.pipeline.lock` 与 pipeline 持久 activity generation；只有两端都证明 idle 且 generation 未变时，`performance/journey_monitor.py` 才把该样本写入 `logs/performance/`，并让 `PERF:<journey>:<vantage>:idle` 窗口消费它。pipeline 正在运行、owner 不可信或测量期间 activity 变化时跳过该次旅程尝试，不保存对应样本、不让 non-idle 输入进入规则。每个 cell 保留 20 个 warm samples + 3 个逐样本窗口，首个 confirmed firing 需要 22 条有效 idle 样本，P75/P95 超预算或 hard failure 连续满足确认窗后直接输出 page。样本和诊断证据保留 14 天；两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
 
 ### Alert state → delivery → ledger → remediation
 
@@ -238,9 +238,9 @@ performance remediation ──只读 lifecycles.page firing
 
 `admin/alerts.py` 以每个 `rule_id` 下的 `lifecycles` map 作为状态真源；`page` 与 `notice` 分别保存 `state`、`since`、`last_notified`、`detail` 和 `announced`。无 `lifecycles` 的旧 flat entry 在读取时被规范化到其记录的 severity（缺失则保守视为 page），之后统一写新形状。顶层 `state/since/last_notified/detail/severity/announced` 仅是供旧 reader 使用的兼容投影；当异常 state 同时含 firing page 和 notice 时，投影优先 page，避免隐藏高严重度。
 
-状态机只在 firing transport 成功后更新 announced / `last_notified`；失败 firing 下轮重试。severity 转换时先关闭另一 firing lifecycle，已 announced 的旧 episode 先沿原 severity resolved，再尝试新 severity firing；pending 且未送达的旧 episode 静默关闭。每个 severity 保留自己的 debounce / cooldown 计时器。成功 sender invocation 同时以 `{ts,rule_id,severity,type,detail,values,channel}` 写入 notification-only JSONL ledger；它不是状态真源，写入失败 fail-open，不阻断 delivery 或 state 持久化。
+状态机只在 firing transport 成功后更新 announced / `last_notified`；未投递成功的 pending firing 或 resolved 都在下轮重试。severity 转换时先关闭另一 firing lifecycle，已 announced 的旧 episode 先沿原 severity resolved，再尝试新 severity firing；pending 且从未成功公告的旧 firing episode 静默关闭。每个 severity 保留自己的 debounce / cooldown 计时器。投递契约是 at-least-once：发送和状态持久化之间不能原子提交，重试使用发送前持久化的 notification nonce，并把 rule/severity/event/nonce/episode identity 传给 `im-notify` 的 signature ledger 抑制同一意图的重复可见消息；不宣称 exactly-once。成功 sender invocation 同时以 `{ts,rule_id,severity,type,detail,values,channel}` 写入 notification-only JSONL ledger；它不是状态真源，写入失败 fail-open，不阻断 delivery 或 state 持久化。
 
-confirmed `PERF:*` incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 对新 state 直接以 `lifecycles.page` firing 为权威 incident，不依赖可能 stale 的顶层投影；仅对无 `lifecycles` 的旧 entry 回退为 flat page，所以 notice-only `PERF:rollup:busy` 不会触发 remediation。remediation 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
+confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 对新 state 直接以 `lifecycles.page` firing 为权威 incident，不依赖可能 stale 的顶层投影；仅对无 `lifecycles` 的旧 entry 回退为 flat page。remediation 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
 
 ## Database
 
@@ -403,7 +403,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | openai | LLM API 客户端（OpenAI SDK 兼容接口） |
 | trafilatura | HTML 正文提取 |
 | beautifulsoup4 | 微信公众号 HTML 解析 |
-| Playwright + Chromium | 微信公众号原文抓取浏览器运行时 |
+| Playwright + Chromium | 微信公众号原文抓取 + 默认 `performance-probe` 四旅程测量的浏览器运行时 |
 | Mp2RSS | 微信公众号发现层，将已订阅公众号暴露为 RSS/Atom |
 | markdown-it-py | 微信文章解读详情页 markdown 渲染 |
 | nh3 | 微信文章解读详情页 HTML sanitizer |

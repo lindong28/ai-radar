@@ -49,16 +49,16 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 | A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
 | A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 查 RSS / X(fedi) / 微信 Mp2RSS 源可用性、`./run.sh fetch` 输出 |
 
-告警状态存储在 `data/alert-state.json`。每个 `rule_id` 内的 `page` / `notice` 有各自的 lifecycle、debounce、`since`、`last_notified` 与 30 分钟 cooldown，不会被另一 severity 的计时器节流。A4 的 `page` debounce 为 0（items-floor 首轮即 page），`notice` debounce 为 30 分钟（fetch-only 持续超窗才通知）。severity 转换时，已成功 announced 的旧 episode 先在原通道 resolved，再在新通道 firing；仍在 debounce 且从未成功投递的旧 episode 静默关闭，不伪造 resolved。firing 仅在 transport 成功后才记为 announced 并进入 cooldown；失败会在下轮重试。resolved 是 best-effort，失败不重试。
+告警状态存储在 `data/alert-state.json`。每个 `rule_id` 内的 `page` / `notice` 有各自的 lifecycle、debounce、`since`、`last_notified` 与 30 分钟 cooldown，不会被另一 severity 的计时器节流。A4 的 `page` debounce 为 0（items-floor 首轮即 page），`notice` debounce 为 30 分钟（fetch-only 持续超窗才通知）。severity 转换时，已成功 announced 的旧 episode 先在原通道 resolved，再在新通道 firing；仍在 debounce 且从未成功投递的旧 episode 静默关闭，不伪造 resolved。firing 仅在 transport 成功后才记为 announced 并进入 cooldown；未投递成功的 pending firing 或 resolved 都在下轮重试。投递语义是 at-least-once：发送前持久化的 notification nonce 保持重试 signature 稳定，由 `im-notify` 的持久 signature dedup 抑制同一意图的用户可见重复，不宣称 exactly-once。
 
 ### 已送达通知历史
 
-A1–A4 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。它是 notification-only ledger：只有 transport 返回成功的 firing / resolved 才每次追加一行，不记失败 attempt。字段为 `ts`、`rule_id`、`severity`、`type`、`detail`、`values`、`channel`；PERF busy rollup 的子 cell 在 `values.cells` 中。例如：
+A1–A4 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。它是 notification-only ledger：只有 transport 返回成功的 firing / resolved 才每次追加一行，不记失败 attempt。字段为 `ts`、`rule_id`、`severity`、`type`、`detail`、`values`、`channel`。例如：
 
 ```bash
 tail -n 50 data/alert-events.jsonl | jq .
 jq -c 'select(.severity == "page" and .type == "firing")' data/alert-events.jsonl
-jq -c 'select(.rule_id == "PERF:rollup:busy")' data/alert-events.jsonl
+jq -c 'select(.rule_id | startswith("PERF:"))' data/alert-events.jsonl
 ```
 
 ledger 在每次成功写入时裁掉 14 天前的事件。A1–A4 与 PERF 可并发写入，因此用稳定的 `data/alert-events.lock` sidecar 做 `flock`；锁等待最多 1 秒。读取前有 64 MiB 成本熔断上限。损坏 JSON、非普通文件、锁超时、超限或写入失败都 fail-open：记错误日志并跳过本批 ledger，不覆盖原文件，不阻断通知投递或告警状态持久化。因此 ledger 是便于查询的非权威已送达历史，不是 attempt 或状态真源。
@@ -79,13 +79,21 @@ ledger 在每次成功写入时裁掉 14 天前的事件。A1–A4 与 PERF 可�
 | `wechat.detail.readable` | 2000ms | 3000ms |
 | `wechat.pagination.settle` | 1000ms | 1500ms |
 
-规则 key 为 `PERF:<journey>:<vantage>:<load_class>`。探针在每条旅程测量前后读取 `.pipeline.lock/pid`：两次都确认同一个运行中 pipeline 时记为 `busy`，两次都无锁时记为 `idle`，死 PID、坏锁或测量期间状态变化记为 `unknown`。idle 与 busy 独立评估，unknown 只留样本、不进入合规窗口。
+规则 key 固定为 `PERF:<journey>:<vantage>:idle`。探针在每条旅程测量前后读取 `.pipeline.lock` 的 owner 证明与 pipeline 持久 activity generation；只有两端都证明 pipeline 空闲且 generation 未变时，才保存该 idle 样本并让 PERF 窗口消费它。pipeline 正在运行、owner 不可信或测量期间 activity 变化时跳过该次旅程尝试：不保存对应样本、不让 non-idle 输入进入规则。PERF 不再采集或评估 busy cell，也没有 busy→idle 降级 gate、busy-specific severity/message 或共因 rollup。
 
-每个规则先积累 20 个样本，再用 nearest-rank P75/P95 评估最近窗口；P75/P95 任一超预算或窗口含 hard failure 都算该窗口违规，最近 3 个逐样本前进窗口都违规才进入 firing。按建议的每小时 cadence，且同一 `vantage × load_class` 每小时都恰好取得一个有效样本时，从零样本到 confirmed firing 的理论最短时间约 22 小时（20 个 warm samples + 2 个前进窗口）。idle/busy 分流或 unknown 样本会继续拉长确认时间，因此 22 小时不是检测延迟上界，更不能按分钟级告警理解。
+每个 cell 先积累 20 个样本，再用 nearest-rank P75/P95 评估最近窗口；P75/P95 任一超预算或窗口含 hard failure 都算该窗口违规，最近 3 个逐样本前进窗口都违规才进入 firing。因而从零样本到首个可 confirmed firing 需要 `WARM_SAMPLES + CONFIRMATION_WINDOWS - 1 = 22` 条有效 idle 样本；达到确认窗后直接以 `page` severity 投递，不降为 notice。这是“上膛”时间：表示冷启动或样本清空后，cell 重新具备发出 confirmed page 的最短数据准备过程，不代表每个退化都固定延迟同样时长，更不是每 5 分钟即时 page。
 
-busy cell 只在同一 `(journey, vantage)` 的 idle cell 同时满足两个条件时降为 `notice`：idle 至少有 `WARM_SAMPLES + CONFIRMATION_WINDOWS - 1 = 22` 个样本，且当前 not-firing。idle 也 firing、不存在或少于 22 个样本时都 fail-closed 保留 `page`；idle cell 自身 firing 始终是 `page`。本轮**只移除了 `public → origin` 的跨-vantage gate**：origin 无法覆盖 Cloudflare/tunnel 公网失败面，所以 public busy 不会因 origin 干净而降级；它仍由自己的 public idle cell 把关。
+2026-07-26 的 L2-4 live 证明中，生产 pipeline 约 60% 时间处于运行态，idle 窗稀疏；每个启用 cell 约每 14 分钟取得 1 条 idle 样本。4 条旅程 × origin/public 共 8 个 cell 都在 296 分钟（4.93 小时）取得第 22 条样本，满足预固定的 6 小时硬门槛，但只剩约 1.07 小时裕度。这个 PASS 依赖 pipeline 不比测量时更忙：源数量、interpret 时长或单轮 pipeline 占比继续上升都会吃掉裕度。运维必须持续监督“每个启用 cell 从零到 22 条 ≤6h”；任一 cell 超过 6 小时都表示 idle-only + 20+3 在当前负载下不再满足时效契约，不能靠放宽门槛结案。
 
-同一轮所有经上述 gate 降级的 busy notice cell（一条或多条）会合并成唯一 `PERF:rollup:busy` notice，明细与最严重子项保留在消息及 `values.cells`。个体 busy notice 不再各自进入状态机或 ledger；page 级 PERF cell 仍独立投递，不并入 rollup。全部 notice busy 子项恢复时，rollup 以同一 lifecycle 发一条 resolved。
+### Liveness、投递语义与已知限制
+
+- LaunchAgent 的 `ProgramArguments` 经 `./run.sh performance-probe` 启动。`run.sh` 的外部进程 watchdog 在 16 分钟终止超时 probe；进程内另有 15 分钟 `SIGALRM`，负责杀 browser worker 进程组并退出，作为第二层兜底。两层都远短于 6 小时样本时效门槛。
+- 单次旅程测量在父进程 primary cutoff（`timeout + startup grace`）后，基于 worker 结果发布或进程退出的**有界 readiness**（`BROWSER_WORKER_EXIT_GRACE_SECONDS`）收集结果。已接受的 documented limitation：worker 若在 cutoff 后**超过该 grace** 才发布已判定的真实 site 故障（需恰在超时边界发生 >grace 的 scheduler 暂停，天文级罕见），该真故障会被归为 `worker_unavailable` infra、不进入 22 样本窗口。这是"严格 bounded liveness"与"无界 scheduler pause 零丢失"不可兼得的取舍——放宽等待会违反上面两层 watchdog 门槛；真正静默的 worker 仍确定性进入 infra。
+- PERF 通知契约是 **at-least-once + `im-notify` dedup**，不是 exactly-once。发送和状态持久化无法原子提交；状态机在发送前持久化 notification nonce，同一意图的 crash retry 复用 nonce，不同 cooldown reminder / severity 往返分配新 nonce。真实 sender 把 rule/severity/event/nonce/episode identity 交给 `im-notify` 的持久 signature ledger，抑制同一意图的重复可见消息。`data/alert-events.jsonl` 只是成功投递历史，不承担去重权威。
+- 刻意把 probe、外部 watchdog 及其整棵进程树持续 `SIGSTOP` 超过 6 小时且不恢复，会同时冻结两层 in-tree liveness 机制；需要独立于该进程树的外部/fleet watchdog 或操作员解除冻结。这是已接受的 documented limitation。
+- 生命周期脚本按单操作员使用设计，不支持并发执行同一服务的 install + uninstall；并发调用可能产生最终状态竞争。
+- 恶意调用者在生命周期操作中途替换受信 `HOME` / `Library/LaunchAgents` 路径组件，超出该手动部署工具的 threat model。
+- 若外来 job 刻意同时冒用本项目的精确 launchd label、精确 generated plist 路径，且本项目 destination 也存在，`launchctl` canonicalize 后无法与 genuine legacy/current job 区分。不要把 label 或路径交给不受信调用者控制。
 
 | 资产 | 默认路径 | 保留策略 |
 |---|---|---|
@@ -95,9 +103,9 @@ busy cell 只在同一 `(journey, vantage)` 的 idle cell 同时满足两个条�
 | remediation 状态/锁 | `logs/performance/remediation-state.json`、`logs/performance/remediation.lock` | 防止同一 firing episode 重复处理或并发启动 |
 | remediation 证据 | `logs/performance/remediation-evidence/` | worker 成功、失败与边界拒绝记录 |
 
-### 安装每小时调度
+### 安装 5 分钟 launchd 调度
 
-先用 `--help` 核对当前版本内置的 cron 样例，再手工冒烟：
+先用 `--help` 核对当前版本给出的 launchd 安装入口，再手工冒烟：
 
 ```bash
 ./run.sh performance-probe --help
@@ -105,16 +113,18 @@ busy cell 只在同一 `(journey, vantage)` 的 idle cell 同时满足两个条�
 ./run.sh performance-probe
 ```
 
-U4 发现的 homepage `hard_failure=true` 假阳性已修复：浏览器现在把首 12 条 SSR/prepaint ID 当作完整渲染列表的前缀，不再要求两者长度相等。但这不代替部署后运维验证：在手工 probe 确认 homepage `hard_failure=false` 且 homepage `PERF:*` 非 firing 前，**只安装 probe，不启用 remediation cron**。下面命令通过 marker 替换旧 probe 行，重复执行保持幂等，并为 cron 显式设置 `uv` / `codex` 所需 PATH：
+U4 发现的 homepage `hard_failure=true` 假阳性已修复：浏览器现在把首 12 条 SSR/prepaint ID 当作完整渲染列表的前缀，不再要求两者长度相等。但这不代替部署后运维验证：在手工 probe 确认 homepage `hard_failure=false` 且 homepage `PERF:*` 非 firing 前，**只安装 probe，不启用 remediation cron**。
+
+probe 使用专属 `live.aiplanet.ai-radar.performance-probe.plist`，`StartInterval=300`、`RunAtLoad=true`，并始终经 `./run.sh performance-probe` 进入 external watchdog。`install.sh` 以 per-file regular plist 放置到 `~/Library/LaunchAgents/`，按 destination + label/path ownership fail closed，并迁移精确指向本仓库 generated plist 的 legacy symlink；它不会编辑共享 crontab。pipeline 自身仍由既有 `*/15` user crontab 调度，未迁移。
 
 ```bash
-repo=$PWD
-{ crontab -l 2>/dev/null | sed '/# ai-radar-performance-probe$/d'
-  printf '17 * * * * cd "%s" && PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-probe >> logs/performance-probe-cron.log 2>&1 # ai-radar-performance-probe\n' "$repo"
-} | crontab -
+./install.sh performance-probe
+./status.sh performance-probe
+# 移除时：
+./uninstall.sh performance-probe
 ```
 
-部署包含上述修复的版本后，用手工 probe 确认 homepage `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing；两项都满足后，才先手工运行一次 remediation，再安装排在 probe 之后的 cron：
+部署包含上述修复的版本后，用手工 probe 确认 homepage `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing；两项都满足后，才先手工运行一次 remediation，再按需安装它自己的独立 cron：
 
 ```bash
 ./run.sh performance-remediate
@@ -125,11 +135,11 @@ repo=$PWD
 } | crontab -
 ```
 
-`performance-remediate` **只消费 page incident**：对新状态它直接读取权威的 `lifecycles.page` firing episode，不信任顶层兼容投影；只有无 `lifecycles` 的旧 flat state 才回退到顶层，缺 severity 时按 page 兼容。因此 `PERF:rollup:busy` notice 不会启动 remediation。它不会二次判断上游 hard failure 的真伪，所以即使 homepage 误标缺陷已修复，仍必须以部署后 `hard_failure=false` 且 homepage page lifecycle 非 firing 作为启用条件。worker 以 nonblocking lock 保证单 active，单次最长 3600 秒；Codex 固定使用 `--ignore-user-config --sandbox workspace-write` 和 `approval_policy="never"`，只允许隔离 worktree 写入。worker 不获得 push、deploy、launchctl 或生产数据库写入口；任何 preflight 无法证明边界时 fail closed、告警并留证。成功结果是 worktree 内的 detached 本地 candidate commit 和摘要，仍需站长审阅与显式授权后才能进入部署流程。
+`performance-remediate` **只消费 page incident**：对新状态它直接读取权威的 `lifecycles.page` firing episode，不信任顶层兼容投影；只有无 `lifecycles` 的旧 flat state 才回退到顶层，缺 severity 时按 page 兼容。它不会二次判断上游 hard failure 的真伪，所以即使 homepage 误标缺陷已修复，仍必须以部署后 `hard_failure=false` 且 homepage page lifecycle 非 firing 作为启用条件。worker 以 nonblocking lock 保证单 active，单次最长 3600 秒；Codex 固定使用 `--ignore-user-config --sandbox workspace-write` 和 `approval_policy="never"`，只允许隔离 worktree 写入。worker 不获得 push、deploy、launchctl 或生产数据库写入口；任何 preflight 无法证明边界时 fail closed、告警并留证。成功结果是 worktree 内的 detached 本地 candidate commit 和摘要，仍需站长审阅与显式授权后才能进入部署流程。
 
 ### 边缘缓存与旅程延迟
 
-public vantage 的旅程延迟受 Cloudflare 边缘缓存直接影响：`/`、`/wechat` 及其分页 API 的安全分页变体经 `AI Radar short public pagination TTL` Cache Rule 在边缘命中后，翻页 API 实测从 3-5s 降到 0.5-1.4s。注意这是 **API 层**改善——完整浏览器旅程 `wechat.pagination.settle` 的 settle 时间因还含渲染/交互开销，边缘缓存后单样本仍略高于 1500ms 预算，其 P95 是否达标待 hourly probe 积累样本确认；`homepage.first_card` 同理以样本为准，不因 API 提速即判定旅程达标。评估 public 样本回归前，先确认缓存仍在生效——冷缓存或规则失效会让 public 延迟整体回升，但不代表 origin 或 pipeline 退化。验证同一 URL 第二次请求为 `CF-Cache-Status: HIT`、`q=` 请求为 `DYNAMIC` + `private, no-store`；Cache Rule 配置、origin 头契约与完整验证命令见 [services.md §Cloudflare Cache Rule](services.md#cloudflare-cache-rulepublic-分页边缘缓存)。origin vantage 不经 CF，故不反映边缘缓存效果，可用来区分"缓存回退"与"真实后端退化"。
+public vantage 的旅程延迟受 Cloudflare 边缘缓存直接影响：`/`、`/wechat` 及其分页 API 的安全分页变体经 `AI Radar short public pagination TTL` Cache Rule 在边缘命中后，翻页 API 实测从 3-5s 降到 0.5-1.4s。注意这是 **API 层**改善——完整浏览器旅程 `wechat.pagination.settle` 的 settle 时间因还含渲染/交互开销，边缘缓存后单样本仍略高于 1500ms 预算，其 P95 是否达标待 idle-only probe 积累样本确认；`homepage.first_card` 同理以样本为准，不因 API 提速即判定旅程达标。评估 public 样本回归前，先确认缓存仍在生效——冷缓存或规则失效会让 public 延迟整体回升，但不代表 origin 或 pipeline 退化。验证同一 URL 第二次请求为 `CF-Cache-Status: HIT`、`q=` 请求为 `DYNAMIC` + `private, no-store`；Cache Rule 配置、origin 头契约与完整验证命令见 [services.md §Cloudflare Cache Rule](services.md#cloudflare-cache-rulepublic-分页边缘缓存)。origin vantage 不经 CF，故不反映边缘缓存效果，可用来区分"缓存回退"与"真实后端退化"。
 
 ## `im-notify` 飞书双通道
 

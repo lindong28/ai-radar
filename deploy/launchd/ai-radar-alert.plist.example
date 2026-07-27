@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- ai-radar:managed-launch-agent:v1 -->
   <key>Label</key><string>live.aiplanet.ai-radar.alert</string>
   <key>ProgramArguments</key>
   <array>

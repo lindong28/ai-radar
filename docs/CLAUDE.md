@@ -89,6 +89,7 @@
 | [008-alert-severity-lifecycles.md](adr/008-alert-severity-lifecycles.md) | 告警按 severity 维护独立 lifecycle，并保留 page-preferring 兼容投影 |
 | [009-alert-notification-ledger.md](adr/009-alert-notification-ledger.md) | 用有界、fail-open 的 JSONL 记录已送达告警通知 |
 | [010-db-slimming-clear-regenerable-cache.md](adr/010-db-slimming-clear-regenerable-cache.md) | radar.db 瘦身选清可再生 summary 缓存（Option A）+ 常驻保留 + 历史 digest TTL |
+| [011-perf-idle-only-probing.md](adr/011-perf-idle-only-probing.md) | PERF 改为 idle-only 探测并用 per-file launchd 调度（仅 supersede ADR-008 的 PERF F1/F4） |
 
 ### docs/experiences/ [Agent]
 

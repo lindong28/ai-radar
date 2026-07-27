@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- ai-radar:managed-launch-agent:v1 -->
+  <key>Label</key><string>live.aiplanet.ai-radar.performance-probe</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd /path/to/ai-radar &amp;&amp; mkdir -p logs &amp;&amp; PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-probe</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/ai-radar</string>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <!-- A 16-minute watchdog can overlap about four 5-minute slots; observe capacity during Phase 2b live validation. -->
+  <key>StandardOutPath</key><string>/path/to/ai-radar/logs/performance-probe-launchd.log</string>
+  <key>StandardErrorPath</key><string>/path/to/ai-radar/logs/performance-probe-launchd.err.log</string>
+</dict>
+</plist>

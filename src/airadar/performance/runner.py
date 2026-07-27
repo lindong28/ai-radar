@@ -24,7 +24,6 @@ class ProbeRuntime:
     origin_url: str
     public_url: str
     stage_ledger_root: Path
-    browser_lock_path: Path
     db_path: Path
 
 
@@ -36,7 +35,6 @@ def canonical_probe_runtime() -> ProbeRuntime:
         # (browser drivers) must not inherit the full dotenv secret surface.
         public_url=runtime_env.read_value("AI_RADAR_PUBLIC_URL"),
         stage_ledger_root=state_root / "stage-ledger",
-        browser_lock_path=state_root / "browser.lock",
         db_path=db.resolve_db_path(),
     )
 
@@ -238,7 +236,6 @@ def run_adapter(
             target=target,
             detail_slug=detail_slug,
             timeout_seconds=timeout,
-            lock_path=runtime.browser_lock_path,
             expected=expectation,
         )
         if browser_measurement.outcome != "observed":

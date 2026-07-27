@@ -12,7 +12,6 @@ def test_run_adapter_rejects_unconfigured_public_vantage(tmp_path: Path) -> None
         origin_url="http://origin.invalid",
         public_url="",
         stage_ledger_root=tmp_path / "ledger",
-        browser_lock_path=tmp_path / "browser.lock",
         db_path=tmp_path / "radar.db",
     )
     environ = {

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import argparse
+import fcntl
 import hashlib
 import json
+import logging
 import math
 import os
+import signal
 import sqlite3
 import subprocess
+import sys
+import tempfile
+import threading
+import time
 from collections import defaultdict
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,9 +27,18 @@ from ..admin.alerts import (
     DEFAULT_EVENT_PATH,
     AlertRuleResult,
     AlertSender,
+    _normalize_firing_basis,
+    _normalize_lifecycles,
+    _normalize_severity,
+    _project_lifecycles,
+    reserve_alert_evaluation_sequence,
     run_alert_results_state_machine,
 )
-from .browser_probe import measure_browser_journey
+from .browser_probe import (
+    PROBE_INFRA_FAILURE_OUTCOME,
+    measure_browser_journey,
+    terminate_active_browser_workers,
+)
 
 WARM_SAMPLES = 20
 CONFIRMATION_WINDOWS = 3
@@ -28,12 +47,19 @@ SAME_HOST_SCOPE = "same-host provisional; not a regional SLO"
 DEFAULT_SAMPLE_PATH = db.PROJECT_ROOT / "logs" / "performance" / "journey-samples.jsonl"
 DEFAULT_ALERT_STATE_PATH = db.PROJECT_ROOT / "logs" / "performance" / "alert-state.json"
 DEFAULT_EVIDENCE_DIR = db.PROJECT_ROOT / "logs" / "performance" / "evidence"
-DEFAULT_BROWSER_LOCK_PATH = db.PROJECT_ROOT / "logs" / "performance" / "browser.lock"
 DEFAULT_PIPELINE_LOCK_DIR = db.PROJECT_ROOT / ".pipeline.lock"
-PERF_BUSY_ROLLUP_RULE_ID = "PERF:rollup:busy"
-CRONTAB_SAMPLE = (
-    "17 * * * * cd /path/to/ai-radar && "
-    "./run.sh performance-probe >> logs/performance-probe-cron.log 2>&1"
+PROBE_OVERALL_TIMEOUT_SECONDS = 15 * 60
+PROBE_EXTERNAL_TIMEOUT_SECONDS = 16 * 60
+PROBE_EXTERNAL_KILL_AFTER_SECONDS = 5.0
+PROBE_TIMEOUT_EXIT_CODE = 124
+WATCHDOG_PARENT_POLL_SECONDS = 0.05
+LAUNCHD_INSTALL_HINT = "./install.sh performance-probe"
+_LOGGER = logging.getLogger(__name__)
+INFRA_HOLD_OUTCOMES = frozenset(
+    {
+        PROBE_INFRA_FAILURE_OUTCOME,
+        "incompatible",
+    }
 )
 
 
@@ -60,7 +86,6 @@ class JourneyMonitorRuntime:
     origin_url: str
     public_url: str
     pipeline_lock_dir: Path
-    browser_lock_path: Path
     db_path: Path
 
 
@@ -79,13 +104,75 @@ class JourneySample:
     request_url: str
 
 
+@dataclass(frozen=True, slots=True)
+class _PipelineActivitySnapshot:
+    load_class: str
+    generation: bytes | None
+    trustworthy: bool
+
+
+def _current_boot_id() -> str | None:
+    linux_boot_id = Path("/proc/sys/kernel/random/boot_id")
+    try:
+        if linux_boot_id.exists():
+            value = linux_boot_id.read_text(encoding="utf-8").strip()
+            return value or None
+        completed = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.boottime"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = completed.stdout.strip()
+    return value if completed.returncode == 0 and value else None
+
+
+def _process_start_identity(pid: int) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = " ".join(completed.stdout.split())
+    return value if completed.returncode == 0 and value else None
+
+
+def _read_pipeline_owner(lock_dir: Path) -> dict[str, str] | None:
+    try:
+        lines = (lock_dir / "owner").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    owner: dict[str, str] = {}
+    for line in lines:
+        key, separator, value = line.partition("=")
+        if not separator or not key or not value:
+            return None
+        owner[key] = value
+    required = {"token", "pid", "boot_id", "process_start"}
+    return owner if required <= owner.keys() else None
+
+
 def classify_pipeline_load(lock_dir: Path) -> str:
     if not lock_dir.exists():
         return "idle"
+    owner = _read_pipeline_owner(lock_dir)
+    if owner is None:
+        return "idle" if not lock_dir.exists() else "unknown"
     try:
-        raw_pid = (lock_dir / "pid").read_text(encoding="utf-8").strip()
-        pid = int(raw_pid)
+        pid = int(owner["pid"])
         if pid <= 0:
+            return "unknown"
+        if _current_boot_id() != owner["boot_id"]:
+            return "unknown"
+        if _process_start_identity(pid) != owner["process_start"]:
             return "unknown"
         os.kill(pid, 0)
     except (OSError, ValueError):
@@ -95,6 +182,47 @@ def classify_pipeline_load(lock_dir: Path) -> str:
 
 def _interval_load_class(before: str, after: str) -> str:
     return before if before == after and before in {"idle", "busy"} else "unknown"
+
+
+def _pipeline_activity_path(lock_dir: Path) -> Path:
+    return lock_dir.with_suffix(".activity")
+
+
+def _read_pipeline_activity(lock_dir: Path) -> _PipelineActivitySnapshot:
+    marker_path = _pipeline_activity_path(lock_dir)
+    try:
+        generation_before = marker_path.read_bytes()
+    except FileNotFoundError:
+        generation_before = None
+    except OSError:
+        return _PipelineActivitySnapshot("unknown", None, False)
+    load_class = classify_pipeline_load(lock_dir)
+    try:
+        generation_after = marker_path.read_bytes()
+    except FileNotFoundError:
+        generation_after = None
+    except OSError:
+        return _PipelineActivitySnapshot("unknown", None, False)
+    return _PipelineActivitySnapshot(
+        load_class if generation_before == generation_after else "unknown",
+        generation_after,
+        generation_before == generation_after,
+    )
+
+
+def _activity_interval_load_class(
+    before: _PipelineActivitySnapshot,
+    after: _PipelineActivitySnapshot,
+) -> str:
+    endpoint_class = _interval_load_class(before.load_class, after.load_class)
+    if (
+        endpoint_class != "idle"
+        or not before.trustworthy
+        or not after.trustworthy
+        or before.generation != after.generation
+    ):
+        return "unknown"
+    return "idle"
 
 
 def _detail_slug(db_path: Path) -> str:
@@ -176,16 +304,31 @@ def probe_journeys(
         if vantage == "same_host_public" and not base_url:
             continue
         for spec in JOURNEY_SPECS:
-            before = classify_pipeline_load(runtime.pipeline_lock_dir)
+            before = _read_pipeline_activity(runtime.pipeline_lock_dir)
+            if before.load_class != "idle" or not before.trustworthy:
+                continue
             measurement = measure_browser_journey(
                 base_url=base_url,
                 target=spec.target,
                 detail_slug=detail_slug,
                 timeout_seconds=spec.timeout_seconds,
-                lock_path=runtime.browser_lock_path,
                 expected=_probe_expectation(runtime.db_path, spec.target, detail_slug),
             )
-            after = classify_pipeline_load(runtime.pipeline_lock_dir)
+            after = _read_pipeline_activity(runtime.pipeline_lock_dir)
+            if (
+                _activity_interval_load_class(before, after) != "idle"
+                or measurement.outcome == "skipped_overlap"
+            ):
+                continue
+            if measurement.outcome != "observed":
+                _LOGGER.error(
+                    "performance probe infrastructure failure: journey=%s "
+                    "vantage=%s outcome=%s reason=%s",
+                    spec.journey,
+                    vantage,
+                    measurement.outcome,
+                    measurement.incompatible_reason or "unknown",
+                )
             samples.append(
                 JourneySample(
                     schema_version=1,
@@ -194,9 +337,9 @@ def probe_journeys(
                     target=spec.target,
                     vantage=vantage,
                     provisional=True,
-                    load_class=_interval_load_class(before, after),
+                    load_class="idle",
                     value_ms=float(measurement.value_ms),
-                    hard_failure=measurement.hard_failure or measurement.outcome != "observed",
+                    hard_failure=measurement.hard_failure,
                     outcome=measurement.outcome,
                     request_url=measurement.request_url,
                 )
@@ -212,8 +355,135 @@ def _parse_timestamp(value: object) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
+        return None
     return parsed.astimezone(UTC)
+
+
+@contextmanager
+def _sample_store_lock(path: Path) -> Iterator[bool]:
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with lock_path.open("a+") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _corrupt_hold_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".corrupt-hold")
+
+
+def _sample_cell_key(payload: dict[str, object]) -> str | None:
+    journey = payload.get("journey")
+    vantage = payload.get("vantage")
+    load_class = payload.get("load_class")
+    if not all(isinstance(value, str) and value for value in (journey, vantage, load_class)):
+        return None
+    return json.dumps([journey, vantage, load_class], separators=(",", ":"))
+
+
+def _rule_cell_key(rule_id: str) -> str | None:
+    parts = rule_id.split(":")
+    if len(parts) != 4 or parts[0] != "PERF":
+        return None
+    return json.dumps(parts[1:], separators=(",", ":"))
+
+
+def _load_corrupt_hold(path: Path) -> tuple[datetime | None, dict[str, datetime]]:
+    hold_path = _corrupt_hold_path(path)
+    if not hold_path.exists():
+        return None, {}
+    try:
+        payload = json.loads(hold_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, {}
+    if not isinstance(payload, dict):
+        return None, {}
+    observed_at = _parse_timestamp(payload.get("corrupt_input_observed_at"))
+    raw_recovered = payload.get("recovered_cells")
+    recovered: dict[str, datetime] = {}
+    if isinstance(raw_recovered, dict):
+        for key, value in raw_recovered.items():
+            parsed = _parse_timestamp(value)
+            if isinstance(key, str) and parsed is not None:
+                recovered[key] = parsed
+    return observed_at, recovered
+
+
+def _persist_corrupt_hold(
+    path: Path,
+    *,
+    observed_at: datetime,
+    recovered_cells: dict[str, datetime] | None = None,
+) -> None:
+    hold_path = _corrupt_hold_path(path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{hold_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(
+                {
+                    "corrupt_input_observed_at": observed_at.astimezone(UTC).isoformat(),
+                    "recovered_cells": {
+                        key: value.astimezone(UTC).isoformat()
+                        for key, value in sorted((recovered_cells or {}).items())
+                    },
+                },
+                stream,
+                sort_keys=True,
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, hold_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _record_recovered_cells(
+    path: Path,
+    payloads: list[dict[str, object]],
+    *,
+    current: datetime,
+) -> None:
+    hold_observed_at, recovered = _load_corrupt_hold(path)
+    if hold_observed_at is None:
+        return
+    changed = False
+    fresh_cutoff = current - timedelta(minutes=1)
+    for payload in payloads:
+        cell_key = _sample_cell_key(payload)
+        observed_at = _parse_timestamp(payload.get("observed_at"))
+        if (
+            cell_key is None
+            or observed_at is None
+            or observed_at < fresh_cutoff
+            or observed_at > current
+            or payload.get("outcome", "observed") != "observed"
+        ):
+            continue
+        if cell_key not in recovered:
+            recovered[cell_key] = current
+            changed = True
+    if changed:
+        _persist_corrupt_hold(
+            path,
+            observed_at=hold_observed_at,
+            recovered_cells=recovered,
+        )
 
 
 def store_samples(
@@ -221,36 +491,140 @@ def store_samples(
     samples: list[JourneySample] | list[dict[str, object]],
     *,
     now: datetime | None = None,
-) -> None:
+) -> bool | None:
     current = (now or datetime.now(UTC)).astimezone(UTC)
     cutoff = current - timedelta(days=RETENTION_DAYS)
-    payloads = _load_samples(path)
-    payloads.extend(asdict(sample) if isinstance(sample, JourneySample) else sample for sample in samples)
-    retained = [
-        payload
-        for payload in payloads
-        if (observed := _parse_timestamp(payload.get("observed_at"))) is None or observed >= cutoff
-    ]
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        for payload in retained:
-            stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    with _sample_store_lock(path) as acquired:
+        if not acquired:
+            return None
+        existing, corrupt_input = _read_samples(path)
+        retained_existing = [
+            payload
+            for payload in existing
+            if (observed := _parse_timestamp(payload.get("observed_at"))) is not None
+            and cutoff <= observed <= current
+        ]
+        retained_new = [
+            payload
+            for sample in samples
+            if (
+                observed := _parse_timestamp(
+                    (payload := asdict(sample) if isinstance(sample, JourneySample) else sample).get(
+                        "observed_at"
+                    )
+                )
+            )
+            is not None
+            and cutoff <= observed <= current
+        ]
+        if corrupt_input:
+            _persist_corrupt_hold(path, observed_at=current)
+        needs_compaction = corrupt_input or len(retained_existing) != len(existing)
+        if needs_compaction:
+            _replace_sample_file(path, [*retained_existing, *retained_new])
+            if not corrupt_input and retained_new:
+                _record_recovered_cells(path, retained_new, current=current)
+            return corrupt_input
+        if retained_new:
+            encoded = "".join(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+                for payload in retained_new
+            ).encode()
+            descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+            try:
+                offset = 0
+                while offset < len(encoded):
+                    written = os.write(descriptor, encoded[offset:])
+                    if written <= 0:
+                        raise OSError("short write while appending performance samples")
+                    offset += written
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            _record_recovered_cells(path, retained_new, current=current)
+        else:
+            path.touch(exist_ok=True)
+    return corrupt_input
 
 
-def _load_samples(path: Path) -> list[dict[str, object]]:
+def _replace_sample_file(path: Path, payloads: list[dict[str, object]]) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            for payload in payloads:
+                stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _SampleLoadResult:
+    rows: list[dict[str, object]]
+    corrupt_input: bool
+    hold_observed_at: datetime | None
+    recovered_cells: dict[str, datetime]
+    lock_acquired: bool
+    evaluation_sequence: int | None
+
+
+def _load_samples(
+    path: Path,
+    *,
+    now: datetime | None = None,
+    reserve_sequence: Callable[[], int] | None = None,
+) -> _SampleLoadResult:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _sample_store_lock(path) as acquired:
+        if not acquired:
+            return _SampleLoadResult([], False, None, {}, False, None)
+        rows, corrupt_input = _read_samples(path)
+        if corrupt_input:
+            _persist_corrupt_hold(path, observed_at=now or datetime.now(UTC))
+        hold_observed_at, recovered_cells = _load_corrupt_hold(path)
+        evaluation_sequence = reserve_sequence() if reserve_sequence is not None else None
+        return _SampleLoadResult(
+            rows,
+            corrupt_input,
+            hold_observed_at,
+            recovered_cells,
+            True,
+            evaluation_sequence,
+        )
+
+
+def _read_samples(path: Path) -> tuple[list[dict[str, object]], bool]:
     if not path.exists():
-        return []
+        return [], False
     rows: list[dict[str, object]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        payload = json.loads(line)
-        if not isinstance(payload, dict):
-            raise ValueError("journey sample must be a JSON object")
-        rows.append(payload)
-    return rows
+    corrupt_input = False
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                corrupt_input = True
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+            else:
+                corrupt_input = True
+    return rows, corrupt_input
 
 
 def _nearest_rank(values: list[float], percentile: float) -> float:
@@ -275,57 +649,36 @@ def _format_milliseconds(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.0f}ms"
 
 
-def _numeric_value(value: object) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError("PERF result value must be numeric")
-    return float(value)
-
-
-def _with_firing_message(result: AlertRuleResult, *, gate_reason: str) -> AlertRuleResult:
+def _with_firing_message(result: AlertRuleResult) -> AlertRuleResult:
     vantage = result.values["vantage"]
-    if gate_reason == "idle_clean":
-        impact = (
-            "同机合成探针，与 pipeline 并发、疑似主机 CPU 争用；"
-            "idle 视角正常，用户大概率无感"
-        )
-        urgency = "否——除非 idle 视角也超标"
-    elif gate_reason == "idle_firing":
-        impact = "同机合成探针在 busy 与同视角 idle 均超标，已确认同视角真实退化，用户可能受影响"
-        urgency = "是"
-    elif gate_reason == "idle_cell" and vantage == "same_host_public":
+    if vantage == "same_host_public":
         impact = "同机公网路径 idle 合成探针超标，已确认公网路径退化，用户可能受影响"
-        urgency = "是"
-    elif gate_reason == "idle_cell":
-        impact = "同机 origin 路径 idle 合成探针超标，已确认同视角真实退化，用户可能受影响"
-        urgency = "是"
-    elif gate_reason in {"idle_absent", "idle_insufficient"}:
-        evidence_state = "当前无 idle 样本" if gate_reason == "idle_absent" else "当前 idle 样本不足"
-        impact = (
-            f"影响未知：缺少足量同视角 idle 背书（{evidence_state}），"
-            "无法排除用户影响，故保守 page；请补采/核查 idle evidence"
-        )
-        urgency = "是"
     else:
-        raise ValueError(f"unrecognized PERF gate_reason: {gate_reason}")
-    return replace(
-        result,
-        impact=impact,
-        urgency=urgency,
-        values={**result.values, "gate_reason": gate_reason},
-    )
+        impact = "同机 origin 路径 idle 合成探针超标，已确认同视角真实退化，用户可能受影响"
+    return replace(result, impact=impact, urgency="是")
 
 
-def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRuleResult]:
+def evaluate_performance_rules(
+    samples: list[dict[str, object]],
+    *,
+    now: datetime | None = None,
+) -> list[AlertRuleResult]:
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    cutoff = current - timedelta(days=RETENTION_DAYS)
     grouped: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     for sample in samples:
         journey = sample.get("journey")
         vantage = sample.get("vantage")
         load_class = sample.get("load_class")
         value = sample.get("value_ms")
+        observed = _parse_timestamp(sample.get("observed_at"))
         if (
             journey not in _SPEC_BY_JOURNEY
             or vantage not in {"same_host_origin", "same_host_public"}
-            or load_class not in {"idle", "busy"}
+            or load_class != "idle"
+            or sample.get("outcome", "observed") != "observed"
+            or observed is None
+            or not cutoff <= observed <= current
             or isinstance(value, bool)
             or not isinstance(value, int | float)
             or not math.isfinite(float(value))
@@ -336,6 +689,10 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
 
     results_by_cell: dict[tuple[str, str, str], AlertRuleResult] = {}
     for (journey, vantage, load_class), rows in sorted(grouped.items()):
+        rows.sort(
+            key=lambda row: _parse_timestamp(row.get("observed_at"))
+            or datetime.min.replace(tzinfo=UTC)
+        )
         spec = _SPEC_BY_JOURNEY[journey]
         available_windows = max(0, len(rows) - WARM_SAMPLES + 1)
         streak = 0
@@ -367,7 +724,7 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
             detail=detail,
             action=(
                 "查看 logs/performance/evidence/ 中最新证据，"
-                "核对近期样本、CPU、pipeline 与同视角 idle 观测。"
+                "核对近期 idle 样本、CPU 与服务状态。"
             ),
             values={
                 "journey": journey,
@@ -383,35 +740,12 @@ def evaluate_performance_rules(samples: list[dict[str, object]]) -> list[AlertRu
                 "p95_budget_ms": spec.p95_budget_ms,
                 "provisional": True,
             },
+            firing_basis="observed" if firing else None,
         )
 
-    minimum_firing_samples = WARM_SAMPLES + CONFIRMATION_WINDOWS - 1
     results: list[AlertRuleResult] = []
-    for (journey, vantage, load_class), result in results_by_cell.items():
-        if not result.firing:
-            results.append(result)
-            continue
-        if load_class == "idle":
-            results.append(_with_firing_message(result, gate_reason="idle_cell"))
-            continue
-
-        idle_key = (journey, vantage, "idle")
-        idle_result = results_by_cell.get(idle_key)
-        if idle_result is None:
-            gate_reason = "idle_absent"
-        elif len(grouped[idle_key]) < minimum_firing_samples:
-            gate_reason = "idle_insufficient"
-        elif idle_result.firing:
-            gate_reason = "idle_firing"
-        else:
-            results.append(
-                _with_firing_message(
-                    replace(result, severity="notice"),
-                    gate_reason="idle_clean",
-                )
-            )
-            continue
-        results.append(_with_firing_message(result, gate_reason=gate_reason))
+    for result in results_by_cell.values():
+        results.append(_with_firing_message(result) if result.firing else result)
     return results
 
 
@@ -425,103 +759,81 @@ def _load_alert_state(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _announced_firing_entry(entry: object) -> bool:
-    if not isinstance(entry, dict) or entry.get("state") != "firing":
-        return False
-    last_notified = _parse_timestamp(entry.get("last_notified"))
-    since = _parse_timestamp(entry.get("since"))
-    return last_notified is not None and (since is None or last_notified >= since)
+def _is_retired_busy_rule(rule_id: str) -> bool:
+    parts = rule_id.split(":")
+    return rule_id == "PERF:rollup:busy" or (
+        len(parts) == 4 and parts[0] == "PERF" and parts[-1] == "busy"
+    )
 
 
-def _roll_up_notice_busy_results(
-    results: list[AlertRuleResult],
-    *,
-    previous_state: dict[str, Any],
-) -> list[AlertRuleResult]:
-    notice_busy = [
-        result
-        for result in results
-        if result.firing
-        and result.severity == "notice"
-        and result.values.get("load_class") == "busy"
-    ]
-    suppressed_rule_ids = {result.rule_id for result in notice_busy}
-    rolled_up = [result for result in results if result.rule_id not in suppressed_rule_ids]
+def _project_previous_alert_entry(entry: object) -> dict[str, object] | None:
+    if not isinstance(entry, dict):
+        return None
+    preferred_severity = _normalize_severity(entry.get("severity"))
+    return _project_lifecycles(
+        _normalize_lifecycles(entry),
+        preferred_severity=preferred_severity,
+    )
 
-    if notice_busy:
-        cells = [
-            {
-                "journey": result.values["journey"],
-                "vantage": result.values["vantage"],
-                "p75_ms": result.values["p75_ms"],
-                "p95_ms": result.values["p95_ms"],
-                "p75_budget_ms": result.values["p75_budget_ms"],
-                "p95_budget_ms": result.values["p95_budget_ms"],
-            }
-            for result in notice_busy
-        ]
-        most_severe = max(
-            range(len(cells)),
-            key=lambda index: _numeric_value(cells[index]["p95_ms"])
-            / max(_numeric_value(cells[index]["p95_budget_ms"]), 1.0),
-        )
-        cells[most_severe]["most_severe"] = True
-        itemized = []
-        for index, cell in enumerate(cells):
-            marker = "（最严重）" if index == most_severe else ""
-            itemized.append(
-                f"- {cell['journey']} [{cell['vantage']}]："
-                f"p95 实测 {_format_milliseconds(_numeric_value(cell['p95_ms']))} vs 预算 "
-                f"{_format_milliseconds(_numeric_value(cell['p95_budget_ms']))}{marker}"
-            )
-        impact = (
-            "同机合成探针，与 pipeline 并发、疑似主机 CPU 争用；"
-            "idle 视角正常，用户大概率无感"
-        )
-        rolled_up.append(
-            AlertRuleResult(
-                rule_id=PERF_BUSY_ROLLUP_RULE_ID,
-                title=f"性能自测：pipeline 运行期间 {len(cells)} 条 busy 旅程探针超预算",
-                firing=True,
-                detail=f"{impact}；明细：\n" + "\n".join(itemized),
-                action="查看 logs/performance/evidence/ 中最新合成证据，并核对主机 load。",
-                values={"load_class": "busy", "cells": cells},
-                severity="notice",
-                impact=impact,
-                urgency="否——除非 idle 视角也超标",
-            )
-        )
-    elif isinstance(previous_state.get(PERF_BUSY_ROLLUP_RULE_ID), dict) and previous_state[
-        PERF_BUSY_ROLLUP_RULE_ID
-    ].get("state") == "firing":
-        rolled_up.append(
-            AlertRuleResult(
-                rule_id=PERF_BUSY_ROLLUP_RULE_ID,
-                title="性能自测 busy 旅程探针",
-                firing=False,
-                detail="本轮已无 notice 级 busy PERF 子项；合成告警恢复",
-                action="none",
-                values={"load_class": "busy", "cells": []},
-                severity="notice",
-            )
-        )
 
-    for result in notice_busy:
-        entry = previous_state.get(result.rule_id)
-        if not _announced_firing_entry(entry):
+def _pending_firing_result(
+    rule_id: str,
+    entry: object,
+) -> AlertRuleResult | None:
+    if not isinstance(entry, dict):
+        return None
+    parts = rule_id.split(":")
+    if len(parts) != 4 or parts[0] != "PERF" or parts[-1] != "idle":
+        return None
+    for severity, lifecycle in _normalize_lifecycles(entry).items():
+        pending = lifecycle.get("pending_notification")
+        if (
+            lifecycle.get("state") != "firing"
+            or not isinstance(pending, dict)
+            or pending.get("event_type") != "firing"
+        ):
             continue
-        assert isinstance(entry, dict)
-        rolled_up.append(
+        detail = lifecycle.get("detail")
+        result = AlertRuleResult(
+            rule_id=rule_id,
+            title=f"旅程性能退化 {parts[1]}",
+            firing=True,
+            detail=detail if isinstance(detail, str) else "性能告警待投递",
+            action=(
+                "查看 logs/performance/evidence/ 中最新证据，"
+                "核对近期 idle 样本、CPU 与服务状态。"
+            ),
+            values={
+                "journey": parts[1],
+                "vantage": parts[2],
+                "load_class": parts[3],
+            },
+            severity=_normalize_severity(severity),
+            firing_basis=_normalize_firing_basis(lifecycle.get("firing_basis")),
+        )
+        return _with_firing_message(result)
+    return None
+
+
+def _retired_busy_results(previous_state: dict[str, Any]) -> list[AlertRuleResult]:
+    results: list[AlertRuleResult] = []
+    for rule_id, entry in previous_state.items():
+        projected = _project_previous_alert_entry(entry)
+        if not _is_retired_busy_rule(rule_id) or projected is None:
+            continue
+        if projected.get("state") != "firing":
+            continue
+        results.append(
             AlertRuleResult(
-                rule_id=result.rule_id,
-                title=result.title,
+                rule_id=rule_id,
+                title="性能自测旧 busy 告警",
                 firing=False,
-                detail="已迁移到 PERF:rollup:busy；旧个体 busy 告警恢复",
+                detail="idle-only 探针已启用；旧 busy/rollup 告警恢复",
                 action="none",
-                severity="notice" if entry.get("severity") == "notice" else "page",
+                severity=_normalize_severity(projected.get("severity")),
             )
         )
-    return rolled_up
+    return results
 
 
 def _diagnostics(pipeline_lock_dir: Path) -> dict[str, object]:
@@ -582,37 +894,18 @@ def _write_firing_evidence(
     now: datetime,
 ) -> Path:
     values = result.values
-    raw_cells = values.get("cells")
-    if result.rule_id == PERF_BUSY_ROLLUP_RULE_ID and isinstance(raw_cells, list):
-        cells = [cell for cell in raw_cells if isinstance(cell, dict)]
-        recent = []
-        for cell in cells:
-            recent.extend(
-                [
-                    sample
-                    for sample in samples
-                    if sample.get("journey") == cell.get("journey")
-                    and sample.get("vantage") == cell.get("vantage")
-                    and sample.get("load_class") == "busy"
-                ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
-            )
-        identity: dict[str, object] = {
-            "load_class": "busy",
-            "cells": cells,
-        }
-    else:
-        recent = [
-            sample
-            for sample in samples
-            if sample.get("journey") == values["journey"]
-            and sample.get("vantage") == values["vantage"]
-            and sample.get("load_class") == values["load_class"]
-        ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
-        identity = {
-            "journey": values["journey"],
-            "vantage": values["vantage"],
-            "load_class": values["load_class"],
-        }
+    recent = [
+        sample
+        for sample in samples
+        if sample.get("journey") == values["journey"]
+        and sample.get("vantage") == values["vantage"]
+        and sample.get("load_class") == "idle"
+    ][-(WARM_SAMPLES + CONFIRMATION_WINDOWS - 1) :]
+    identity = {
+        "journey": values["journey"],
+        "vantage": values["vantage"],
+        "load_class": "idle",
+    }
     payload = {
         "schema_version": 1,
         "created_at": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
@@ -656,36 +949,153 @@ def run_performance_alerts(
     now: datetime | None = None,
     send: AlertSender | None = None,
     enabled_vantages: frozenset[str] | None = None,
+    known_corrupt_input: bool = False,
 ) -> dict[str, object]:
-    current = now or datetime.now(UTC)
-    samples = _load_samples(sample_path)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    cutoff = current - timedelta(days=RETENTION_DAYS)
+    loaded = _load_samples(
+        sample_path,
+        now=current,
+        reserve_sequence=lambda: reserve_alert_evaluation_sequence(
+            state_path=state_path
+        ),
+    )
+    if not loaded.lock_acquired:
+        return {
+            "ruleset": [],
+            "sent_count": 0,
+            "sent": [],
+            "results": [],
+            "state_path": str(state_path),
+            "corrupt_input": False,
+            "sample_store_skipped": True,
+        }
+    evaluation_sequence = loaded.evaluation_sequence
+    if evaluation_sequence is None:
+        raise RuntimeError("sample snapshot did not receive an evaluation sequence")
+    samples = [
+        sample
+        for sample in loaded.rows
+        if (observed := _parse_timestamp(sample.get("observed_at"))) is not None
+        and cutoff <= observed <= current
+    ]
+    samples.sort(
+        key=lambda sample: _parse_timestamp(sample.get("observed_at"))
+        or datetime.min.replace(tzinfo=UTC)
+    )
     if enabled_vantages is not None:
         samples = [sample for sample in samples if sample.get("vantage") in enabled_vantages]
-    results = evaluate_performance_rules(samples)
+    latest_outcomes_by_cell: dict[str, str] = {}
+    for sample in samples:
+        cell_key = _sample_cell_key(sample)
+        if cell_key is not None:
+            latest_outcomes_by_cell[cell_key] = str(
+                sample.get("outcome", "observed")
+            )
+    infra_cells = {
+        cell_key
+        for cell_key, outcome in latest_outcomes_by_cell.items()
+        if outcome in INFRA_HOLD_OUTCOMES
+    }
     previous_state = _load_alert_state(state_path)
-    results = _roll_up_notice_busy_results(results, previous_state=previous_state)
-    if enabled_vantages is not None:
-        # A vantage disabled after firing would otherwise leave its alert state
-        # stuck: retained samples age out, the rule stops appearing in results,
-        # and the state machine never resolves it. Emit an explicit non-firing
-        # result for such rules so they resolve instead of going stale.
-        known_rule_ids = {result.rule_id for result in results}
-        for rule_id, entry in previous_state.items():
-            if rule_id in known_rule_ids or not rule_id.startswith("PERF:"):
-                continue
-            if not isinstance(entry, dict) or entry.get("state") != "firing":
-                continue
-            parts = rule_id.split(":")
-            if len(parts) == 4 and parts[2] not in enabled_vantages:
-                results.append(
-                    AlertRuleResult(
-                        rule_id=rule_id,
-                        title=f"{parts[1]} {parts[2]} {parts[3]}",
-                        firing=False,
-                        detail="vantage disabled (public URL unset); auto-resolved",
-                        action="none",
+    relevant_cells = {
+        cell_key
+        for sample in samples
+        if (cell_key := _sample_cell_key(sample)) is not None
+    }
+    relevant_cells.update(
+        cell_key
+        for rule_id, entry in previous_state.items()
+        if (cell_key := _rule_cell_key(rule_id)) is not None
+        and isinstance(entry, dict)
+        and (_project_previous_alert_entry(entry) or {}).get("state") == "firing"
+    )
+    held_cells = {
+        cell_key
+        for cell_key in relevant_cells
+        if loaded.hold_observed_at is not None
+        and cell_key not in loaded.recovered_cells
+    }
+    current_corrupt_input = loaded.corrupt_input or known_corrupt_input
+    evaluated_results = (
+        [] if current_corrupt_input else evaluate_performance_rules(samples, now=current)
+    )
+    previous_observed_firing_rule_ids = {
+        rule_id
+        for rule_id, entry in previous_state.items()
+        if (_project_previous_alert_entry(entry) or {}).get("firing_basis")
+        == "observed"
+    }
+    results = [
+        result
+        for result in evaluated_results
+        if (cell_key := _rule_cell_key(result.rule_id)) is None
+        or (cell_key not in held_cells and cell_key not in infra_cells)
+    ]
+    result_rule_ids = {result.rule_id for result in results}
+    for rule_id, entry in previous_state.items():
+        if (
+            rule_id in result_rule_ids
+            or rule_id not in previous_observed_firing_rule_ids
+            or (cell_key := _rule_cell_key(rule_id)) is None
+            or cell_key not in infra_cells
+        ):
+            continue
+        pending_result = _pending_firing_result(rule_id, entry)
+        if pending_result is not None:
+            results.append(pending_result)
+            result_rule_ids.add(rule_id)
+    corrupt_input = current_corrupt_input or bool(held_cells)
+    if not corrupt_input:
+        results.extend(_retired_busy_results(previous_state))
+    known_rule_ids = {result.rule_id for result in results}
+    for rule_id, entry in previous_state.items():
+        if rule_id in known_rule_ids or not rule_id.startswith("PERF:"):
+            continue
+        projected = _project_previous_alert_entry(entry)
+        if projected is None or projected.get("state") != "firing":
+            continue
+        parts = rule_id.split(":")
+        if len(parts) != 4 or parts[-1] != "idle":
+            continue
+        disabled = enabled_vantages is not None and parts[2] not in enabled_vantages
+        rule_cell_key = _rule_cell_key(rule_id)
+        stored_firing_basis = projected.get("firing_basis")
+        trusted_observed_firing = stored_firing_basis == "observed"
+        if (
+            not disabled
+            and trusted_observed_firing
+            and (
+                current_corrupt_input
+                or (
+                    rule_cell_key is not None
+                    and (
+                        rule_cell_key in held_cells
+                        or rule_cell_key in infra_cells
                     )
                 )
+            )
+        ):
+            continue
+        detail = (
+            "vantage disabled (public URL unset); auto-resolved"
+            if disabled
+            else (
+                "unstamped performance alert retired; awaiting fresh observed samples"
+                if not trusted_observed_firing
+                else "no retained fresh idle samples; stale performance alert auto-resolved"
+            )
+        )
+        results.append(
+            AlertRuleResult(
+                rule_id=rule_id,
+                title=f"{parts[1]} {parts[2]} {parts[3]}",
+                firing=False,
+                detail=detail,
+                action="none",
+                severity=_normalize_severity(projected.get("severity")),
+            )
+        )
     evidenced: list[AlertRuleResult] = []
     for result in results:
         entry = previous_state.get(result.rule_id, {})
@@ -699,12 +1109,182 @@ def run_performance_alerts(
             )
             result = replace(result, detail=f"{result.detail}; evidence={evidence_path}")
         evidenced.append(result)
-    return run_alert_results_state_machine(
+    payload = run_alert_results_state_machine(
         evidenced,
         state_path=state_path,
         event_path=event_path,
         now=current,
         send=send,
+        evaluation_sequence=evaluation_sequence,
+    )
+    payload["corrupt_input"] = corrupt_input
+    payload["sample_store_skipped"] = False
+    return payload
+
+
+@contextmanager
+def _probe_process_deadline() -> Iterator[None]:
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("performance probe process deadline requires the main thread")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    started = time.monotonic()
+
+    def deadline_expired(_signum: int, _frame: object) -> None:
+        terminate_active_browser_workers()
+        os._exit(PROBE_TIMEOUT_EXIT_CODE)
+
+    signal.signal(signal.SIGALRM, deadline_expired)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, PROBE_OVERALL_TIMEOUT_SECONDS)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            remaining = max(0.000001, previous_timer[0] - (time.monotonic() - started))
+            signal.setitimer(signal.ITIMER_REAL, remaining, previous_timer[1])
+
+
+def _process_tree_pids(root_pid: int) -> set[int]:
+    try:
+        rows = subprocess.run(
+            ["/bin/ps", "-axo", "pid=,ppid="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout.splitlines()
+    except (OSError, subprocess.TimeoutExpired):
+        return {root_pid}
+    parsed: list[tuple[int, int]] = []
+    for row in rows:
+        try:
+            pid, parent = (int(value) for value in row.split())
+        except (TypeError, ValueError):
+            continue
+        parsed.append((pid, parent))
+    descendants = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for pid, parent in parsed:
+            if parent in descendants and pid not in descendants:
+                descendants.add(pid)
+                changed = True
+    return descendants
+
+
+def _signal_external_probe_tree(root_pid: int, signum: int) -> None:
+    for pid in sorted(_process_tree_pids(root_pid), reverse=True):
+        try:
+            os.kill(pid, signum)
+        except ProcessLookupError:
+            pass
+    try:
+        os.killpg(root_pid, signum)
+    except (PermissionError, ProcessLookupError):
+        pass
+
+
+def run_external_probe_watchdog(
+    command: list[str],
+    *,
+    timeout_seconds: float = PROBE_EXTERNAL_TIMEOUT_SECONDS,
+    kill_after_seconds: float = PROBE_EXTERNAL_KILL_AFTER_SECONDS,
+) -> int:
+    if not command:
+        raise ValueError("external probe watchdog requires a command")
+    # Deliberately sustained SIGSTOP of this watchdog and its entire child tree
+    # cannot be defeated in-tree. Phase 3 operations documentation must expose
+    # that monitoring limitation; ordinary child hangs/stops and parent death are
+    # bounded here without reintroducing age-based lock stealing.
+    child_command = [
+        sys.executable,
+        "-m",
+        "airadar.performance.journey_monitor",
+        "--watchdog-child",
+        "--parent-pid",
+        str(os.getpid()),
+        "--",
+        *command,
+    ]
+    process = subprocess.Popen(child_command, start_new_session=True)
+    try:
+        return process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _signal_external_probe_tree(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=kill_after_seconds)
+        except subprocess.TimeoutExpired:
+            _signal_external_probe_tree(process.pid, signal.SIGKILL)
+            process.wait()
+        return PROBE_TIMEOUT_EXIT_CODE
+
+
+def _enable_linux_parent_death_signal(parent_pid: int) -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            return False
+    except (AttributeError, OSError):
+        return False
+    if os.getppid() != parent_pid:
+        os.kill(os.getpid(), signal.SIGKILL)
+    return True
+
+
+def _run_watchdog_child(command: list[str], *, parent_pid: int) -> int:
+    if not command:
+        raise ValueError("watchdog child requires a command")
+    if _enable_linux_parent_death_signal(parent_pid):
+        os.execvp(command[0], command)
+        raise AssertionError("os.execvp returned unexpectedly")
+
+    process = subprocess.Popen(command)
+    while True:
+        try:
+            return process.wait(timeout=WATCHDOG_PARENT_POLL_SECONDS)
+        except subprocess.TimeoutExpired:
+            if os.getppid() == parent_pid:
+                continue
+            _signal_external_probe_tree(process.pid, signal.SIGKILL)
+            process.wait()
+            return PROBE_TIMEOUT_EXIT_CODE
+
+
+def _watchdog_main(arguments: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--external-watchdog", action="store_true")
+    mode.add_argument("--watchdog-child", action="store_true")
+    parser.add_argument("--parent-pid", type=int)
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=PROBE_EXTERNAL_TIMEOUT_SECONDS,
+    )
+    parser.add_argument(
+        "--kill-after-seconds",
+        type=float,
+        default=PROBE_EXTERNAL_KILL_AFTER_SECONDS,
+    )
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    parsed = parser.parse_args(arguments)
+    command = parsed.command[1:] if parsed.command[:1] == ["--"] else parsed.command
+    if parsed.watchdog_child:
+        if parsed.parent_pid is None or parsed.parent_pid <= 0:
+            parser.error("--watchdog-child requires a positive --parent-pid")
+        return _run_watchdog_child(command, parent_pid=parsed.parent_pid)
+    if parsed.timeout_seconds <= 0 or parsed.kill_after_seconds <= 0:
+        parser.error("watchdog timeouts must be positive")
+    return run_external_probe_watchdog(
+        command,
+        timeout_seconds=parsed.timeout_seconds,
+        kill_after_seconds=parsed.kill_after_seconds,
     )
 
 
@@ -716,33 +1296,56 @@ def run_journey_monitor(
     state_path: Path = DEFAULT_ALERT_STATE_PATH,
     evidence_dir: Path = DEFAULT_EVIDENCE_DIR,
     pipeline_lock_dir: Path = DEFAULT_PIPELINE_LOCK_DIR,
-    browser_lock_path: Path = DEFAULT_BROWSER_LOCK_PATH,
     db_path: Path | None = None,
 ) -> dict[str, object]:
-    runtime = JourneyMonitorRuntime(
-        origin_url=origin_url,
-        public_url=public_url,
-        pipeline_lock_dir=pipeline_lock_dir,
-        browser_lock_path=browser_lock_path,
-        db_path=db_path or db.resolve_db_path(),
-    )
-    observed_at = datetime.now(UTC)
-    samples = probe_journeys(runtime, observed_at=observed_at)
-    store_samples(sample_path, samples, now=observed_at)
-    enabled = {"same_host_origin"}
-    if runtime.public_url:
-        enabled.add("same_host_public")
-    alerts = run_performance_alerts(
-        sample_path=sample_path,
-        state_path=state_path,
-        evidence_dir=evidence_dir,
-        pipeline_lock_dir=pipeline_lock_dir,
-        now=observed_at,
-        enabled_vantages=frozenset(enabled),
-    )
-    return {
-        "scope": SAME_HOST_SCOPE,
-        "samples": [asdict(sample) for sample in samples],
-        "sample_path": str(sample_path),
-        "alerts": alerts,
-    }
+    with _probe_process_deadline():
+        observed_at = datetime.now(UTC)
+        runtime = JourneyMonitorRuntime(
+            origin_url=origin_url,
+            public_url=public_url,
+            pipeline_lock_dir=pipeline_lock_dir,
+            db_path=db_path or db.resolve_db_path(),
+        )
+        samples = probe_journeys(runtime, observed_at=observed_at)
+        corrupt_input = store_samples(sample_path, samples, now=observed_at)
+        if corrupt_input is None:
+            return {
+                "scope": SAME_HOST_SCOPE,
+                "samples": [],
+                "sample_path": str(sample_path),
+                "alerts": {
+                    "ruleset": [],
+                    "sent_count": 0,
+                    "sent": [],
+                    "results": [],
+                    "state_path": str(state_path),
+                    "corrupt_input": False,
+                    "sample_store_skipped": True,
+                },
+                "sample_store_skipped": True,
+                "skipped_overlap": False,
+            }
+        enabled = {"same_host_origin"}
+        if runtime.public_url:
+            enabled.add("same_host_public")
+        alerts = run_performance_alerts(
+            sample_path=sample_path,
+            state_path=state_path,
+            evidence_dir=evidence_dir,
+            pipeline_lock_dir=pipeline_lock_dir,
+            now=observed_at,
+            enabled_vantages=frozenset(enabled),
+            known_corrupt_input=corrupt_input,
+        )
+        return {
+            "scope": SAME_HOST_SCOPE,
+            "samples": [asdict(sample) for sample in samples],
+            "sample_path": str(sample_path),
+            "alerts": alerts,
+            "sample_store_skipped": False,
+            "skipped_overlap": False,
+        }
+
+
+if __name__ == "__main__":
+    raise SystemExit(_watchdog_main(sys.argv[1:]))

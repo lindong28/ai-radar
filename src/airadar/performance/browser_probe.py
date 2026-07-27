@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import fcntl
 import multiprocessing
 import os
 import signal
 import subprocess
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from multiprocessing.connection import wait as wait_for_multiprocessing
 from time import perf_counter_ns
 from urllib.parse import parse_qsl, urljoin, urlsplit
-
-
-class BrowserProbeBusy(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +23,23 @@ _CONTRACTS = {
     "wechat_detail": BrowserJourneyContract(".wechat-detail[data-item-id]"),
     "wechat_pagination": BrowserJourneyContract(".wechat-card[data-detail-url]", '#pagination [rel="next"]'),
 }
+PROBE_INFRA_FAILURE_OUTCOME = "probe_infra_failure"
+# Spawn plus Chromium/context/page setup happens before the page-level timeout starts.
+# Keep enough bounded grace for that startup; even eight silent 20-second journeys
+# remain bounded at 520 seconds, below the 15/16-minute whole-probe watchdogs.
+BROWSER_STARTUP_GRACE_SECONDS = 45.0
+# After the primary site+startup budget, wait for the OS to report either a
+# published pipe result or worker exit. This is bounded independently so a
+# silent live worker still cannot consume the whole-probe watchdog budget.
+BROWSER_WORKER_EXIT_GRACE_SECONDS = 1.0
+_BROWSER_RUNTIME_LOSS_MARKERS = (
+    "target page, context or browser has been closed",
+    "target closed",
+    "browser closed",
+    "page has been closed",
+    "context has been closed",
+    "browser has been closed",
+)
 
 
 def browser_journey_contract(target: str) -> BrowserJourneyContract:
@@ -37,20 +48,6 @@ def browser_journey_contract(target: str) -> BrowserJourneyContract:
 
 def browser_stop_predicate(*, attached: bool, visible: bool, text: str, next_frame_visible: bool) -> bool:
     return attached and visible and bool(text.strip()) and next_frame_visible
-
-
-@contextmanager
-def browser_singleflight(path: Path) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise BrowserProbeBusy("skipped_overlap") from error
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,14 +59,36 @@ class BrowserMeasurement:
     incompatible_reason: str | None = None
 
 
+def _probe_infra_failure(
+    request_url: str,
+    *,
+    started: int,
+    reason: str,
+) -> BrowserMeasurement:
+    return BrowserMeasurement(
+        request_url,
+        (perf_counter_ns() - started) / 1_000_000,
+        False,
+        PROBE_INFRA_FAILURE_OUTCOME,
+        reason,
+    )
+
+
+def _is_browser_runtime_loss(error: BaseException) -> bool:
+    if isinstance(error, BrokenPipeError | ConnectionResetError):
+        return True
+    message = str(error).casefold()
+    return any(marker in message for marker in _BROWSER_RUNTIME_LOSS_MARKERS)
+
+
 def _measure_browser_journey_inner(
     *,
     base_url: str,
     target: str,
     detail_slug: str,
     timeout_seconds: float,
-    lock_path: Path,
     expected: dict[str, object] | None = None,
+    _result_callback: Callable[[BrowserMeasurement], None] | None = None,
 ) -> BrowserMeasurement:
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -85,33 +104,85 @@ def _measure_browser_journey_inner(
     contract = browser_journey_contract(target)
     timeout_ms = timeout_seconds * 1000
     started = perf_counter_ns()
+    finished_result: BrowserMeasurement | None = None
+
+    def finish(result: BrowserMeasurement) -> BrowserMeasurement:
+        nonlocal finished_result
+        if finished_result is not None:
+            return finished_result
+        finished_result = result
+        if _result_callback is not None:
+            _result_callback(result)
+        return result
+
     try:
-        with browser_singleflight(lock_path), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context()
+        with sync_playwright() as playwright:
+            browser = None
+            context = None
             try:
+                browser = playwright.chromium.launch(headless=True)
+                context = browser.new_context()
                 page = context.new_page()
                 page.set_default_timeout(timeout_ms)
-                page.goto(request_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            except (OSError, PlaywrightError, AttributeError):
+                if context is not None:
+                    try:
+                        context.close()
+                    except (OSError, PlaywrightError):
+                        pass
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except (OSError, PlaywrightError):
+                        pass
+                return finish(
+                    _probe_infra_failure(
+                        request_url,
+                        started=started,
+                        reason="browser_runtime:launch_failed",
+                    )
+                )
+            site_deadline_ns = perf_counter_ns() + int(timeout_seconds * 1_000_000_000)
+
+            def remaining_site_timeout_ms() -> float:
+                remaining_ms = (site_deadline_ns - perf_counter_ns()) / 1_000_000
+                if remaining_ms <= 0:
+                    raise PlaywrightTimeoutError("browser journey site timeout")
+                page.set_default_timeout(remaining_ms)
+                return remaining_ms
+
+            try:
+                page.goto(
+                    request_url,
+                    wait_until="domcontentloaded",
+                    timeout=remaining_site_timeout_ms(),
+                )
                 locators = page.locator(contract.selector)
                 locator = locators.first
                 if contract.action_selector:
+                    remaining_site_timeout_ms()
                     previous = locator.get_attribute("data-detail-url") or locator.inner_text()
+                    remaining_site_timeout_ms()
                     page.locator(contract.action_selector).click()
                     page.wait_for_function(
                         "([selector, previous]) => { const e=document.querySelector(selector); "
                         "return e && e.offsetParent !== null && (e.dataset.detailUrl || e.textContent.trim()) !== previous; }",
                         arg=[contract.selector, previous],
+                        timeout=remaining_site_timeout_ms(),
                     )
                     locators = page.locator(contract.selector)
                     locator = locators.first
+                remaining_site_timeout_ms()
                 locator.wait_for(state="visible")
+                remaining_site_timeout_ms()
                 text = locator.inner_text()
-                next_frame_visible = page.evaluate(
+                page.wait_for_function(
                     "selector => new Promise(resolve => requestAnimationFrame(() => { const e=document.querySelector(selector); "
                     "resolve(Boolean(e && e.offsetParent !== null)); }))",
-                    contract.selector,
+                    arg=contract.selector,
+                    timeout=remaining_site_timeout_ms(),
                 )
+                next_frame_visible = True
                 hard_failure = not browser_stop_predicate(
                     attached=locator.count() > 0,
                     visible=locator.is_visible(),
@@ -148,30 +219,107 @@ def _measure_browser_journey_inner(
                         if key == "page"
                     ]
                     hard_failure = hard_failure or page_values != ["2"]
-                return BrowserMeasurement(request_url, (perf_counter_ns() - started) / 1_000_000, hard_failure)
+                return finish(
+                    BrowserMeasurement(
+                        request_url,
+                        (perf_counter_ns() - started) / 1_000_000,
+                        hard_failure,
+                    )
+                )
+            except PlaywrightTimeoutError:
+                return finish(
+                    BrowserMeasurement(
+                        request_url,
+                        (perf_counter_ns() - started) / 1_000_000,
+                        True,
+                    )
+                )
+            except PlaywrightError as error:
+                if _is_browser_runtime_loss(error):
+                    return finish(
+                        _probe_infra_failure(
+                            request_url,
+                            started=started,
+                            reason="browser_runtime:crashed",
+                        )
+                    )
+                return finish(
+                    BrowserMeasurement(
+                        request_url,
+                        (perf_counter_ns() - started) / 1_000_000,
+                        True,
+                    )
+                )
+            except OSError as error:
+                if _is_browser_runtime_loss(error):
+                    return finish(
+                        _probe_infra_failure(
+                            request_url,
+                            started=started,
+                            reason="browser_runtime:crashed",
+                        )
+                    )
+                return finish(
+                    BrowserMeasurement(
+                        request_url,
+                        (perf_counter_ns() - started) / 1_000_000,
+                        True,
+                    )
+                )
+            except AttributeError:
+                return finish(
+                    _probe_infra_failure(
+                        request_url,
+                        started=started,
+                        reason="browser_runtime:invalid_api",
+                    )
+                )
             finally:
-                context.close()
-                browser.close()
-    except BrowserProbeBusy:
-        return BrowserMeasurement(
-            request_url, (perf_counter_ns() - started) / 1_000_000, False, "skipped_overlap"
-        )
-    except PlaywrightTimeoutError:
-        return BrowserMeasurement(request_url, (perf_counter_ns() - started) / 1_000_000, True)
+                try:
+                    context.close()
+                except (OSError, PlaywrightError):
+                    pass
+                try:
+                    browser.close()
+                except (OSError, PlaywrightError):
+                    pass
     except (OSError, PlaywrightError, AttributeError):
-        return BrowserMeasurement(
-            request_url,
-            (perf_counter_ns() - started) / 1_000_000,
-            False,
-            "incompatible",
-            "browser_runtime:missing",
+        return finish(
+            _probe_infra_failure(
+                request_url,
+                started=started,
+                reason="browser_runtime:launch_failed",
+            )
         )
 
 
 def _browser_worker(sender: object, kwargs: dict[str, object]) -> None:
-    try:
-        result = _measure_browser_journey_inner(**kwargs)  # type: ignore[arg-type]
+    os.setsid()
+    sent = False
+
+    def send_result(result: BrowserMeasurement) -> None:
+        nonlocal sent
         sender.send(result)  # type: ignore[attr-defined]
+        sent = True
+
+    try:
+        raw_expected = kwargs.get("expected")
+        raw_timeout_seconds = kwargs["timeout_seconds"]
+        if isinstance(raw_timeout_seconds, bool) or not isinstance(
+            raw_timeout_seconds,
+            int | float,
+        ):
+            raise TypeError("browser worker timeout_seconds must be numeric")
+        result = _measure_browser_journey_inner(
+            base_url=str(kwargs["base_url"]),
+            target=str(kwargs["target"]),
+            detail_slug=str(kwargs["detail_slug"]),
+            timeout_seconds=float(raw_timeout_seconds),
+            expected=raw_expected if isinstance(raw_expected, dict) else None,
+            _result_callback=send_result,
+        )
+        if not sent:
+            send_result(result)
     finally:
         sender.close()  # type: ignore[attr-defined]
 
@@ -205,13 +353,24 @@ def _kill_process_tree(root_pid: int) -> None:
             pass
 
 
+_ACTIVE_BROWSER_WORKER_PIDS: set[int] = set()
+
+
+def terminate_active_browser_workers() -> None:
+    for pid in tuple(_ACTIVE_BROWSER_WORKER_PIDS):
+        _kill_process_tree(pid)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (PermissionError, ProcessLookupError):
+            pass
+
+
 def measure_browser_journey(
     *,
     base_url: str,
     target: str,
     detail_slug: str,
     timeout_seconds: float,
-    lock_path: Path,
     expected: dict[str, object] | None = None,
 ) -> BrowserMeasurement:
     request_url = urljoin(
@@ -224,8 +383,9 @@ def measure_browser_journey(
         }[target].lstrip("/"),
     )
     started = perf_counter_ns()
-    receiver, sender = multiprocessing.get_context("spawn").Pipe(duplex=False)
-    process = multiprocessing.get_context("spawn").Process(
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(
         target=_browser_worker,
         args=(
             sender,
@@ -234,18 +394,54 @@ def measure_browser_journey(
                 "target": target,
                 "detail_slug": detail_slug,
                 "timeout_seconds": timeout_seconds,
-                "lock_path": lock_path,
                 "expected": expected,
             },
         ),
     )
-    process.start()
+    try:
+        process.start()
+    except (OSError, RuntimeError):
+        sender.close()
+        receiver.close()
+        return _probe_infra_failure(
+            request_url,
+            started=started,
+            reason="browser_runtime:worker_start_failed",
+        )
+    if process.pid is not None:
+        _ACTIVE_BROWSER_WORKER_PIDS.add(process.pid)
     sender.close()
     try:
-        if receiver.poll(timeout_seconds):
-            result = receiver.recv()
+        result: object = None
+        if receiver.poll(timeout_seconds + BROWSER_STARTUP_GRACE_SECONDS):
+            try:
+                result = receiver.recv()
+            except (EOFError, OSError):
+                result = None
+        else:
+            # Accepted bounded-liveness tradeoff: a genuine site failure published
+            # more than BROWSER_WORKER_EXIT_GRACE_SECONDS after this cutoff can
+            # still be classified as worker_unavailable. That requires a scheduler
+            # pause at the timeout boundary; waiting without a bound would violate
+            # the 960s external and 15-minute in-process watchdog deadlines.
+            wait_for_multiprocessing(
+                [receiver, process.sentinel],
+                timeout=BROWSER_WORKER_EXIT_GRACE_SECONDS,
+            )
+            if receiver.poll(0):
+                try:
+                    result = receiver.recv()
+                except (EOFError, OSError):
+                    result = None
+        if result is not None:
             process.join(timeout=1)
             if isinstance(result, BrowserMeasurement):
+                if process.is_alive():
+                    if process.pid is not None:
+                        _kill_process_tree(process.pid)
+                    else:
+                        process.kill()
+                    process.join(timeout=2)
                 return result
         if process.is_alive():
             if process.pid is not None:
@@ -253,12 +449,14 @@ def measure_browser_journey(
             else:
                 process.kill()
         process.join(timeout=2)
-        return BrowserMeasurement(
+        return _probe_infra_failure(
             request_url,
-            (perf_counter_ns() - started) / 1_000_000,
-            True,
+            started=started,
+            reason="browser_runtime:worker_unavailable",
         )
     finally:
+        if process.pid is not None:
+            _ACTIVE_BROWSER_WORKER_PIDS.discard(process.pid)
         receiver.close()
 
 

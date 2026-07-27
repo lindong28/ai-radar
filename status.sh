@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read-only service status panel. Never modifies state.
 # Usage: ./status.sh              # all services
-#        ./status.sh <service>    # serve | tunnel | pipeline | alert
+#        ./status.sh <service>    # serve | tunnel | pipeline | alert | performance-probe
 
 set -uo pipefail  # no -e: status must report failures, not abort on them
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,19 +13,56 @@ resolve_services "$@" || exit 1
 
 status_launchd_service() {
   local slug="$1"
-  local label pid
+  local label pid launchd_status destination plist_path
+  local file_present=0
+  local file_owned=0
   label="$(service_label "$slug")"
+  destination="$(service_launch_agent_path "$slug")" || {
+    printf "%-9s | status unavailable (unsafe HOME)\n" "$slug"
+    return 1
+  }
+  plist_path="$REPO_ROOT/deploy/launchd/$(service_plist_name "$slug")"
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    file_present=1
+    if launch_agent_file_owned "$slug" "$destination" \
+      || legacy_launch_agent_symlink_owned "$slug" "$destination"; then
+      file_owned=1
+    fi
+  fi
 
   printf "%-9s | " "$slug"
-  if is_launchd_loaded "$label"; then
-    pid="$(launchd_pid "$label")"
-    if [[ -n "${pid:-}" && "$pid" != "-" ]]; then
-      printf "loaded ✓ pid=%-6s" "$pid"
+  if [[ "$file_present" -eq 0 ]]; then
+    printf "not installed     "
+  elif is_launchd_loaded "$label" "$destination" "$plist_path"; then
+    if [[ "$file_owned" -eq 1 ]]; then
+      if [[ "$LAUNCHD_LOADED_PATH_KIND" == "generated" ]]; then
+        printf "loaded ✓ migration pending"
+      else
+        pid="$(launchd_pid "$label")"
+        if [[ -n "${pid:-}" && "$pid" != "-" ]]; then
+          printf "loaded ✓ pid=%-6s" "$pid"
+        else
+          printf "loaded ✓ (no pid)   "
+        fi
+      fi
     else
-      printf "loaded ✓ (no pid)   "
+      printf "foreign job/file ⚠ "
     fi
   else
-    printf "not installed     "
+    launchd_status=$?
+    case "$launchd_status" in
+      1)
+        if [[ "$file_owned" -eq 1 ]]; then
+          printf "installed, not loaded"
+        elif [[ "$file_present" -eq 1 ]]; then
+          printf "foreign file ⚠    "
+        else
+          printf "not installed     "
+        fi
+        ;;
+      3) printf "foreign job ⚠     " ;;
+      *) printf "status unavailable" ;;
+    esac
   fi
 
   # Service-specific extras
@@ -33,6 +70,7 @@ status_launchd_service() {
     serve)  printf " | log logs/serve-access.log" ;;
     tunnel) printf " | log /tmp/ai-radar-tunnel.err" ;;
     alert)  printf " | log logs/alert-check.log" ;;
+    performance-probe) printf " | log logs/performance-probe-launchd.log" ;;
   esac
   echo
 }
@@ -57,7 +95,7 @@ status_pipeline() {
 
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
-    serve|tunnel|alert) status_launchd_service "$slug" ;;
+    serve|tunnel|alert|performance-probe) status_launchd_service "$slug" ;;
     pipeline)          status_pipeline ;;
   esac
 done

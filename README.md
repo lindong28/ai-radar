@@ -12,7 +12,7 @@ AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS、X 和微信�
 git clone https://github.com/your-org/ai-radar.git
 cd ai-radar
 uv sync
-uv run playwright install chromium  # 仅启用微信公众号抓取时需要
+uv run playwright install chromium  # 微信抓取 + 默认安装的 performance-probe 均必需
 ```
 
 ### 2. 配置环境变量
@@ -78,7 +78,7 @@ sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 
 ### 用户旅程性能监控与候选修复
 
-`performance-probe` 每次用浏览器从同机 origin 与同机 public（由 `AI_RADAR_PUBLIC_URL` 环境变量配置；未配置时跳过 public 视角、仅测 origin）两个视角测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定四条旅程。样本按 pipeline 的 `idle` / `busy` / `unknown` 分类，写入 `logs/performance/`；所有结果均为 **same-host provisional**，不代表区域 SLO。确认退化后，`performance-remediate` 会在隔离 worktree 中启动一个 fail-closed Codex worker，最多生成一个仅供人工审阅的本地候选 commit；它不会 push、deploy、调用 launchctl 或写生产数据库。
+`performance-probe` 每次用浏览器从同机 origin 与同机 public（由 `AI_RADAR_PUBLIC_URL` 环境变量配置；未配置时跳过 public 视角、仅测 origin）两个视角测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定四条旅程。探针只在单条旅程测量前后都确认 pipeline 空闲时保存该样本；pipeline 正在运行或负载状态不确定时跳过该次旅程尝试，不让 non-idle 输入进入 PERF 窗口。每个旅程/视角保留 20+3 确认窗，首个 confirmed firing 需要 22 条有效 idle 样本，超预算后以 `page` 投递。所有结果均为 **same-host provisional**，不代表区域 SLO。确认退化后，`performance-remediate` 会在隔离 worktree 中启动一个 fail-closed Codex worker，最多生成一个仅供人工审阅的本地候选 commit；它不会 push、deploy、调用 launchctl 或写生产数据库。
 
 先核对两个 CLI，并只手工运行 probe 来确认浏览器、站点和告警配置可用：
 
@@ -88,16 +88,15 @@ sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 ./run.sh performance-probe
 ```
 
-两个命令不由 `install.sh` 管理。U4 发现的 homepage `hard_failure=true` 假阳性已修复：浏览器以首 12 条 SSR/prepaint ID 作为完整渲染列表的前缀校验，不再因后续正常卡片存在而误报。但 remediation 仍受运维 gate 约束：在部署该修复并手工验证 homepage `hard_failure=false` 且 homepage `PERF:*` 非 firing 前，**只安装 probe，不要把 remediation 加入 cron**。下面命令按 marker 先删旧行再添加，重复执行不会制造重叠任务，并显式提供 cron 所需的 `uv` / `codex` PATH：
+`performance-probe` 由 `install.sh` 管理：专属 per-file LaunchAgent 以 `StartInterval=300` 每 5 分钟经 `./run.sh performance-probe` 启动，因此外部超时 watchdog 始终位于启动路径；pipeline 自身仍保留既有 `*/15` user crontab。安装、查询和卸载 probe：
 
 ```bash
-repo=$PWD
-{ crontab -l 2>/dev/null | sed '/# ai-radar-performance-probe$/d'
-  printf '17 * * * * cd "%s" && PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-probe >> logs/performance-probe-cron.log 2>&1 # ai-radar-performance-probe\n' "$repo"
-} | crontab -
+./install.sh performance-probe
+./status.sh performance-probe
+./uninstall.sh performance-probe
 ```
 
-部署包含上述修复的版本后，先用手工 probe 确认 homepage 样本 `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing；两项都满足后，才先手工运行一次 remediation，再以同样的幂等方式把它安排在 probe 之后：
+U4 发现的 homepage `hard_failure=true` 假阳性已修复：浏览器以首 12 条 SSR/prepaint ID 作为完整渲染列表的前缀校验，不再因后续正常卡片存在而误报。但 `performance-remediate` 仍不由 `install.sh` 管理并受运维 gate 约束：部署后先用手工 probe 确认 homepage 样本 `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing；两项都满足后，才先手工运行一次 remediation，再按需安装它自己的 cron：
 
 ```bash
 ./run.sh performance-remediate
@@ -226,7 +225,7 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 | `tunnel` | launchd | Cloudflare tunnel 到你的公网域名 |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A4 以 severity lifecycle 决定 firing / resolved，page 通过 `im-notify --alert` 发往 `ALERT`，notice 通过 `im-notify` 发往 `NOTIFICATION` |
-| `performance-probe` | cron（建议每小时 :17） | 测量四条浏览器旅程，按 idle/busy 留存样本并评估 `PERF:*` 告警 |
+| `performance-probe` | launchd, StartInterval=300 | 每 5 分钟经 `./run.sh performance-probe` 启动；只保存 pipeline idle 窗样本，22 条确认窗后超预算以 page 投递 |
 | `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
 
 ### 部署 / 移除 / 查状态
@@ -237,9 +236,9 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe`）；不带参数作用于全部。脚本幂等——重复跑不报错。
 
-`./install.sh` 会在安装每个服务前检查依赖：
+`./install.sh` 会检查各服务能由脚本判定的依赖；Playwright Chromium 是需按快速开始步骤显式安装的运行时前置：
 
 | 服务 | 依赖 | 缺失时 |
 |---|---|---|
@@ -247,8 +246,9 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 | `pipeline` | 至少一个 LLM key：`DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` | 交互式终端会询问 `DEEPSEEK_API_KEY` 并追加到 `./.env`；非交互环境自动跳过 |
 | `alert` | `~/.local/bin/im-notify` + `FEISHU_GENERAL_ALERT_WEBHOOK` + `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | 先从 `ai-agent-config` 安装 `im-notify`；两个 webhook 分别承接 page/notice，任缺一个都拒绝部分安装。交互式终端逐个询问并追加到 `./.env`，非交互环境自动跳过 |
 | `tunnel` | `deploy/cloudflared/config.yml` | 提示从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置，本次跳过 |
+| `performance-probe` | Playwright Chromium | 安装服务前先显式运行 `uv run playwright install chromium`；该浏览器同时供微信抓取使用，`install.sh` 不自动下载或校验 |
 
-依赖查找顺序是当前进程环境、项目 `./.env`、`~/.claude/.env`。因此已有密钥放在 `~/.claude/.env` 的本机部署不会出现提示。任何自动跳过都会在命令末尾的 summary 中列出原因。
+脚本可判定的环境变量依赖按当前进程环境、项目 `./.env`、`~/.claude/.env` 查找。因此已有密钥放在 `~/.claude/.env` 的本机部署不会出现提示。任何自动跳过都会在命令末尾的 summary 中列出原因。
 
 完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除，不再作为发布快照的一部分维护。
 

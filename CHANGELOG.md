@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-26
+
+- 将 same-host `performance-probe` 从 busy/idle 双轨 gate + busy rollup 改为 idle-only：pipeline 运行或负载不确定时不保存/评估，只有 idle 窗的 22 样本确认窗超预算才直接 page，不再降为 notice。probe 调度同步从 hourly `:17` crontab 改为专属 per-file launchd（`StartInterval=300`，经 `./run.sh performance-probe` 进入 external watchdog），pipeline 仍保留既有 `*/15` crontab；install/uninstall/status 现管理该 plist 与 legacy symlink 迁移。Playwright Chromium 是微信抓取与默认 probe 共用的显式部署前置，安装器不会自动下载或校验。2026-07-26 live 证明中，全 8 个旅程 cell 在 4.93 小时取得第 22 条 idle 样本，满足 6 小时硬门槛但仅余约 1 小时负载裕度。PERF 投递契约明确为 at-least-once，并依赖 `im-notify` 持久 signature dedup 抑制同一 crash retry 的重复可见消息。
+
 ## 2026-07-22
 
 - 新增 `curated_items.summary_json` 精选 digest 缓存的常驻保留：每次 curate 后自动清空超过 `keep_days`（默认 7 天）且非最新 run 的可再生预计算缓存，使 `radar.db` 体量长期有界（此前约 8MB/天持续膨胀），生产库一次性瘦身实测由约 2.28GB 降到约 1.5GB（省约 785MB / 34%）。同时新增 `./run.sh admin db retain`（只清列）与 `./run.sh admin db slim`（清列 + VACUUM 回收磁盘、DB 同步前跑）子命令，`slim` 返回 `retained`/`compacted` 两阶段结果，`--dry-run` 零写只报待清量。唯一用户可感知的行为变化：`/api/v1/curated?run_id=X` 访问超窗口的历史 run 时，其 digest 改为 live 现算，内容反映当前 enrichment 而非 curation 时快照（TTL 语义）；所有 HTML 用户页只服务最新 run，字节一致、不受影响。

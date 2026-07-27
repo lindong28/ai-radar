@@ -67,7 +67,7 @@
 5. **apply 原地**：`wal_checkpoint(TRUNCATE)` → 清列 → `VACUUM`。**生产语义比 CLI 严格**：`compacted=false` 直接进回滚（生产要么完整成功、要么回滚到已验证备份，不停在中间态）。
 6. **本地验证**（放行 gate）：用独立端口的短生命周期临时 serve / TestClient 指向 `$PROD_DB`——FTS5 integrity-check + 无半清 run + 被清键集精确 + schema hash 不变 + 最新 run `/api/v1/curated` 与 apply 前 sha256 一致。任一失败 → 回滚。
 7. **回滚**（fail-closed）：确认 serve/writer 仍停 → **先删 `"$PROD_DB-wal"` / `"$PROD_DB-shm"`**（与恢复文件不匹配的 WAL/SHM 会静默损坏库）→ 原子 `mv "$BACKUP" "$PROD_DB"` → 复验 integrity + FTS5 + FTS keyset → 通过前不恢复 writer/serve。
-8. **恢复 serve + writer**：仅当验证通过。重启 serve、恢复 disable 的 cron/pipeline。
+8. **恢复 serve + writer**：仅当验证通过。重启 serve、恢复此前 disable 的 launchd 定时项与 pipeline crontab。
 9. **同步服务器 + 线上验证**：sync driver [`plans/20260719-tencent-migration/sync-db-to-tencent.sh`](../../plans/20260719-tencent-migration/sync-db-to-tencent.sh) 现对它**实际传输的那份快照**生成并**持久化 manifest**（`snapshot_hash` + 文件体量 + `summary_json IS NOT NULL` 计数 + 动态枚举普通表逐表逻辑摘要，排除 FTS shadow），并解析远端 apply 真实终态用于线上验证——先过 mutation anchor（远端"已替换并重启"终态 + summary 计数 == manifest + 体量落入 manifest 区间），再过 preservation（远端普通表逻辑摘要 == manifest）。远端终态不明确 → 保留远端旧库、重试 sync，**本地已验证瘦身不回滚**。aiplanet.live 冒烟 200。
 
 > `.backup` 副本用完即弃、不回 merge——schema 无变更，代码（保留函数 + admin 子命令）走常规 merge 回 main，瘦身对生产库 apply 一次即可。
@@ -76,4 +76,4 @@
 
 - [docs/architecture.md §API 端点](../architecture.md#api-端点) — `/api/v1/curated?run_id=X` 历史 run digest 的 TTL 语义
 - [plans/20260720-db-slimming/plan.md](../../plans/20260720-db-slimming/plan.md) — 完整设计、probe 证据、验证矩阵与生产 apply 流程
-- [docs/operations/services.md](services.md) — 服务清单（serve / pipeline / cron 自启机制）
+- [docs/operations/services.md](services.md) — 服务清单（serve / performance-probe 的 launchd 与 pipeline crontab 自启机制）

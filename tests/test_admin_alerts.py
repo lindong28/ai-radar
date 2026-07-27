@@ -5,9 +5,11 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,6 +24,7 @@ from airadar.admin.alerts import (
     AlertSignals,
     _project_lifecycles,
     evaluate_rules,
+    reserve_alert_evaluation_sequence,
     run_alert_results_state_machine,
     run_alert_state_machine,
     send_alert_message,
@@ -58,6 +61,15 @@ def _recording_sender(sent: list[tuple[str, str]]):
         return {"skipped": False}
 
     return sender
+
+
+def _state_without_evaluation_metadata(serialized: str) -> dict[str, object]:
+    state = json.loads(serialized)
+    state.pop("evaluation_sequence", None)
+    for entry in state.values():
+        if isinstance(entry, dict):
+            entry.pop("last_evaluation_sequence", None)
+    return state
 
 
 def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
@@ -477,11 +489,38 @@ def test_alert_rule_result_is_frozen_and_serializable_with_message_slots() -> No
         severity="notice",
         impact="users unaffected",
         urgency="no",
+        firing_basis="observed",
     )
 
     with pytest.raises(FrozenInstanceError):
         result.severity = "page"  # type: ignore[misc]
     assert json.loads(json.dumps(asdict(result))) == asdict(result)
+
+
+def test_state_machine_persists_firing_basis_in_projection_and_lifecycle(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "firing-basis.json"
+    result = AlertRuleResult(
+        rule_id="PERF:homepage.first_card:same_host_origin:idle",
+        title="site performance",
+        firing=True,
+        detail="observed site failure",
+        action="inspect",
+        firing_basis="observed",
+    )
+
+    run_alert_results_state_machine(
+        [result],
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=datetime.fromisoformat("2026-07-22T08:00:00+08:00"),
+        send=lambda _text, *, severity="page": {"skipped": True},
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))[result.rule_id]
+
+    assert state["firing_basis"] == "observed"
+    assert state["lifecycles"]["page"]["firing_basis"] == "observed"
 
 
 @pytest.mark.parametrize(
@@ -659,7 +698,7 @@ def test_fixed_page_rules_retry_failed_firing_without_cooldown(
     assert all(f"🔴 {rule_id}" in text for text, _severity in calls)
 
 
-def test_unannounced_episode_closes_silently_and_failed_resolve_is_not_retried(tmp_path: Path) -> None:
+def test_unannounced_episode_closes_silently_and_failed_resolve_retries(tmp_path: Path) -> None:
     now = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     firing = AlertRuleResult("TEST", "delivery", True, "detail", "action")
     recovered = AlertRuleResult("TEST", "delivery", False, "ok", "action")
@@ -694,7 +733,7 @@ def test_unannounced_episode_closes_silently_and_failed_resolve_is_not_retried(t
 
     def success_then_fail(text: str, *, severity: str = "page") -> dict[str, object]:
         resolve_calls.append((text, severity))
-        return {"skipped": False} if len(resolve_calls) == 1 else resolve_failure
+        return {"skipped": False} if len(resolve_calls) in {1, 3} else resolve_failure
 
     run_alert_results_state_machine(
         [firing],
@@ -723,10 +762,620 @@ def test_unannounced_episode_closes_silently_and_failed_resolve_is_not_retried(t
     assert failed_resolve["sent"][0]["effective_severity"] == "page"
     assert failed_resolve["sent"][0]["channel"] == "ALERT"
     assert failed_resolve["sent"][0]["send_result"] is resolve_failure
-    assert next_ok["sent_count"] == 0
-    assert len(resolve_calls) == 2
+    assert next_ok["sent_count"] == 1
+    assert next_ok["sent"][0]["delivered"] is True
+    assert len(resolve_calls) == 3
     assert final_state["state"] == "ok"
     assert final_state["announced"] is False
+
+
+def test_partial_resolve_exception_persists_delivered_lifecycle_and_retries_pending(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "partial-resolve.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    now = datetime.fromisoformat("2026-07-24T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "TEST": {
+                    "state": "firing",
+                    "severity": "page",
+                    "lifecycles": {
+                        "page": {
+                            "state": "firing",
+                            "since": now.isoformat(),
+                            "last_notified": now.isoformat(),
+                            "detail": "page firing",
+                            "announced": True,
+                        },
+                        "notice": {
+                            "state": "firing",
+                            "since": now.isoformat(),
+                            "last_notified": now.isoformat(),
+                            "detail": "notice firing",
+                            "announced": True,
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def partial_sender(text: str, *, severity: str = "page") -> dict[str, object]:
+        calls.append(severity)
+        if severity == "notice":
+            raise RuntimeError("notice transport crashed")
+        return {"skipped": False}
+
+    recovered = AlertRuleResult("TEST", "partial", False, "ok", "none")
+    with pytest.raises(RuntimeError, match="notice transport crashed"):
+        run_alert_results_state_machine(
+            [recovered],
+            state_path=state_path,
+            event_path=event_path,
+            now=now + timedelta(minutes=1),
+            send=partial_sender,
+        )
+
+    partial = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]
+    assert partial["lifecycles"]["page"]["state"] == "ok"
+    assert partial["lifecycles"]["notice"]["state"] == "firing"
+
+    retried = run_alert_results_state_machine(
+        [recovered],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=2),
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    repeated = run_alert_results_state_machine(
+        [recovered],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=3),
+        send=lambda text, *, severity="page": pytest.fail("resolved lifecycle resent"),
+    )
+
+    assert calls == ["page", "notice"]
+    assert [
+        (receipt["effective_severity"], receipt["type"])
+        for receipt in retried["sent"]
+    ] == [("notice", "resolved")]
+    assert repeated["sent"] == []
+
+
+def test_concurrent_resolve_state_machine_delivers_once(tmp_path: Path) -> None:
+    state_path = tmp_path / "concurrent-resolve.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    now = datetime.fromisoformat("2026-07-24T08:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "TEST": {
+                    "state": "firing",
+                    "since": now.isoformat(),
+                    "last_notified": now.isoformat(),
+                    "detail": "firing",
+                    "severity": "page",
+                    "announced": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    sender_entered = threading.Event()
+    release_sender = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def sender(text: str, *, severity: str = "page") -> dict[str, object]:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        sender_entered.set()
+        assert release_sender.wait(timeout=2)
+        return {"skipped": False}
+
+    result = AlertRuleResult("TEST", "concurrent", False, "ok", "none")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            run_alert_results_state_machine,
+            [result],
+            state_path=state_path,
+            event_path=event_path,
+            now=now + timedelta(minutes=1),
+            send=sender,
+        )
+        assert sender_entered.wait(timeout=1)
+        second = executor.submit(
+            run_alert_results_state_machine,
+            [result],
+            state_path=state_path,
+            event_path=event_path,
+            now=now + timedelta(minutes=1),
+            send=sender,
+        )
+        time.sleep(0.05)
+        release_sender.set()
+        payloads = [first.result(timeout=2), second.result(timeout=2)]
+
+    assert calls == 1
+    assert sorted(payload["sent_count"] for payload in payloads) == [0, 1]
+
+
+def test_older_evaluation_cannot_resolve_newer_firing_state(tmp_path: Path) -> None:
+    state_path = tmp_path / "ordered-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    newer = datetime.fromisoformat("2026-07-24T09:00:00+08:00")
+    older = newer - timedelta(hours=1)
+    calls: list[str] = []
+
+    run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "ordered", True, "new firing", "inspect")],
+        state_path=state_path,
+        event_path=event_path,
+        now=newer,
+        evaluation_sequence=2,
+        send=lambda text, *, severity="page": calls.append(text) or {"skipped": False},
+    )
+    stale = run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "ordered", False, "old recovery", "none")],
+        state_path=state_path,
+        event_path=event_path,
+        now=older,
+        evaluation_sequence=1,
+        send=lambda text, *, severity="page": pytest.fail(
+            f"older evaluation sent {severity}: {text}"
+        ),
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    entry = state["TEST"]
+    assert stale["sent"] == []
+    assert entry["state"] == "firing"
+    assert entry["detail"] == "new firing"
+    assert entry["last_evaluated_at"] == newer.isoformat()
+    assert len(calls) == 1
+
+
+def test_newer_sequence_accepts_firing_after_small_clock_rollback(tmp_path: Path) -> None:
+    state_path = tmp_path / "sequence-rollback-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    first = datetime.fromisoformat("2026-07-24T09:00:00+08:00")
+    rolled_back = first - timedelta(hours=1)
+    calls: list[str] = []
+
+    run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "sequence", False, "healthy", "none")],
+        state_path=state_path,
+        event_path=event_path,
+        now=first,
+        evaluation_sequence=1,
+        send=lambda text, *, severity="page": pytest.fail(
+            f"healthy baseline sent {severity}: {text}"
+        ),
+    )
+    payload = run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "sequence", True, "new firing", "inspect")],
+        state_path=state_path,
+        event_path=event_path,
+        now=rolled_back,
+        evaluation_sequence=2,
+        send=lambda text, *, severity="page": calls.append(text) or {"skipped": False},
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    entry = state["TEST"]
+    assert payload["sent_count"] == 1
+    assert len(calls) == 1
+    assert entry["state"] == "firing"
+    assert entry["last_evaluation_sequence"] == 2
+    assert state["evaluation_sequence"]["last_reserved"] == 2
+
+
+def test_older_sequence_cannot_resolve_newer_state_despite_large_wall_clock_lead(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "sequence-late-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    newer_wall_time = datetime.fromisoformat("2026-07-24T09:00:00+08:00")
+    late_old_wall_time = newer_wall_time + timedelta(hours=12)
+    older_sequence = reserve_alert_evaluation_sequence(state_path=state_path)
+    newer_sequence = reserve_alert_evaluation_sequence(state_path=state_path)
+
+    run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "sequence", True, "new firing", "inspect")],
+        state_path=state_path,
+        event_path=event_path,
+        now=newer_wall_time,
+        evaluation_sequence=newer_sequence,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    payload = run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "sequence", False, "late old recovery", "none")],
+        state_path=state_path,
+        event_path=event_path,
+        now=late_old_wall_time,
+        evaluation_sequence=older_sequence,
+        send=lambda text, *, severity="page": pytest.fail(
+            f"older sequence sent {severity}: {text}"
+        ),
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    entry = state["TEST"]
+    assert payload["sent"] == []
+    assert entry["state"] == "firing"
+    assert entry["detail"] == "new firing"
+    assert entry["last_evaluation_sequence"] == 2
+    assert state["evaluation_sequence"]["last_reserved"] == 2
+
+
+def test_equal_sequence_recovery_cannot_overwrite_firing_state(tmp_path: Path) -> None:
+    state_path = tmp_path / "equal-timestamp-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    current = datetime.fromisoformat("2026-07-24T09:00:00+08:00")
+
+    run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "ordered", True, "new firing", "inspect")],
+        state_path=state_path,
+        event_path=event_path,
+        now=current,
+        evaluation_sequence=1,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    stale = run_alert_results_state_machine(
+        [AlertRuleResult("TEST", "ordered", False, "same-time recovery", "none")],
+        state_path=state_path,
+        event_path=event_path,
+        now=current,
+        evaluation_sequence=1,
+        send=lambda text, *, severity="page": pytest.fail(
+            f"equal-timestamp evaluation sent {severity}: {text}"
+        ),
+    )
+
+    entry = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]
+    assert stale["sent"] == []
+    assert entry["state"] == "firing"
+    assert entry["detail"] == "new firing"
+
+
+@pytest.mark.parametrize(
+    ("initial_firing", "next_firing"),
+    [(True, False), (False, True)],
+)
+def test_implausible_future_ordering_fence_does_not_freeze_state(
+    tmp_path: Path,
+    initial_firing: bool,
+    next_firing: bool,
+) -> None:
+    state_path = tmp_path / f"future-fence-{initial_firing}.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    current = datetime.fromisoformat("2026-07-24T09:00:00+08:00")
+    future = current + timedelta(days=30)
+    state_path.write_text(
+        json.dumps(
+            {
+                "TEST": {
+                    "state": "firing" if initial_firing else "ok",
+                    "since": current.isoformat() if initial_firing else None,
+                    "last_notified": current.isoformat() if initial_firing else None,
+                    "detail": "clock-skewed state",
+                    "severity": "page",
+                    "announced": initial_firing,
+                    "last_evaluated_at": future.isoformat(),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    payload = run_alert_results_state_machine(
+        [
+            AlertRuleResult(
+                "TEST",
+                "rollback",
+                next_firing,
+                "fresh result after clock rollback",
+                "inspect",
+            )
+        ],
+        state_path=state_path,
+        event_path=event_path,
+        now=current,
+        send=lambda text, *, severity="page": calls.append(text) or {"skipped": False},
+    )
+
+    entry = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]
+    assert payload["sent_count"] == 1
+    assert len(calls) == 1
+    assert entry["state"] == ("firing" if next_firing else "ok")
+    assert entry["last_evaluated_at"] == current.isoformat()
+
+
+def test_state_replace_failure_preserves_previous_complete_json(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    original = {
+        "KEEP": {
+            "state": "ok",
+            "since": None,
+            "last_notified": None,
+            "detail": "complete",
+            "severity": "page",
+            "announced": False,
+        }
+    }
+    state_path.write_text(json.dumps(original), encoding="utf-8")
+    real_replace = alerts_module.os.replace
+
+    def fail_state_replace(source: object, destination: object) -> None:
+        if Path(destination) == state_path:
+            raise OSError("injected state replace failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(alerts_module.os, "replace", fail_state_replace)
+
+    with pytest.raises(OSError, match="state replace failure"):
+        run_alert_results_state_machine(
+            [AlertRuleResult("NEW", "atomic", True, "detail", "action")],
+            state_path=state_path,
+            event_path=event_path,
+            now=datetime.fromisoformat("2026-07-24T09:00:00+08:00"),
+            send=lambda text, *, severity="page": {"skipped": False},
+        )
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == original
+
+
+def _install_deduplicating_fake_im_notify(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sender = fake_bin / "im-notify"
+    fake_sender.write_text(
+        """#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+key = args[args.index("--dedup-key") + 1]
+identity = args[args.index("--dedup-text") + 1]
+root = Path(os.environ["FAKE_IM_NOTIFY_STATE"])
+root.mkdir(parents=True, exist_ok=True)
+(root / "attempts.jsonl").open("a", encoding="utf-8").write(
+    json.dumps({"key": key, "identity": identity}) + "\\n"
+)
+signature = hashlib.sha256(identity.encode()).hexdigest()
+signature_path = root / (hashlib.sha256(key.encode()).hexdigest() + ".sig")
+if signature_path.exists() and signature_path.read_text() == signature:
+    print("im-notify: suppressed")
+    raise SystemExit(0)
+(root / "visible.jsonl").open("a", encoding="utf-8").write(json.dumps(identity) + "\\n")
+signature_path.write_text(signature)
+print("im-notify: sent")
+""",
+        encoding="utf-8",
+    )
+    fake_sender.chmod(0o755)
+    transport_state = tmp_path / "transport-state"
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_IM_NOTIFY_STATE", str(transport_state))
+    return transport_state
+
+
+def test_resolve_retry_after_state_persist_crash_is_transport_deduplicated(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    transport_state = _install_deduplicating_fake_im_notify(monkeypatch, tmp_path)
+
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    since = datetime.fromisoformat("2026-07-24T07:00:00+08:00")
+    state_path.write_text(
+        json.dumps(
+            {
+                "TEST": {
+                    "state": "firing",
+                    "since": since.isoformat(),
+                    "last_notified": since.isoformat(),
+                    "detail": "firing",
+                    "severity": "page",
+                    "announced": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    recovered = AlertRuleResult("TEST", "dedup", False, "ok", "none")
+    real_write_state = alerts_module._write_state
+    fail_once = True
+
+    def crash_after_send(path: Path, state: dict[str, dict[str, object]]) -> None:
+        nonlocal fail_once
+        attempts = transport_state / "attempts.jsonl"
+        if fail_once and attempts.exists():
+            fail_once = False
+            raise OSError("injected crash after send")
+        real_write_state(path, state)
+
+    monkeypatch.setattr(alerts_module, "_write_state", crash_after_send)
+    with pytest.raises(OSError, match="crash after send"):
+        run_alert_results_state_machine(
+            [recovered],
+            state_path=state_path,
+            event_path=event_path,
+            now=since + timedelta(minutes=1),
+        )
+    retried = run_alert_results_state_machine(
+        [recovered],
+        state_path=state_path,
+        event_path=event_path,
+        now=since + timedelta(minutes=2),
+    )
+
+    attempts = [
+        json.loads(line)
+        for line in (transport_state / "attempts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    visible = (transport_state / "visible.jsonl").read_text(encoding="utf-8").splitlines()
+    assert retried["sent"][0]["delivered"] is True
+    assert len(attempts) == 2
+    assert attempts[0] == attempts[1]
+    assert attempts[0]["key"] == "ai-radar:TEST:page:resolved:1"
+    assert since.isoformat() in attempts[0]["identity"]
+    assert len(visible) == 1
+    assert json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["state"] == "ok"
+
+
+def test_fresh_firing_retry_after_persist_crash_reuses_notification_nonce(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport_state = _install_deduplicating_fake_im_notify(monkeypatch, tmp_path)
+    state_path = tmp_path / "fresh-state.json"
+    event_path = tmp_path / "fresh-events.jsonl"
+    started = datetime.fromisoformat("2026-07-24T07:00:00+08:00")
+    firing = AlertRuleResult("TEST", "fresh", True, "firing", "inspect")
+    real_write_state = alerts_module._write_state
+    fail_once = True
+
+    def crash_after_send(path: Path, state: dict[str, dict[str, object]]) -> None:
+        nonlocal fail_once
+        attempts = transport_state / "attempts.jsonl"
+        if fail_once and attempts.exists():
+            fail_once = False
+            raise OSError("injected crash after fresh firing send")
+        real_write_state(path, state)
+
+    monkeypatch.setattr(alerts_module, "_write_state", crash_after_send)
+    with pytest.raises(OSError, match="crash after fresh firing send"):
+        run_alert_results_state_machine(
+            [firing],
+            state_path=state_path,
+            event_path=event_path,
+            now=started,
+        )
+    pending = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["lifecycles"]["page"]
+    pending_nonce = pending["pending_notification"]["nonce"]
+
+    retried = run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=1),
+    )
+
+    attempts = [
+        json.loads(line)
+        for line in (transport_state / "attempts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    visible = (transport_state / "visible.jsonl").read_text(encoding="utf-8").splitlines()
+    final = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["lifecycles"]["page"]
+    assert retried["sent_count"] == 1
+    assert attempts[0] == attempts[1]
+    assert str(pending_nonce) in attempts[0]["key"]
+    assert str(pending_nonce) in attempts[0]["identity"]
+    assert len(visible) == 1
+    assert final["notification_sequence"] == pending_nonce
+    assert final["pending_notification"] is None
+
+
+def test_cooldown_repage_allocates_new_notification_nonce(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport_state = _install_deduplicating_fake_im_notify(monkeypatch, tmp_path)
+    state_path = tmp_path / "cooldown-state.json"
+    event_path = tmp_path / "cooldown-events.jsonl"
+    started = datetime.fromisoformat("2026-07-24T07:00:00+08:00")
+    firing = AlertRuleResult("TEST", "cooldown", True, "firing", "inspect")
+
+    run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+    )
+    reminded = run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=31),
+    )
+
+    attempts = [
+        json.loads(line)
+        for line in (transport_state / "attempts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    visible = (transport_state / "visible.jsonl").read_text(encoding="utf-8").splitlines()
+    lifecycle = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["lifecycles"]["page"]
+    assert reminded["sent_count"] == 1
+    assert len(attempts) == len(visible) == 2
+    assert attempts[0] != attempts[1]
+    assert lifecycle["notification_sequence"] == 2
+
+
+def test_page_notice_page_round_trip_allocates_new_page_nonce(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport_state = _install_deduplicating_fake_im_notify(monkeypatch, tmp_path)
+    state_path = tmp_path / "round-trip-state.json"
+    event_path = tmp_path / "round-trip-events.jsonl"
+    started = datetime.fromisoformat("2026-07-24T07:00:00+08:00")
+    thresholds = {"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 0}}}
+
+    run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        thresholds=thresholds,
+    )
+    run_alert_results_state_machine(
+        [_severity_result("notice")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=1),
+        thresholds=thresholds,
+    )
+    returned = run_alert_results_state_machine(
+        [_severity_result("page")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=31),
+        thresholds=thresholds,
+    )
+
+    attempts = [
+        json.loads(line)
+        for line in (transport_state / "attempts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    page_firings = [
+        row
+        for row in attempts
+        if ":page:firing:" in row["key"]
+    ]
+    visible = (transport_state / "visible.jsonl").read_text(encoding="utf-8").splitlines()
+    assert returned["sent_count"] == 2
+    assert len(page_firings) == 2
+    assert page_firings[0] != page_firings[1]
+    assert len(visible) == len(attempts)
 
 
 def _delivery_outcome(case: str) -> object:
@@ -959,7 +1608,9 @@ def test_double_firing_current_state_projects_page_without_silent_healing(
     assert _firing_lifecycle_severities(state_path, "PERF:double") == {"page", "notice"}
     assert entry["lifecycles"]["notice"]["state"] == "firing"
     assert entry["lifecycles"]["notice"]["announced"] is True
-    assert first_saved == second_saved
+    assert _state_without_evaluation_metadata(
+        first_saved
+    ) == _state_without_evaluation_metadata(second_saved)
 
 
 def test_flat_projection_prefers_firing_page_before_notice_preference() -> None:
@@ -1348,7 +1999,9 @@ def test_legacy_pending_a4_inherits_since_when_condition_becomes_notice(tmp_path
     )
 
     assert pending["sent_count"] == reloaded["sent_count"] == 0
-    assert first_saved == second_saved
+    assert _state_without_evaluation_metadata(
+        first_saved
+    ) == _state_without_evaluation_metadata(second_saved)
     assert _receipt_identities(announced) == [("A4", "notice", "firing")]
     state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
     assert state["lifecycles"]["notice"]["since"] == started.isoformat()
@@ -1434,7 +2087,9 @@ def test_load_save_normalizes_legacy_rule_entries_without_touching_healthz(tmp_p
 
     assert first["sent_count"] == second["sent_count"] == 0
     assert calls == []
-    assert first_saved == second_saved
+    assert _state_without_evaluation_metadata(
+        first_saved
+    ) == _state_without_evaluation_metadata(second_saved)
     assert state["A4"]["severity"] == "page"
     assert state["A4"]["announced"] is True
     assert state["A4"]["lifecycles"]["page"] == {
@@ -1443,6 +2098,8 @@ def test_load_save_normalizes_legacy_rule_entries_without_touching_healthz(tmp_p
         "last_notified": (started + timedelta(minutes=1)).isoformat(),
         "detail": "legacy announced page",
         "announced": True,
+        "notification_sequence": 0,
+        "pending_notification": None,
     }
     assert state["healthz_probe"] == healthz
 
@@ -1574,7 +2231,9 @@ def test_legacy_fixed_page_cooldown_migrates_idempotently(tmp_path: Path, rule_i
     )
 
     assert first["sent_count"] == second["sent_count"] == 0
-    assert first_saved == second_saved
+    assert _state_without_evaluation_metadata(
+        first_saved
+    ) == _state_without_evaluation_metadata(second_saved)
     assert _receipt_identities(after_cooldown) == [(rule_id, "page", "firing")]
     state = json.loads(state_path.read_text(encoding="utf-8"))[rule_id]
     assert set(state["lifecycles"]) == {"page"}
@@ -2087,8 +2746,12 @@ def test_notification_ledger_replace_failure_preserves_original_and_state(
     ).encode()
     event_path.write_bytes(original)
 
+    real_replace = alerts_module.os.replace
+
     def fail_replace(source: object, destination: object) -> None:
-        raise OSError("injected replace failure")
+        if Path(destination) == event_path:
+            raise OSError("injected replace failure")
+        real_replace(source, destination)
 
     monkeypatch.setattr("airadar.admin.alerts.os.replace", fail_replace)
     _assert_ledger_failure_isolated(
@@ -2221,8 +2884,12 @@ def test_notification_ledger_failure_survives_raising_logging_handler(
     hostile_logger = logging.Logger("phase6-hostile-ledger-logger")
     hostile_logger.addHandler(RaisingHandler())
 
+    real_replace = alerts_module.os.replace
+
     def fail_replace(source: object, destination: object) -> None:
-        raise OSError("injected replace failure")
+        if Path(destination) == event_path:
+            raise OSError("injected replace failure")
+        real_replace(source, destination)
 
     monkeypatch.setattr(alerts_module.os, "replace", fail_replace)
     monkeypatch.setattr(alerts_module, "LOGGER", hostile_logger)

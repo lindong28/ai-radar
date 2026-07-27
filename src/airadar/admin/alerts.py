@@ -9,7 +9,8 @@ import stat
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,8 +31,10 @@ RETENTION_DAYS = 14
 MAX_LEDGER_BYTES = 64 * 1024 * 1024
 LEDGER_LOCK_TIMEOUT_SECONDS = 1.0
 LEDGER_LOCK_RETRY_SECONDS = 0.025
+STATE_LOCK_TIMEOUT_SECONDS = 1.0
 MINUTES_PER_DAY = 24 * 60
 HEALTHZ_STATE_KEY = "healthz_probe"
+EVALUATION_SEQUENCE_STATE_KEY = "evaluation_sequence"
 # src/airadar/web/routes/health.py registers /healthz and create_app mounts it
 # under the app API prefix /api/v1.
 DEFAULT_HEALTHZ_URL = "http://127.0.0.1:8000/api/v1/healthz"
@@ -40,6 +43,7 @@ DEFAULT_HEALTHZ_TIMEOUT_SECONDS = 2.0
 # multiple projects) lets the reader tell which project an alert came from.
 ALERT_SOURCE = "AI Radar"
 AlertSeverity = Literal["page", "notice"]
+FiringBasis = Literal["observed"]
 PAGE_SEVERITY: Literal["page"] = "page"
 NOTICE_SEVERITY: Literal["notice"] = "notice"
 ALERT_CHANNEL = "ALERT"
@@ -56,6 +60,10 @@ class LedgerLockTimeoutError(TimeoutError):
 
 
 class LedgerNonRegularFileError(RuntimeError):
+    pass
+
+
+class AlertStateLockTimeoutError(TimeoutError):
     pass
 
 
@@ -92,6 +100,7 @@ class AlertRuleResult:
     severity: AlertSeverity = PAGE_SEVERITY
     impact: str = ""
     urgency: str = ""
+    firing_basis: FiringBasis | None = None
 
 
 def _threshold_section(thresholds: dict[str, object], key: str) -> dict[str, Any]:
@@ -329,6 +338,12 @@ def _normalize_severity(value: object) -> AlertSeverity:
     return NOTICE_SEVERITY if value == NOTICE_SEVERITY else PAGE_SEVERITY
 
 
+def _normalize_firing_basis(value: object) -> FiringBasis | None:
+    if value == "observed":
+        return "observed"
+    return None
+
+
 def _severity_channel(severity: AlertSeverity) -> str:
     return NOTIFICATION_CHANNEL if severity == NOTICE_SEVERITY else ALERT_CHANNEL
 
@@ -354,13 +369,37 @@ def _entry_announced(entry: dict[str, object]) -> bool:
 
 def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
     state = "firing" if entry.get("state") == "firing" else "ok"
-    return {
+    raw_sequence = entry.get("notification_sequence")
+    notification_sequence = (
+        raw_sequence if isinstance(raw_sequence, int) and raw_sequence >= 0 else 0
+    )
+    raw_pending = entry.get("pending_notification")
+    pending_notification: dict[str, object] | None = None
+    if isinstance(raw_pending, dict):
+        nonce = raw_pending.get("nonce")
+        event_type = raw_pending.get("event_type")
+        if (
+            isinstance(nonce, int)
+            and nonce > 0
+            and event_type in {"firing", "resolved"}
+        ):
+            pending_notification = {
+                "nonce": nonce,
+                "event_type": event_type,
+                "episode_since": raw_pending.get("episode_since"),
+            }
+    normalized = {
         "state": state,
         "since": entry.get("since") if state == "firing" else None,
         "last_notified": entry.get("last_notified"),
         "detail": entry.get("detail"),
         "announced": state == "firing" and _entry_announced(entry),
+        "notification_sequence": notification_sequence,
+        "pending_notification": pending_notification,
     }
+    if (firing_basis := _normalize_firing_basis(entry.get("firing_basis"))) is not None:
+        normalized["firing_basis"] = firing_basis
+    return normalized
 
 
 def _normalize_lifecycles(entry: dict[str, object]) -> dict[AlertSeverity, dict[str, object]]:
@@ -385,6 +424,8 @@ def _ok_lifecycle(lifecycle: dict[str, object], detail: str) -> dict[str, object
         "last_notified": lifecycle.get("last_notified"),
         "detail": detail,
         "announced": False,
+        "notification_sequence": lifecycle.get("notification_sequence", 0),
+        "pending_notification": None,
     }
 
 
@@ -407,7 +448,7 @@ def _project_lifecycles(
         preferred_severity if preferred_severity in lifecycles else next(iter(lifecycles))
     )
     projected = lifecycles[projected_severity]
-    return {
+    projection = {
         "state": "firing" if active_severity is not None else "ok",
         "since": projected.get("since") if active_severity is not None else None,
         "last_notified": projected.get("last_notified"),
@@ -416,6 +457,11 @@ def _project_lifecycles(
         "announced": active_severity is not None and _entry_announced(projected),
         "lifecycles": lifecycles,
     }
+    if active_severity is not None and (
+        firing_basis := _normalize_firing_basis(projected.get("firing_basis"))
+    ) is not None:
+        projection["firing_basis"] = firing_basis
+    return projection
 
 
 def _transition_since(
@@ -438,8 +484,32 @@ def _invoke_sender(
     text: str,
     severity: AlertSeverity,
     sender: AlertSender,
+    episode_since: object,
+    notification_nonce: int,
+    transport_dedup: bool,
 ) -> dict[str, object]:
-    send_result = sender(text, severity=severity)
+    send_result: object
+    if transport_dedup:
+        dedup_key = (
+            f"ai-radar:{result.rule_id}:{severity}:{event_type}:{notification_nonce}"
+        )
+        dedup_text = "\n".join(
+            (
+                result.rule_id,
+                severity,
+                event_type,
+                str(notification_nonce),
+                str(episode_since or ""),
+            )
+        )
+        send_result = send_alert_message(
+            text,
+            severity=severity,
+            dedup_key=dedup_key,
+            dedup_text=dedup_text,
+        )
+    else:
+        send_result = sender(text, severity=severity)
     delivered = _snapshot_delivery_succeeded(send_result)
     return {
         "rule_id": result.rule_id,
@@ -449,6 +519,7 @@ def _invoke_sender(
         "text": text,
         "send_result": send_result,
         "delivered": delivered,
+        "notification_nonce": notification_nonce,
     }
 
 
@@ -652,19 +723,116 @@ def _load_state(path: Path) -> dict[str, dict[str, object]]:
         return {}
     state = payload
     for rule_id, entry in list(state.items()):
-        if rule_id == HEALTHZ_STATE_KEY or not isinstance(entry, dict):
+        if rule_id in {HEALTHZ_STATE_KEY, EVALUATION_SEQUENCE_STATE_KEY} or not isinstance(
+            entry, dict
+        ):
             continue
         lifecycles = _normalize_lifecycles(entry)
-        state[rule_id] = _project_lifecycles(
+        projected = _project_lifecycles(
             lifecycles,
             preferred_severity=_normalize_severity(entry.get("severity")),
         )
+        if _parse_dt(entry.get("last_evaluated_at")) is not None:
+            projected["last_evaluated_at"] = entry["last_evaluated_at"]
+        if (
+            isinstance(entry.get("last_evaluation_sequence"), int)
+            and int(entry["last_evaluation_sequence"]) > 0
+        ):
+            projected["last_evaluation_sequence"] = entry["last_evaluation_sequence"]
+        state[rule_id] = projected
     return state
+
+
+def _claim_evaluation_sequence(
+    state: dict[str, dict[str, object]],
+    requested: int | None = None,
+) -> int:
+    metadata = state.get(EVALUATION_SEQUENCE_STATE_KEY, {})
+    raw_last_reserved = metadata.get("last_reserved") if isinstance(metadata, dict) else None
+    last_reserved = (
+        raw_last_reserved
+        if isinstance(raw_last_reserved, int) and raw_last_reserved >= 0
+        else 0
+    )
+    if requested is None:
+        sequence = last_reserved + 1
+    else:
+        if requested <= 0:
+            raise ValueError("evaluation_sequence must be positive")
+        sequence = requested
+    state[EVALUATION_SEQUENCE_STATE_KEY] = {
+        "last_reserved": max(last_reserved, sequence),
+    }
+    return sequence
+
+
+def reserve_alert_evaluation_sequence(*, state_path: str | Path) -> int:
+    path = Path(state_path)
+    with _alert_state_lock(path):
+        state = _load_state(path)
+        sequence = _claim_evaluation_sequence(state)
+        _write_state(path, state)
+    return sequence
 
 
 def _write_state(path: Path, state: dict[str, dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(state, temporary, ensure_ascii=False, indent=2, sort_keys=True)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _alert_state_lock(state_path: Path) -> Iterator[None]:
+    lock_path = state_path.with_suffix(state_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o666)
+    try:
+        with os.fdopen(descriptor, mode="r+") as lock_file:
+            descriptor = -1
+            if not stat.S_ISREG(os.fstat(lock_file.fileno()).st_mode):
+                raise AlertStateLockTimeoutError(
+                    f"alert state lock is not a regular file: {lock_path}"
+                )
+            deadline = time.monotonic() + STATE_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as exc:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise AlertStateLockTimeoutError(
+                            f"timed out locking alert state after "
+                            f"{STATE_LOCK_TIMEOUT_SECONDS:.1f}s: {state_path}"
+                        ) from exc
+                    time.sleep(min(LEDGER_LOCK_RETRY_SECONDS, remaining))
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _probe_healthz(url: str, timeout: float) -> bool:
@@ -717,8 +885,11 @@ def _apply_alert_results(
     state: dict[str, dict[str, object]],
     results: list[AlertRuleResult],
     *,
+    state_path: Path,
     current: datetime,
+    evaluation_sequence: int,
     sender: AlertSender,
+    transport_dedup: bool,
     thresholds: dict[str, object],
     event_path: str | Path,
 ) -> list[dict[str, object]]:
@@ -731,8 +902,63 @@ def _apply_alert_results(
         )
         if not isinstance(entry, dict):
             entry = {"state": "ok", "severity": _normalize_severity(result.severity)}
+        last_evaluation_sequence = entry.get("last_evaluation_sequence")
+        if (
+            isinstance(last_evaluation_sequence, int)
+            and evaluation_sequence <= last_evaluation_sequence
+        ):
+            continue
         lifecycles = _normalize_lifecycles(entry)
         projected_severity = _normalize_severity(entry.get("severity"))
+
+        def project(preferred_severity: AlertSeverity) -> dict[str, object]:
+            projected = _project_lifecycles(
+                lifecycles,
+                preferred_severity=preferred_severity,
+            )
+            projected["last_evaluated_at"] = current.isoformat()
+            projected["last_evaluation_sequence"] = evaluation_sequence
+            return projected
+
+        def prepare_notification(
+            lifecycle: dict[str, object],
+            *,
+            severity: AlertSeverity,
+            event_type: Literal["firing", "resolved"],
+            episode_since: object,
+            preferred_severity: AlertSeverity,
+        ) -> tuple[dict[str, object], int]:
+            pending = lifecycle.get("pending_notification")
+            episode_identity = str(episode_since or "")
+            if (
+                isinstance(pending, dict)
+                and pending.get("event_type") == event_type
+                and pending.get("episode_since") == episode_identity
+                and isinstance(pending.get("nonce"), int)
+                and int(pending["nonce"]) > 0
+            ):
+                nonce = int(pending["nonce"])
+            else:
+                sequence = lifecycle.get("notification_sequence")
+                nonce = (sequence if isinstance(sequence, int) and sequence >= 0 else 0) + 1
+                pending = {
+                    "nonce": nonce,
+                    "event_type": event_type,
+                    "episode_since": episode_identity,
+                }
+            existing_sequence = lifecycle.get("notification_sequence")
+            if not isinstance(existing_sequence, int) or existing_sequence < 0:
+                existing_sequence = 0
+            prepared = {
+                **lifecycle,
+                "notification_sequence": max(nonce, existing_sequence),
+                "pending_notification": pending,
+            }
+            lifecycles[severity] = prepared
+            state[result.rule_id] = project(preferred_severity)
+            _write_state(state_path, state)
+            return prepared, nonce
+
         if result.firing:
             effective_severity = _normalize_severity(result.severity)
             debounce = _debounce_window(thresholds, result.rule_id, effective_severity)
@@ -749,18 +975,33 @@ def _apply_alert_results(
                 if announced:
                     outgoing_announced = True
                     outgoing_since = lifecycle.get("since")
+                    lifecycle, notification_nonce = prepare_notification(
+                        lifecycle,
+                        severity=severity,
+                        event_type="resolved",
+                        episode_since=lifecycle.get("since"),
+                        preferred_severity=effective_severity,
+                    )
                     receipt = _invoke_sender(
                         result=result,
                         event_type="resolved",
                         text=_format_resolved(result, str(lifecycle.get("since") or "")),
                         severity=severity,
                         sender=sender,
+                        episode_since=lifecycle.get("since"),
+                        notification_nonce=notification_nonce,
+                        transport_dedup=transport_dedup,
                     )
                     sent.append(receipt)
                     delivered.append((receipt, result))
+                    if receipt["delivered"] is True:
+                        lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+                    state[result.rule_id] = project(effective_severity)
+                    _write_state(state_path, state)
                 elif pending_since is None:
                     pending_since = lifecycle.get("since")
-                lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+                if not announced:
+                    lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
 
             lifecycle = lifecycles.get(
                 effective_severity,
@@ -770,10 +1011,16 @@ def _apply_alert_results(
                     "last_notified": None,
                     "detail": result.detail,
                     "announced": False,
+                    "notification_sequence": 0,
+                    "pending_notification": None,
                 },
             )
             lifecycle_was_firing = lifecycle.get("state") == "firing"
             previously_announced = lifecycle_was_firing and _entry_announced(lifecycle)
+            existing_firing_basis = _normalize_firing_basis(
+                lifecycle.get("firing_basis")
+            )
+            firing_basis = result.firing_basis or existing_firing_basis
             if lifecycle_was_firing:
                 since = lifecycle.get("since")
             elif outgoing_announced:
@@ -792,20 +1039,44 @@ def _apply_alert_results(
             should_notify = confirmed and (
                 last_notified is None or current - last_notified >= COOLDOWN
             )
+            lifecycle = {
+                **lifecycle,
+                "state": "firing",
+                "since": since,
+                "detail": result.detail,
+                "announced": previously_announced,
+            }
+            if firing_basis is not None:
+                lifecycle["firing_basis"] = firing_basis
+            else:
+                lifecycle.pop("firing_basis", None)
+            lifecycles[effective_severity] = lifecycle
+            state[result.rule_id] = project(effective_severity)
             delivery_succeeded = False
             if should_notify:
                 text = _format_firing(result)
+                lifecycle, notification_nonce = prepare_notification(
+                    lifecycle,
+                    severity=effective_severity,
+                    event_type="firing",
+                    episode_since=since,
+                    preferred_severity=effective_severity,
+                )
                 receipt = _invoke_sender(
                     result=result,
                     event_type="firing",
                     text=text,
                     severity=effective_severity,
                     sender=sender,
+                    episode_since=since,
+                    notification_nonce=notification_nonce,
+                    transport_dedup=transport_dedup,
                 )
                 sent.append(receipt)
                 delivered.append((receipt, result))
                 delivery_succeeded = receipt["delivered"] is True
             lifecycles[effective_severity] = {
+                **lifecycle,
                 "state": "firing",
                 "since": since,
                 "last_notified": (
@@ -813,27 +1084,44 @@ def _apply_alert_results(
                 ),
                 "detail": result.detail,
                 "announced": previously_announced or delivery_succeeded,
+                "pending_notification": (
+                    None if delivery_succeeded else lifecycle.get("pending_notification")
+                ),
             }
-            state[result.rule_id] = _project_lifecycles(
-                lifecycles,
-                preferred_severity=effective_severity,
-            )
+            state[result.rule_id] = project(effective_severity)
+            if should_notify:
+                _write_state(state_path, state)
         else:
             for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
                 lifecycle = lifecycles.get(severity)
                 if lifecycle is None or lifecycle.get("state") != "firing":
                     continue
                 if _entry_announced(lifecycle):
+                    lifecycle, notification_nonce = prepare_notification(
+                        lifecycle,
+                        severity=severity,
+                        event_type="resolved",
+                        episode_since=lifecycle.get("since"),
+                        preferred_severity=projected_severity,
+                    )
                     receipt = _invoke_sender(
                         result=result,
                         event_type="resolved",
                         text=_format_resolved(result, str(lifecycle.get("since") or "")),
                         severity=severity,
                         sender=sender,
+                        episode_since=lifecycle.get("since"),
+                        notification_nonce=notification_nonce,
+                        transport_dedup=transport_dedup,
                     )
                     sent.append(receipt)
                     delivered.append((receipt, result))
-                lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+                    if receipt["delivered"] is True:
+                        lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+                    state[result.rule_id] = project(projected_severity)
+                    _write_state(state_path, state)
+                else:
+                    lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
             if projected_severity not in lifecycles:
                 projected_severity = _normalize_severity(result.severity)
                 lifecycles[projected_severity] = _ok_lifecycle({}, result.detail)
@@ -842,10 +1130,7 @@ def _apply_alert_results(
                     **lifecycles[projected_severity],
                     "detail": result.detail,
                 }
-            state[result.rule_id] = _project_lifecycles(
-                lifecycles,
-                preferred_severity=projected_severity,
-            )
+            state[result.rule_id] = project(projected_severity)
     try:
         _record_notification_events(event_path, current=current, delivered=delivered)
     except BaseException:
@@ -861,6 +1146,7 @@ def run_alert_results_state_machine(
     now: datetime | None = None,
     send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
+    evaluation_sequence: int | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(SHANGHAI_TZ)
     if current.tzinfo is None:
@@ -869,16 +1155,25 @@ def run_alert_results_state_machine(
     path = Path(state_path)
     ledger_path = Path(event_path)
     _validate_alert_paths(state_path=path, event_path=ledger_path)
-    state = _load_state(path)
-    sent = _apply_alert_results(
-        state,
-        results,
-        current=current,
-        sender=send or send_alert_message,
-        thresholds=thresholds or {},
-        event_path=ledger_path,
-    )
-    _write_state(path, state)
+    with _alert_state_lock(path):
+        state = _load_state(path)
+        active_evaluation_sequence = _claim_evaluation_sequence(
+            state,
+            evaluation_sequence,
+        )
+        sender = send or send_alert_message
+        sent = _apply_alert_results(
+            state,
+            results,
+            state_path=path,
+            current=current,
+            evaluation_sequence=active_evaluation_sequence,
+            sender=sender,
+            transport_dedup=send is None,
+            thresholds=thresholds or {},
+            event_path=ledger_path,
+        )
+        _write_state(path, state)
     return {
         "ruleset": [result.rule_id for result in results],
         "sent_count": len(sent),
@@ -905,27 +1200,31 @@ def run_alert_state_machine(
     path = Path(state_path)
     ledger_path = Path(event_path)
     _validate_alert_paths(state_path=path, event_path=ledger_path)
-    state = _load_state(path)
-    sender = send or send_alert_message
-    active_thresholds = thresholds or ALERT_THRESHOLDS
-    healthz_consecutive_failures = _record_healthz_probe(
-        state,
-        current=current,
-        thresholds=active_thresholds,
-        healthz_probe=healthz_probe,
-    )
-    signals = replace(signals, healthz_consecutive_failures=healthz_consecutive_failures)
-    results = evaluate_rules(signals, thresholds=active_thresholds)
-    sent = _apply_alert_results(
-        state,
-        results,
-        current=current,
-        sender=sender,
-        thresholds=active_thresholds,
-        event_path=ledger_path,
-    )
-
-    _write_state(path, state)
+    with _alert_state_lock(path):
+        state = _load_state(path)
+        sender = send or send_alert_message
+        active_thresholds = thresholds or ALERT_THRESHOLDS
+        healthz_consecutive_failures = _record_healthz_probe(
+            state,
+            current=current,
+            thresholds=active_thresholds,
+            healthz_probe=healthz_probe,
+        )
+        signals = replace(signals, healthz_consecutive_failures=healthz_consecutive_failures)
+        results = evaluate_rules(signals, thresholds=active_thresholds)
+        evaluation_sequence = _claim_evaluation_sequence(state)
+        sent = _apply_alert_results(
+            state,
+            results,
+            state_path=path,
+            current=current,
+            evaluation_sequence=evaluation_sequence,
+            sender=sender,
+            transport_dedup=send is None,
+            thresholds=active_thresholds,
+            event_path=ledger_path,
+        )
+        _write_state(path, state)
     return {
         "ruleset": list(RULESET),
         "sent_count": len(sent),
@@ -935,11 +1234,22 @@ def run_alert_state_machine(
     }
 
 
-def send_alert_message(text: str, *, severity: AlertSeverity = PAGE_SEVERITY) -> dict[str, object]:
+def send_alert_message(
+    text: str,
+    *,
+    severity: AlertSeverity = PAGE_SEVERITY,
+    dedup_key: str | None = None,
+    dedup_text: str | None = None,
+) -> dict[str, object]:
     effective_severity = _normalize_severity(severity)
-    command = ["im-notify", text]
+    command = ["im-notify"]
     if effective_severity == PAGE_SEVERITY:
-        command.insert(1, "--alert")
+        command.append("--alert")
+    if dedup_key is not None:
+        command.extend(("--dedup-key", dedup_key))
+    if dedup_text is not None:
+        command.extend(("--dedup-text", dedup_text))
+    command.append(text)
     try:
         completed = subprocess.run(command, capture_output=True, text=True, timeout=15.0)
     except (OSError, subprocess.TimeoutExpired) as exc:

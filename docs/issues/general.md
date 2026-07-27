@@ -329,3 +329,48 @@
 - Priority: low（该集成当前休眠：registry 为空、checkout 无 `config/performance-adapter` 入口、历史 wrapper source-hash 与当前源码不符）
 - Discovered: 2026-07-19 规则审计的 review gate（`AI_RADAR_PUBLIC_URL` 中性化改造复核）
 - Description: `run_adapter` 现对未配置的 `same_host_public` vantage 以 `ProbeInfrastructureError("vantage_unconfigured")` 干净拒绝（wire-schema safe 的 bare slug reason，exit 78 → status=incompatible），不再用空 base URL 产生伪 hard_failure 样本——这是 repo 侧能做到的最干净语义。但外层 continuous-performance fleet 会把 `incompatible` 计为 infrastructure failure，令 `run-all` 失败并触发外层告警，因此"未配置 = 静默跳过"在 fleet 层面不成立。Fix 方向（激活该集成时执行）：在 fleet/journey 注册配置层面按 `AI_RADAR_PUBLIC_URL` 是否配置决定是否注册 `same_host_public` vantage（未配置就不调度，而不是调度后靠 incompatible 兜底）；或在 fleet 侧为 `vantage_unconfigured` reason 增加"配置性跳过"的非告警处置。在此之前不要在未配置 public URL 的环境注册 public vantage journeys。
+
+---
+
+## [open] PERF probe `value_ms` 含 Chromium 启动耗时 → 慢启动可伪造站点性能页
+
+- Type: reliability / measurement-correctness
+- Priority: medium
+- Discovered: 2026-07-26 idle-only probe 收尾对抗复审（reviewer 019f92af）；pre-existing（HEAD `browser_probe.py` 即在 `chromium.launch()`/`new_context()`/`new_page()` 之前记 `started`），idle-only follow-up 未引入，按用户裁决单独排期。
+- Description: `value_ms = (perf_counter_ns() - started)/1e6` 的 `started` 在浏览器启动前记录，故上报延迟包含 Chromium 启动+context/page 创建耗时。若某轮启动异常慢（如 4s）而站点本身瞬时返回正确内容，样本仍为 `observed, hard_failure=False, value_ms≈4000`；连续 22 轮慢启动会把 p75/p95 顶过 2/3s 预算，产生并非站点退化的 PERF page（reviewer 最小实验已复现）。这是探针基础设施耗时污染站点测量的方向（与 browser-launch-failure 分类正交）。Fix 方向：把测量起点移到 page 就绪之后（site_deadline 已如此计算），使 `value_ms` 只覆盖站点旅程、不含浏览器启动；或从 value 中扣除已知启动区间。改动需配套确认 2/3s 预算校准仍成立。
+
+---
+
+## [open] PERF probe 不检查 `goto()` HTTP 状态，500 + 有效 DOM 判成功
+
+- Type: reliability / measurement-correctness
+- Priority: medium
+- Discovered: 2026-07-26 idle-only probe 收尾对抗复审（reviewer 019f92af）；pre-existing（HEAD `browser_probe.py:72` 即丢弃 `page.goto()` 返回值），按用户裁决单独排期。
+- Description: `page.goto()` 的 response 返回值被完全丢弃，无 status 检查。服务返回 HTTP 500 但错误页/缓存页/fallback shell 仍含预期 selector、文本与 item IDs 时，全部 DOM 断言通过，结果为 `observed, hard_failure=False`，持续 500 永不 page（reviewer 已复现 `status=500` 且 DOM 匹配→observed/non-failure）。空白 500 通常因 selector timeout 兜底 firing，但一般 500 不覆盖。Fix 方向：捕获 `goto()` 返回的 response，对 5xx（及按契约的 4xx）计 `hard_failure=True`；注意与既有 blank-page/selector-timeout 路径去重。
+
+---
+
+## [open] PERF probe 无 timeout 的 `locator.count()/evaluate_all()` renderer hang → 被判 infra 而非站点故障
+
+- Type: reliability / measurement-correctness
+- Priority: medium
+- Discovered: 2026-07-26 idle-only probe 收尾对抗复审（reviewer 019f92af）；renderer-hang 子路径 pre-existing（无 timeout 的协议调用），idle-only follow-up 的 grace-race 半边已单独修复，此半边按用户裁决单独排期。
+- Description: `locator.count()` 与 `locators.evaluate_all()` 在当前 Playwright 实现下经无 timeout 的协议调用执行。页面已渲染预期 DOM 后 JS/renderer 卡死于这些调用时，worker 永不发布 site result，父进程在 `timeout+grace` 后杀 worker 返回 `probe_infra_failure/worker_unavailable`——真实站点/renderer 挂死被改判成 infra、连续发生也不 page。Fix 方向：给这些 locator 操作套用与 goto 一致的剩余 site deadline（`remaining_site_timeout_ms()`），使 renderer hang 触发 `PlaywrightTimeoutError`→observed hard_failure（site fire），而非 worker 沉默→infra。
+
+---
+
+## [open] PERF probe `Pipe()/Process()` 构造失败未包成 infra marker
+
+- Type: reliability
+- Priority: low
+- Discovered: 2026-07-26 idle-only probe 收尾对抗复审（reviewer 019f92af）；按用户裁决单独排期。
+- Description: `process.start()` 已被 try 包裹并转 `probe_infra_failure`，但 `get_context()`、`Pipe()`、`Process()` 在 try 之外。文件描述符耗尽等导致 `Pipe()` 抛 `OSError` 时整个 probe 异常退出、无持久 `probe_infra_failure` marker（stderr 留堆栈、非完全静默，但 worker-start infra 的可见性契约不完整）。Fix 方向：把 context/Pipe/Process 构造纳入同一 infra 兜底，构造失败也产出可见的 `browser_runtime:*` infra 样本。
+
+---
+
+## [open] PERF probe 把 invalid selector/protocol PlaywrightError（探针自身故障）当站点故障 → 误 page
+
+- Type: reliability / measurement-correctness
+- Priority: medium
+- Discovered: 2026-07-26 idle-only probe 收尾第五轮对抗复审（reviewer 019f92af）；pre-existing（HEAD 即 `except (OSError, PlaywrightError) → hard_failure=True`），按用户裁决单独排期。
+- Description: page 就绪后的 site-operation 阶段，若探针自身的 selector/API 契约不兼容（如 `PlaywrightError: Unexpected token "?" while parsing css selector` 或 `Protocol error: Invalid parameters`），该错误既不匹配 `_is_browser_runtime_loss` 的 target/browser-closed marker、也不是 `AttributeError`，于是落到 `outcome="observed", hard_failure=True`（browser_probe.py:246）当成真实站点故障；连续 22 次后 evaluator 产生 firing 并写入可信 `firing_basis="observed"`，误发"站点慢" page，且此后即使 probe 转 infra，round-5 统一迁移规则还会把这个错误 provenance 当可信 observed firing 持有（reviewer 只读复现 classification observed True→count 22→evaluation True observed）。这是探针自身故障被误报为站点退化的方向——与 launch/crash 分类同类，但发生在启动后、且原授权曾把"启动后 error 保留 page"划在 scope 外，故本轮 defer。实务风险低：selector 是代码静态常量、部署测试全绿，仅 Playwright 升级破坏 API 契约才触发（可检测的部署/升级时风险）。Fix 方向：新增一个 invalid-API 分类谓词（匹配 invalid selector/protocol 的 PlaywrightError 签名，与 `AttributeError→browser_runtime:invalid_api` 同归），把探针自身契约错误归为 non-firing `browser_runtime:invalid_api` infra，使其永不 page、也不取得 observed provenance；注意与真实站点驱动的 PlaywrightError（导航/连接失败）区分，后者仍 fire。

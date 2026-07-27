@@ -28,12 +28,11 @@ from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
 from .fetcher.runner import fetch_all, refresh_wechat_avatar, reload_sources
 from .interpret.runner import run_interpret
 from .performance.journey_monitor import (
-    CRONTAB_SAMPLE,
     DEFAULT_ALERT_STATE_PATH,
-    DEFAULT_BROWSER_LOCK_PATH,
     DEFAULT_EVIDENCE_DIR,
     DEFAULT_PIPELINE_LOCK_DIR,
     DEFAULT_SAMPLE_PATH,
+    LAUNCHD_INSTALL_HINT,
     run_journey_monitor,
 )
 from .performance.remediation import (
@@ -388,7 +387,6 @@ def _performance_probe(args: argparse.Namespace) -> int:
         state_path=Path(args.state_path),
         evidence_dir=Path(args.evidence_dir),
         pipeline_lock_dir=Path(args.pipeline_lock),
-        browser_lock_path=Path(args.browser_lock),
         db_path=Path(args.db_path),
     )
     print(str(result["scope"]))
@@ -569,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     performance_probe = subparsers.add_parser(
         "performance-probe",
-        epilog=f"crontab example: {CRONTAB_SAMPLE}",
+        epilog=f"launchd install: {LAUNCHD_INSTALL_HINT}",
     )
     performance_probe.add_argument("--origin-url", default="http://127.0.0.1:8000")
     performance_probe.add_argument(
@@ -581,7 +579,6 @@ def build_parser() -> argparse.ArgumentParser:
     performance_probe.add_argument("--state-path", default=str(DEFAULT_ALERT_STATE_PATH))
     performance_probe.add_argument("--evidence-dir", default=str(DEFAULT_EVIDENCE_DIR))
     performance_probe.add_argument("--pipeline-lock", default=str(DEFAULT_PIPELINE_LOCK_DIR))
-    performance_probe.add_argument("--browser-lock", default=str(DEFAULT_BROWSER_LOCK_PATH))
     performance_probe.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
 
     performance_remediate = subparsers.add_parser(
