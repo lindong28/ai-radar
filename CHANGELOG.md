@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-02
+
+- 前端全面改版（参照 aihot.virxact.com 的信息架构与视觉）：默认主题从深色科技风改为浅色简约风，新增暗色变体与侧栏底部三态主题切换（浅色/深色/跟随系统，localStorage 持久，head 内联脚本防闪烁）；精选与全部动态页从分页控件改为无限下拉（IntersectionObserver + 请求代际校验防筛选切换竞态；/all 搜索态改用页码分页以规避 timeline API 搜索时忽略 cursor 的语义）；卡片新增收藏按钮与 `/bookmarks` 收藏页（localStorage 快照 + 导出/导入 JSON，导入经字段与日期可解析校验；服务端同步接口已预留约定未实现）；首页新增"当前热点"榜（新端点 `GET /api/v1/hot`，近 48 小时按 加权分×10+关联讨论×5 排序，单次一致快照取样，纳入 90s 公共缓存白名单）；日期分组可折叠且追加加载继承折叠态；主站页面移除 Google Fonts 改用系统字体栈（消除跨境字体请求的首屏延迟），AI 日报页保留原深色报纸风（旧样式与 token 原样迁移）。微信详情页安全契约由"整页无 script"收窄为"正文容器无 script"（新增 head 主题引导与导航 module 两个可信脚本）。改版经 Codex 高档对抗审查两轮修复复核后合入。
+
 ## 2026-07-26
 
 - 将 same-host `performance-probe` 从 busy/idle 双轨 gate + busy rollup 改为 idle-only：pipeline 运行或负载不确定时不保存/评估，只有 idle 窗的 22 样本确认窗超预算才直接 page，不再降为 notice。probe 调度同步从 hourly `:17` crontab 改为专属 per-file launchd（`StartInterval=300`，经 `./run.sh performance-probe` 进入 external watchdog），pipeline 仍保留既有 `*/15` crontab；install/uninstall/status 现管理该 plist 与 legacy symlink 迁移。Playwright Chromium 是微信抓取与默认 probe 共用的显式部署前置，安装器不会自动下载或校验。2026-07-26 live 证明中，全 8 个旅程 cell 在 4.93 小时取得第 22 条 idle 样本，满足 6 小时硬门槛但仅余约 1 小时负载裕度。PERF 投递契约明确为 at-least-once，并依赖 `im-notify` 持久 signature dedup 抑制同一 crash retry 的重复可见消息。

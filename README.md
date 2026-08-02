@@ -113,10 +113,11 @@ repo=$PWD
 
 | 页面 | URL | 说明 |
 |------|-----|------|
-| 精选 | `/` | 高评分精选内容，按日期分组 |
-| 全部 AI 动态 | `/all` | 完整时间线，最新优先 |
+| 精选 | `/` | 高评分精选内容，按日期分组（可折叠），顶部为近 48 小时热点榜，无限下拉加载 |
+| 全部 AI 动态 | `/all` | 完整时间线，最新优先，无限下拉加载 |
 | 微信文章解读 | `/wechat` | 已订阅微信公众号文章的结构化总结，支持按标题、公众号、摘要和标签搜索；详情页为 `/wechat/<slug>` |
 | AI 日报 | `/daily` | 每日精选归档，支持 `?date=YYYY-MM-DD` |
+| 收藏 | `/bookmarks` | 本设备浏览器收藏的内容（localStorage），支持导出/导入 JSON |
 | 关于 | `/about` | 项目介绍和信源池 |
 | 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
 | LLM 用量 | `/admin/usage` | 内部页面，展示最近 30 天 prefilter / score / enrich / interpret 的按天、按模型 token 用量与输入归因；公网需 Cloudflare Access |

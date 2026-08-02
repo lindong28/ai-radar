@@ -46,6 +46,7 @@ _PUBLIC_PAGINATION_QUERY_KEYS = {
     "/": frozenset({"page"}),
     "/wechat": frozenset({"page"}),
     "/api/v1/curated": frozenset({"page", "limit"}),
+    "/api/v1/hot": frozenset({"limit", "hours"}),
     "/api/v1/wechat": frozenset({"page", "limit"}),
 }
 
@@ -370,6 +371,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/daily/{daily_date}", include_in_schema=False)
     def dated_daily_page(daily_date: str) -> FileResponse:
         return FileResponse(STATIC_DIR / "daily.html")
+
+    @app.get("/bookmarks", include_in_schema=False)
+    def bookmarks_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "bookmarks.html", {})
 
     @app.get("/about", include_in_schema=False)
     def about_page(request: Request) -> HTMLResponse:

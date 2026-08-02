@@ -363,7 +363,7 @@ function itemCard(item, showScore, options = {}) {
   return `<article class="item-row timeline-card${isX ? " x-card" : ""}${compact ? " compact-card" : ""}${options.clampSummary ? " clamped-card" : ""}" data-item-id="${esc(item.id)}" data-source-id="${esc(item.source_id)}" data-published-date="${esc(itemDateBucket(item))}" data-published-at="${esc(isoDateTime(itemTime(item)))}">
     <div class="card-topline">
       ${sourceLine(item)}
-      ${showScore ? scorePill(item) : ""}
+      <span class="card-topline-end">${showScore ? scorePill(item) : ""}${bookmarkButton(item)}</span>
     </div>
     ${title}
     <p class="summary">${esc(excerpt(item))}</p>
@@ -395,24 +395,26 @@ function compareByScoreDesc(a, b) {
 function renderTimeline(container, items, options = {}) {
   const showScore = Boolean(options.showScore);
   const compact = Boolean(options.compact);
+  const append = Boolean(options.append);
   const emptyTitle = options.emptyTitle || "暂无内容";
   const emptyBody = options.emptyBody || "稍后再回来看看。";
-  if (!items.length) {
+  if (!append && !items.length) {
+    delete container.dataset.lastDate;
     container.innerHTML = `<div class="empty-state">
       <h2>${esc(emptyTitle)}</h2>
       <p>${esc(emptyBody)}</p>
     </div>`;
     return;
   }
-  let lastDate = "";
+  let lastDate = append ? container.dataset.lastDate || "" : "";
   const sortByScore = options.sortByScore === true;
   const renderedItems = [...items].sort(sortByScore ? compareByScoreDesc : compareByTimeDesc);
-  container.innerHTML = renderedItems.map((item) => {
+  const html = renderedItems.map((item) => {
     const day = dateKey(itemTime(item));
     const bucket = itemDateBucket(item);
-    const dateLabel = day === lastDate ? "" : `<div class="timeline-date date-group"><time datetime="${esc(bucket)}" title="${esc(bucket)}">${esc(day)}</time></div>`;
+    const dateLabel = day === lastDate ? "" : `<div class="timeline-date date-group" data-date="${esc(bucket)}"><button type="button" class="date-collapse" aria-expanded="true" aria-label="折叠 ${esc(day)}">▾</button><time datetime="${esc(bucket)}" title="${esc(bucket)}">${esc(day)}</time><span class="date-count"></span></div>`;
     lastDate = day;
-    return `${dateLabel}<div class="timeline-entry">
+    return `${dateLabel}<div class="timeline-entry" data-entry-date="${esc(bucket)}">
       <div class="timeline-time"><time datetime="${esc(isoDateTime(itemTime(item)))}" title="${esc(bucket)}">${esc(timeKey(itemTime(item)))}</time><span></span></div>
       ${itemCard(item, showScore, {
         compact,
@@ -422,6 +424,41 @@ function renderTimeline(container, items, options = {}) {
       })}
     </div>`;
   }).join("");
+  if (append) container.insertAdjacentHTML("beforeend", html);
+  else container.innerHTML = html;
+  container.dataset.lastDate = lastDate;
+  updateDateGroupCounts(container);
+  bindDateGroupCollapse(container);
+  syncBookmarkButtons(container);
+}
+
+function updateDateGroupCounts(container) {
+  container.querySelectorAll(".timeline-date").forEach((header) => {
+    const bucket = header.dataset.date;
+    const entries = container.querySelectorAll(`.timeline-entry[data-entry-date="${CSS.escape(bucket)}"]`);
+    const label = header.querySelector(".date-count");
+    if (label) label.textContent = `· ${entries.length} 条`;
+    if (header.classList.contains("date-group-collapsed")) {
+      entries.forEach((entry) => entry.classList.add("entry-hidden"));
+    }
+  });
+}
+
+function bindDateGroupCollapse(container) {
+  if (container.dataset.collapseBound === "true") return;
+  container.dataset.collapseBound = "true";
+  container.addEventListener("click", (event) => {
+    const button = event.target.closest(".date-collapse");
+    if (!button || !container.contains(button)) return;
+    const header = button.closest(".timeline-date");
+    const bucket = header?.dataset.date;
+    if (!bucket) return;
+    const collapsed = header.classList.toggle("date-group-collapsed");
+    button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    container.querySelectorAll(`.timeline-entry[data-entry-date="${CSS.escape(bucket)}"]`).forEach((entry) => {
+      entry.classList.toggle("entry-hidden", collapsed);
+    });
+  });
 }
 
 function wechatCard(item) {
@@ -508,6 +545,7 @@ function initNavigation() {
 
 export function initNavigationOnly() {
   initNavigation();
+  initThemeToggle();
 }
 
 function queryPath(path, params) {
@@ -695,6 +733,8 @@ function renderTimelineError(container, error, retry) {
 
 export async function initWechat() {
   initNavigation();
+  initThemeToggle();
+  initBackToTop();
   const list = document.querySelector("#list");
   const pagination = document.querySelector("#pagination");
   const search = document.querySelector("#search");
@@ -801,13 +841,17 @@ export async function initWechat() {
 
 export async function initTimeline() {
   initNavigation();
+  initThemeToggle();
+  initBackToTop();
   const list = document.querySelector("#list");
-  const pagination = document.querySelector("#pagination");
   const search = document.querySelector("#search");
   let activeCategory = categoryFromUrl();
   let activeChannel = channelFromUrl();
-  let visibleItems = [];
   let currentPage = pageFromUrl();
+  let currentTotal = 0;
+  let nextCursor = null;
+  let itemsById = new Map();
+  let generation = 0;
   const syncCategoryControls = bindCategoryControls((category) => {
     activeCategory = category;
     load({ page: 1, mode: "push" });
@@ -816,16 +860,13 @@ export async function initTimeline() {
     activeChannel = channel;
     load({ page: 1, mode: "push" });
   });
-  function timelineUrlParams(page = currentPage) {
-    return {
+  function syncTimelineUrl(page = currentPage, mode = "replace") {
+    updateFeedUrl("/all", {
       q: search.value.trim(),
       category: activeCategory,
       channel: activeChannel,
       page: page > 1 ? String(page) : "",
-    };
-  }
-  function syncTimelineUrl(page = currentPage, mode = "replace") {
-    updateFeedUrl("/all", timelineUrlParams(page), mode);
+    }, mode);
   }
   search.value = searchFromUrl();
   normalizeFeedUrl("/all", {
@@ -837,64 +878,103 @@ export async function initTimeline() {
   syncCategoryControls(activeCategory, activeChannel);
   syncChannelControls(activeChannel, activeCategory);
 
+  function timelineApiParams(extra = {}) {
+    return {
+      limit: 40,
+      q: search.value.trim(),
+      channel: CHANNEL_URL_VALUES[activeChannel] || "",
+      category: CATEGORY_URL_VALUES[activeCategory] || "",
+      ...extra,
+    };
+  }
+
+  function rememberItems(rawItems) {
+    for (const item of rawItems) itemsById.set(String(item.id), item);
+  }
+
+  const cardOptions = {
+    showScore: true,
+    showReason: "selected",
+    showRelated: false,
+    clampSummary: true,
+  };
+
+  const feed = attachInfiniteFeed({
+    list,
+    loadMore: async () => {
+      const gen = generation;
+      // timeline API 在搜索态忽略 cursor 条件（timeline.py），改用 page 递增分页
+      const searching = Boolean(search.value.trim());
+      const params = searching
+        ? timelineApiParams({ page: currentPage + 1 })
+        : timelineApiParams({ cursor: nextCursor });
+      let data;
+      try {
+        data = await api(queryPath("/api/v1/timeline", params));
+      } catch (error) {
+        if (gen !== generation) return null;
+        throw error;
+      }
+      if (gen !== generation) return null;
+      rememberItems(data.items);
+      renderTimeline(list, data.items, { ...cardOptions, append: true });
+      if (searching) {
+        currentPage = Number(data.page || currentPage + 1);
+        currentTotal = Number(data.total || currentTotal);
+        const limit = Number(data.limit || 40);
+        return data.items.length > 0 && currentPage * limit < currentTotal;
+      }
+      nextCursor = data.next_cursor || null;
+      return Boolean(nextCursor);
+    },
+  });
+
   function renderView(rawItems, meta = {}) {
-    visibleItems = rawItems;
     syncCategoryControls(activeCategory, activeChannel);
     syncChannelControls(activeChannel, activeCategory);
     const hasQuery = Boolean(search.value.trim());
+    itemsById = new Map();
+    rememberItems(rawItems);
     renderTimeline(list, rawItems, {
-      showScore: true,
-      showReason: "selected",
-      showRelated: false,
+      ...cardOptions,
       sortByScore: false,
-      clampSummary: true,
       emptyTitle: hasQuery ? "没有匹配条目" : activeCategory === "all" ? "暂无内容" : `${CATEGORY_LABELS[activeCategory]}分类暂无内容`,
       emptyBody: hasQuery ? "清空搜索后可回到默认列表。" : activeCategory === "all" ? "当前还没有可展示的 AI 动态。" : `可以切换到${CHANNEL_LABELS[activeChannel]}全部内容继续浏览。`,
     });
-    renderPagination(pagination, {
-      page: meta.page || currentPage,
-      total: meta.total || rawItems.length,
-      limit: meta.limit || 40,
-      q: search.value.trim(),
-      category: activeCategory,
-      channel: activeChannel,
-    });
+    nextCursor = meta.next_cursor || null;
+    currentTotal = Number(meta.total || 0);
+    const limit = Number(meta.limit || 40);
+    const hasMore = search.value.trim()
+      ? rawItems.length > 0 && (Number(meta.page || 1)) * limit < currentTotal
+      : rawItems.length > 0 && Boolean(nextCursor);
+    feed.reset(hasMore);
   }
 
   async function load({ page = pageFromUrl(), mode = "replace", updateUrl = true } = {}) {
+    const gen = ++generation;
     currentPage = page;
     const q = search.value.trim();
     if (updateUrl) syncTimelineUrl(page, mode);
     syncCategoryControls(activeCategory, activeChannel);
     syncChannelControls(activeChannel, activeCategory);
     renderTimelineLoading(list);
-    if (pagination) pagination.hidden = true;
+    feed.reset(false);
     try {
-      const data = await api(queryPath("/api/v1/timeline", {
-        limit: 40,
-        page,
-        q,
-        channel: CHANNEL_URL_VALUES[activeChannel] || "",
-        category: CATEGORY_URL_VALUES[activeCategory] || "",
-      }));
+      const data = await api(queryPath("/api/v1/timeline", timelineApiParams({ page })));
+      if (gen !== generation) return;
       const responsePage = Number(data.page || page);
       currentPage = responsePage;
       if (responsePage !== page || pageFromUrl() !== responsePage) {
         syncTimelineUrl(responsePage, "replace");
       }
-      const total = Number(data.total || 0);
-      const limit = Number(data.limit || 40);
-      const totalPages = Math.max(1, Math.ceil(total / limit));
-      if (total > 0 && !data.items.length && page > totalPages) {
-        await load({ page: totalPages, mode: "replace" });
-        return;
-      }
       renderView(data.items, data);
     } catch (error) {
-      if (pagination) pagination.hidden = true;
+      if (gen !== generation) return;
       renderTimelineError(list, error, () => load({ page, mode: "replace" }));
     }
   }
+
+  bindBookmarkClicks(list, (id) => itemsById.get(id));
 
   async function runSearch() {
     await load({ page: 1, mode: "replace" });
@@ -905,23 +985,10 @@ export async function initTimeline() {
     event.preventDefault();
     runSearch();
   });
-  pagination?.addEventListener("click", (event) => {
-    const link = event.target.closest("[data-page]");
-    if (!link) return;
-    event.preventDefault();
-    const nextPage = Number(link.dataset.page || "1");
-    load({ page: nextPage, mode: "push" });
-  });
   window.addEventListener("popstate", () => {
     activeCategory = categoryFromUrl();
     activeChannel = channelFromUrl();
     search.value = searchFromUrl();
-    normalizeFeedUrl("/all", {
-      q: search.value.trim(),
-      category: activeCategory,
-      channel: activeChannel,
-      page: pageFromUrl() > 1 ? String(pageFromUrl()) : "",
-    });
     load({ page: pageFromUrl(), updateUrl: false });
   });
   rememberListScroll(list);
@@ -940,25 +1007,28 @@ export async function initTimeline() {
 
 export async function initCurated() {
   initNavigation();
+  initThemeToggle();
+  initBackToTop();
   const search = document.querySelector("#search");
   const list = document.querySelector("#list");
-  const pagination = document.querySelector("#pagination");
+  const hotBox = document.querySelector("#hot-topics");
   const runMeta = document.querySelector("#run-meta");
   let activeCategory = categoryFromUrl();
   let currentPage = pageFromUrl();
+  let itemsById = new Map();
+  let generation = 0;
   const loadCuratedPage = memoizedApi();
-  if (runMeta) runMeta.textContent = "AI 自动挑选的高价值内容（日期为原文发布日，截至 2026 年）";
+  if (runMeta) runMeta.textContent = "AI 自动挑选的高价值内容（日期为原文发布日）";
+  search.value = searchFromUrl();
+  normalizeFeedUrl("/", {
+    q: search.value.trim(),
+    category: activeCategory,
+    page: currentPage > 1 ? String(currentPage) : "",
+  });
   const syncCategoryControls = bindCategoryControls((category) => {
     activeCategory = category;
     void load({ page: 1, mode: "push" });
   });
-  function curatedUrlParams(page = currentPage) {
-    return {
-      q: search.value.trim(),
-      category: activeCategory,
-      page: page > 1 ? String(page) : "",
-    };
-  }
   function syncCuratedUrl(page = currentPage, mode = "replace") {
     updateFeedUrl("/", {
       q: search.value.trim(),
@@ -976,68 +1046,86 @@ export async function initCurated() {
     });
   }
 
-  function prefetchNextCuratedPage(meta) {
-    if (search.value.trim() || activeCategory !== "all") return;
-    const state = paginationState(meta);
-    if (state.hasNext) void loadCuratedPage(curatedApiPath(state.current + 1)).catch(() => {});
+  function rememberItems(rawItems) {
+    for (const item of rawItems) itemsById.set(String(item.id), item);
   }
-  search.value = searchFromUrl();
-  normalizeFeedUrl("/", curatedUrlParams(currentPage));
-  syncCategoryControls(activeCategory);
+
+  const feed = attachInfiniteFeed({
+    list,
+    loadMore: async () => {
+      const gen = generation;
+      let data;
+      try {
+        data = await loadCuratedPage(curatedApiPath(currentPage + 1));
+      } catch (error) {
+        if (gen !== generation) return null;
+        throw error;
+      }
+      if (gen !== generation) return null;
+      currentPage = Number(data.page || currentPage + 1);
+      rememberItems(data.items);
+      renderTimeline(list, data.items, { showScore: true, append: true });
+      return feedHasMore(data, currentPage);
+    },
+  });
+
+  function feedHasMore(meta, page) {
+    const total = Number(meta.total || 0);
+    const limit = Number(meta.limit || 40);
+    return page * limit < total;
+  }
 
   function renderView(rawItems, meta = {}) {
     syncCategoryControls(activeCategory);
     const q = search.value.trim();
+    itemsById = new Map();
+    rememberItems(rawItems);
     renderTimeline(list, rawItems, {
       showScore: true,
       sortByScore: false,
       emptyTitle: q ? "没有匹配条目" : activeCategory === "all" ? "暂无精选条目" : `${CATEGORY_LABELS[activeCategory]}分类暂无精选`,
       emptyBody: q ? "清空搜索后可回到默认列表。" : "可以切换到全部继续浏览精选内容。",
     });
-    renderPagination(pagination, {
-      page: meta.page || currentPage,
-      total: meta.total || rawItems.length,
-      limit: meta.limit || 40,
-      q,
-      category: activeCategory,
-      path: "/",
-    });
-    prefetchNextCuratedPage({
-      page: meta.page || currentPage,
-      total: meta.total || rawItems.length,
-      limit: meta.limit || 40,
-    });
+    feed.reset(rawItems.length > 0 && feedHasMore(meta, Number(meta.page || currentPage)));
+  }
+
+  function refreshHotTopics() {
+    if (!hotBox) return;
+    const showHot = !search.value.trim() && activeCategory === "all";
+    hotBox.hidden = !showHot;
+    if (showHot && hotBox.dataset.loaded !== "true") {
+      hotBox.dataset.loaded = "true";
+      void renderHotTopics(hotBox);
+    }
   }
 
   async function load({ page = pageFromUrl(), mode = "replace", updateUrl = true } = {}) {
+    const gen = ++generation;
     currentPage = page;
     if (updateUrl) syncCuratedUrl(page, mode);
     syncCategoryControls(activeCategory);
+    refreshHotTopics();
     renderTimelineLoading(list);
-    if (pagination) pagination.hidden = true;
+    feed.reset(false);
     try {
       const data = await loadCuratedPage(
         curatedApiPath(page),
         !search.value.trim() && activeCategory === "all",
       );
+      if (gen !== generation) return;
       const responsePage = Number(data.page || page);
       currentPage = responsePage;
       if (responsePage !== page || pageFromUrl() !== responsePage) {
         syncCuratedUrl(responsePage, "replace");
       }
-      const total = Number(data.total || 0);
-      const responseLimit = Number(data.limit || 40);
-      const totalPages = Math.max(1, Math.ceil(total / responseLimit));
-      if (total > 0 && !data.items.length && page > totalPages) {
-        await load({ page: totalPages, mode: "replace" });
-        return;
-      }
       renderView(data.items, data);
     } catch (error) {
-      if (pagination) pagination.hidden = true;
+      if (gen !== generation) return;
       renderTimelineError(list, error, () => load({ page, mode: "replace" }));
     }
   }
+
+  bindBookmarkClicks(list, (id) => itemsById.get(id));
 
   async function runSearch() {
     await load({ page: 1, mode: "replace" });
@@ -1048,21 +1136,14 @@ export async function initCurated() {
     event.preventDefault();
     runSearch();
   });
-  pagination?.addEventListener("click", (event) => {
-    const link = event.target.closest("[data-page]");
-    if (!link) return;
-    event.preventDefault();
-    const nextPage = Number(link.dataset.page || "1");
-    load({ page: nextPage, mode: "push" });
-  });
   window.addEventListener("popstate", () => {
     activeCategory = categoryFromUrl();
     search.value = searchFromUrl();
     currentPage = pageFromUrl();
-    normalizeFeedUrl("/", curatedUrlParams(currentPage));
     load({ page: currentPage, updateUrl: false });
   });
   rememberListScroll(list);
+  refreshHotTopics();
   const preload = readPreload();
   if (preload && Array.isArray(preload.items)) {
     currentPage = Number(preload.page || currentPage);
@@ -1270,6 +1351,7 @@ async function renderDailyArchive(activeDate, latestAvailableDate) {
 }
 
 export async function initDaily() {
+  initThemeToggle();
   initNavigation();
   const list = document.querySelector("#daily-sections");
   const previousLink = document.querySelector(".daily-prev");
@@ -1370,6 +1452,7 @@ export async function initDaily() {
 }
 
 export async function initAbout() {
+  initThemeToggle();
   initNavigation();
   const search = document.querySelector("#search");
   const table = document.querySelector("#sources-table");
@@ -1400,6 +1483,8 @@ export async function initAbout() {
 }
 
 export async function initItem() {
+  initNavigation();
+  initThemeToggle();
   const id = new URLSearchParams(location.search).get("id");
   const root = document.querySelector("#detail");
   if (!id) {
@@ -1435,4 +1520,307 @@ function missingItem(title) {
       <a class="origin" href="/all">查看全部 AI 动态</a>
     </div>
   </section>`;
+}
+
+/* ---------- theme (浅色默认 + 暗色变体 + 跟随系统) ---------- */
+
+const THEME_KEY = "ai-radar:theme";
+
+function themePreference() {
+  const value = localStorage.getItem(THEME_KEY);
+  return value === "dark" || value === "system" || value === "light" ? value : "light";
+}
+
+function applyThemePreference(pref) {
+  const dark = pref === "dark"
+    || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+}
+
+export function initThemeToggle() {
+  const toggle = document.querySelector(".theme-toggle");
+  if (!toggle || toggle.dataset.bound === "true") return;
+  toggle.dataset.bound = "true";
+  const buttons = toggle.querySelectorAll(".theme-btn[data-theme-pref]");
+  const sync = () => {
+    const pref = themePreference();
+    applyThemePreference(pref);
+    buttons.forEach((btn) => {
+      btn.setAttribute("aria-pressed", btn.dataset.themePref === pref ? "true" : "false");
+    });
+  };
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      localStorage.setItem(THEME_KEY, btn.dataset.themePref);
+      sync();
+    });
+  });
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+    if (themePreference() === "system") applyThemePreference("system");
+  });
+  sync();
+}
+
+/* ---------- bookmarks (localStorage; 预留服务端同步) ---------- */
+
+// 服务端同步接口约定（未实现，跨设备需求确认后启用）：
+//   GET  /api/v1/bookmarks        -> {version: 1, items: [snapshot...]}
+//   PUT  /api/v1/bookmarks        <- 同结构全量上传（需身份标识）
+// snapshot 结构与 BookmarkStore.exportJson() 的 items 元素一致。
+const BOOKMARKS_KEY = "ai-radar:bookmarks:v1";
+
+export const BookmarkStore = {
+  _read() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || "{}");
+      return parsed && typeof parsed === "object" && parsed.items && typeof parsed.items === "object" ? parsed : { version: 1, items: {} };
+    } catch {
+      return { version: 1, items: {} };
+    }
+  },
+  _write(state) {
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(state));
+    window.dispatchEvent(new CustomEvent("ai-radar:bookmarks-changed"));
+  },
+  all() {
+    return Object.values(this._read().items).sort((a, b) => String(b.saved_at || "").localeCompare(String(a.saved_at || "")));
+  },
+  has(id) {
+    return Boolean(this._read().items[String(id)]);
+  },
+  count() {
+    return Object.keys(this._read().items).length;
+  },
+  toggle(item) {
+    const state = this._read();
+    const id = String(item.id);
+    if (state.items[id]) delete state.items[id];
+    else state.items[id] = bookmarkSnapshot(item);
+    this._write(state);
+    return Boolean(state.items[id]);
+  },
+  remove(id) {
+    const state = this._read();
+    delete state.items[String(id)];
+    this._write(state);
+  },
+  exportJson() {
+    return JSON.stringify({ version: 1, items: this.all() }, null, 2);
+  },
+  importJson(text) {
+    const parsed = JSON.parse(text);
+    const incoming = Array.isArray(parsed?.items) ? parsed.items : [];
+    const state = this._read();
+    let added = 0;
+    for (const snap of incoming) {
+      if (!snap || typeof snap !== "object" || snap.id == null || !snap.url || !(snap.title || snap.title_zh)) continue;
+      const normalized = normalizeSnapshotDates(snap);
+      if (!state.items[String(normalized.id)]) added += 1;
+      state.items[String(normalized.id)] = normalized;
+    }
+    this._write(state);
+    return added;
+  },
+};
+
+function normalizeSnapshotDates(snap) {
+  const normalized = { ...snap };
+  const nowIso = new Date().toISOString();
+  if (!normalized.saved_at || Number.isNaN(Date.parse(normalized.saved_at))) normalized.saved_at = nowIso;
+  for (const key of ["published_at", "fetched_at"]) {
+    if (normalized[key] != null && Number.isNaN(Date.parse(normalized[key]))) delete normalized[key];
+  }
+  if (!normalized.fetched_at) normalized.fetched_at = normalized.published_at || normalized.saved_at;
+  return normalized;
+}
+
+function bookmarkSnapshot(item) {
+  return {
+    id: item.id,
+    url: item.url,
+    title: item.title,
+    title_zh: item.title_zh,
+    author: item.author,
+    source_id: item.source_id,
+    source_name: item.source_name,
+    source_kind: item.source_kind,
+    source_homepage_url: item.source_homepage_url,
+    source_icon_url: item.source_icon_url,
+    author_avatar_url: item.author_avatar_url,
+    published_at: item.published_at,
+    fetched_at: item.fetched_at,
+    content_text: typeof item.content_text === "string" ? item.content_text.slice(0, 500) : undefined,
+    summary_zh: item.summary_zh,
+    weighted_score: item.weighted_score,
+    enriched_tags: Array.isArray(item.enriched_tags) ? item.enriched_tags.slice(0, 4) : undefined,
+    saved_at: new Date().toISOString(),
+  };
+}
+
+function bookmarkButton(item) {
+  const saved = BookmarkStore.has(item.id);
+  return `<button type="button" class="bookmark-btn" data-bookmark-id="${esc(String(item.id))}" aria-pressed="${saved ? "true" : "false"}" aria-label="收藏" title="收藏 / 取消收藏"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4.2-5.5 4.2z"/></svg></button>`;
+}
+
+function syncBookmarkButtons(container) {
+  container.querySelectorAll(".bookmark-btn[data-bookmark-id]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", BookmarkStore.has(btn.dataset.bookmarkId) ? "true" : "false");
+  });
+}
+
+function bindBookmarkClicks(container, resolveItem) {
+  if (!container || container.dataset.bookmarkBound === "true") return;
+  container.dataset.bookmarkBound = "true";
+  container.addEventListener("click", (event) => {
+    const btn = event.target.closest(".bookmark-btn[data-bookmark-id]");
+    if (!btn || !container.contains(btn)) return;
+    event.preventDefault();
+    const id = btn.dataset.bookmarkId;
+    const item = resolveItem ? resolveItem(id) : null;
+    if (item) BookmarkStore.toggle(item);
+    else BookmarkStore.remove(id);
+    syncBookmarkButtons(container);
+  });
+}
+
+export async function initBookmarks() {
+  initNavigation();
+  initThemeToggle();
+  initBackToTop();
+  const list = document.querySelector("#list");
+  const meta = document.querySelector("#run-meta");
+  const exportBtn = document.querySelector("#bookmark-export");
+  const importBtn = document.querySelector("#bookmark-import");
+  const importInput = document.querySelector("#bookmark-import-file");
+  const snapshots = () => new Map(BookmarkStore.all().map((snap) => [String(snap.id), snap]));
+  let current = snapshots();
+  function render() {
+    current = snapshots();
+    if (meta) meta.textContent = `共 ${current.size} 条收藏 · 保存在本设备浏览器`;
+    const renderable = [...current.values()].map(normalizeSnapshotDates);
+    renderTimeline(list, renderable, {
+      showScore: true,
+      emptyTitle: "还没有收藏",
+      emptyBody: "在精选或全部动态里点卡片右上角的书签即可收藏。",
+    });
+  }
+  bindBookmarkClicks(list, (id) => current.get(id));
+  window.addEventListener("ai-radar:bookmarks-changed", render);
+  exportBtn?.addEventListener("click", () => {
+    const blob = new Blob([BookmarkStore.exportJson()], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `ai-radar-bookmarks-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
+  importBtn?.addEventListener("click", () => importInput?.click());
+  importInput?.addEventListener("change", async () => {
+    const file = importInput.files?.[0];
+    if (!file) return;
+    try {
+      const added = BookmarkStore.importJson(await file.text());
+      if (meta) meta.textContent = `导入完成，新增 ${added} 条`;
+    } catch {
+      if (meta) meta.textContent = "导入失败：文件不是有效的收藏导出";
+    }
+    importInput.value = "";
+    render();
+  });
+  render();
+}
+
+/* ---------- hot topics ---------- */
+
+async function renderHotTopics(container) {
+  try {
+    const data = await api("/api/v1/hot?limit=5");
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length) {
+      container.hidden = true;
+      return;
+    }
+    container.innerHTML = `
+      <h2 class="hot-topics-title">当前热点</h2>
+      <ol class="hot-topics-list">
+        ${items.map((item, index) => `<li class="hot-topics-row">
+          <span class="hot-topics-rank">${index + 1}</span>
+          <a class="hot-topics-link" href="${esc(String(item.url || "#"))}" target="_blank" rel="noopener noreferrer">${esc(String(item.title || ""))}</a>
+          <span class="hot-topics-heat">${esc(String(item.heat ?? ""))} 热度</span>
+        </li>`).join("")}
+      </ol>`;
+  } catch {
+    container.hidden = true;
+  }
+}
+
+/* ---------- infinite scroll ---------- */
+
+function attachInfiniteFeed({ list, loadMore }) {
+  const sentinel = document.createElement("div");
+  sentinel.className = "scroll-sentinel";
+  const status = document.createElement("div");
+  status.className = "scroll-status";
+  list.after(status);
+  list.after(sentinel);
+  let hasMore = false;
+  let loading = false;
+  async function maybeLoad() {
+    if (!hasMore || loading) return;
+    loading = true;
+    status.textContent = "加载中…";
+    try {
+      const result = await loadMore();
+      if (result === null) {
+        // 响应已过期（筛选条件变更）：不改动状态，由新一轮 reset 接管
+        status.textContent = "";
+        loading = false;
+        return;
+      }
+      hasMore = Boolean(result);
+      status.textContent = hasMore ? "" : "已加载全部";
+    } catch (error) {
+      hasMore = true;
+      status.innerHTML = `加载失败：${esc(error?.message || String(error))} <a href="#" data-retry>重试</a>`;
+    }
+    loading = false;
+  }
+  status.addEventListener("click", (event) => {
+    const retry = event.target.closest("[data-retry]");
+    if (!retry) return;
+    event.preventDefault();
+    void maybeLoad();
+  });
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) void maybeLoad();
+  }, { rootMargin: "600px 0px" });
+  observer.observe(sentinel);
+  return {
+    reset(nextHasMore) {
+      hasMore = Boolean(nextHasMore);
+      status.textContent = "";
+    },
+  };
+}
+
+/* ---------- back to top ---------- */
+
+export function initBackToTop() {
+  if (document.querySelector(".back-to-top")) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "back-to-top";
+  button.setAttribute("aria-label", "回到顶部");
+  button.textContent = "↑";
+  document.body.append(button);
+  button.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+  let ticking = false;
+  window.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      button.classList.toggle("visible", window.scrollY > 600);
+      ticking = false;
+    });
+  }, { passive: true });
 }

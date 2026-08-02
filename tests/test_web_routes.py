@@ -852,10 +852,8 @@ def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
         preload_pos = html.index('id="__PRELOAD__"')
         module_preload_pos = html.index('rel="modulepreload"')
         module_pos = html.index('type="module"')
-        font_preload_pos = html.index('rel="preload" as="style"')
         assert module_preload_pos < preload_pos
         assert article_pos < preload_pos
-        assert font_preload_pos < preload_pos
         assert preload_pos < module_pos
 
 
@@ -873,7 +871,7 @@ def test_home_page_ssr_preload_is_curated_page_aware(tmp_path: Path) -> None:
     assert preload["limit"] == 40
     assert preload["total"] == api_data["total"] > 40
     assert [item["id"] for item in preload["items"]] == [item["id"] for item in api_data["items"]]
-    assert 'id="pagination"' in response.text
+    assert 'id="pagination"' not in response.text
 
 
 @pytest.mark.parametrize(

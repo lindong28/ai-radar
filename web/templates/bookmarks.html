@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Radar · 收藏</title>
     <script>(function(){try{var t=localStorage.getItem("ai-radar:theme")||"light";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";}catch(e){document.documentElement.dataset.theme="light";}})();</script>
-    <title>{{ item.title }} · 微信文章解读 · AI Radar</title>
     <link rel="modulepreload" href="/app.js?v=20260802-redesign1">
     <link rel="stylesheet" href="/style.css?v=20260802-redesign1">
   </head>
@@ -17,9 +17,9 @@
       <nav class="side-nav">
         <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
         <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
-        <a class="side-link side-link-active" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
+        <a class="side-link" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
         <a class="side-link" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
-        <a class="side-link" href="/bookmarks"><span class="side-icon side-icon-bookmark" aria-hidden="true"></span><span>收藏</span></a>
+        <a class="side-link side-link-active" href="/bookmarks"><span class="side-icon side-icon-bookmark" aria-hidden="true"></span><span>收藏</span></a>
       </nav>
       <div class="side-group-label">更多</div>
       <nav class="side-nav">
@@ -33,48 +33,28 @@
         </div>
       </div>
     </aside>
-    <main class="app-main wechat-detail-main">
+    <main class="app-main">
       <div class="app-mobile-bar">
         <button type="button" class="app-hamburger" aria-label="打开导航" aria-expanded="false" aria-controls="app-sidebar">≡</button>
         <a class="app-mobile-brand" aria-label="AI Radar 首页" href="/"><span class="app-mobile-brand-text">AI RADAR</span></a>
         <span class="app-mobile-bar-spacer" aria-hidden="true"></span>
       </div>
-      <article class="card wechat-detail" data-item-id="{{ item.id }}">
-        <a class="detail-back" href="{{ back_href }}">‹ 返回列表</a>
-        <header class="wechat-detail-header">
-          <div class="source-line">
-            <a class="source-link" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">
-              <span class="source-icon">
-                {% if item.avatar_url %}
-                  <img class="source-avatar" src="{{ item.avatar_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
-                {% endif %}
-                <span class="source-initial">{{ (item.author or "?")[:1] }}</span>
-              </span>
-              <span class="source-name">{{ item.author }}</span>
-            </a>
-          </div>
-          <h1>{{ item.title }}</h1>
-          <div class="wechat-detail-meta">
-            <time datetime="{{ item.published_at }}">{{ item.published_at[:10] }}</time>
-            {% if item.recommendation %}<span>{{ item.recommendation }}</span>{% endif %}
-          </div>
-          <div class="tags">
-            {% for tag in item.tags %}
-              <span class="tag">{{ tag }}</span>
-            {% endfor %}
-          </div>
-        </header>
-        {% if item.url %}
-        <a class="wechat-origin-link" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">访问原文 <span aria-hidden="true">↗</span></a>
-        {% endif %}
-        <div class="summary-body markdown-body">
-          {{ item.summary_html | safe }}
+      <section class="card page-header">
+        <div>
+          <h1>收藏</h1>
+          <p id="run-meta" class="page-subtitle">保存在本设备浏览器的收藏内容</p>
         </div>
-      </article>
+        <div class="bookmarks-toolbar">
+          <button type="button" id="bookmark-export" class="wide-action">导出 JSON</button>
+          <button type="button" id="bookmark-import" class="wide-action">导入 JSON</button>
+          <input type="file" id="bookmark-import-file" class="bookmarks-file-input" accept="application/json">
+        </div>
+      </section>
+      <section id="list" class="timeline" aria-live="polite"></section>
     </main>
-    <script type="module" async>
-      import { initNavigationOnly } from "/app.js?v=20260802-redesign1";
-      initNavigationOnly();
+    <script type="module">
+      import { initBookmarks } from "/app.js?v=20260802-redesign1";
+      initBookmarks();
     </script>
   </body>
 </html>

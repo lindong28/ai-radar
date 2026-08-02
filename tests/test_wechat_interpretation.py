@@ -640,7 +640,13 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
     for heading in ("文章概况", "独特亮点", "可动手实践", "可复用认知", "关键词", "价值判断"):
         assert heading in detail.text
     assert "<h3" in detail.text
-    assert "<script" not in detail.text.lower()
+    # 详情页只允许 head 主题引导 + 导航 module 两个脚本；sanitize 后的正文不得再有 script
+    lowered_detail = detail.text.lower()
+    assert lowered_detail.count("<script") == 2
+    assert 'localstorage.getitem("ai-radar:theme")' in lowered_detail
+    assert "initnavigationonly" in lowered_detail
+    markdown_part = lowered_detail.split('class="summary-body', 1)[1].split("</main>", 1)[0]
+    assert "<script" not in markdown_part
     assert "onerror" not in detail.text.lower()
 
     detail_from_page = client.get("/wechat/newer-slug?page=2")

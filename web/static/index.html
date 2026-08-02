@@ -4,22 +4,34 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AI Radar · 精选</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Noto+Serif+SC:wght@400;600;800&amp;family=Playfair+Display:wght@800&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/style.css?v=20260515-ux5">
+    <script>(function(){try{var t=localStorage.getItem("ai-radar:theme")||"light";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";}catch(e){document.documentElement.dataset.theme="light";}})();</script>
+    <link rel="modulepreload" href="/app.js?v=20260802-redesign1">
+    <link rel="stylesheet" href="/style.css?v=20260802-redesign1">
   </head>
   <body>
     <aside id="app-sidebar" class="sidebar" aria-label="主导航">
       <button type="button" class="sidebar-close" aria-label="关闭导航">×</button>
       <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
       <div class="divider"></div>
+      <div class="side-group-label">内容</div>
       <nav class="side-nav">
         <a class="side-link side-link-active" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
         <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
+        <a class="side-link" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
         <a class="side-link" href="/daily"><span class="side-icon side-icon-daily" aria-hidden="true"></span><span>AI 日报</span></a>
+        <a class="side-link" href="/bookmarks"><span class="side-icon side-icon-bookmark" aria-hidden="true"></span><span>收藏</span></a>
+      </nav>
+      <div class="side-group-label">更多</div>
+      <nav class="side-nav">
         <a class="side-link" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span></a>
       </nav>
+      <div class="sidebar-foot">
+        <div class="theme-toggle" role="group" aria-label="主题切换">
+          <button type="button" class="theme-btn" data-theme-pref="light" aria-pressed="false" title="浅色主题" aria-label="浅色主题"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5 5l1.8 1.8M17.2 17.2 19 19M19 5l-1.8 1.8M6.8 17.2 5 19"/></svg></button>
+          <button type="button" class="theme-btn" data-theme-pref="system" aria-pressed="false" title="跟随系统" aria-label="跟随系统"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M9 20.5h6M12 17v3.5"/></svg></button>
+          <button type="button" class="theme-btn" data-theme-pref="dark" aria-pressed="false" title="深色主题" aria-label="深色主题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13.5A8 8 0 0 1 10.5 4a8 8 0 1 0 9.5 9.5z"/></svg></button>
+        </div>
+      </div>
     </aside>
     <main class="app-main">
       <div class="app-mobile-bar">
@@ -34,13 +46,13 @@
         </div>
         <div class="feed-toolbar-row">
           <div class="seg-list" data-category-filter aria-label="内容分类">
-            <a class="seg-item seg-item-active" href="/?page=1" data-category="all" aria-pressed="true">全部</a>
-            <a class="seg-item" href="/?category=ai-models&page=1" data-category="model" aria-pressed="false">模型</a>
-            <a class="seg-item" href="/?category=ai-products&page=1" data-category="product" aria-pressed="false">产品</a>
-            <a class="seg-item" href="/?category=industry&page=1" data-category="industry" aria-pressed="false">行业</a>
-            <a class="seg-item" href="/?category=paper&page=1" data-category="paper" aria-pressed="false">论文</a>
-            <a class="seg-item" href="/?category=tip&page=1" data-category="practice" aria-pressed="false">技巧</a>
-          </div>
+              <a class="seg-item seg-item-active" href="/?page=1" data-category="all" aria-pressed="true">全部</a>
+              <a class="seg-item" href="/?category=ai-models&page=1" data-category="model" aria-pressed="false">模型</a>
+              <a class="seg-item" href="/?category=ai-products&page=1" data-category="product" aria-pressed="false">产品</a>
+              <a class="seg-item" href="/?category=industry&page=1" data-category="industry" aria-pressed="false">行业</a>
+              <a class="seg-item" href="/?category=paper&page=1" data-category="paper" aria-pressed="false">论文</a>
+              <a class="seg-item" href="/?category=tip&page=1" data-category="practice" aria-pressed="false">技巧</a>
+            </div>
           <form class="feed-filter" action="/" method="get">
             <input id="category-param" type="hidden" name="category" value="">
             <input id="search" type="search" name="q" placeholder="搜索标题/摘要…">
@@ -48,11 +60,11 @@
           </form>
         </div>
       </section>
+      <section id="hot-topics" class="card hot-topics" hidden aria-label="当前热点"></section>
       <section id="list" class="timeline" aria-live="polite"></section>
-      <nav id="pagination" class="pagination" aria-label="分页"></nav>
     </main>
     <script type="module">
-      import { initCurated } from "/app.js?v=20260607-wechat-search1";
+      import { initCurated } from "/app.js?v=20260802-redesign1";
       initCurated();
     </script>
   </body>

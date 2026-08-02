@@ -167,23 +167,24 @@ def test_feed_controls_are_url_backed_like_aihot() -> None:
     assert "data-category-filter" not in daily_html
 
 
-def test_all_page_declares_aihot_style_channel_filter_and_pagination() -> None:
+
+def test_all_page_declares_aihot_style_channel_filter_and_infinite_scroll() -> None:
     html = _read("all.html")
 
     assert "data-channel-filter" in html
     assert 'id="channel-param"' in html
     for channel in ["firstParty", "news", "x"]:
         assert f"channel={channel}" in html
-    assert 'id="pagination"' in html
+    assert 'id="pagination"' not in html
     assert 'id="more"' not in html
 
 
-def test_curated_page_declares_archive_pagination() -> None:
+
+def test_curated_page_declares_hot_topics_and_infinite_scroll() -> None:
     html = _read("index.html")
 
-    assert 'id="pagination"' in html
-    assert 'class="pagination"' in html
-    assert 'aria-label="分页"' in html
+    assert 'id="hot-topics"' in html
+    assert 'id="pagination"' not in html
 
 
 def test_app_js_supports_url_state_score_tiers_and_card_dividers() -> None:
@@ -249,14 +250,14 @@ def test_app_js_supports_all_page_channel_pagination_and_full_card_affordances()
     assert "compact: true" not in js
 
 
-def test_app_js_supports_curated_archive_pagination() -> None:
+
+def test_app_js_supports_curated_infinite_scroll() -> None:
     js = _read("app.js")
 
-    assert 'const pagination = document.querySelector("#pagination");' in js
+    assert "attachInfiniteFeed" in js
+    assert "IntersectionObserver" in js
     assert 'queryPath("/api/v1/curated"' in js
     assert "limit: 40" in js
-    assert "page," in js
-    assert 'path: "/"' in js
     assert 'page: page > 1 ? String(page) : ""' in js
 
 
@@ -331,11 +332,13 @@ def test_app_js_renders_x_cards_with_clickable_title_instead_of_origin_action() 
     assert '<a class="origin-link"' not in js
 
 
+
 def test_article_media_is_constrained_for_scan_reading() -> None:
     css = _read("style.css")
 
     assert ".article-media {" in css
     assert "width: min(100%, 416px);" in css
+
 
 
 def test_mobile_category_filter_is_not_horizontal_scroll_only() -> None:
@@ -345,54 +348,82 @@ def test_mobile_category_filter_is_not_horizontal_scroll_only() -> None:
     assert "flex: 1 1 0;" in css
 
 
-def test_global_visual_tokens_match_aihot_baseline_across_static_pages() -> None:
+
+def test_global_visual_tokens_light_default_with_dark_variant() -> None:
     css = _read("style.css")
 
-    for name in ["index.html", "all.html", "daily.html", "item.html", "about.html"]:
-        assert AIHOT_FONT_HREF in _read(name)
+    # 主站页面不再引用 Google Fonts（跨境延迟）；daily 报纸风保留
+    for name in ["index.html", "all.html", "item.html", "about.html"]:
+        assert "fonts.googleapis.com" not in _read(name)
+    assert AIHOT_FONT_HREF in _read("daily.html")
 
-    assert '--font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;' in css
-    assert '--font-serif: "Noto Serif SC", ui-serif, Georgia, serif;' in css
-    assert '--font-display: "Playfair Display", "Noto Serif SC", ui-serif, Georgia, serif;' in css
-    assert (
-        '--font-daily-body: "IBM Plex Sans", -apple-system, "system-ui", "PingFang SC", '
-        '"HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;'
-    ) in css
-    assert "font: 14px/1.5 var(--font-sans);" in css
-    assert ".sidebar {" in css
-    assert "position: sticky;" in css
-    assert "grid-template-columns: 155px;" in css
-    assert "gap: 8px;" in css
-    assert "width: 180px;" in css
-    assert "padding: 18px 12px 14px;" in css
-    assert ".brand-logo-sidebar {" in css
-    assert "letter-spacing: 0.13em;" in css
-    assert ".brand-logo-orbit {" in css
+    # 浅色默认 + 暗色变体 token
+    assert "color-scheme: light;" in css
+    assert '[data-theme="dark"]' in css
+    assert "--bg: #f6f7f8;" in css
+    assert "--accent: #0f766e;" in css
+    assert '--font-sans: -apple-system' in css
+
+    # 每页 head 内联主题脚本，避免 FOUC；浅色为默认
+    for name in ["index.html", "all.html", "item.html", "about.html"]:
+        html = _read(name)
+        assert 'localStorage.getItem("ai-radar:theme")||"light"' in html
+        assert "dataset.theme" in html
 
 
-def test_feed_text_metrics_match_aihot_baseline() -> None:
+def test_shell_declares_theme_toggle_and_bookmarks_nav() -> None:
+    for name in ["index.html", "all.html", "about.html", "item.html"]:
+        html = _read(name)
+        assert 'class="theme-toggle"' in html
+        assert 'data-theme-pref="light"' in html
+        assert 'data-theme-pref="system"' in html
+        assert 'data-theme-pref="dark"' in html
+        assert 'href="/bookmarks"' in html
+
+
+def test_app_js_inits_bind_theme_toggle_on_every_page() -> None:
+    js = _read("app.js")
+
+    for fn in ["initWechat", "initDaily", "initAbout", "initItem", "initNavigationOnly", "initCurated", "initTimeline", "initBookmarks"]:
+        start = js.index(f"function {fn}(")
+        body = js[start : start + 400]
+        assert "initThemeToggle()" in body, fn
+
+
+def test_daily_page_scope_restores_legacy_tokens() -> None:
+    css = _read("style.css")
+
+    assert ".daily-page {" in css
+    assert '--font-display: "Playfair Display"' in css
+    assert "--cyan: #22d3ee;" in css
+    assert "--green: #34d399;" in css
+
+
+def test_app_js_declares_bookmark_store_and_hot_topics() -> None:
+    js = _read("app.js")
+
+    assert "BookmarkStore" in js
+    assert 'localStorage.setItem(BOOKMARKS_KEY' in js
+    assert "bookmarkButton" in js
+    assert '"/api/v1/hot' in js
+    assert "initBookmarks" in js
+    assert "initThemeToggle" in js
+
+
+
+def test_feed_text_metrics_match_redesign_baseline() -> None:
     css = _read("style.css")
 
     assert ".item-title {" in css
-    assert "margin-top: 0;" in css
-    assert "font-size: 15px;" in css
     assert "font-weight: 700;" in css
-    assert "line-height: 1.5;" in css
-    assert ".x-card .item-title {" in css
-    assert "font-size: 14px;" in css
-    assert "font-weight: 400;" in css
-    assert "line-height: 23.8px;" in css
-    assert ".clamped-card.x-card .item-title {" in css
+    assert ".clamped-card.x-card .summary {" in css
     assert "-webkit-line-clamp: 4;" in css
-    assert ".summary {" in css
-    assert "display: flow-root;" in css
-    assert "margin: 6px 0 0;" in css
-    assert ".compact-card .summary {" in css
-    assert "margin-top: 6px;" in css
-    assert "font-size: 12.5px;" in css
-    assert "line-height: 20px;" in css
     assert ".clamped-card .summary {" in css
     assert "-webkit-line-clamp: 3;" in css
+    assert ".timeline-card:hover {" in css
+    assert ".date-collapse" in css
+    assert ".hot-topics" in css
+    assert ".bookmark-btn" in css
 
 
 def test_daily_text_metrics_match_aihot_baseline() -> None:
@@ -419,7 +450,6 @@ def test_daily_structural_styles_match_aihot_baseline() -> None:
     css = _read("style.css")
 
     assert ".app-mobile-bar {" in css
-    assert "grid-template-columns: 44px minmax(0, 1fr) 44px;" in css
     assert ".sidebar-open .sidebar {" in css
     assert ".daily-shell {" in css
     assert "margin: -24px -28px -72px;" in css
@@ -446,18 +476,15 @@ def test_daily_structural_styles_match_aihot_baseline() -> None:
     assert "letter-spacing: 1px;" in css
 
 
-def test_sidebar_responsive_drawer_keeps_aihot_natural_nav_rows() -> None:
+
+def test_sidebar_drawer_and_grouped_nav() -> None:
     css = _read("style.css")
 
-    assert "align-content: start;" in css
-    assert "grid-auto-rows: min-content;" in css
-    assert "justify-items: stretch;" in css
-    assert "white-space: nowrap;" in css
-    assert "background: transparent;" in css
-    assert ".daily-page .sidebar {" not in css
-    assert ".daily-page .side-nav {" not in css
-    assert ".daily-page .side-link {" not in css
-    assert ".daily-page .side-nav.open" not in css
+    assert ".side-group-label {" in css
+    assert ".sidebar-foot {" in css
+    assert ".theme-toggle {" in css
+    assert "transform: translateX(-100%);" in css
+    assert ".sidebar-open .sidebar {" in css
 
 
 def test_selected_badge_is_only_rendered_in_score_pill_not_topic_tags() -> None:
