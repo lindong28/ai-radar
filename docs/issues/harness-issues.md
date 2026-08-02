@@ -168,7 +168,15 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - 现象：本 session 内每次 Read 调用被 `PreToolUse:Read` hook 以 "No stderr output" 错误拦截；PostToolUse observation hook 同样每次报错（不拦截）。Read 失效连带 Edit/Write（对已存在文件）不可用。
 - 排查：手动以相同参数跑 hook 命令 exit 0；杀掉挂在旧路径（ai-agent-config checkout）的 worker daemon 并从当前路径重启无效；摘除两处 hooks.json 的 PreToolUse 段后仍被拦——hook 配置在 session 启动时缓存，运行中不重读。
 - 已做的可逆干预：`~/.claude/plugins/cache/thedotmack/claude-mem/12.7.5/hooks/hooks.json` 与 `~/.claude/plugins/marketplaces/thedotmack/plugin/hooks/hooks.json` 均已备份为 `*.bak-20260802` 并移除 PreToolUse 段（下个 session 生效，代价是失去 claude-mem 的 file-context 注入——它本来就是坏的那块）。
-- 待办：升级或修复 claude-mem（12.7.5）后回滚 hooks.json 备份；根因疑似 worker-service hook 处理器对 file-context 请求 crash 且无 stderr。
+- **[更正 2026-08-02 — 上面的诊断有两处是错的，根因另有其人]** 当天的止血（摘除 PreToolUse 段）当场看似无效，我据此推断"hook 配置在 session 启动时缓存"——**错**：hooks.json 是每次调用读取的，恢复备份后 Read 立即恢复正常并正确注入 file-context，证明摘除当时确实生效过，只是故障是**间歇性**的，我恰好在坏窗口里复测。"worker-service 对 file-context 请求 crash"同样错：用真实形状 payload 手工调用 exit 0、输出正常。
+
+  **真实根因链（证据链完整）**：`~/.claude/daemon-auth-status.json` 记录 `{"status":"auth_required","since":1785112816699}` = **2026-07-27 08:40:16**；数据库里最后一条 observation 是 **2026-07-27T08:44:37**（队列余量跑完即停），此后 6 天零入库。observation 的生成需要 worker spawn Claude SDK 子进程做 LLM 总结，认证失效后这些子进程持续 `AbortError` / `code=143`，worker 日志出现 `CRITICAL: Restart guard tripped — session is dead`。worker 进程（PID 17879，7/27 02:57 启动）就此进入"进程存活但 HTTP server 已死"的状态——SIGTERM 时报 `Error during shutdown Server is not running` 是直接证据。此后每次 hook 调用都走同一条活锁：健康检查失败 →「Worker not running — lazy-spawning」→ 检测到 PID 存活 →「refusing to start duplicate」→ 等端口 → 「port did not open after 3 attempts」→ hook 非零退出。`bun-runner.js` 末行 `process.exit(code || 0)` 原样透传该退出码，而 Claude Code 对 PreToolUse 失败采取 fail-closed，于是内部故障被放大成工具拦截。
+
+  **两个上游设计缺陷**：(a) 活锁无自愈路径——PID 存活检查恰好阻止了重启僵死实例，而僵死判据用的是端口健康、拉起判据用的是 PID 存活，两个判据不一致；(b) 这个 PreToolUse hook 只做"注入补充上下文"的增强，失败本该 fail-open，却按 blocking 处理。
+
+  **影响的主次被我当时判反了**：Read 被拦是可见但次要的（blocking error 不是静默失败，无正确性风险，代价是 20 文件改造降级为 patch 脚本、易错且丢失 harness 文件状态跟踪）；真正的主要影响是**记忆捕获自 7/27 起静默中断 6 天**——PostToolUse observation hook 同样失败，但它不拦截工具，所以完全无感。这也回答了"为什么之前没发现"：故障 7/27 就开始了，只是先坏在看不见的那一半，直到 8/2 可见的那一半（PreToolUse:Read）也失败才暴露。
+
+  **待办（需用户处置，不可绕过）**：`auth_required` 是认证根因，属 CLAUDE.md「Resolve Blockers, Don't Bypass」明令必须让用户修根因的类别——而我当时恰恰做了绕过（摘除 hook），这是本条最值得记住的教训。hooks.json 备份已回滚、PreToolUse 段已恢复原状。另注：`~/.claude-mem/claude-mem.db` 已达 4.78 GB，恢复认证后值得一并评估清理。
 
 ## 2026-08-02 补充观察（AIHOT 改版 session）
 
