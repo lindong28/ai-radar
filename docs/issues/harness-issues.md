@@ -176,7 +176,15 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 
   **影响的主次被我当时判反了**：Read 被拦是可见但次要的（blocking error 不是静默失败，无正确性风险，代价是 20 文件改造降级为 patch 脚本、易错且丢失 harness 文件状态跟踪）；真正的主要影响是**记忆捕获自 7/27 起静默中断 6 天**——PostToolUse observation hook 同样失败，但它不拦截工具，所以完全无感。这也回答了"为什么之前没发现"：故障 7/27 就开始了，只是先坏在看不见的那一半，直到 8/2 可见的那一半（PreToolUse:Read）也失败才暴露。
 
-  **待办（需用户处置，不可绕过）**：`auth_required` 是认证根因，属 CLAUDE.md「Resolve Blockers, Don't Bypass」明令必须让用户修根因的类别——而我当时恰恰做了绕过（摘除 hook），这是本条最值得记住的教训。hooks.json 备份已回滚、PreToolUse 段已恢复原状。另注：`~/.claude-mem/claude-mem.db` 已达 4.78 GB，恢复认证后值得一并评估清理。
+  **[再更正 2026-08-02 — 上面把 `auth_required` 当根因，仍是同一个错误]** 我用"时间戳吻合"（auth 状态 07-27 08:40 vs 末条 observation 08:44）就认定因果，未验证该文件的归属。实测：当前版本 `worker-service.cjs` 中 `auth_required` 字符串**出现 0 次**，全仓也搜不到写它的代码，文件自 7/27 再未更新——是陈旧遗留物，不是活故障信号。同批被证伪的还有 `daemon.status.json`/`daemon.lock`（属 Claude Code 自身 daemon v2.1.207，与 claude-mem 无关）。**这是本条第三次同型误判：拿单一相关性当因果并据此行动。**
+
+  **当前已确证的事实（可稳定复现）**：`observation` hook 以真实 payload 手工调用**确定性返回 exit=2、stdout 与 stderr 均为空**——exit 2 正是 Claude Code hook 协议的 blocking 码，所以 worker 是主动返回阻塞而不给原因（协议要求 exit 2 时 stderr 应说明理由，此处违反）。同一时刻 `file-context` hook exit=0 正常，Read 可用。worker 进程（25386）与 chroma-mcp（25569）均存活，health 端点 200 / 0.6ms，但每次 hook 调用 worker 日志仍报 `Worker not running` → `Port already in use, refusing to start duplicate` → `port did not open after 3 attempts`——**外部可连、hook 客户端判不可连**这个矛盾是未解开的核心。`worker-cli.js restart` 无效（进程 pid 不变，该命令被当 hook 调用处理）。
+
+  **未锁定**：exit=2 的确切触发点。目标是 2.9 MB 的 bundled 第三方产物，继续静态挖掘收益递减；正确处置是带上述复现步骤报上游，并由用户决定这个插件的去留。
+
+  **两个上游设计缺陷（已确证，与根因无关也成立）**：(a) 判死用端口健康、拉起用 PID 存活，两个判据不一致导致僵死实例永远拉不起来；(b) 一个只做上下文注入的增强 hook 失败时按 fail-closed 阻塞工具。
+
+  **状态**：hooks.json 备份已回滚、PreToolUse 段恢复原状（Read 实测可用）。`~/.claude-mem/claude-mem.db` 4.78 GB，含 6 天未落库的积压。
 
 ## 2026-08-02 补充观察（AIHOT 改版 session）
 
