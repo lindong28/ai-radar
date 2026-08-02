@@ -184,6 +184,26 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 
   **两个上游设计缺陷（已确证，与根因无关也成立）**：(a) 判死用端口健康、拉起用 PID 存活，两个判据不一致导致僵死实例永远拉不起来；(b) 一个只做上下文注入的增强 hook 失败时按 fail-closed 阻塞工具。
 
+  **[根因已锁定 2026-08-02 晚 — 由独立 reviewer 用新证据推翻了"投递链断裂"这个中间结论]** 关键证据是 `user_prompts` 表：它与 `observations` 经**同一条投递链、同一个写入函数**入库，而 `MAX(created_at)` 分别是 `2026-08-01T17:19` 与 `2026-07-27T08:44`。同链一通一不通，说明 07-27→08-01 那 5 天**投递链是好的**，死的是 observation 的**生成侧**（该路要 spawn Claude SDK 子进程做 LLM 总结，worker 日志里对应 `AbortError` 与 `CRITICAL: Restart guard tripped — session is dead`）。
+
+  **完整时间线**：① 07-27 08:44 生成侧死亡，投递链正常 → `consecutiveFailures` 因"收到任何 HTTP 响应即归零"而全程读作 0，**5 天完全静默**；② 08-01 17:19 后投递链本身也断（bun-runner 空 stdin，上游 issue #2188），计数器开始累积；③ 累积超默认阈值 3 触发 fail-loud：`process.exit(BLOCKING_ERROR)` 即 exit 2，Claude Code 按 blocking 处理 → 工具被拦；④ fail-loud 本该打印的 `claude-mem worker unreachable for N consecutive hooks.` 被 hook 包装器的 `process.stderr.write` 劫持吞掉（代码里有 `finally{process.stderr.write=i}`），只剩无解释的 exit 2。这解释了为何数据 07-27 就停、而可见症状 08-02 才出现。
+
+  **教训（本条第三次同型误判后的总结）**：三次误判（坏 hook / auth 文件 / 投递链断裂）都是拿单一相关性当因果。真正终结它的不是更仔细地看同一批证据，而是找到一个**能区分竞争假说的对照量**——`user_prompts` 与 `observations` 共享写入路径，所以它们的时间差直接把"链断"与"生成侧死"分开。
+
+  **处置**：`claude/settings.json` 加 `CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD=999999` 恢复 fail-open（实测 exit 0）；新建 `claude/references/enhancement-service-liveness.md` 并接入 `/custom:review-agent-harness` 第 2b 路，判据即上述对照量。根因在上游第三方 bundle，待报。
+
+  **[根因确认为代理 2026-08-02 晚 — 用户在另一 session 独立定位并已修复]** 真因是 **Claude Code 在代理模式下把 `http_proxy`/`https_proxy` 传给了 hook 进程，于是它连 `127.0.0.1:37701` 的本机 worker 也走代理并失败**。修复见 `~/research/system-config` 的 `69cd92e`：`claude` 系 wrapper 在 dotenv 覆盖生效后合并 `no_proxy`/`NO_PROXY` 并加入 `127.0.0.1,localhost,::1`。本 session 对照实测确认（显式清掉阈值变量，排除绕过干扰）：同一 payload、同一 worker，不带 `no_proxy` → `exit=2`；带 `no_proxy` → `exit=0` 且返回 `{}`，失败计数器随即从 91 归零。
+
+  **我的调查方法本身屏蔽了真因**：全程用 `curl --noproxy '*'` 探 worker 健康端点，于是看到"外部能连、hook 连不上"，把它归因成"请求送达但响应回不来"。而两者唯一的差别就是 `--noproxy`——那个我为绕开系统代理而顺手加的参数，恰好消除了要诊断的变量。这是本条第四次同型误判，前三次是拿相关性当因果，这次是**用一个屏蔽了自变量的方法去测因果**。
+
+  **已 revert**：`CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD=999999`（ai-agent-config `1db67bc`）——它是基于错误诊断的绕过，根因既已修复就不该保留，否则永久压掉一个有效信号。探活 reference 保留，其"与消音配置的关系"节改写为「已知环境陷阱：代理劫持回环流量」，记入两条可复用教训：探活命令必须自己绕过代理否则会得出与被测组件相反的结论；常驻进程继承的是被拉起那一刻的环境，判定恢复前先确认其启动时间晚于环境修复。
+
+  **已闭合 2026-08-02**：上一版记的"另一层未闭合"（`SDK_SPAWN … AbortError` / `code=143`）不是独立故障——它的成因是**被测进程仍在旧环境里**：worker 与其派生的 SDK 子进程继承的是被拉起那一刻的环境，我在旧 session 内重启 worker，它继承的仍是无 `no_proxy` 的坏环境。用户在新 tab 重新加载 zshrc 后重启 session，链路一次贯通：`no_proxy=127.0.0.1,localhost,::1` 生效、`consecutiveFailures` 归零、`chroma-mcp` 也从长期 backoff 恢复连接（`Connected to chroma-mcp successfully`），observation 走完 `ENQUEUED → CLAIMED → CLEARED → CHROMA_SYNC` 全流程，`observations` 新增 19936/19937，`hours_since` 由 148 降到 0。6 天断档结束。
+
+  这也让「常驻进程继承的是被拉起那一刻的环境」这条从推测升级为实测结论，已写入探活 reference——判定服务是否恢复前，先确认被测进程的启动时间晚于环境修复，否则会把"环境没换"误读成"修复无效"（我上一版正是如此误读）。
+
+  **附带发现**：用真实恢复态跑探活，衰减档会触发（`hours_since`=0.001 但 `last_24h`=3 < 均值 61.4/3）——窗口里还含着已结束的断档。这不是误报但不 actionable，已在 reference 补「恢复期形态」：三个取值一起看即可与持续衰减分辨（ai-agent-config `a6f07e9`）。
+
   **状态**：hooks.json 备份已回滚、PreToolUse 段恢复原状（Read 实测可用）。`~/.claude-mem/claude-mem.db` 4.78 GB，含 6 天未落库的积压。
 
 ## 2026-08-02 补充观察（AIHOT 改版 session）
