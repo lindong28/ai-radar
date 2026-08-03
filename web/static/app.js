@@ -48,11 +48,44 @@ function esc(value) {
 
 function dateKey(value) {
   const parts = shanghaiDateParts(value);
-  return `${Number(parts.month)}月${Number(parts.day)}日`;
+  return parts ? `${Number(parts.month)}月${Number(parts.day)}日` : "日期未知";
+}
+
+function weekdayKey(value) {
+  const date = validDate(value);
+  if (!date) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    weekday: "long",
+  }).format(date);
+}
+
+function shortWeekdayKey(value) {
+  return weekdayKey(value).replace("星期", "周");
+}
+
+function mobileDateKey(value, now = Date.now()) {
+  const bucket = dateBucket(value);
+  const today = dateBucket(now);
+  const yesterday = dateBucket(now - 86_400_000);
+  const relative = bucket && bucket === today ? "今天 " : bucket && bucket === yesterday ? "昨天 " : "";
+  const weekday = shortWeekdayKey(value);
+  return `${relative}${dateKey(value)}${weekday ? ` ${weekday}` : ""}`;
+}
+
+function mobileTopbarDate(value = Date.now()) {
+  const weekday = shortWeekdayKey(value);
+  return `${dateKey(value)}${weekday ? ` · ${weekday}` : ""}`;
+}
+
+function validDate(value) {
+  const date = new Date(value);
+  return date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
 function shanghaiDateParts(value) {
-  const date = new Date(value);
+  const date = validDate(value);
+  if (!date) return null;
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Shanghai",
     year: "numeric",
@@ -64,21 +97,22 @@ function shanghaiDateParts(value) {
 
 function dateBucket(value) {
   const parts = shanghaiDateParts(value);
-  return `${parts.year}-${parts.month}-${parts.day}`;
+  return parts ? `${parts.year}-${parts.month}-${parts.day}` : "";
 }
 
 function isoDateTime(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+  return validDate(value)?.toISOString() || "";
 }
 
 function timeKey(value) {
+  const date = validDate(value);
+  if (!date) return "";
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function itemTime(item) {
@@ -217,6 +251,11 @@ function bindCategoryControls(onChange) {
 function updateChannelControls(root, activeChannel, activeCategory = "all") {
   if (!root) return;
   const q = document.querySelector("#search")?.value.trim() || "";
+  if (root.tagName === "SELECT") {
+    root.value = CHANNEL_URL_VALUES[activeChannel] || "";
+    updateHiddenFeedInputs(activeCategory, "", activeChannel);
+    return;
+  }
   root.querySelectorAll("[data-channel]").forEach((control) => {
     const channel = control.dataset.channel || "all";
     const active = channel === activeChannel;
@@ -232,6 +271,12 @@ function updateChannelControls(root, activeChannel, activeCategory = "all") {
 function bindChannelControls(onChange) {
   const root = document.querySelector("[data-channel-filter]");
   if (!root) return () => {};
+  if (root.tagName === "SELECT") {
+    root.addEventListener("change", () => {
+      onChange(CHANNEL_FROM_URL[root.value] || "all");
+    });
+    return (activeChannel, activeCategory = "all") => updateChannelControls(root, activeChannel, activeCategory);
+  }
   root.addEventListener("click", (event) => {
     const control = event.target.closest("[data-channel]");
     if (!control) return;
@@ -245,8 +290,12 @@ function badges(item) {
   const sourceTags = Array.isArray(item.enriched_tags) ? item.enriched_tags : item.topic_tags;
   const topics = Array.isArray(sourceTags) ? sourceTags.slice(0, 4) : [];
   if (!topics.length) topics.push(item.source_kind === "x" ? "社交" : "AI");
-  const parts = topics.map((tag) => `<span class="tag">${esc(tag)}</span>`);
+  const parts = topics.map((tag) => `<span class="tag">#${esc(normalizedTagLabel(tag))}</span>`);
   return parts.join("");
+}
+
+function normalizedTagLabel(tag) {
+  return String(tag || "").replace(/^#+/, "");
 }
 
 function scorePill(item) {
@@ -254,8 +303,7 @@ function scorePill(item) {
   const title = "LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明";
   const score = Math.round(Number(item.weighted_score) * 10);
   const tier = scoreTierClass(score);
-  const selected = item.rank == null ? "" : `<span class="hot-pill">精选</span>`;
-  return `<div class="score-stack ${tier}" title="${esc(title)}">${selected}<span class="score-pill ${tier}" title="${esc(title)}">${score}</span></div>`;
+  return `<span class="timeline-score ${tier}" title="${esc(title)}">${score}</span>`;
 }
 
 function scoreTierClass(score) {
@@ -272,17 +320,8 @@ function safeCssUrl(value) {
   return String(value || "").replace(/["\\\n\r]/g, "");
 }
 
-function xHandleFromUrl(value) {
-  const match = String(value || "").match(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([^/?#]+)/i);
-  return match ? match[1] : "";
-}
-
 function sourceAvatarUrl(item) {
   if (item.source_kind === "wechat") return item.author_avatar_url || WECHAT_FALLBACK_ICON;
-  if (item.source_kind === "x") {
-    const handle = xHandleFromUrl(item.source_homepage_url) || xHandleFromUrl(item.url);
-    if (handle) return `https://unavatar.io/x/${encodeURIComponent(handle)}`;
-  }
   return item.source_icon_url || "";
 }
 
@@ -302,17 +341,24 @@ function sourceDisplayName(item) {
   return suffixes[item.source_id] ? `${name}：${suffixes[item.source_id]}` : `${name}（RSS）`;
 }
 
-function sourceLine(item) {
+function authorHandle(value) {
+  const author = String(value || "").trim();
+  return !author || author.startsWith("@") ? author : `@${author}`;
+}
+
+function sourceLine(item, selected = false) {
   const homepage = item.source_homepage_url || item.url || "#";
   const icon = safeCssUrl(sourceAvatarUrl(item));
   const img = icon ? `<img class="source-avatar" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
-  const author = item.author && item.source_kind !== "wechat" ? `<span class="source-author">${esc(item.author)}</span>` : "";
+  const author = item.author && item.source_kind !== "wechat" ? `<span class="source-author">${esc(authorHandle(item.author))}</span>` : "";
+  const selectedBadge = selected ? '<span class="timeline-selected-badge">精选</span>' : "";
   return `<div class="source-line">
     <a class="source-link" href="${esc(homepage)}" target="_blank" rel="noopener noreferrer">
       <span class="source-icon">${img}<span class="source-initial">${esc(sourceInitial(item))}</span></span>
       <span class="source-name">${esc(sourceDisplayName(item))}</span>
     </a>
     ${author}
+    ${selectedBadge}
   </div>`;
 }
 
@@ -324,9 +370,9 @@ function itemHref(item) {
 function articleMedia(item) {
   const assets = Array.isArray(item.media_assets) ? item.media_assets.filter((asset) => asset?.type === "image" && asset.url) : [];
   if (!assets.length) return "";
-  const label = `打开原文：${itemTitleText(item) || "查看媒体"}`;
+  const label = `打开大图：${itemTitleText(item) || "查看媒体"}`;
   const images = assets.slice(0, 4).map((asset) => `
-    <a class="article-media-link" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
+    <a class="article-media-link" href="${esc(asset.url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
       <img class="article-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.article-media-link').hidden=true">
     </a>`).join("");
   return `<div class="article-media article-media-count-${Math.min(assets.length, 4)}">${images}</div>`;
@@ -352,7 +398,7 @@ function relatedDiscussions(item) {
 function itemCard(item, showScore, options = {}) {
   const compact = Boolean(options.compact);
   const showReason = options.showReason === "selected" ? item.rank != null : options.showReason !== false;
-  const reason = !compact && showReason && item.reasoning ? `<div class="reason">推荐理由：${esc(item.reasoning)}</div>` : "";
+  const reason = !compact && showReason && item.reasoning ? `<div class="reason"><span class="reason-label">推荐理由：</span>${esc(item.reasoning)}</div>` : "";
   const showRelated = !compact && options.showRelated !== false;
   const isX = item.source_kind === "x";
   const itemTitle = itemTitleText(item);
@@ -362,7 +408,7 @@ function itemCard(item, showScore, options = {}) {
   const media = compact ? "" : articleMedia(item);
   return `<article class="item-row timeline-card${isX ? " x-card" : ""}${compact ? " compact-card" : ""}${options.clampSummary ? " clamped-card" : ""}" data-item-id="${esc(item.id)}" data-source-id="${esc(item.source_id)}" data-published-date="${esc(itemDateBucket(item))}" data-published-at="${esc(isoDateTime(itemTime(item)))}">
     <div class="card-topline">
-      ${sourceLine(item)}
+      ${sourceLine(item, item.rank != null)}
       <span class="card-topline-end">${showScore ? scorePill(item) : ""}${bookmarkButton(item)}</span>
     </div>
     ${title}
@@ -406,16 +452,21 @@ function renderTimeline(container, items, options = {}) {
     </div>`;
     return;
   }
-  let lastDate = append ? container.dataset.lastDate || "" : "";
   const sortByScore = options.sortByScore === true;
   const renderedItems = [...items].sort(sortByScore ? compareByScoreDesc : compareByTimeDesc);
-  const html = renderedItems.map((item) => {
-    const day = dateKey(itemTime(item));
+  const groups = [];
+  for (const item of renderedItems) {
     const bucket = itemDateBucket(item);
-    const dateLabel = day === lastDate ? "" : `<div class="timeline-date date-group" data-date="${esc(bucket)}"><button type="button" class="date-collapse" aria-expanded="true" aria-label="折叠 ${esc(day)}">▾</button><time datetime="${esc(bucket)}" title="${esc(bucket)}">${esc(day)}</time><span class="date-count"></span></div>`;
-    lastDate = day;
-    return `${dateLabel}<div class="timeline-entry" data-entry-date="${esc(bucket)}">
-      <div class="timeline-time"><time datetime="${esc(isoDateTime(itemTime(item)))}" title="${esc(bucket)}">${esc(timeKey(itemTime(item)))}</time><span></span></div>
+    let group = groups.at(-1);
+    if (!group || group.bucket !== bucket) {
+      group = { bucket, day: dateKey(itemTime(item)), mobileDay: mobileDateKey(itemTime(item)), weekday: weekdayKey(itemTime(item)), items: [] };
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  const itemMarkup = (item, bucket) => `<div class="timeline-item timeline-entry" data-entry-date="${esc(bucket)}">
+      <div class="timeline-time"><time datetime="${esc(isoDateTime(itemTime(item)))}" title="${esc(bucket)}">${esc(timeKey(itemTime(item)))}</time></div>
+      <div class="timeline-rail" aria-hidden="true"><span class="timeline-dot"></span></div>
       ${itemCard(item, showScore, {
         compact,
         showReason: options.showReason,
@@ -423,22 +474,43 @@ function renderTimeline(container, items, options = {}) {
         clampSummary: options.clampSummary,
       })}
     </div>`;
-  }).join("");
-  if (append) container.insertAdjacentHTML("beforeend", html);
-  else container.innerHTML = html;
-  container.dataset.lastDate = lastDate;
+  const dayMarkup = (group) => `<section class="timeline-day date-group" data-date="${esc(group.bucket)}">
+    <div class="timeline-day-head timeline-date">
+      <button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 ${esc(group.day)}">
+        <time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label">${esc(group.mobileDay)}</span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <span class="timeline-day-meta">${group.weekday ? `${esc(group.weekday)} · ` : ""}<span class="date-count">${group.items.length} 条</span></span>
+    </div>
+    <div class="timeline-day-items">${group.items.map((item) => itemMarkup(item, group.bucket)).join("")}</div>
+  </section>`;
+  if (append) {
+    // offset 分页在采集管线并发写入时会跨页重发边界条目；按 data-item-id 去重，
+    // 保证追加过程中不出现重复卡片（滚动期间新增的内容在刷新后收敛）。
+    const seen = new Set(
+      Array.from(container.querySelectorAll(".timeline-card[data-item-id]"), (el) => el.dataset.itemId || ""),
+    );
+    for (const group of groups) {
+      const freshItems = group.items.filter((item) => !seen.has(String(item.id)));
+      if (!freshItems.length) continue;
+      const existing = container.querySelector(`.timeline-day[data-date="${CSS.escape(group.bucket)}"]`);
+      if (existing) existing.querySelector(".timeline-day-items")?.insertAdjacentHTML("beforeend", freshItems.map((item) => itemMarkup(item, group.bucket)).join(""));
+      else container.insertAdjacentHTML("beforeend", dayMarkup({ ...group, items: freshItems }));
+    }
+  } else {
+    container.innerHTML = groups.map(dayMarkup).join("");
+  }
+  container.dataset.lastDate = groups.at(-1)?.bucket || container.dataset.lastDate || "";
   updateDateGroupCounts(container);
   bindDateGroupCollapse(container);
   syncBookmarkButtons(container);
 }
 
 function updateDateGroupCounts(container) {
-  container.querySelectorAll(".timeline-date").forEach((header) => {
-    const bucket = header.dataset.date;
-    const entries = container.querySelectorAll(`.timeline-entry[data-entry-date="${CSS.escape(bucket)}"]`);
-    const label = header.querySelector(".date-count");
-    if (label) label.textContent = `· ${entries.length} 条`;
-    if (header.classList.contains("date-group-collapsed")) {
+  container.querySelectorAll(".timeline-day").forEach((group) => {
+    const entries = group.querySelectorAll(".timeline-entry");
+    const label = group.querySelector(".date-count");
+    if (label) label.textContent = `${entries.length} 条`;
+    if (group.classList.contains("date-group-collapsed")) {
       entries.forEach((entry) => entry.classList.add("entry-hidden"));
     }
   });
@@ -450,12 +522,11 @@ function bindDateGroupCollapse(container) {
   container.addEventListener("click", (event) => {
     const button = event.target.closest(".date-collapse");
     if (!button || !container.contains(button)) return;
-    const header = button.closest(".timeline-date");
-    const bucket = header?.dataset.date;
-    if (!bucket) return;
-    const collapsed = header.classList.toggle("date-group-collapsed");
+    const group = button.closest(".timeline-day");
+    if (!group) return;
+    const collapsed = group.classList.toggle("date-group-collapsed");
     button.setAttribute("aria-expanded", collapsed ? "false" : "true");
-    container.querySelectorAll(`.timeline-entry[data-entry-date="${CSS.escape(bucket)}"]`).forEach((entry) => {
+    group.querySelectorAll(".timeline-entry").forEach((entry) => {
       entry.classList.toggle("entry-hidden", collapsed);
     });
   });
@@ -481,7 +552,7 @@ function wechatCard(item) {
     </div>
     <a class="item-title" href="${esc(detailUrl)}">${esc(item.title || "")}</a>
     <p class="summary">${esc(item.abstract || "")}</p>
-    <div class="tags">${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>
+    <div class="tags">${tags.map((tag) => `<span class="tag">#${esc(normalizedTagLabel(tag))}</span>`).join("")}</div>
   </article>`;
 }
 
@@ -494,52 +565,41 @@ function renderWechatTimeline(container, items, { hasQuery = false } = {}) {
     </div>`;
     return;
   }
-  let lastDate = "";
-  container.innerHTML = [...items].sort(compareByTimeDesc).map((item) => {
+  const groups = [];
+  for (const item of [...items].sort(compareByTimeDesc)) {
     const when = item.published_at || "";
-    const day = dateKey(when);
     const bucket = dateBucket(when);
-    const dateLabel = day === lastDate ? "" : `<div class="timeline-date date-group"><time datetime="${esc(bucket)}" title="${esc(bucket)}">${esc(day)}</time></div>`;
-    lastDate = day;
-    return `${dateLabel}<div class="timeline-entry">
-      <div class="timeline-time"><time datetime="${esc(isoDateTime(when))}" title="${esc(bucket)}">${esc(timeKey(when))}</time><span></span></div>
+    let group = groups.at(-1);
+    if (!group || group.bucket !== bucket) {
+      group = { bucket, day: dateKey(when), mobileDay: mobileDateKey(when), weekday: weekdayKey(when), items: [] };
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  const itemMarkup = (item, bucket) => {
+    const when = item.published_at || "";
+    return `<div class="timeline-item timeline-entry" data-entry-date="${esc(bucket)}">
+      <div class="timeline-time"><time datetime="${esc(isoDateTime(when))}" title="${esc(bucket)}">${esc(timeKey(when))}</time></div>
+      <div class="timeline-rail" aria-hidden="true"><span class="timeline-dot"></span></div>
       ${wechatCard(item)}
     </div>`;
-  }).join("");
+  };
+  container.innerHTML = groups.map((group) => `<section class="timeline-day date-group" data-date="${esc(group.bucket)}">
+    <div class="timeline-day-head timeline-date">
+      <button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 ${esc(group.day)}">
+        <time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label">${esc(group.mobileDay)}</span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <span class="timeline-day-meta">${group.weekday ? `${esc(group.weekday)} · ` : ""}<span class="date-count">${group.items.length} 条</span></span>
+    </div>
+    <div class="timeline-day-items">${group.items.map((item) => itemMarkup(item, group.bucket)).join("")}</div>
+  </section>`).join("");
+  bindDateGroupCollapse(container);
 }
 
 function initNavigation() {
-  const sidebar = document.querySelector(".sidebar");
-  const toggle = document.querySelector(".app-hamburger");
-  const close = document.querySelector(".sidebar-close");
-  if (!sidebar || !toggle || toggle.dataset.bound === "true") return;
-  const mobileQuery = window.matchMedia("(max-width: 760px)");
-  const setSidebarInteractivity = (open) => {
-    const hiddenDrawer = mobileQuery.matches && !open;
-    sidebar.toggleAttribute("inert", hiddenDrawer);
-    if (hiddenDrawer) sidebar.setAttribute("aria-hidden", "true");
-    else sidebar.removeAttribute("aria-hidden");
-  };
-  const setOpen = (open) => {
-    document.body.classList.toggle("sidebar-open", open);
-    toggle.setAttribute("aria-expanded", open ? "true" : "false");
-    setSidebarInteractivity(open);
-    if (open) close?.focus();
-    else if (sidebar.contains(document.activeElement)) toggle.focus();
-  };
-  toggle.dataset.bound = "true";
-  setSidebarInteractivity(document.body.classList.contains("sidebar-open"));
-  mobileQuery.addEventListener?.("change", () => {
-    setSidebarInteractivity(document.body.classList.contains("sidebar-open"));
-  });
-  toggle.addEventListener("click", () => {
-    setOpen(!document.body.classList.contains("sidebar-open"));
-  });
-  close?.addEventListener("click", () => setOpen(false));
-  sidebar.querySelectorAll(".side-link").forEach((link) => {
-    link.addEventListener("click", () => {
-      setOpen(false);
-    });
+  const label = mobileTopbarDate();
+  document.querySelectorAll("[data-mobile-date]").forEach((date) => {
+    date.textContent = label;
   });
 }
 
@@ -1018,7 +1078,7 @@ export async function initCurated() {
   let itemsById = new Map();
   let generation = 0;
   const loadCuratedPage = memoizedApi();
-  if (runMeta) runMeta.textContent = "AI 自动挑选的高价值内容（日期为原文发布日）";
+  const runMetaCopy = "AI 自动挑选的高价值内容";
   search.value = searchFromUrl();
   normalizeFeedUrl("/", {
     q: search.value.trim(),
@@ -1086,6 +1146,13 @@ export async function initCurated() {
       emptyTitle: q ? "没有匹配条目" : activeCategory === "all" ? "暂无精选条目" : `${CATEGORY_LABELS[activeCategory]}分类暂无精选`,
       emptyBody: q ? "清空搜索后可回到默认列表。" : "可以切换到全部继续浏览精选内容。",
     });
+    if (runMeta) {
+      const validTimes = rawItems.map(itemTime)
+        .map((value) => new Date(value))
+        .filter((value) => !Number.isNaN(value.getTime()));
+      const latest = validTimes.sort((a, b) => b.getTime() - a.getTime())[0];
+      runMeta.textContent = latest ? `${curatedHeaderDate(latest)} · ${runMetaCopy}` : runMetaCopy;
+    }
     feed.reset(rawItems.length > 0 && feedHasMore(meta, Number(meta.page || currentPage)));
   }
 
@@ -1157,20 +1224,27 @@ export async function initCurated() {
   restoreListScroll();
 }
 
+function curatedHeaderDate(value) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  }).format(new Date(value));
+}
+
 function todayIso() {
   return dateBucket(new Date().toISOString());
 }
 
 function isDateString(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value || "") && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime());
-}
-
-function isFutureDate(value) {
-  return isDateString(value) && value > todayIso();
-}
-
-function shouldFallbackToRecentContentDate(value) {
-  return !value || !isDateString(value) || isFutureDate(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
 }
 
 function addDays(value, days) {
@@ -1219,12 +1293,17 @@ const DAILY_SECTION_DEFS = [
 
 const CHINESE_DIGITS = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
 
-function dailyDateFromPath() {
-  const match = location.pathname.match(/^\/daily\/(\d{4}-\d{2}-\d{2})\/?$/);
-  return match ? match[1] : "";
+export function dailyDateFromPath() {
+  const match = location.pathname.match(/^\/daily\/([^/]+)\/?$/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch (_error) {
+    return match[1];
+  }
 }
 
-function dailyPath(dateValue = "") {
+export function dailyPath(dateValue = "") {
   return dateValue ? `/daily/${dateValue}` : "/daily";
 }
 
@@ -1246,6 +1325,82 @@ function readableDailyDate(value) {
   const date = new Date(Date.UTC(year, month - 1, day));
   const weekday = new Intl.DateTimeFormat("zh-CN", { weekday: "long", timeZone: "UTC" }).format(date);
   return `${dailyYearLabel(year)}年${chineseNumber(month)}月${chineseNumber(day)}日　${weekday}`;
+}
+
+export function dailyReadingMinutes(characterCount) {
+  return Math.max(1, Math.ceil(Math.max(0, Number(characterCount) || 0) / 300));
+}
+
+function isDailyCjk(character) {
+  const codePoint = character.codePointAt(0);
+  return (codePoint >= 0x3400 && codePoint <= 0x4dbf)
+    || (codePoint >= 0x4e00 && codePoint <= 0x9fff)
+    || (codePoint >= 0xf900 && codePoint <= 0xfaff);
+}
+
+export function dailyVisibleCjkCount(node) {
+  const text = node.textContent || "";
+  const ownerDocument = node.ownerDocument;
+  if (!ownerDocument?.createRange || !ownerDocument.createTreeWalker || !node.getBoundingClientRect) {
+    return Array.from(text).filter(isDailyCjk).length;
+  }
+  const bounds = node.getBoundingClientRect();
+  if (!bounds.width && !bounds.height) return Array.from(text).filter(isDailyCjk).length;
+  const walker = ownerDocument.createTreeWalker(node, 4);
+  const range = ownerDocument.createRange();
+  let count = 0;
+  for (let textNode = walker.nextNode(); textNode; textNode = walker.nextNode()) {
+    let offset = 0;
+    for (const character of Array.from(textNode.nodeValue || "")) {
+      const nextOffset = offset + character.length;
+      if (isDailyCjk(character)) {
+        range.setStart(textNode, offset);
+        range.setEnd(textNode, nextOffset);
+        const visible = Array.from(range.getClientRects()).some((rect) => (
+          rect.right > bounds.left
+          && rect.left < bounds.right
+          && rect.bottom > bounds.top
+          && rect.top < bounds.bottom
+        ));
+        if (visible) count += 1;
+      }
+      offset = nextOffset;
+    }
+  }
+  range.detach?.();
+  return count;
+}
+
+export function dailyReadingStats(root) {
+  const characters = Array.from(root.querySelectorAll(".daily-article-summary"))
+    .reduce((total, node) => total + dailyVisibleCjkCount(node), 0);
+  return { characters, minutes: dailyReadingMinutes(characters) };
+}
+
+export function resolveDailyRequest(requestedDate, latestDate, today = todayIso()) {
+  const invalid = Boolean(requestedDate) && (!isDateString(requestedDate) || requestedDate > today);
+  return {
+    activeDate: invalid || !requestedDate ? latestDate || today : requestedDate,
+    rewriteUrl: invalid,
+    showFallbackStatus: invalid,
+  };
+}
+
+export function dailyFallbackStatus(resolvedDate) {
+  return `请求的日期无效或晚于今天，已显示最近一期 ${resolvedDate}`;
+}
+
+export function createDailyLoadGate() {
+  let generation = 0;
+  return {
+    begin(date) {
+      generation += 1;
+      return { date, generation };
+    },
+    isCurrent(request) {
+      return request.generation === generation;
+    },
+  };
 }
 
 function dailySectionKey(item) {
@@ -1270,7 +1425,7 @@ function dailySourceParts(item) {
   return { role, label, avatar: sourceAvatarUrl(item) };
 }
 
-function renderDailyReport(container, items, activeDate) {
+export function renderDailyReport(container, items, activeDate) {
   if (!items.length) {
     container.innerHTML = `<div class="daily-empty">
       <h2>${esc(activeDate)}：当日没有日报内容</h2>
@@ -1296,7 +1451,7 @@ function renderDailyReport(container, items, activeDate) {
           <p class="daily-article-summary">${esc(excerpt(item))}</p>
         </article>`;
       }).join("");
-      return `<section class="daily-section" data-section="${esc(section.key)}">
+      return `<section class="daily-section" id="daily-section-${esc(section.key)}" data-section="${esc(section.key)}">
         <header class="daily-section-header">
           <div class="daily-section-no daily-section-number">${esc(section.number)}</div>
           <h2 class="daily-section-title">${esc(section.title)}</h2>
@@ -1309,7 +1464,36 @@ function renderDailyReport(container, items, activeDate) {
     .join("");
 }
 
-function renderDailyHeader(activeDate, count) {
+function renderDailyHighlights(container) {
+  const highlights = document.querySelector("#daily-highlights");
+  if (!highlights) return;
+  const articleCount = container.querySelectorAll(".daily-article").length;
+  if (!articleCount) {
+    highlights.hidden = true;
+    highlights.innerHTML = "";
+    return;
+  }
+  const reading = dailyReadingStats(container);
+  const sections = DAILY_SECTION_DEFS.map((section) => {
+    const sectionElement = container.querySelector(`[data-section="${section.key}"]`);
+    const count = sectionElement?.querySelectorAll(".daily-article").length || 0;
+    return { ...section, count };
+  }).filter((section) => section.count > 0);
+  highlights.hidden = false;
+  highlights.innerHTML = `<div class="reader-toc-head">
+      <span class="reader-toc-heading">今日看点</span>
+      <span class="reader-toc-meta">${articleCount} 篇报道 · 约 ${reading.minutes} 分钟</span>
+    </div>
+    <ol class="reader-toc-list">
+      ${sections.map((section) => `<li><a class="reader-toc-row" href="#daily-section-${esc(section.key)}">
+        <span class="reader-toc-no">${esc(section.number)}</span>
+        <span class="reader-toc-body"><span class="reader-toc-label">${esc(section.title)}</span><span class="reader-toc-sub">${esc(section.subtitle)}</span></span>
+        <span class="reader-toc-count">${section.count} 篇</span>
+      </a></li>`).join("")}
+    </ol>`;
+}
+
+export function renderDailyHeader(activeDate, count) {
   const volume = document.querySelector("#daily-volume");
   const storyCount = document.querySelector(".daily-story-count");
   const readableDate = document.querySelector(".daily-readable-date");
@@ -1321,33 +1505,50 @@ function renderDailyHeader(activeDate, count) {
   }
 }
 
-async function renderDailyArchive(activeDate, latestAvailableDate) {
+export function groupDailyArchiveItems(items) {
+  const dates = new Map();
+  const seenItems = new Set();
+  items.forEach((item) => {
+    if (!item || seenItems.has(item.id)) return;
+    seenItems.add(item.id);
+    const date = itemDateBucket(item);
+    if (!date) return;
+    const existing = dates.get(date) || { date, title: itemTitleText(item), count: 0 };
+    existing.count += 1;
+    dates.set(date, existing);
+  });
+  return Array.from(dates.values()).sort((left, right) => right.date.localeCompare(left.date));
+}
+
+async function fetchDailyArchiveDays() {
+  const data = await api("/api/v1/curated/daily-archive");
+  return Array.isArray(data.days) ? data.days : [];
+}
+
+function renderDailyArchive(activeDate, days) {
   const archive = document.querySelector("#daily-archive");
-  const latestDateEl = document.querySelector("#daily-latest-date");
-  if (latestDateEl) {
-    latestDateEl.textContent = latestAvailableDate;
-    latestDateEl.setAttribute("datetime", latestAvailableDate);
-  }
   if (!archive) return;
-  const archiveAnchorDate = latestAvailableDate || activeDate;
-  const candidates = Array.from({ length: 16 }, (_, index) => addDays(archiveAnchorDate, -index));
-  const results = await Promise.all(candidates.map(async (dateValue) => {
-    const data = await api(queryPath("/api/v1/curated", { date: dateValue }));
-    if (!data.items.length) return null;
-    return {
-      date: dateValue,
-      title: itemTitleText(data.items[0]),
-      count: data.count,
-    };
-  }));
-  const days = results.filter(Boolean).slice(0, 12);
-  const monthLabel = archiveAnchorDate.slice(0, 7).replace("-", " 年 ") + " 月";
-  archive.innerHTML = `<div class="daily-archive-month">${esc(monthLabel)}</div>
-    ${days.map((day) => `<a class="daily-side-day${day.date === activeDate ? " is-active" : ""}" href="${esc(dailyPath(day.date))}">
-      <span>${Number(day.date.slice(8, 10))} 日</span>
-      <strong>${esc(day.title)}</strong>
-      <em>${day.count}</em>
-    </a>`).join("")}`;
+  if (!days.length) {
+    archive.innerHTML = '<div class="daily-side-empty">暂无日报归档</div>';
+    return;
+  }
+  const months = new Map();
+  days.forEach((day) => {
+    const month = day.date.slice(0, 7);
+    if (!months.has(month)) months.set(month, []);
+    months.get(month).push(day);
+  });
+  archive.innerHTML = Array.from(months.entries()).map(([month, monthDays], index) => {
+    const monthLabel = `${Number(month.slice(0, 4))} 年 ${Number(month.slice(5, 7))} 月`;
+    const open = activeDate.startsWith(month) || (!activeDate && index === 0) ? " open" : "";
+    return `<details class="daily-side-month"${open}>
+      <summary><span class="daily-side-month-name">${esc(monthLabel)}</span><span class="daily-side-month-count">${monthDays.length} 期</span></summary>
+      <div class="daily-side-day-list">${monthDays.map((day) => `<a class="daily-side-day${day.date === activeDate ? " is-active" : ""}" href="${esc(dailyPath(day.date))}">
+        <time class="daily-side-day-num" datetime="${esc(day.date)}">${Number(day.date.slice(5, 7))}月${Number(day.date.slice(8, 10))}日</time>
+        <span class="daily-side-day-headline">${esc(day.title || `${day.count} 篇报道`)}</span>
+      </a>`).join("")}</div>
+    </details>`;
+  }).join("");
 }
 
 export async function initDaily() {
@@ -1358,18 +1559,21 @@ export async function initDaily() {
   const nextLink = document.querySelector(".daily-next");
   const fallbackBanner = document.querySelector("#daily-fallback");
   const requestedDate = currentParams().get("date") || dailyDateFromPath();
-  let activeDate = isDateString(requestedDate) && !isFutureDate(requestedDate) ? requestedDate : todayIso();
-  let latestAvailableDate = "";
+  const archiveDays = await fetchDailyArchiveDays();
+  const latestAvailableDate = archiveDays[0]?.date || "";
+  const resolution = resolveDailyRequest(requestedDate, latestAvailableDate);
+  let activeDate = resolution.activeDate;
+  const loadGate = createDailyLoadGate();
 
-  function setFallbackBanner(requested, resolved) {
+  function setFallbackStatus(visible, resolved) {
     if (!fallbackBanner) return;
-    if (!requested || requested === resolved) {
+    if (!visible) {
       fallbackBanner.hidden = true;
       fallbackBanner.textContent = "";
       return;
     }
     fallbackBanner.hidden = false;
-    fallbackBanner.textContent = `日期 ${requested} 无效或无内容，已切到最近一期 ${resolved}`;
+    fallbackBanner.textContent = dailyFallbackStatus(resolved);
   }
 
   function syncDateControls(latestDate = "") {
@@ -1395,41 +1599,30 @@ export async function initDaily() {
     }
   }
 
-  async function latestContentDate() {
-    if (latestAvailableDate) return latestAvailableDate;
-    const data = await api("/api/v1/curated");
-    latestAvailableDate = data.items.length ? itemDateBucket(data.items[0]) : data.date || todayIso();
-    return latestAvailableDate;
-  }
-
-  async function load(requested = activeDate, options = {}) {
-    const latest = await latestContentDate();
-    const data = await api(queryPath("/api/v1/curated", { date: activeDate }));
-    if (options.allowRecentFallback && !data.items.length) {
-      if (latest && latest !== activeDate) {
-        activeDate = latest;
-        updateUrl("replace");
-        return load(requested, { allowRecentFallback: false });
-      }
-    }
-    const resolvedDate = data.date || activeDate;
-    if (resolvedDate !== activeDate) {
+  async function load(options = {}) {
+    const request = loadGate.begin(activeDate);
+    const data = await api(queryPath("/api/v1/curated", { date: request.date }));
+    if (!loadGate.isCurrent(request)) return;
+    // 服务端是日期语义的 authority：future/非法日期会被钳制并写进响应的 date。
+    // 前端采纳它，避免归档里混入未来 published_at 时把「最近一期」渲染成未来日报。
+    const resolvedDate = String(data.date || request.date);
+    if (resolvedDate !== request.date) {
       activeDate = resolvedDate;
-      updateUrl("replace");
+      updateUrl("replace", resolvedDate);
     }
-    activeDate = data.date || activeDate;
-    renderDailyHeader(activeDate, data.count);
-    setFallbackBanner(requested, activeDate);
-    syncDateControls(latest);
-    renderDailyReport(list, data.items, activeDate);
-    await renderDailyArchive(activeDate, latest);
+    renderDailyReport(list, data.items, resolvedDate);
+    const renderedCount = list.querySelectorAll(".daily-article").length;
+    renderDailyHeader(resolvedDate, renderedCount);
+    renderDailyHighlights(list);
+    setFallbackStatus(Boolean(options.showFallbackStatus), resolvedDate);
+    syncDateControls(latestAvailableDate);
+    renderDailyArchive(resolvedDate, archiveDays);
   }
 
   async function goToDate(nextDate, mode = "push") {
-    const requested = nextDate;
-    activeDate = isDateString(nextDate) ? nextDate : todayIso();
+    activeDate = nextDate;
     updateUrl(mode);
-    await load(requested);
+    await load();
   }
 
   if (previousLink) previousLink.addEventListener("click", (event) => {
@@ -1440,14 +1633,16 @@ export async function initDaily() {
     event.preventDefault();
     goToDate(addDays(activeDate, 1));
   });
+  window.addEventListener("popstate", async () => {
+    const historyRequest = currentParams().get("date") || dailyDateFromPath();
+    const historyResolution = resolveDailyRequest(historyRequest, latestAvailableDate);
+    activeDate = historyResolution.activeDate;
+    if (historyResolution.rewriteUrl) updateUrl("replace");
+    await load({ showFallbackStatus: historyResolution.showFallbackStatus });
+  });
   rememberListScroll(list);
-  if (currentParams().get("date") && isDateString(requestedDate) && !isFutureDate(requestedDate)) updateUrl("replace");
-  if (!requestedDate || !isDateString(requestedDate) || isFutureDate(requestedDate)) {
-    const latest = await latestContentDate();
-    activeDate = latest || activeDate;
-    if (requestedDate) updateUrl("replace");
-  }
-  await load(requestedDate || activeDate, { allowRecentFallback: shouldFallbackToRecentContentDate(requestedDate) });
+  if (resolution.rewriteUrl) updateUrl("replace");
+  await load({ showFallbackStatus: resolution.showFallbackStatus });
   restoreListScroll();
 }
 
@@ -1525,6 +1720,7 @@ function missingItem(title) {
 /* ---------- theme (浅色默认 + 暗色变体 + 跟随系统) ---------- */
 
 const THEME_KEY = "ai-radar:theme";
+const THEME_COLORS = { light: "#f4f5f6", dark: "#10151c" };
 
 function themePreference() {
   const value = localStorage.getItem(THEME_KEY);
@@ -1534,7 +1730,10 @@ function themePreference() {
 function applyThemePreference(pref) {
   const dark = pref === "dark"
     || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const theme = dark ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.themeMode = pref;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[theme]);
 }
 
 export function initThemeToggle() {
@@ -1734,19 +1933,25 @@ export async function initBookmarks() {
 
 async function renderHotTopics(container) {
   try {
-    const data = await api("/api/v1/hot?limit=5");
+    const data = await api("/api/v1/hot?limit=2");
     const items = Array.isArray(data.items) ? data.items : [];
     if (!items.length) {
       container.hidden = true;
       return;
     }
     container.innerHTML = `
-      <h2 class="hot-topics-title">当前热点</h2>
+      <div class="hot-topics-head">
+        <h2 class="hot-topics-title">
+          <span class="hot-topics-title-desktop">当前热点</span>
+          <span class="hot-topics-title-mobile">今日热点</span>
+        </h2>
+        <a class="hot-topics-more" href="/hot">完整榜单 →</a>
+      </div>
       <ol class="hot-topics-list">
         ${items.map((item, index) => `<li class="hot-topics-row">
-          <span class="hot-topics-rank">${index + 1}</span>
+          <span class="hot-topics-rank hot-topics-rank-${index < 3 ? index + 1 : "rest"}" aria-hidden="true">${index + 1}</span>
           <a class="hot-topics-link" href="${esc(String(item.url || "#"))}" target="_blank" rel="noopener noreferrer">${esc(String(item.title || ""))}</a>
-          <span class="hot-topics-heat">${esc(String(item.heat ?? ""))} 热度</span>
+          <span class="hot-topics-meta hot-topics-heat">${esc(String(item.heat ?? ""))} 热度</span>
         </li>`).join("")}
       </ol>`;
   } catch {
@@ -1813,7 +2018,10 @@ export function initBackToTop() {
   button.setAttribute("aria-label", "回到顶部");
   button.textContent = "↑";
   document.body.append(button);
-  button.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+  button.addEventListener("click", () => {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
+  });
   let ticking = false;
   window.addEventListener("scroll", () => {
     if (ticking) return;

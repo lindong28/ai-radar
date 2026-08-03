@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from datetime import date as date_cls
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -11,6 +11,7 @@ from .categories import CATEGORY_TAGS
 from .request_db import conn_from_request
 
 router = APIRouter()
+SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 prewarm_curated_archive_total_cache = curated_archive.prewarm_curated_archive_total_cache
 
@@ -18,7 +19,7 @@ prewarm_curated_archive_total_cache = curated_archive.prewarm_curated_archive_to
 def _normalized_date(value: str | None) -> str | None:
     if value is None:
         return None
-    today = date_cls.today()
+    today = datetime.now(SHANGHAI_TZ).date()
     try:
         parsed = date_cls.fromisoformat(value)
     except ValueError:
@@ -26,6 +27,25 @@ def _normalized_date(value: str | None) -> str | None:
     if parsed > today:
         return today.isoformat()
     return parsed.isoformat()
+
+
+@router.get("/curated/daily-archive")
+def daily_archive(request: Request) -> dict[str, object]:
+    with conn_from_request(request) as conn:
+        days = curated_archive._compute_daily_archive(conn)
+    return ok({"days": days, "count": len(days)})
+
+
+def _hot_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 @router.get("/curated")
@@ -123,6 +143,7 @@ def hot(
     hours: int = Query(default=48, ge=6, le=168),
 ) -> dict[str, object]:
     """近 N 小时内按热度排序的头条：热度 = 加权分×10 + 关联讨论数×5。"""
+    generated_at = datetime.now(UTC)
     # 单次调用取一致快照（跨页会因采集管线并发写入产生 offset 漂移）；
     # 600 = 48h 现实归档量（约 160 条）的近 4 倍富余，超出即截断属可接受近似
     with conn_from_request(request) as conn:
@@ -133,21 +154,23 @@ def hot(
             normalized_category=None,
             q=None,
         )
-    now = datetime.now(UTC)
     ranked: list[dict[str, object]] = []
     for item in items:
-        published = str(item.get("published_at") or item.get("fetched_at") or "")
-        try:
-            ts = datetime.fromisoformat(published.replace("Z", "+00:00"))
-        except ValueError:
+        published_at = item.get("published_at")
+        fetched_at = item.get("fetched_at")
+        published_ts = _hot_datetime(published_at)
+        use_published = published_ts is not None and published_ts <= generated_at
+        event_time = published_at if use_published else fetched_at
+        event_ts = published_ts if use_published else _hot_datetime(fetched_at)
+        if event_ts is None:
             continue
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        if (now - ts).total_seconds() > hours * 3600:
+        age_seconds = (generated_at - event_ts).total_seconds()
+        if age_seconds < 0 or age_seconds > hours * 3600:
             continue
         score = float(str(item.get("weighted_score") or 0.0))
         related = item.get("related_discussions")
-        related_count = len(related) if isinstance(related, list) else 0
+        related_discussions = related if isinstance(related, list) else []
+        related_count = len(related_discussions)
         heat = round(score * 10 + related_count * 5)
         ranked.append(
             {
@@ -155,8 +178,20 @@ def hot(
                 "title": item.get("title_zh") or item.get("title"),
                 "url": item.get("url"),
                 "source_name": item.get("source_name"),
+                "published_at": published_at,
+                "fetched_at": fetched_at,
+                "event_time": event_time,
+                "source_kind": item.get("source_kind"),
+                "author": item.get("author"),
+                "related_discussions": related_discussions,
                 "heat": heat,
             }
         )
     ranked.sort(key=lambda entry: (-int(str(entry["heat"] or 0)), str(entry["id"])))
-    return ok({"items": ranked[:limit], "hours": hours})
+    return ok(
+        {
+            "items": ranked[:limit],
+            "hours": hours,
+            "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        }
+    )

@@ -5,12 +5,6 @@ from pathlib import Path
 
 STATIC = Path("web/static")
 TEMPLATES = Path("web/templates")
-AIHOT_FONT_HREF = (
-    "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700;800"
-    "&amp;family=IBM+Plex+Sans:wght@400;500;600;700"
-    "&amp;family=Noto+Serif+SC:wght@400;600;800"
-    "&amp;family=Playfair+Display:wght@800&amp;display=swap"
-)
 BACKEND_CATEGORY_TAGS = {
     "模型发布",
     "产品更新",
@@ -22,6 +16,22 @@ BACKEND_CATEGORY_TAGS = {
     "教程/实践",
     "部署/工程",
 }
+THEMED_PUBLIC_PAGES = [
+    STATIC / "index.html",
+    STATIC / "all.html",
+    STATIC / "daily.html",
+    STATIC / "item.html",
+    TEMPLATES / "index.html",
+    TEMPLATES / "all.html",
+    TEMPLATES / "wechat.html",
+    TEMPLATES / "wechat_detail.html",
+    TEMPLATES / "wechat_404.html",
+    TEMPLATES / "bookmarks.html",
+    TEMPLATES / "about.html",
+    TEMPLATES / "hot.html",
+    TEMPLATES / "more.html",
+    TEMPLATES / "changelog.html",
+]
 
 
 def _read(name: str) -> str:
@@ -56,15 +66,38 @@ def test_app_import_names_collects_multiple_module_imports() -> None:
     assert _app_import_names(html) == {"initCurated", "initTimeline", "paginationState"}
 
 
-def test_static_pages_have_aihot_mobile_bar_and_no_search_button() -> None:
-    for name in ["index.html", "all.html", "daily.html", "item.html", "about.html"]:
-        html = _read(name)
+def test_static_pages_have_compact_mobile_chrome_without_sidebar_drawer() -> None:
+    for path in [STATIC / "index.html", STATIC / "all.html", STATIC / "daily.html", STATIC / "item.html"]:
+        html = path.read_text(encoding="utf-8")
         assert 'class="app-mobile-bar"' in html
-        assert 'class="app-hamburger"' in html
         assert 'class="app-mobile-brand"' in html
+        assert 'class="app-mobile-date"' in html
+        assert 'class="m-tabbar" aria-label="移动端主导航"' in html
+        assert len(re.findall(r'<a class="m-tab(?: m-tab-active)?"', html)) == 4
+        assert 'class="app-hamburger"' not in html
+        assert 'aria-label="打开导航"' not in html
         assert 'class="sidebar-close"' in html
-        assert 'aria-expanded="false"' in html
         assert 'id="refresh"' not in html
+
+    for path in [
+        TEMPLATES / "index.html",
+        TEMPLATES / "all.html",
+        TEMPLATES / "about.html",
+        TEMPLATES / "bookmarks.html",
+        TEMPLATES / "wechat.html",
+        TEMPLATES / "wechat_404.html",
+        TEMPLATES / "wechat_detail.html",
+        TEMPLATES / "hot.html",
+        TEMPLATES / "more.html",
+    ]:
+        html = path.read_text(encoding="utf-8")
+        assert '{% include "_mobile_topbar.html" %}' in html, path
+        assert '{% include "_mobile_tabbar.html" %}' in html, path
+        assert 'class="app-hamburger"' not in html, path
+
+    tabbar = (TEMPLATES / "_mobile_tabbar.html").read_text(encoding="utf-8")
+    assert len(re.findall(r'<a class="m-tab', tabbar)) == 4
+    assert re.findall(r'href="([^"]+)"', tabbar) == ["/", "/all", "/daily", "/more"]
 
 
 def test_daily_page_declares_date_controls_and_fallback_banner() -> None:
@@ -168,13 +201,16 @@ def test_feed_controls_are_url_backed_like_aihot() -> None:
 
 
 
-def test_all_page_declares_aihot_style_channel_filter_and_infinite_scroll() -> None:
+def test_all_page_declares_single_category_row_source_select_and_infinite_scroll() -> None:
     html = _read("all.html")
 
     assert "data-channel-filter" in html
-    assert 'id="channel-param"' in html
+    assert '<select id="channel-param" name="channel"' in html
+    assert 'class="source-filter"' in html
+    assert "来源" in html
     for channel in ["firstParty", "news", "x"]:
-        assert f"channel={channel}" in html
+        assert f'value="{channel}"' in html
+    assert '<div class="seg-list" data-channel-filter' not in html
     assert 'id="pagination"' not in html
     assert 'id="more"' not in html
 
@@ -314,14 +350,14 @@ def test_app_js_supports_aihot_style_daily_report() -> None:
     assert "dailyDateFromPath" in js
 
 
-def test_daily_css_supports_zoomed_desktop_aihot_narrow_flow() -> None:
+def test_daily_css_supports_measured_narrow_flow() -> None:
     css = _read("style.css")
 
-    assert "@media (min-width: 761px) and (max-width: 1100px)" in css
-    assert ".daily-page .daily-archive-panel" in css
-    assert ".daily-page .daily-report" in css
-    assert "font-size: 19px;" in css
-    assert "font-weight: 600;" in css
+    assert "@media (max-width: 960px)" in css
+    assert ".daily-side {\n    display: none;\n  }" in css
+    assert ".daily-main {\n    padding: 0;\n  }" in css
+    assert "@media (max-width: 640px)" in css
+    assert ".daily-article-summary {\n    font-size: 15px;\n    line-height: 1.75;\n  }" in css
 
 
 def test_app_js_renders_x_cards_with_clickable_title_instead_of_origin_action() -> None:
@@ -337,38 +373,94 @@ def test_article_media_is_constrained_for_scan_reading() -> None:
     css = _read("style.css")
 
     assert ".article-media {" in css
-    assert "width: min(100%, 416px);" in css
+    assert "width: 100%;" in css
+    assert "max-width: 100%;" in css
+    assert "max-height: 360px;" in css
 
 
 
-def test_mobile_category_filter_is_not_horizontal_scroll_only() -> None:
+def test_mobile_home_uses_scrollable_chips_but_all_keeps_full_search() -> None:
     css = _read("style.css")
+    home = (TEMPLATES / "index.html").read_text(encoding="utf-8")
+    all_page = (TEMPLATES / "all.html").read_text(encoding="utf-8")
 
-    assert "overflow-x: visible;" in css
-    assert "flex: 1 1 0;" in css
+    assert ".home-page .seg-list" in css
+    assert "overflow-x: auto;" in css
+    assert "min-height: var(--touch-target-sm);" in css
+    assert 'class="mobile-search-link" aria-label="搜索全部动态" href="/all#search"' in home
+    assert ".home-page .feed-filter" in css
+    assert "display: none;" in css
+    assert 'class="app-main all-page"' in all_page
+    assert '<form class="feed-filter" action="/all" method="get">' in all_page
+    assert 'data-channel-filter' in all_page
 
 
 
 def test_global_visual_tokens_light_default_with_dark_variant() -> None:
     css = _read("style.css")
 
-    # 主站页面不再引用 Google Fonts（跨境延迟）；daily 报纸风保留
-    for name in ["index.html", "all.html", "item.html", "about.html"]:
-        assert "fonts.googleapis.com" not in _read(name)
-    assert AIHOT_FONT_HREF in _read("daily.html")
+    # 所有页面都使用全站字体 token，不再加载独立的日报字体。
+    for path in THEMED_PUBLIC_PAGES:
+        assert "fonts.googleapis.com" not in path.read_text(encoding="utf-8")
 
     # 浅色默认 + 暗色变体 token
     assert "color-scheme: light;" in css
     assert '[data-theme="dark"]' in css
-    assert "--bg: #f6f7f8;" in css
-    assert "--accent: #0f766e;" in css
-    assert '--font-sans: -apple-system' in css
+    assert "--bg: #f4f5f6;" in css
+    assert "--accent: #135e6b;" in css
+    assert '--font-sans: system-ui, -apple-system' in css
+    for token in [
+        "--text-size-xs: 0.75rem;",
+        "--text-size-sm: 0.8125rem;",
+        "--text-size-base: 0.875rem;",
+        "--text-size-md: 1rem;",
+        "--text-size-lg: 1.125rem;",
+        "--text-size-xl: 1.25rem;",
+        "--text-size-2xl: 1.5rem;",
+        "--line-height-tight: 1.25;",
+        "--line-height-normal: 1.5;",
+        "--line-height-relaxed: 1.75;",
+        "--border: #e2e4e7;",
+        "--border-strong: #d8dbdf;",
+        "--border-soft: #eceef0;",
+        "--border-emphasis: #8a94a2;",
+        "--border-card-subtle-solid: #c9cdd2;",
+        "--space-1: 4px;",
+        "--space-6: 32px;",
+        "--radius: 12px;",
+        "--radius-sm: 8px;",
+        "--radius-lg: 16px;",
+        "--sidebar-width: 180px;",
+        "--touch-target: 44px;",
+        "--touch-target-sm: 36px;",
+        "--mobile-tabbar-height: 54px;",
+        "--mobile-gutter: 18px;",
+        "--search-control-height: 38px;",
+        "--theme-transition: background-color 220ms ease, background 220ms ease, color 180ms ease, border-color 180ms ease, box-shadow 220ms ease;",
+    ]:
+        assert token in css
+    dark_block = css.split('[data-theme="dark"] {', 1)[1].split("}", 1)[0]
+    assert "--bg: #10151c;" in dark_block
+    assert "--shadow-card: none;" in dark_block
+    for token in [
+        "--border: rgba(255, 255, 255, 0.08);",
+        "--border-strong: rgba(255, 255, 255, 0.12);",
+        "--border-soft: rgba(255, 255, 255, 0.06);",
+        "--border-emphasis: rgba(255, 255, 255, 0.22);",
+        "--border-card-subtle-solid: rgba(255, 255, 255, 0.14);",
+    ]:
+        assert token in dark_block
+    assert re.search(r"--line(?:-strong)?:", css) is None
 
-    # 每页 head 内联主题脚本，避免 FOUC；浅色为默认
-    for name in ["index.html", "all.html", "item.html", "about.html"]:
-        html = _read(name)
+    # 每个现有 public HTML consumer 的 head 都内联完整主题 bootstrap，避免 FOUC。
+    for path in THEMED_PUBLIC_PAGES:
+        html = path.read_text(encoding="utf-8")
+        assert '<meta name="theme-color" content="#f4f5f6">' in html
         assert 'localStorage.getItem("ai-radar:theme")||"light"' in html
         assert "dataset.theme" in html
+        assert "dataset.themeMode" in html
+        assert 'querySelector(\'meta[name="theme-color"]\')' in html
+        assert 'setAttribute("content",d?"#10151c":"#f4f5f6")' in html
 
 
 def test_shell_declares_theme_toggle_and_bookmarks_nav() -> None:
@@ -381,6 +473,39 @@ def test_shell_declares_theme_toggle_and_bookmarks_nav() -> None:
         assert 'href="/bookmarks"' in html
 
 
+def test_theme_toggle_uses_moon_monitor_sun_order_on_every_public_page() -> None:
+    for path in THEMED_PUBLIC_PAGES:
+        html = path.read_text(encoding="utf-8")
+        prefs = re.findall(r'data-theme-pref="(dark|system|light)"', html)
+        assert prefs == ["dark", "system", "light"], path
+
+
+def test_phase1_chrome_css_matches_measured_contract() -> None:
+    css = _read("style.css")
+
+    assert "width: var(--sidebar-width);" in css
+    assert "flex: 0 0 var(--sidebar-width);" in css
+    assert "background: var(--sidebar-bg);" in css
+    assert "border-right: 1px solid var(--sidebar-border);" in css
+    assert ".page-header {" in css
+    assert "background: transparent;" in css
+    assert ".seg-list {" in css
+    assert "gap: 22px;" in css
+    assert "border-bottom: 1px solid var(--border-soft);" in css
+    assert "padding: 7px 1px 9px;" in css
+    assert "box-shadow: inset 0 -2px 0 var(--accent);" in css
+
+
+def test_curated_header_date_uses_latest_visible_item_and_hides_for_empty_list() -> None:
+    js = _read("app.js")
+
+    assert "function curatedHeaderDate" in js
+    assert 'timeZone: "Asia/Shanghai"' in js
+    assert "rawItems.map(itemTime)" in js
+    assert 'const runMetaCopy = "AI 自动挑选的高价值内容";' in js
+    assert "runMeta.textContent = latest ? `${curatedHeaderDate(latest)} · ${runMetaCopy}` : runMetaCopy;" in js
+
+
 def test_app_js_inits_bind_theme_toggle_on_every_page() -> None:
     js = _read("app.js")
 
@@ -390,13 +515,23 @@ def test_app_js_inits_bind_theme_toggle_on_every_page() -> None:
         assert "initThemeToggle()" in body, fn
 
 
-def test_daily_page_scope_restores_legacy_tokens() -> None:
+def test_daily_page_scope_bridges_to_global_tokens() -> None:
     css = _read("style.css")
 
-    assert ".daily-page {" in css
-    assert '--font-display: "Playfair Display"' in css
-    assert "--cyan: #22d3ee;" in css
-    assert "--green: #34d399;" in css
+    daily = css.split(".daily-shell {", 1)[1].split("}", 1)[0]
+    for declaration in [
+        "--d-bg: var(--bg);",
+        "--d-text: var(--ink);",
+        "--d-text-soft: var(--soft);",
+        "--d-text-faint: var(--muted);",
+        "--d-accent: var(--accent-ink);",
+        "--d-rule: var(--border-soft);",
+        "--sans: var(--font-sans);",
+    ]:
+        assert declaration in daily
+    light = css.split('[data-theme="light"] .daily-shell {', 1)[1].split("}", 1)[0]
+    assert "--d-bg: var(--panel);" in light
+    assert "Playfair Display" not in css
 
 
 def test_app_js_declares_bookmark_store_and_hot_topics() -> None:
@@ -426,70 +561,224 @@ def test_feed_text_metrics_match_redesign_baseline() -> None:
     assert ".bookmark-btn" in css
 
 
-def test_daily_text_metrics_match_aihot_baseline() -> None:
+def test_daily_text_metrics_match_measured_baseline() -> None:
     css = _read("style.css")
 
-    assert ".daily-masthead-title {" in css
-    assert "display: flex;" in css
-    assert "gap: 14px;" in css
-    assert "margin: 0 0 36px;" in css
-    assert "letter-spacing: -1px;" in css
-    assert "font-size: clamp(56px, 8vw, 104px);" in css
-    assert ".daily-article-title {" in css
-    assert "font-family: var(--font-daily-body);" in css
-    assert "margin: 0 0 14px;" in css
-    assert "line-height: 1.4;" in css
-    assert "letter-spacing: -0.1px;" in css
-    assert ".daily-article-summary {" in css
-    assert "margin: 0;" in css
-    assert "line-height: 1.7;" in css
-    assert "letter-spacing: 0.1px;" in css
+    title = css.split(".daily-masthead-title {", 1)[1].split("}", 1)[0]
+    for declaration in [
+        "display: flex;",
+        "gap: 0;",
+        "margin: 0 0 10px;",
+        "font-family: var(--sans);",
+        "font-size: 34px;",
+        "font-weight: 800;",
+        "letter-spacing: 0.02em;",
+    ]:
+        assert declaration in title
+    article_title = css.split(".daily-article-title {", 1)[1].split("}", 1)[0]
+    for declaration in [
+        "font-family: var(--sans);",
+        "font-size: 15px;",
+        "margin: 0 0 5px;",
+        "line-height: 1.5;",
+        "letter-spacing: 0;",
+    ]:
+        assert declaration in article_title
+    summary = css.split(".daily-article-summary {", 1)[1].split("}", 1)[0]
+    for declaration in [
+        "font-family: var(--sans);",
+        "font-size: 13.5px;",
+        "margin: 0;",
+        "line-height: 1.7;",
+        "letter-spacing: 0;",
+    ]:
+        assert declaration in summary
 
 
-def test_daily_structural_styles_match_aihot_baseline() -> None:
+def test_daily_structural_styles_match_measured_baseline() -> None:
     css = _read("style.css")
 
     assert ".app-mobile-bar {" in css
-    assert ".sidebar-open .sidebar {" in css
-    assert ".daily-shell {" in css
-    assert "margin: -24px -28px -72px;" in css
-    assert "background: #0b0f1a;" in css
-    assert ".daily-layout {" in css
-    assert "display: flex;" in css
-    assert ".daily-side {" in css
-    assert "flex: 0 0 220px;" in css
-    assert ".daily-masthead {" in css
-    assert "margin-bottom: 96px;" in css
-    assert ".daily-masthead-eyebrow {" in css
-    assert "margin-bottom: 32px;" in css
-    assert ".daily-section-header {" in css
-    assert "gap: 24px;" in css
-    assert "margin-bottom: 24px;" in css
-    assert ".daily-section-no" in css
-    assert "font-size: 56px;" in css
-    assert "color: #34d399;" in css
-    assert ".daily-section-articles" in css
-    assert "padding: 24px 28px;" in css
-    assert "background: transparent;" in css
-    assert ".daily-article-source" in css
-    assert "display: flex;" in css
-    assert "letter-spacing: 1px;" in css
+    assert ".m-tabbar {" in css
+    shell = css.split(".daily-shell {", 1)[1].split("}", 1)[0]
+    assert "margin: -24px -28px -72px;" in shell
+    assert "background: var(--d-bg);" in shell
+    side = css.split(".daily-side {", 1)[1].split("}", 1)[0]
+    assert "flex: 0 0 clamp(240px, 20vw, 320px);" in side
+    assert "border-right: 1px solid var(--d-rule);" in side
+    masthead = css.split(".daily-masthead {", 1)[1].split("}", 1)[0]
+    assert "margin-bottom: 0;" in masthead
+    eyebrow = css.split(".daily-masthead-eyebrow {", 1)[1].split("}", 1)[0]
+    assert "margin-bottom: 12px;" in eyebrow
+    section_header = css.split(".daily-section-header {", 1)[1].split("}", 1)[0]
+    assert "gap: 10px;" in section_header
+    assert "padding-bottom: 10px;" in section_header
+    assert "border-bottom: 1px solid var(--d-rule-strong);" in section_header
+    section_number = css.split(".daily-section-no,", 1)[1].split("}", 1)[0]
+    assert "font-size: 13px;" in section_number
+    assert "color: var(--d-accent);" in section_number
+    article_list = css.split(".daily-section-articles,", 1)[1].split("}", 1)[0]
+    assert "padding: 0;" in article_list
+    assert "border: 0;" in article_list
+    article_source = css.split(".daily-article-source,", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in article_source
+    assert "letter-spacing: 0;" in article_source
 
 
 
-def test_sidebar_drawer_and_grouped_nav() -> None:
+def test_mobile_tabbar_replaces_sidebar_drawer_and_uses_aihot_breakpoints() -> None:
     css = _read("style.css")
 
     assert ".side-group-label {" in css
     assert ".sidebar-foot {" in css
     assert ".theme-toggle {" in css
-    assert "transform: translateX(-100%);" in css
-    assert ".sidebar-open .sidebar {" in css
+    assert ".m-tabbar {" in css
+    assert "grid-template-columns: repeat(4, 1fr);" in css
+    assert "calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom, 0px) + 28px)" in css
+    assert "transform: translateX(-100%);" not in css
+    assert ".sidebar-open .sidebar {" not in css
+    media = sorted(set(re.findall(r"@media[^\{]+", css)))
+    assert not any(old in rule for rule in media for old in ["760", "761", "1100"])
+    for expected in ["max-width: 640px", "max-width: 960px", "max-width: 1200px", "prefers-reduced-motion: reduce"]:
+        assert any(expected in rule for rule in media)
 
 
-def test_selected_badge_is_only_rendered_in_score_pill_not_topic_tags() -> None:
+def test_phase2a_selected_badge_score_and_tags_match_aihot_contract() -> None:
     js = _read("app.js")
+    template = _read("_prepaint_list.html")
+    css = _read("style.css")
 
-    assert 'class="hot-pill">精选</span>' in js
+    score_pill = js.split("function scorePill(item)", 1)[1].split("function scoreTierClass", 1)[0]
+    source_line = js.split("function sourceLine(item", 1)[1].split("function itemHref", 1)[0]
+
+    assert "timeline-selected-badge" not in score_pill
+    assert "timeline-selected-badge" in source_line
+    assert "authorHandle(item.author)" in source_line
+    assert 'class="timeline-selected-badge">精选</span>' in js
+    assert 'class="timeline-selected-badge">精选</span>' in template
+    assert "✦" not in js
+    assert "✦" not in template
+    assert 'content: "\\2726";' in css
+    assert "timeline-score" in score_pill
+    assert 'class="timeline-score' in template
+    assert "#${esc(normalizedTagLabel(tag))}" in js
+    assert "#{{ tag }}" in template
     assert "tag tag-hot" not in js
     assert "parts.unshift" not in js
+
+
+def test_phase2a_timeline_structure_is_kept_in_sync_for_ssr_and_csr() -> None:
+    js = _read("app.js")
+    template = _read("_prepaint_list.html")
+
+    for class_name in [
+        "timeline-day-head",
+        "timeline-day-toggle",
+        "timeline-day-chevron",
+        "timeline-day-meta",
+        "date-count",
+        "timeline-entry",
+        "timeline-time",
+        "timeline-rail",
+        "timeline-dot",
+        "timeline-card",
+        "source-line",
+        "timeline-selected-badge",
+        "timeline-score",
+        "article-media",
+        "article-media-link",
+        "article-media-img",
+        "tags",
+        "tag",
+        "timeline-divider",
+        "reason",
+    ]:
+        assert class_name in js, class_name
+        assert class_name in template, class_name
+
+    assert "weekdayKey" in js
+    assert "weekday_label" in template
+    assert "item.date_count" in template
+    assert '<p class="summary">{{ item.summary }}</p>' in template
+    assert "function validDate" in js
+    assert 'return date && !Number.isNaN(date.getTime()) ? date : null;' in js
+    collapse = js.split("function bindDateGroupCollapse", 1)[1].split("function wechatCard", 1)[0]
+    assert "if (!bucket) return" not in collapse
+    render_timeline = js.split("function renderTimeline", 1)[1].split("function updateDateGroupCounts", 1)[0]
+    assert render_timeline.index("timeline-time") < render_timeline.index("timeline-rail") < render_timeline.index("itemCard(item")
+    assert template.index("timeline-time") < template.index("timeline-rail") < template.index("timeline-card")
+
+
+def test_phase2a_wechat_timeline_pair_uses_the_same_desktop_day_and_rail_skeleton() -> None:
+    js = _read("app.js")
+    template = _read("wechat.html")
+    wechat_pair = js.split("function wechatCard", 1)[1].split("function initNavigation", 1)[0]
+    render_wechat = js.split("function renderWechatTimeline", 1)[1].split("function initNavigation", 1)[0]
+
+    for class_name in [
+        "timeline-day",
+        "timeline-day-head",
+        "timeline-day-toggle",
+        "timeline-day-chevron",
+        "timeline-day-meta",
+        "timeline-day-items",
+        "timeline-entry",
+        "timeline-time",
+        "timeline-rail",
+        "timeline-dot",
+        "timeline-card",
+    ]:
+        assert class_name in wechat_pair, class_name
+        assert class_name in template, class_name
+
+    assert "weekdayKey" in render_wechat
+    assert "weekday_label" in template
+    assert render_wechat.index("timeline-time") < render_wechat.index("timeline-rail") < render_wechat.index("wechatCard(item)")
+    assert template.index("timeline-time") < template.index("timeline-rail") < template.index("timeline-card")
+
+
+def test_phase2a_css_uses_measured_badge_timeline_media_and_quote_values() -> None:
+    css = _read("style.css")
+
+    for token in [
+        "--tl-time-w: 64px;",
+        "--tl-rail-w: 22px;",
+        "--tl-dot-top: 20px;",
+        "gap: 22px;",
+        "padding: 15px 18px 14px;",
+        "border: 1px solid var(--border);",
+        "background: var(--panel);",
+        "box-shadow: var(--shadow-card);",
+    ]:
+        assert token in css
+
+    badge_rule = css.split(".timeline-selected-badge {", 1)[1].split("}", 1)[0]
+    for declaration in [
+        "display: inline-flex;",
+        "gap: 3px;",
+        "font-size: 10.5px;",
+        "font-weight: 600;",
+        "line-height: 1;",
+        "padding: 3px 7px;",
+        "border-radius: 3px;",
+        "letter-spacing: 0.04em;",
+        "color: var(--gold-ink);",
+        "background: color-mix(in srgb, var(--gold) 12%, transparent);",
+        "border: 0;",
+        "box-shadow: none;",
+        "text-shadow: none;",
+        "font-variant-east-asian: proportional-width;",
+    ]:
+        assert declaration in badge_rule
+
+    tag_rule = css.split(".tag {", 1)[1].split("}", 1)[0]
+    assert "color: var(--muted);" in tag_rule
+    assert "background: transparent;" in tag_rule
+    assert "border: 0;" in tag_rule
+    assert "border-radius: 0;" in tag_rule
+
+    assert "max-height: 360px;" in css
+    assert ".summary-body blockquote {" in css
+    assert "cursor: zoom-in;" in css
+    assert ".brand-logo-ai {\n  color: var(--accent-ink);" in css
+    assert '.bookmark-btn[aria-pressed="true"] {\n  color: var(--accent-ink);' in css

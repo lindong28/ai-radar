@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,7 @@ from airadar.db import migrate
 from airadar.enrich.schema import EnrichOutput
 from airadar.presentation import summary as presentation_summary
 from airadar.presentation.media import proxy_image_url
-from airadar.web.app import WECHAT_FALLBACK_ICON, _prepaint_items, create_app
+from airadar.web.app import SHANGHAI_TZ, WECHAT_FALLBACK_ICON, _mobile_date_label, _prepaint_items, create_app
 from airadar.web.routes import request_db, search
 from airadar.web.routes import timeline as timeline_routes
 
@@ -555,6 +556,11 @@ def test_prepaint_uses_wechat_author_name_and_avatar_without_rss_suffix() -> Non
                 "url": "https://example.com/post",
                 "title": "Feed Article",
                 "content_preview": "Preview",
+                "weighted_score": 8.25,
+                "media_assets": [
+                    {"type": "image", "url": "https://example.com/one.png"},
+                    {"type": "video", "url": "https://example.com/ignored.mp4"},
+                ],
                 "published_at": "2026-06-01T00:00:00Z",
             },
         ],
@@ -565,8 +571,13 @@ def test_prepaint_uses_wechat_author_name_and_avatar_without_rss_suffix() -> Non
     assert wechat["source_icon_url"] == "https://mmbiz.qpic.cn/guizang.png"
     assert wechat["source_initial"] == "歸"
     assert "RSS" not in wechat["source_name"]
-    assert feed["source_name"] == "OpenAI Blog"
+    assert feed["source_name"] == "OpenAI Blog：官网动态（RSS）"
     assert feed["source_icon_url"] == "https://example.com/openai.png"
+    assert feed["source_author"] == "@Ada"
+    assert feed["weekday_label"] == "星期一"
+    assert feed["iso_datetime"] == "2026-06-01T00:00:00.000Z"
+    assert feed["score"] == 83
+    assert feed["media_assets"] == [{"type": "image", "url": "https://example.com/one.png"}]
 
 
 def test_prepaint_uses_generic_wechat_icon_when_author_avatar_missing() -> None:
@@ -589,6 +600,48 @@ def test_prepaint_uses_generic_wechat_icon_when_author_avatar_missing() -> None:
 
     assert item["source_name"] == "数字生命卡兹克"
     assert item["source_icon_url"] == WECHAT_FALLBACK_ICON
+
+
+def test_wechat_prepaint_uses_shanghai_day_geometry() -> None:
+    from airadar.web.app import _prepaint_wechat_items
+
+    [item] = _prepaint_wechat_items(
+        [
+            {
+                "slug": "midnight-boundary",
+                "published_at": "2026-08-02T16:30:00Z",
+            }
+        ]
+    )
+
+    assert item["date_bucket"] == "2026-08-03"
+    assert item["date_label"] == "8月3日"
+    assert item["weekday_label"] == "星期一"
+    assert item["time_label"] == "00:30"
+    assert item["iso_datetime"] == "2026-08-02T16:30:00.000Z"
+
+
+def test_prepaint_day_count_uses_full_payload_and_all_hides_related_discussions() -> None:
+    items = [
+        {
+            "id": f"item-{index}",
+            "source_id": "openai_blog",
+            "source_name": "OpenAI Blog",
+            "source_kind": "feed",
+            "author": "Ada",
+            "published_at": f"2026-06-01T{index:02d}:00:00Z",
+            "related_discussions": [{"source_id": "x", "author": "someone"}],
+        }
+        for index in range(13)
+    ]
+
+    all_prepaint = _prepaint_items(items, timeline_page=True)
+    home_prepaint = _prepaint_items(items, timeline_page=False)
+
+    assert len(all_prepaint) == 12
+    assert {item["date_count"] for item in all_prepaint} == {13}
+    assert all(item["related_discussions"] == [] for item in all_prepaint)
+    assert home_prepaint[0]["related_discussions"] == [{"source_id": "x", "author": "someone"}]
 
 
 def test_timeline_total_uses_real_count_and_clamps_out_of_range_page(tmp_path: Path) -> None:
@@ -825,6 +878,37 @@ def test_static_clean_routes_and_curated_redirect(tmp_path: Path) -> None:
     assert redirect.headers["location"] == "/"
 
 
+def test_more_page_lists_only_the_approved_mobile_destinations(tmp_path: Path) -> None:
+    client = TestClient(create_app(_seed_db(tmp_path)))
+
+    response = client.get("/more")
+
+    assert response.status_code == 200
+    main = response.text.split('<main class="app-main more-page">', 1)[1].split("</main>", 1)[0]
+    assert re.findall(r'class="more-row" href="([^"]+)"', main) == [
+        "/wechat",
+        "/bookmarks",
+        "/about",
+        "/changelog",
+    ]
+    assert "微信文章解读" in main
+    assert "收藏" in main
+    assert "关于" in main
+    assert "更新日志" in main
+    for excluded in ["主题", "Agent 接入", "反馈", "/hot"]:
+        assert excluded not in main
+    assert '<a class="m-tab m-tab-active" aria-current="page" href="/more">' in response.text
+
+
+def test_mobile_date_labels_use_shanghai_today_yesterday_and_absolute_fallback() -> None:
+    now = datetime(2026, 8, 3, 12, tzinfo=SHANGHAI_TZ)
+
+    assert _mobile_date_label(now, now) == "今天 8月3日 周一"
+    assert _mobile_date_label(datetime(2026, 8, 2, 16, 30, tzinfo=UTC), now) == "今天 8月3日 周一"
+    assert _mobile_date_label(now - timedelta(days=1), now) == "昨天 8月2日 周日"
+    assert _mobile_date_label(now - timedelta(days=2), now) == "8月1日 周六"
+
+
 def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
     client = TestClient(create_app(_seed_db(tmp_path)))
 
@@ -848,13 +932,26 @@ def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
         item["id"] for item in timeline_api.json()["data"]["items"]
     ]
     for html in [home.text, all_page.text]:
+        assert 'class="timeline-day date-group"' in html
+        assert 'class="timeline-day-head timeline-date"' in html
+        assert 'class="timeline-day-meta">星期' in html
+        assert 'class="timeline-item timeline-entry"' in html
+        assert 'class="timeline-rail"' in html
+        assert 'class="timeline-dot"' in html
+        assert 'class="timeline-score ' in html
+        assert 'class="tag">#' in html
         article_pos = html.index('<article class="item-row timeline-card')
+        time_pos = html.index('class="timeline-time"')
+        rail_pos = html.index('class="timeline-rail"')
         preload_pos = html.index('id="__PRELOAD__"')
         module_preload_pos = html.index('rel="modulepreload"')
         module_pos = html.index('type="module"')
         assert module_preload_pos < preload_pos
-        assert article_pos < preload_pos
+        assert time_pos < rail_pos < article_pos < preload_pos
         assert preload_pos < module_pos
+
+    assert 'class="source-line"' in home.text
+    assert 'class="timeline-selected-badge">精选</span>' in home.text
 
 
 def test_home_page_ssr_preload_is_curated_page_aware(tmp_path: Path) -> None:

@@ -81,35 +81,48 @@ def test_feed_pages_show_loading_state_while_fetching(page: Page, base_url: str)
         page.unroute(route_pattern, delay_response)
 
 
-def test_home_prefetches_next_api_page_and_reuses_it_on_click(page: Page, base_url: str) -> None:
+def test_home_intersection_observer_appends_the_next_api_page(page: Page, base_url: str) -> None:
     _strip_ssr_preload(page)
     requested_pages: list[int] = []
+    pending_second_page = []
+    items = [
+        _timeline_payload_item(
+            f"curated-{index:02d}",
+            f"Curated item {index:02d}",
+            f"2026-05-15T{23 - (index % 24):02d}:{59 - (index % 60):02d}:00Z",
+        )
+        for index in range(41)
+    ]
 
     def curated_response(route):
         requested_page = int(parse_qs(urlparse(route.request.url).query).get("page", ["1"])[0])
         page_number = min(max(requested_page, 1), 2)
         requested_pages.append(page_number)
-        item = _timeline_payload_item(
-            f"curated-page-{page_number}",
-            f"Curated page {page_number}",
-            f"2026-05-1{page_number}T10:00:00Z",
-        )
-        payload = _curated_payload([item])
-        payload["data"].update({"total": 80, "page": page_number, "limit": 40})
+        start = (page_number - 1) * 40
+        payload = _curated_payload(items[start : start + 40])
+        payload["data"].update({"total": len(items), "page": page_number, "limit": 40})
+        if page_number == 2:
+            pending_second_page.append((route, payload))
+            return
         route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
 
     page.route("**/api/v1/curated*", curated_response)
-    with page.expect_response(lambda response: "/api/v1/curated" in response.url and "page=2" in response.url):
-        page.goto(f"{base_url}/", wait_until="domcontentloaded")
-
-    expect(page.locator(".timeline-card .item-title")).to_have_text("Curated page 1")
+    page.goto(f"{base_url}/?q=intersection-contract", wait_until="domcontentloaded")
+    expect(page.locator(".timeline-card")).to_have_count(40, timeout=10_000)
     assert requested_pages.count(1) == 1
-    assert requested_pages.count(2) == 1
-
-    page.locator('#pagination .pagination-link[rel="next"]').click()
-
-    expect(page).to_have_url(f"{base_url}/?page=2")
-    expect(page.locator(".timeline-card .item-title")).to_have_text("Curated page 2")
+    assert page.locator("#pagination, .pagination-link").count() == 0
+    page.locator(".scroll-sentinel").scroll_into_view_if_needed()
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    for _ in range(100):
+        if pending_second_page:
+            break
+        page.wait_for_timeout(50)
+    assert len(pending_second_page) == 1
+    second_route, second_payload = pending_second_page.pop()
+    second_route.fulfill(status=200, content_type="application/json", body=json.dumps(second_payload))
+    expect(page.locator(".timeline-card")).to_have_count(41, timeout=10_000)
+    ids = page.locator(".timeline-card").evaluate_all("els => els.map(el => el.dataset.itemId)")
+    assert len(ids) == len(set(ids)) == 41
     assert requested_pages.count(2) == 1
 
 
@@ -188,30 +201,29 @@ def test_v20_feed_pages_have_url_backed_search_forms(page: Page, base_url: str) 
     assert page.locator("button[type=submit]").count() == 0
 
 
-def test_all_page_out_of_range_page_clamps_to_last_result_page(page: Page, base_url: str) -> None:
+def test_all_search_page_out_of_range_normalizes_to_the_api_page(page: Page, base_url: str) -> None:
     _strip_ssr_preload(page)
 
     def timeline_response(route):
-        if "page=9999" in route.request.url:
-            payload = {"success": True, "data": {"items": [], "page": 9999, "limit": 40, "total": 41}}
-        else:
-            payload = {
-                "success": True,
-                "data": {
-                    "items": [_timeline_payload_item("last-page-item", "最后一页的模型发布", "2026-05-14T10:00:00Z")],
-                    "page": 2,
-                    "limit": 40,
-                    "total": 41,
-                },
-            }
+        payload = {
+            "success": True,
+            "data": {
+                "items": [_timeline_payload_item("last-page-item", "最后一页的模型发布", "2026-05-14T10:00:00Z")],
+                "page": 2,
+                "limit": 40,
+                "total": 41,
+            },
+        }
         route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
 
     page.route("**/api/v1/timeline*", timeline_response)
-    page.goto(f"{base_url}/all?page=9999", wait_until="domcontentloaded")
+    page.goto(f"{base_url}/all?q=last-page-contract&page=9999", wait_until="domcontentloaded")
 
+    expect(page.locator(".timeline-card")).to_have_count(1, timeout=10_000)
     expect(page.locator(".timeline-card .item-title")).to_have_text("最后一页的模型发布")
-    expect(page.locator('.pagination-link[aria-current="page"]')).to_have_text("2")
-    expect(page).to_have_url(f"{base_url}/all?page=2")
+    expect(page).to_have_url(f"{base_url}/all?q=last-page-contract&page=2")
+    assert page.locator("#pagination, .pagination-link").count() == 0
+    expect(page.locator(".scroll-status")).to_have_text("")
     assert page.locator(".empty-state").count() == 0
 
 
@@ -223,7 +235,7 @@ def test_invalid_category_deeplinks_are_normalized(page: Page, base_url: str) ->
     page.goto(f"{base_url}/all?category=not-real&channel=x&page=1", wait_until="domcontentloaded")
     expect(page).to_have_url(f"{base_url}/all?channel=x")
     assert "seg-item-active" in (page.locator('[data-category="all"]').first.get_attribute("class") or "")
-    expect(page.locator('[data-channel="x"]').first).to_have_class(re.compile("seg-item-active"))
+    expect(page.locator("#channel-param")).to_have_value("x")
 
 
 def test_home_product_and_tip_categories_request_server_filtered_results(page: Page, base_url: str) -> None:
@@ -283,11 +295,12 @@ def test_home_product_and_tip_categories_request_server_filtered_results(page: P
     page.route("**/api/v1/curated*", curated_response)
 
     page.goto(f"{base_url}/?category=ai-products", wait_until="domcontentloaded")
+    expect(page.locator(".timeline-card")).to_have_count(1, timeout=10_000)
     expect(page.locator(".timeline-card .item-title")).to_have_text("真实产品更新")
     assert seen_categories[-1] == "ai-products"
 
     page.goto(f"{base_url}/?category=tip", wait_until="domcontentloaded")
-    expect(page.locator(".timeline-card").first).to_be_visible()
+    expect(page.locator(".timeline-card")).to_have_count(2, timeout=10_000)
     titles = page.locator(".timeline-card .item-title").all_inner_texts()
     assert titles == ["Transformer 实践课程", "部署工程实践"]
     assert seen_categories[-1] == "tip"
@@ -310,13 +323,23 @@ def test_home_search_request_keeps_active_category(page: Page, base_url: str) ->
 
     page.route("**/api/v1/curated*", curated_response)
     page.goto(f"{base_url}/?category=ai-models", wait_until="domcontentloaded")
+    expect(page.locator(".timeline-card")).to_have_count(1, timeout=10_000)
     expect(page.locator(".timeline-card .item-title")).to_have_text("Qwen 模型发布")
 
     page.locator('input[type="search"]').fill("Qwen")
-    page.locator("form.feed-filter").evaluate("form => form.requestSubmit()")
-    page.wait_for_timeout(500)
+    with page.expect_response(
+        lambda response: "/api/v1/curated" in response.url
+        and "q=Qwen" in response.url
+        and "category=ai-models" in response.url
+        and response.status == 200
+    ):
+        page.locator("form.feed-filter").evaluate("form => form.requestSubmit()")
 
     assert any("q=Qwen" in url and "category=ai-models" in url for url in seen_urls)
+    expect(page).to_have_url(re.compile(r"/\?(?=.*q=Qwen)(?=.*category=ai-models)"))
+    expect(page.locator('.seg-item[data-category="model"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator(".timeline-card")).to_have_count(1)
+    expect(page.locator('.timeline-card[data-item-id="qwen"] .item-title')).to_contain_text("模型发布")
 
 
 def test_home_category_requests_server_filter_and_sorts_by_visible_time(page: Page, base_url: str) -> None:
@@ -427,26 +450,3 @@ def test_home_category_requests_server_filter_and_sorts_by_visible_time(page: Pa
 
     titles = page.locator(".timeline-card .item-title").all_inner_texts()
     assert titles == ["较新的低分模型发布", "较早的高分模型发布"]
-
-
-def test_mobile_closed_sidebar_is_not_in_tab_order(page: Page, base_url: str) -> None:
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.goto(f"{base_url}/?category=ai-models", wait_until="domcontentloaded")
-    expect(page.locator(".timeline-card").first).to_be_visible(timeout=10_000)
-
-    page.keyboard.press("Tab")
-    focused = page.evaluate(
-        """() => {
-          const el = document.activeElement;
-          const rect = el.getBoundingClientRect();
-          return {
-            text: (el.innerText || el.getAttribute("aria-label") || "").trim(),
-            className: el.className,
-            left: Math.round(rect.left),
-            right: Math.round(rect.right),
-          };
-        }"""
-    )
-
-    assert "app-hamburger" in focused["className"]
-    assert focused["left"] >= 0

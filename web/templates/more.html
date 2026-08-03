@@ -3,10 +3,9 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AI Radar · 精选</title>
+    <title>AI Radar · 更多</title>
     <meta name="theme-color" content="#f4f5f6">
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');try{var t=localStorage.getItem("ai-radar:theme")||"light";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;m.setAttribute("content",d?"#10151c":"#f4f5f6");}catch(e){r.dataset.theme="light";r.dataset.themeMode="light";m.setAttribute("content","#f4f5f6");}})();</script>
-    <link rel="modulepreload" href="/app.js?v=20260802-redesign1">
     <link rel="stylesheet" href="/style.css?v=20260802-redesign1">
   </head>
   <body>
@@ -16,7 +15,7 @@
       <div class="divider"></div>
       <div class="side-group-label">内容</div>
       <nav class="side-nav">
-        <a class="side-link side-link-active" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
+        <a class="side-link" href="/"><span class="side-icon side-icon-curated" aria-hidden="true"></span><span>精选</span></a>
         <a class="side-link" href="/all"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>全部 AI 动态</span></a>
         <a class="side-link" href="/hot"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>热点榜</span></a>
         <a class="side-link" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span></a>
@@ -36,43 +35,24 @@
         </div>
       </div>
     </aside>
-    {% set mobile_active = "curated" %}
-    <main class="app-main home-page">
+    {% set mobile_active = "more" %}
+    <main class="app-main more-page">
 {% include "_mobile_topbar.html" %}
-      <section class="page-header">
-        <div>
-          <h1><span class="desktop-heading">精选</span><span class="mobile-heading">最新精选</span></h1>
-          <p id="run-meta" class="page-subtitle">AI 自动挑选的高价值内容</p>
-        </div>
-        <div class="feed-toolbar-row">
-          <div class="seg-list" data-category-filter aria-label="内容分类">
-              <a class="seg-item seg-item-active" href="/?page=1" data-category="all" aria-pressed="true">全部</a>
-              <a class="seg-item" href="/?category=ai-models&page=1" data-category="model" aria-pressed="false">模型</a>
-              <a class="seg-item" href="/?category=ai-products&page=1" data-category="product" aria-pressed="false">产品</a>
-              <a class="seg-item" href="/?category=industry&page=1" data-category="industry" aria-pressed="false">行业</a>
-              <a class="seg-item" href="/?category=paper&page=1" data-category="paper" aria-pressed="false">论文</a>
-              <a class="seg-item" href="/?category=tip&page=1" data-category="practice" aria-pressed="false">技巧</a>
-            </div>
-          <a class="mobile-search-link" aria-label="搜索全部动态" href="/all#search"><span class="mobile-search-icon" aria-hidden="true"></span></a>
-          <form class="feed-filter" action="/" method="get">
-            <input id="category-param" type="hidden" name="category" value="">
-            <input id="search" type="search" name="q" placeholder="搜索标题/摘要…">
-            <button class="filter-submit" type="submit">搜索</button>
-          </form>
-        </div>
-      </section>
-      <section id="hot-topics" class="card hot-topics" hidden aria-label="当前热点"></section>
-      <section id="list" class="timeline" aria-live="polite">
-{% include "_prepaint_list.html" %}
-      </section>
+      <header class="more-page-head">
+        <h1>更多</h1>
+        <p>继续浏览 AI Radar 的其他内容</p>
+      </header>
+      <nav class="more-list" aria-label="更多页面">
+        <a class="more-row" href="/wechat"><span class="side-icon side-icon-wechat" aria-hidden="true"></span><span>微信文章解读</span><span class="more-row-arrow" aria-hidden="true">›</span></a>
+        <a class="more-row" href="/bookmarks"><span class="side-icon side-icon-bookmark" aria-hidden="true"></span><span>收藏</span><span class="more-row-arrow" aria-hidden="true">›</span></a>
+        <a class="more-row" href="/about"><span class="side-icon side-icon-about" aria-hidden="true"></span><span>关于</span><span class="more-row-arrow" aria-hidden="true">›</span></a>
+        <a class="more-row" href="/changelog"><span class="side-icon side-icon-all" aria-hidden="true"></span><span>更新日志</span><span class="more-row-arrow" aria-hidden="true">›</span></a>
+      </nav>
     </main>
-    <script id="__PRELOAD__" type="application/json">
-      {{ preload | tojson | safe }}
-    </script>
 {% include "_mobile_tabbar.html" %}
-    <script type="module" async>
-      import { initCurated } from "/app.js?v=20260802-redesign1";
-      initCurated();
+    <script type="module">
+      import { initNavigationOnly } from "/app.js?v=20260802-redesign1";
+      initNavigationOnly();
     </script>
   </body>
 </html>

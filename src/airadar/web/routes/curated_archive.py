@@ -178,6 +178,28 @@ def _compute_archive_for_date(
     )
 
 
+def _compute_daily_archive(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    """Return every available daily issue from one SQLite read snapshot."""
+    rows = conn.execute(
+        f"""
+        SELECT date(datetime(i.published_at, '+08:00')) AS issue_date,
+               COUNT(*) AS story_count
+        FROM items i
+        JOIN sources s ON s.id=i.source_id
+        {_latest_curated_join()}
+        WHERE {deduped_item_clause("i")}
+          AND date(datetime(i.published_at, '+08:00')) <= date(datetime('now', '+08:00'))
+        GROUP BY issue_date
+        ORDER BY issue_date DESC
+        """
+    ).fetchall()
+    return [
+        {"date": str(row["issue_date"]), "count": int(row["story_count"])}
+        for row in rows
+        if row["issue_date"]
+    ]
+
+
 def _archive_items(
     conn: sqlite3.Connection,
     where: str,

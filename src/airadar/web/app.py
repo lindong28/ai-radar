@@ -15,6 +15,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markdown_it import MarkdownIt
+from markupsafe import Markup
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 from uvicorn.config import LOGGING_CONFIG
@@ -29,6 +31,7 @@ from .schemas import FeedItem
 
 STATIC_DIR = db.PROJECT_ROOT / "web" / "static"
 TEMPLATES_DIR = db.PROJECT_ROOT / "web" / "templates"
+CHANGELOG_PATH = db.PROJECT_ROOT / "CHANGELOG.md"
 PRELOAD_ITEM_KEYS = set(FeedItem.model_fields)
 PRE_MIGRATED_DB_ENV = "AI_RADAR_PRE_MIGRATED_DB"
 PRELOAD_ITEM_KEYS.difference_update(
@@ -42,6 +45,7 @@ WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601"
 WECHAT_PAGE_LIMIT = 50
 PUBLIC_PAGINATION_CACHE_CONTROL = "public, max-age=90, stale-while-revalidate=30"
 PRIVATE_CACHE_CONTROL = "private, no-store"
+_CHANGELOG_MARKDOWN = MarkdownIt("commonmark", {"html": False})
 _PUBLIC_PAGINATION_QUERY_KEYS = {
     "/": frozenset({"page"}),
     "/wechat": frozenset({"page"}),
@@ -106,6 +110,106 @@ def _parse_item_datetime(value: object) -> datetime | None:
     return parsed.astimezone(SHANGHAI_TZ)
 
 
+def _js_iso_datetime(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _mobile_date_label(value: datetime | None, now: datetime | None = None) -> str:
+    if value is None:
+        return "日期未知"
+    current = (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ).date()
+    local_value = value.astimezone(SHANGHAI_TZ)
+    item_date = local_value.date()
+    relative = "今天" if item_date == current else "昨天" if item_date == current - timedelta(days=1) else ""
+    weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[local_value.weekday()]
+    prefix = f"{relative} " if relative else ""
+    return f"{prefix}{local_value.month}月{local_value.day}日 {weekday}"
+
+
+def _author_handle(value: object) -> str:
+    author = str(value or "").strip()
+    return author if not author or author.startswith("@") else f"@{author}"
+
+
+def _hot_source_label(source_name: object, author: object) -> str:
+    name = str(source_name or "").strip()
+    byline = str(author or "").strip()
+    if not byline or byline in name:
+        return name
+    return f"{name} ({byline})"
+
+
+def _hot_source_labels(item: dict[str, object]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    candidates: list[tuple[object, object]] = [(item.get("source_name"), item.get("author"))]
+    related = item.get("related_discussions")
+    if isinstance(related, list):
+        candidates.extend(
+            (entry.get("source_name") or entry.get("source_id"), entry.get("author"))
+            for entry in related
+            if isinstance(entry, dict)
+        )
+    for source_name, author in candidates:
+        label = _hot_source_label(source_name, author)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _hot_relative_time(event_time: object, generated_at: object) -> str:
+    event_dt = _parse_item_datetime(event_time)
+    generated_dt = _parse_item_datetime(generated_at)
+    if event_dt is None or generated_dt is None:
+        return "时间未知"
+    seconds = max(0, int((generated_dt - event_dt).total_seconds()))
+    if seconds < 60:
+        return "刚刚"
+    if seconds < 3600:
+        return f"{seconds // 60}分钟前"
+    if seconds < 86400:
+        return f"{seconds // 3600}小时前"
+    return f"{seconds // 86400}天前"
+
+
+def _hot_template_items(items: object, generated_at: object) -> list[dict[str, object]]:
+    if not isinstance(items, list):
+        return []
+    rendered: list[dict[str, object]] = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        related = item.get("related_discussions")
+        item["source_labels"] = _hot_source_labels(item) if isinstance(related, list) and related else []
+        item["relative_time"] = _hot_relative_time(item.get("event_time"), generated_at)
+        rendered.append(item)
+    return rendered
+
+
+def _render_changelog_markdown(markdown: str) -> Markup:
+    tokens = _CHANGELOG_MARKDOWN.parse(markdown)
+    for token in tokens:
+        if token.type == "heading_open":
+            token.attrSet("class", "cl-title" if token.tag == "h1" else "cl-day-date")
+            if token.tag == "h1":
+                token.attrSet("id", "changelog-title")
+        elif token.type in {"bullet_list_open", "ordered_list_open"}:
+            token.attrSet("class", "cl-entries")
+        elif token.type == "list_item_open":
+            token.attrSet("class", "cl-entry cl-li")
+        elif token.type == "paragraph_open":
+            token.attrSet("class", "cl-p")
+        elif token.type in {"fence", "code_block"}:
+            token.attrJoin("class", "cl-code")
+    rendered = _CHANGELOG_MARKDOWN.renderer.render(tokens, _CHANGELOG_MARKDOWN.options, {})
+    return Markup(rendered)
+
+
 def _score_tier(score: int) -> str:
     if score >= 80:
         return "score-high"
@@ -117,7 +221,19 @@ def _score_tier(score: int) -> str:
 def _display_source_name(raw_item: dict[str, object], source_kind: str, source_name: str) -> str:
     if source_kind == "wechat":
         return str(raw_item.get("author") or source_name or raw_item.get("source_id") or "")
-    return source_name
+    if source_kind == "x":
+        return source_name or str(raw_item.get("source_id") or "")
+    suffixes = {
+        "openai_blog": "官网动态（RSS）",
+        "anthropic_news": "Newsroom（RSS）",
+        "anthropic_blog": "Blog（RSS）",
+        "claude_code_releases": "GitHub Releases（RSS）",
+        "huggingface_blog": "Blog（RSS）",
+        "simonw": "Weblog（RSS）",
+        "ithome": "RSS",
+    }
+    source_id = str(raw_item.get("source_id") or "")
+    return f"{source_name}：{suffixes[source_id]}" if source_id in suffixes else f"{source_name}（RSS）"
 
 
 def _display_source_icon_url(raw_item: dict[str, object], source_kind: str) -> str:
@@ -129,6 +245,15 @@ def _display_source_icon_url(raw_item: dict[str, object], source_kind: str) -> s
 def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, object]]:
     if not isinstance(items, list):
         return []
+
+    date_counts: dict[str, int] = {}
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        timestamp = raw_item.get("published_at") or raw_item.get("fetched_at")
+        dt = _parse_item_datetime(timestamp)
+        bucket = dt.strftime("%Y-%m-%d") if dt else ""
+        date_counts[bucket] = date_counts.get(bucket, 0) + 1
 
     prepaint: list[dict[str, object]] = []
     for raw_item in items[:PREPAINT_ITEM_LIMIT]:
@@ -154,10 +279,22 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
         tags = raw_item.get("enriched_tags") or raw_item.get("topic_tags") or []
         if not isinstance(tags, list) or not tags:
             tags = ["社交" if source_kind == "x" else "AI"]
+        media = raw_item.get("media_assets") or []
+        media_assets = [
+            {"type": "image", "url": str(asset["url"])}
+            for asset in media
+            if isinstance(asset, dict) and asset.get("type") == "image" and asset.get("url")
+        ][:4] if isinstance(media, list) else []
+        related = raw_item.get("related_discussions") or []
+        related_discussions = (
+            [entry for entry in related if isinstance(entry, dict)]
+            if isinstance(related, list) and not timeline_page
+            else []
+        )
         timestamp = raw_item.get("published_at") or raw_item.get("fetched_at")
         dt = _parse_item_datetime(timestamp)
         score_value = raw_item.get("weighted_score")
-        score = round(float(score_value) * 10) if isinstance(score_value, int | float) else None
+        score = int(float(score_value) * 10 + 0.5) if isinstance(score_value, int | float) else None
         selected = raw_item.get("rank") is not None
         show_reason = (selected if timeline_page else True) and bool(raw_item.get("reasoning"))
         prepaint.append(
@@ -168,22 +305,65 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
                 "source_homepage_url": raw_item.get("source_homepage_url") or raw_item.get("url") or "#",
                 "source_icon_url": display_source_icon_url,
                 "source_initial": (display_source_name or "?").strip()[:1].upper() or "?",
+                "source_author": _author_handle(raw_item.get("author")) if source_kind != "wechat" else "",
                 "is_x": source_kind == "x",
                 "title": title,
                 "url": str(raw_item.get("url") or "#").split("#", 1)[0],
                 "summary": summary,
-                "tags": [str(tag) for tag in tags[:4]],
+                "tags": [str(tag).lstrip("#") for tag in tags[:4]],
+                "media_assets": media_assets,
+                "related_discussions": related_discussions,
                 "score": score,
                 "score_tier": _score_tier(score or 0),
                 "selected": selected,
                 "reasoning": raw_item.get("reasoning") if show_reason else "",
                 "date_bucket": dt.strftime("%Y-%m-%d") if dt else "",
-                "date_label": f"{dt.month}月{dt.day}日" if dt else "",
+                "date_label": f"{dt.month}月{dt.day}日" if dt else "日期未知",
+                "mobile_date_label": _mobile_date_label(dt),
+                "weekday_label": ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[dt.weekday()] if dt else "",
+                "date_count": date_counts.get(dt.strftime("%Y-%m-%d") if dt else "", 0),
                 "time_label": dt.strftime("%H:%M") if dt else "",
-                "iso_datetime": dt.isoformat() if dt else "",
+                "iso_datetime": _js_iso_datetime(dt),
                 "clamp_summary": timeline_page,
             }
         )
+    return prepaint
+
+
+def _prepaint_wechat_items(items: object) -> list[dict[str, object]]:
+    if not isinstance(items, list):
+        return []
+
+    date_counts: dict[str, int] = {}
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        dt = _parse_item_datetime(raw_item.get("published_at"))
+        bucket = dt.strftime("%Y-%m-%d") if dt else ""
+        date_counts[bucket] = date_counts.get(bucket, 0) + 1
+
+    prepaint: list[dict[str, object]] = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        dt = _parse_item_datetime(item.get("published_at"))
+        item.update(
+            {
+                "date_bucket": dt.strftime("%Y-%m-%d") if dt else "",
+                "date_label": f"{dt.month}月{dt.day}日" if dt else "日期未知",
+                "mobile_date_label": _mobile_date_label(dt),
+                "weekday_label": (
+                    ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[dt.weekday()]
+                    if dt
+                    else ""
+                ),
+                "date_count": date_counts.get(dt.strftime("%Y-%m-%d") if dt else "", 0),
+                "time_label": dt.strftime("%H:%M") if dt else "",
+                "iso_datetime": _js_iso_datetime(dt),
+            }
+        )
+        prepaint.append(item)
     return prepaint
 
 
@@ -320,7 +500,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "wechat.html",
-            {"preload": data, "items": data["items"]},
+            {"preload": data, "items": _prepaint_wechat_items(data["items"])},
         )
 
     @app.get("/wechat/{slug}", include_in_schema=False)
@@ -375,6 +555,34 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/bookmarks", include_in_schema=False)
     def bookmarks_page(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request, "bookmarks.html", {})
+
+    @app.get("/more", include_in_schema=False)
+    def more_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "more.html", {})
+
+    @app.get("/hot", include_in_schema=False)
+    def hot_page(request: Request) -> HTMLResponse:
+        payload = curated.hot(request, limit=10, hours=48)
+        data = cast(dict[str, object], payload["data"])
+        generated_at = data.get("generated_at")
+        return templates.TemplateResponse(
+            request,
+            "hot.html",
+            {
+                "generated_at": generated_at,
+                "hours": data.get("hours", 48),
+                "hot_items": _hot_template_items(data.get("items"), generated_at),
+            },
+        )
+
+    @app.get("/changelog", include_in_schema=False)
+    def changelog_page(request: Request) -> HTMLResponse:
+        changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
+        return templates.TemplateResponse(
+            request,
+            "changelog.html",
+            {"changelog_html": _render_changelog_markdown(changelog)},
+        )
 
     @app.get("/about", include_in_schema=False)
     def about_page(request: Request) -> HTMLResponse:

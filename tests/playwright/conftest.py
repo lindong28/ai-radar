@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import sqlite3
@@ -17,6 +18,16 @@ from airadar import db
 from airadar.db import resolve_db_path
 
 AI_RADAR_ROOT = Path(__file__).resolve().parents[2]
+EXTERNAL_BASE_URL_ENV = "AI_RADAR_PLAYWRIGHT_BASE_URL"
+
+
+def _external_base_url() -> str | None:
+    if EXTERNAL_BASE_URL_ENV not in os.environ:
+        return None
+    base_url = os.environ[EXTERNAL_BASE_URL_ENV].strip().rstrip("/")
+    if not base_url:
+        raise ValueError(f"{EXTERNAL_BASE_URL_ENV} must be a non-empty URL when set")
+    return base_url
 
 
 def _free_port() -> int:
@@ -65,14 +76,22 @@ def _serve_environment(session_db: Path) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def playwright_db_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def playwright_db_path(tmp_path_factory: pytest.TempPathFactory) -> Path | None:
+    if _external_base_url() is not None:
+        return None
     session_db = tmp_path_factory.mktemp("playwright") / "radar.db"
     _prepare_session_db(resolve_db_path(), session_db)
     return session_db
 
 
 @pytest.fixture(scope="session")
-def base_url(playwright_db_path: Path) -> Generator[str, None, None]:
+def base_url(playwright_db_path: Path | None) -> Generator[str, None, None]:
+    external_base_url = _external_base_url()
+    if external_base_url is not None:
+        yield external_base_url
+        return
+
+    assert playwright_db_path is not None
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
     process = subprocess.Popen(
@@ -125,7 +144,16 @@ def source_homepages() -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def historical_date(playwright_db_path: Path) -> str:
+def historical_date(playwright_db_path: Path | None, base_url: str) -> str:
+    if playwright_db_path is None:
+        # 日报的「最近一期」以归档端点为准（它已排除未来 published_at），
+        # 不用 /api/v1/curated 的 date——那是列表最新条目日期，语义不同且可能是未来。
+        with urllib.request.urlopen(f"{base_url}/api/v1/curated/daily-archive", timeout=10) as response:
+            payload = json.load(response)
+        days = payload.get("data", {}).get("days") or []
+        assert days, "daily-archive returned no days"
+        return str(days[0]["date"])
+
     with sqlite3.connect(playwright_db_path) as conn:
         row = conn.execute(
             """
@@ -140,7 +168,7 @@ def historical_date(playwright_db_path: Path) -> str:
                 LIMIT 1
             )
             GROUP BY day
-            HAVING count > 0
+            HAVING count > 0 AND day <= date(datetime('now', '+08:00'))
             ORDER BY day DESC
             LIMIT 1
             """

@@ -4,6 +4,16 @@
 
 ---
 
+## [open] feed URL 无 scheme 白名单，`javascript:` 等非 http(s) 协议可进入卡片与热点榜的 `href`
+
+- Type: security-hardening
+- Priority: medium
+- Discovered: 2026-08-03 AIHOT 视觉复刻 review-gate（独立 Codex reviewer，session 019fc69a）；用户裁决记录 issue、暂不修复。
+- Description: `src/airadar/fetcher/rss.py` 经 `urls.py` canonicalizer 处理 `entry.link` 时没有 `http/https` 白名单——reviewer 用本地 feedparser 实验证实 `javascript:alert(1)` 这类无 netloc 的值会原样返回并入库。前端模板/JS 只做 HTML 属性转义（约束不了 URL scheme），因此该值会进入 timeline 卡片、`/hot` 页与首页热点模块的 `href`。触发前提：一个被收录的信源（41 个、由维护者管理）被放入恶意 link，风险低但非零。浏览器对 `javascript:` + `target="_blank"` 的最终执行行为未在真实浏览器验证（review sandbox 限制）。
+- Fix 方向: 在 fetcher 的 URL canonicalizer 层加 http/https scheme 白名单（一次覆盖全部消费方），非白名单值置空或丢弃该 link；配套单测覆盖 `javascript:`、`data:`、相对路径与大小写变体。渲染层可另加纵深（非 http(s) 渲染为无链接文本）。
+
+---
+
 ## [open] shared Cloudflare tunnel has unstable origin-to-edge throughput for larger dynamic responses
 
 - Type: reliability

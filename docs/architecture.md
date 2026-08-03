@@ -291,6 +291,8 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 
 FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS：`/` 和 `/all` 使用 Jinja2 SSR 预载首屏数据，后续交互继续通过 API 获取数据；`/daily`、`/about` 和 `/item.html` 仍由静态文件提供。
 
+**响应式分层**（断点 640/960px）：`>960px` 为侧栏 + 内容区；`≤960px` 侧栏整体隐藏、由常驻 HTML 的 `.m-tabbar`（`web/templates/_mobile_tabbar.html`）与 `.app-mobile-bar`（`_mobile_topbar.html`）接管导航。**内容区不做 DOM 双份**——同一套卡片 DOM 由 media query 重塑几何（见 [ADR-012](adr/012-single-dom-mobile-layer.md)），只有桌面无对应物的 chrome 才是独立节点。
+
 ### API 端点
 
 所有 API 以 `/api/v1` 为前缀，返回统一信封 `{success, data, error}`。
@@ -299,6 +301,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 |---|---|---|
 | `/api/v1/timeline` | GET | 全量时间线，支持页码分页（返回真实总数 COUNT）、channel 过滤（x/news/firstParty）、category 过滤、混合 FTS/LIKE 搜索 |
 | `/api/v1/curated` | GET | 精选内容。无 `run_id`/`date` 时返回跨 run 去重的累积归档（页码分页 + 真实总数）；仅带 `date` 时返回该日的跨 run 归档（`/daily` 复用），带 `run_id` 时才返回单轮 digest（可再用 `date` 筛选）。支持 category、混合 FTS/LIKE 搜索 |
+| `/api/v1/curated/daily-archive` | GET | 日报归档全集（单次 SQLite 读快照，按 Asia/Shanghai 日期分桶并计数）。**排除晚于今天的桶**——feed 的 `published_at` 不受信任，未来日期若入档会被前端当成「最近一期」 |
+| `/api/v1/hot` | GET | 近 N 小时热点榜（默认 48h）。`heat = round(加权分×10 + 关联讨论数×5)`；响应级 `generated_at`，逐条含 `published_at`/`fetched_at`/`event_time`/`source_kind`/`author`/`related_discussions`。`event_time` 取可解析且不晚于 `generated_at` 的 `published_at`，否则回退 `fetched_at`（页面相对时间只用它）。先取最近 600 条归档再算热度——48h 现实量约 4 倍富余，超出即截断属可接受近似 |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url |
 | `/api/v1/sources` | GET | 信源列表 |
@@ -312,8 +316,11 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 | URL | 渲染方式 | 说明 |
 |---|---|---|
-| `/` | `web/templates/index.html` | 精选累积归档首页（跨 run 去重，页码分页，第 1 页为最新精选），Jinja2 SSR，内联 `/api/v1/curated` 归档形状的 preload JSON |
-| `/all` | `web/templates/all.html` | 全量时间线，Jinja2 SSR，内联 `/api/v1/timeline` 形状的 preload JSON |
+| `/` | `web/templates/index.html` | 精选累积归档首页（跨 run 去重，**无限滚动**，首屏为最新精选），Jinja2 SSR，内联 `/api/v1/curated` 归档形状的 preload JSON |
+| `/all` | `web/templates/all.html` | 全量时间线，**无限滚动**（搜索态仍用页码分页——timeline API 搜索时忽略 cursor），Jinja2 SSR，内联 `/api/v1/timeline` 形状的 preload JSON |
+| `/hot` | `web/templates/hot.html` | 热点榜页，SSR 渲染 `/api/v1/hot?limit=10` 全量响应；桌面侧栏可达，移动端从首页「完整榜单 →」进入 |
+| `/changelog` | `web/templates/changelog.html` | 渲染仓库根 `CHANGELOG.md`（markdown-it-py 逐 token 赋 `.cl-*` class 后渲染），**请求时读取**故编辑源文件即时生效 |
+| `/more` | `web/templates/more.html` | 移动端「更多」页，只含 `/wechat`、`/bookmarks`、`/about`、`/changelog` 四个入口；**桌面无导航入口**，仅 ≤960px 底部 tab 栏第 4 项指向它 |
 | `/wechat` | `web/templates/wechat.html` | 微信文章解读列表，Jinja2 SSR，内联 `/api/v1/wechat` 形状的 preload JSON |
 | `/wechat/{slug}` | `web/templates/wechat_detail.html` | 微信文章解读详情页，`summary_md` 经 markdown-it-py 渲染后用 nh3 sanitize |
 | `/daily` | `web/static/daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |

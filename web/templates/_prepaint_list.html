@@ -1,11 +1,21 @@
-      {% set ns = namespace(last_date="") %}
+      {% set ns = namespace(last_date=none, open_day=false) %}
       {% for item in prepaint_items %}
-        {% if item.date_label and item.date_label != ns.last_date %}
-          <div class="timeline-date date-group"><time datetime="{{ item.date_bucket }}" title="{{ item.date_bucket }}">{{ item.date_label }}</time></div>
-          {% set ns.last_date = item.date_label %}
+        {% if item.date_bucket != ns.last_date %}
+          {% if ns.open_day %}</div></section>{% endif %}
+          <section class="timeline-day date-group" data-date="{{ item.date_bucket }}">
+            <div class="timeline-day-head timeline-date">
+              <button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 {{ item.date_label }}">
+                <time datetime="{{ item.date_bucket }}" title="{{ item.date_bucket }}"><span class="desktop-date-label">{{ item.date_label }}</span><span class="mobile-date-label">{{ item.mobile_date_label }}</span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span>
+              </button>
+              <span class="timeline-day-meta">{% if item.weekday_label %}{{ item.weekday_label }} · {% endif %}<span class="date-count">{{ item.date_count }} 条</span></span>
+            </div>
+            <div class="timeline-day-items">
+          {% set ns.last_date = item.date_bucket %}
+          {% set ns.open_day = true %}
         {% endif %}
-        <div class="timeline-entry">
-          <div class="timeline-time"><time datetime="{{ item.iso_datetime }}" title="{{ item.date_bucket }}">{{ item.time_label }}</time><span></span></div>
+        <div class="timeline-item timeline-entry" data-entry-date="{{ item.date_bucket }}">
+          <div class="timeline-time"><time datetime="{{ item.iso_datetime }}" title="{{ item.date_bucket }}">{{ item.time_label }}</time></div>
+          <div class="timeline-rail" aria-hidden="true"><span class="timeline-dot"></span></div>
           <article class="item-row timeline-card{% if item.is_x %} x-card{% endif %}{% if item.clamp_summary %} clamped-card{% endif %}" data-item-id="{{ item.item_id }}" data-source-id="{{ item.source_id }}" data-published-date="{{ item.date_bucket }}" data-published-at="{{ item.iso_datetime }}">
             <div class="card-topline">
               <div class="source-line">
@@ -18,29 +28,42 @@
                   </span>
                   <span class="source-name">{{ item.source_name }}</span>
                 </a>
+                {% if item.source_author %}<span class="source-author">{{ item.source_author }}</span>{% endif %}
+                {% if item.selected %}<span class="timeline-selected-badge">精选</span>{% endif %}
               </div>
-              {% if item.score is not none %}
-                <div class="score-stack {{ item.score_tier }}" title="LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明">
-                  {% if item.selected %}<span class="hot-pill">精选</span>{% endif %}
-                  <span class="score-pill {{ item.score_tier }}" title="LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明">{{ item.score }}</span>
-                </div>
-              {% endif %}
+              <span class="card-topline-end">
+                {% if item.score is not none %}<span class="timeline-score {{ item.score_tier }}" title="LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明">{{ item.score }}</span>{% endif %}
+                <button type="button" class="bookmark-btn" data-bookmark-id="{{ item.item_id }}" aria-pressed="false" aria-label="收藏" title="收藏 / 取消收藏"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4.2-5.5 4.2z"/></svg></button>
+              </span>
             </div>
             {% if item.title %}
               <a class="item-title" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
             {% endif %}
-            {% if item.summary %}
-              <p class="summary">{{ item.summary }}</p>
+            <p class="summary">{{ item.summary }}</p>
+            {% if item.media_assets %}
+              <div class="article-media article-media-count-{{ item.media_assets | length }}">
+                {% for asset in item.media_assets %}
+                  <a class="article-media-link" href="{{ asset.url }}" target="_blank" rel="noopener noreferrer" aria-label="打开大图：{{ item.title or '查看媒体' }}">
+                    <img class="article-media-img" src="{{ asset.url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.article-media-link').hidden=true">
+                  </a>
+                {% endfor %}
+              </div>
             {% endif %}
             <div class="tags">
               {% for tag in item.tags %}
-                <span class="tag">{{ tag }}</span>
+                <span class="tag">#{{ tag }}</span>
               {% endfor %}
             </div>
+            {% if item.related_discussions %}
+              <span class="timeline-dup-count timeline-dup-hover">关联讨论 {{ item.related_discussions | length }} 条<span class="dup-tooltip">
+                {% for entry in item.related_discussions %}<span class="dup-tooltip-item">{% if entry.source_kind == 'x' %}X{% else %}来源{% endif %}：{{ entry.source_name or entry.source_id }}{% if entry.author %} ({{ entry.author if entry.author.startswith('@') else '@' ~ entry.author }}){% endif %}</span>{% endfor %}
+              </span></span>
+            {% endif %}
             {% if item.reasoning %}
               <hr class="timeline-divider">
-              <div class="reason">推荐理由：{{ item.reasoning }}</div>
+              <div class="reason"><span class="reason-label">推荐理由：</span>{{ item.reasoning }}</div>
             {% endif %}
           </article>
         </div>
       {% endfor %}
+      {% if ns.open_day %}</div></section>{% endif %}

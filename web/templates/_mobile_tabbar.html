@@ -1,0 +1,6 @@
+    <nav class="m-tabbar" aria-label="移动端主导航">
+      <a class="m-tab{% if mobile_active == 'curated' %} m-tab-active{% endif %}"{% if mobile_active == 'curated' %} aria-current="page"{% endif %} href="/"><span class="side-icon side-icon-curated m-tab-icon" aria-hidden="true"></span><span class="m-tab-label">精选</span></a>
+      <a class="m-tab{% if mobile_active == 'all' %} m-tab-active{% endif %}"{% if mobile_active == 'all' %} aria-current="page"{% endif %} href="/all"><span class="side-icon side-icon-all m-tab-icon" aria-hidden="true"></span><span class="m-tab-label">全部</span></a>
+      <a class="m-tab{% if mobile_active == 'daily' %} m-tab-active{% endif %}"{% if mobile_active == 'daily' %} aria-current="page"{% endif %} href="/daily"><span class="side-icon side-icon-daily m-tab-icon" aria-hidden="true"></span><span class="m-tab-label">日报</span></a>
+      <a class="m-tab{% if mobile_active == 'more' %} m-tab-active{% endif %}"{% if mobile_active == 'more' %} aria-current="page"{% endif %} href="/more"><span class="m-tab-icon m-tab-icon-more" aria-hidden="true"></span><span class="m-tab-label">更多</span></a>
+    </nav>

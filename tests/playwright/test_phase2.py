@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
@@ -17,6 +18,23 @@ def _goto(page: Page, base_url: str, path: str, cards: bool = False) -> None:
     page.goto(f"{base_url}{path}", wait_until="domcontentloaded")
     if cards:
         expect(page.locator(".timeline-card").first).to_be_visible(timeout=10_000)
+        # SSR prepaint 先渲染首屏子集（约 12 条），CSR hydration 随后用完整首批（约 40 条）替换。
+        # 只等「首张卡可见」会在替换前放行，导致后续基线读到 prepaint 的条数而非首批条数。
+        _settle_card_count(page)
+
+
+def _settle_card_count(page: Page, quiet_ms: int = 350, timeout_ms: int = 10_000) -> int:
+    """等卡片数量停止变化后返回它，避开 SSR→CSR 替换与无限滚动追加的竞态。"""
+    cards = page.locator(".timeline-card")
+    deadline = time.monotonic() + timeout_ms / 1000
+    previous = -1
+    while time.monotonic() < deadline:
+        current = cards.count()
+        if current == previous and current > 0:
+            return current
+        previous = current
+        page.wait_for_timeout(quiet_ms)
+    return cards.count()
 
 
 def _strip_wechat_preload(page: Page) -> None:
@@ -62,18 +80,11 @@ def _require_wechat_cards_on_page(page: Page, base_url: str, page_number: int) -
 def _grouped_times(page: Page) -> list[list[str]]:
     return page.evaluate(
         """() => {
-          const groups = [];
-          let current = null;
-          for (const child of document.querySelector("#list").children) {
-            if (child.classList.contains("date-group")) {
-              current = [];
-              groups.push(current);
-            } else if (child.classList.contains("timeline-entry") && current) {
-              const value = child.querySelector(".timeline-time time")?.textContent?.trim();
-              if (value) current.push(value);
-            }
-          }
-          return groups;
+          return [...document.querySelectorAll("#list .timeline-day")].map(group =>
+            [...group.querySelectorAll(".timeline-entry .timeline-time time")]
+              .map(el => el.textContent?.trim())
+              .filter(Boolean)
+          );
         }"""
     )
 
@@ -88,24 +99,34 @@ def _ensure_multiple_date_groups(page: Page) -> list[list[str]]:
     for _ in range(12):
         if len(groups) >= 2:
             return groups
-        more = page.locator("#more")
-        if more.count() and more.is_visible():
-            with page.expect_response(lambda response: "/api/v1/timeline" in response.url and response.status == 200):
-                more.click()
-        else:
-            next_link = page.locator('.pagination-link[rel="next"]')
-            if not next_link.count() or not next_link.is_visible():
-                break
-            with page.expect_response(lambda response: "/api/v1/timeline" in response.url and response.status == 200):
-                next_link.click()
+        sentinel = page.locator(".scroll-sentinel")
+        if not sentinel.count():
+            break
+        previous = page.locator(".timeline-card").count()
+        sentinel.scroll_into_view_if_needed()
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_function(
+            "previous => document.querySelectorAll('.timeline-card').length > previous",
+            arg=previous,
+            timeout=10_000,
+        )
         groups = _grouped_times(page)
     return groups
 
 
 def test_v03_v04_v06_navigation_and_search_inputs(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/")
-    assert page.locator(".side-link").all_inner_texts() == ["精选", "全部 AI 动态", "微信文章解读", "AI 日报", "关于"]
-    body = page.locator(".side-nav").inner_text()
+    assert page.locator(".side-link").all_inner_texts() == [
+        "精选",
+        "全部 AI 动态",
+        "热点榜",
+        "微信文章解读",
+        "AI 日报",
+        "收藏",
+        "关于",
+        "更新日志",
+    ]
+    body = " ".join(page.locator(".side-nav").all_inner_texts())
     for forbidden in ["公众号", "Agent", "反馈", "登录"]:
         assert forbidden not in body
 
@@ -126,11 +147,12 @@ def test_v07_v08_v09_v11_cards_links_and_score_gating(
         cards = page.locator(".timeline-card")
         assert entries.count() >= 10
 
+        assert page.locator(".timeline-card .timeline-score").count() == cards.count()
+        badges = page.locator(".timeline-card .timeline-selected-badge", has_text="精选")
         if path == "/":
-            assert page.locator(".timeline-card .score-pill").count() == cards.count()
-        else:
-            assert page.locator(".timeline-card .score-pill").count() == cards.count()
-            assert page.locator(".timeline-card .hot-pill", has_text="精选").count() >= 1
+            assert badges.count() == cards.count()
+        assert page.locator(".source-line > .timeline-selected-badge").count() == badges.count()
+        assert page.locator(".card-topline-end .timeline-selected-badge").count() == 0
 
         for index in range(10):
             entry = entries.nth(index)
@@ -162,11 +184,14 @@ def test_v07_v08_v09_v11_cards_links_and_score_gating(
 def test_curated_page_does_not_duplicate_selected_badge_in_tags(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/", cards=True)
 
-    assert page.locator(".timeline-card .hot-pill", has_text="精选").count() >= 1
+    assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() >= 1
+    assert page.locator(".timeline-card .source-line .timeline-selected-badge", has_text="精选").count() >= 1
+    assert page.locator(".card-topline-end .timeline-selected-badge").count() == 0
     assert page.locator(".timeline-card .tags .tag", has_text="精选").count() == 0
+    assert all(label.startswith("#") for label in page.locator(".timeline-card .tags .tag").all_inner_texts())
 
 
-def test_v10_x_cards_render_clickable_title_to_original(page: Page, base_url: str) -> None:
+def test_v10_x_cards_keep_original_title_link_but_render_body_first(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/all?channel=x", cards=True)
 
     x_cards = page.locator(".timeline-card.x-card")
@@ -175,7 +200,8 @@ def test_v10_x_cards_render_clickable_title_to_original(page: Page, base_url: st
     for index in range(3):
         card = x_cards.nth(index)
         title = card.locator(".item-title")
-        expect(title).to_be_visible()
+        expect(title).to_be_attached()
+        expect(title).to_be_hidden()
         title_href = title.get_attribute("href") or ""
         assert title_href.startswith("https://x.com/")
         assert "/status/" in title_href
@@ -193,7 +219,7 @@ def test_v10b_article_media_does_not_dominate_viewport(page: Page, base_url: str
     max_ratio = media.evaluate_all(
         """imgs => Math.max(...imgs.map(img => img.getBoundingClientRect().height / window.innerHeight))"""
     )
-    assert max_ratio <= 0.31
+    assert max_ratio <= 0.4
 
 
 def test_v10d_all_page_preserves_aihot_media_score_and_selected_reason(page: Page, base_url: str) -> None:
@@ -201,11 +227,14 @@ def test_v10d_all_page_preserves_aihot_media_score_and_selected_reason(page: Pag
 
     assert page.locator(".timeline-card").count() >= 30
     assert page.locator(".timeline-card .article-media-img").count() >= 1
-    assert page.locator(".timeline-card .score-pill").count() == page.locator(".timeline-card").count()
-    assert page.locator(".timeline-card .hot-pill", has_text="精选").count() >= 1
+    assert page.locator(".timeline-card .timeline-score").count() == page.locator(".timeline-card").count()
+    assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() == 0
+
+    _goto(page, base_url, "/", cards=True)
+    assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() >= 1
     selected_reason_count = page.locator(".timeline-card").evaluate_all(
         """cards => cards.filter(card =>
-          card.querySelector('.hot-pill')?.textContent?.trim() === '精选'
+          card.querySelector('.timeline-selected-badge')?.textContent?.trim() === '精选'
           && card.querySelector('.reason')?.textContent?.trim()
         ).length"""
     )
@@ -226,12 +255,14 @@ def test_v10d_all_page_preserves_aihot_media_score_and_selected_reason(page: Pag
     assert metrics["avgHeight"] <= 520
 
 
-def test_x_cards_use_aihot_body_text_weight_instead_of_bold_article_title(page: Page, base_url: str) -> None:
+def test_x_cards_use_body_text_as_the_desktop_reading_surface(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/all?channel=x", cards=True)
 
-    title = page.locator(".timeline-card.x-card .item-title").first
-    expect(title).to_be_visible()
-    metrics = title.evaluate(
+    card = page.locator(".timeline-card.x-card").first
+    expect(card.locator(".item-title")).to_be_hidden()
+    summary = card.locator(".summary")
+    expect(summary).to_be_visible()
+    metrics = summary.evaluate(
         """el => {
           const style = getComputedStyle(el);
           return {
@@ -244,17 +275,18 @@ def test_x_cards_use_aihot_body_text_weight_instead_of_bold_article_title(page: 
 
     assert metrics["fontSize"] == "14px"
     assert metrics["fontWeight"] == "400"
-    assert metrics["lineHeight"] == "23.8px"
+    assert metrics["lineHeight"] == "23.1px"
 
 
 def test_v10e_all_page_channel_filters_are_url_backed_targets(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/all", cards=True)
 
-    assert page.locator("[data-channel-filter] .seg-item").all_inner_texts() == ["全部", "一手信源", "资讯", "推文"]
+    channel = page.locator("#channel-param")
+    assert channel.locator("option").all_inner_texts() == ["全部", "一手信源", "资讯", "推文"]
     with page.expect_response(
         lambda response: "/api/v1/timeline" in response.url and "channel=x" in response.url and response.status == 200
     ):
-        page.locator('[data-channel-filter] [data-channel="x"]').click()
+        channel.select_option("x")
     expect(page).to_have_url(f"{base_url}/all?channel=x")
     x_cards = page.locator(".timeline-card.x-card")
     assert x_cards.count() >= 3
@@ -265,26 +297,51 @@ def test_v10e_all_page_channel_filters_are_url_backed_targets(page: Page, base_u
         and "channel=firstParty" in response.url
         and response.status == 200
     ):
-        page.locator('[data-channel-filter] [data-channel="firstParty"]').click()
+        channel.select_option("firstParty")
     expect(page).to_have_url(f"{base_url}/all?channel=firstParty")
     assert page.locator(".timeline-card.x-card").count() == 0
-    assert page.locator('[data-channel-filter] [data-channel="firstParty"]').get_attribute("aria-pressed") == "true"
+    expect(channel).to_have_value("firstParty")
 
 
-def test_v10f_all_page_pagination_is_a_natural_click_target(page: Page, base_url: str) -> None:
+def test_v10f_all_page_infinite_scroll_appends_the_next_cursor_batch(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/all", cards=True)
 
-    next_link = page.locator('.pagination-link[rel="next"]')
-    expect(next_link).to_be_visible()
-    assert "page=2" in (next_link.get_attribute("href") or "")
+    assert page.locator("#pagination, .pagination-link").count() == 0
+    cards = page.locator(".timeline-card")
+    before = cards.count()
+    ids_before = cards.evaluate_all("els => els.map(el => el.dataset.itemId)")
     with page.expect_response(
-        lambda response: "/api/v1/timeline" in response.url and "page=2" in response.url and response.status == 200
-    ):
-        next_link.click()
+        lambda response: "/api/v1/timeline" in response.url
+        and "cursor=" in response.url
+        and response.status == 200
+    ) as response_info:
+        page.locator(".scroll-sentinel").scroll_into_view_if_needed()
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
-    expect(page).to_have_url(f"{base_url}/all?page=2")
-    expect(page.locator('.pagination-link[aria-current="page"]')).to_have_text("2")
-    expect(page.locator(".timeline-card").first).to_be_visible()
+    response_data = response_info.value.json()["data"]
+    expected_appended = [
+        str(item["id"])
+        for item in sorted(
+            response_data["items"],
+            key=lambda item: (
+                str(item.get("published_at") or item.get("fetched_at") or ""),
+                str(item.get("fetched_at") or ""),
+                str(item.get("id") or ""),
+            ),
+            reverse=True,
+        )
+    ]
+
+    page.wait_for_function(
+        "before => document.querySelectorAll('.timeline-card').length > before",
+        arg=before,
+        timeout=10_000,
+    )
+    ids_after = cards.evaluate_all("els => els.map(el => el.dataset.itemId)")
+    assert ids_after[:before] == ids_before
+    assert ids_after[before:] == expected_appended
+    assert len(ids_after) == len(set(ids_after))
+    expect(page).to_have_url(f"{base_url}/all")
 
 
 def test_wechat_card_body_click_opens_detail_and_back_preserves_page(page: Page, base_url: str) -> None:
@@ -420,7 +477,7 @@ def test_v10h_typography_tone_matches_aihot_reference(page: Page, base_url: str)
         }"""
     )
     _goto(page, base_url, "/all?channel=x", cards=True)
-    x_card_title = page.locator(".timeline-card.x-card .item-title").first.evaluate(
+    x_body = page.locator(".timeline-card.x-card .summary").first.evaluate(
         """el => {
           const style = getComputedStyle(el);
           return {
@@ -431,34 +488,37 @@ def test_v10h_typography_tone_matches_aihot_reference(page: Page, base_url: str)
         }"""
     )
 
-    assert "Noto Serif SC" in styles["pageTitle"]["fontFamily"]
-    assert styles["pageTitle"]["fontWeight"] == "400"
+    assert "system-ui" in styles["pageTitle"]["fontFamily"]
+    assert styles["pageTitle"]["fontWeight"] == "700"
     assert styles["pageTitle"]["fontSize"] == "24px"
 
-    assert "IBM Plex Mono" in styles["time"]["fontFamily"]
-    assert styles["time"]["lineHeight"] == "19.8px"
+    assert "ui-monospace" in styles["time"]["fontFamily"]
+    # measured-tokens B.1 的 base `.timeline-time`：font-size 12.5px / line-height 1.1 → 13.75px。
+    # 旧断言写的 12px 来自 base 误用了 ≤640px 档的 12px/1（CSS 忠实度审计 MISMATCH 6/7 已修）。
+    assert styles["time"]["fontSize"] == "12.5px"
+    assert styles["time"]["lineHeight"] == "13.75px"
 
-    assert "IBM Plex Sans" in styles["cardTitle"]["fontFamily"]
-    assert styles["cardTitle"]["fontSize"] == "15px"
+    assert "system-ui" in styles["cardTitle"]["fontFamily"]
+    assert styles["cardTitle"]["fontSize"] == "15.5px"
     assert styles["cardTitle"]["fontWeight"] == "700"
-    assert styles["cardTitle"]["lineHeight"] == "22.5px"
+    assert styles["cardTitle"]["lineHeight"] == "22.475px"
 
-    assert x_card_title["fontSize"] == "14px"
-    assert x_card_title["fontWeight"] == "400"
-    assert x_card_title["lineHeight"] == "23.8px"
+    assert x_body["fontSize"] == "14px"
+    assert x_body["fontWeight"] == "400"
+    assert x_body["lineHeight"] == "23.1px"
 
-    assert "IBM Plex Sans" in styles["source"]["fontFamily"]
-    assert styles["source"]["fontSize"] == "11px"
-    assert styles["source"]["color"] == "rgb(100, 116, 139)"
+    assert "system-ui" in styles["source"]["fontFamily"]
+    assert styles["source"]["fontSize"] == "13px"
+    assert styles["source"]["color"] == "rgb(92, 102, 114)"
 
-    assert "IBM Plex Sans" in styles["summary"]["fontFamily"]
-    assert styles["summary"]["fontSize"] == "12.5px"
-    assert styles["summary"]["lineHeight"] == "20px"
-    assert styles["summary"]["color"] == "rgb(148, 163, 184)"
+    assert "system-ui" in styles["summary"]["fontFamily"]
+    assert styles["summary"]["fontSize"] == "13.5px"
+    assert styles["summary"]["lineHeight"] == "22.275px"
+    assert styles["summary"]["color"] == "rgb(92, 102, 114)"
 
-    assert "IBM Plex Mono" in styles["tag"]["fontFamily"]
-    assert "IBM Plex Mono" in styles["filter"]["fontFamily"]
-    assert styles["filter"]["lineHeight"] == "12px"
+    assert "system-ui" in styles["tag"]["fontFamily"]
+    assert "system-ui" in styles["filter"]["fontFamily"]
+    assert styles["filter"]["lineHeight"] == "13px"
 
 
 def test_v10c_mobile_category_filter_keeps_all_options_visible(page: Page, base_url: str) -> None:

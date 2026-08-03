@@ -6,15 +6,79 @@ from pathlib import Path
 
 import conftest as fixture_module
 import pytest
-from conftest import _prepare_session_db, _serve_environment, base_url, historical_date
+from conftest import _prepare_session_db, _serve_environment, base_url, historical_date, playwright_db_path
 
 from airadar import db
+
+
+def test_external_mode_does_not_copy_database_or_spawn_service(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    external_url = "http://127.0.0.1:8011"
+    expected_db = tmp_path / "playwright" / "radar.db"
+    tmp_factory_calls: list[str] = []
+    prepare_calls: list[tuple[Path, Path]] = []
+    popen_calls: list[list[str]] = []
+
+    class FakeTmpPathFactory:
+        def mktemp(self, basename: str) -> Path:
+            tmp_factory_calls.append(basename)
+            assert basename == "playwright"
+            expected_db.parent.mkdir()
+            return expected_db.parent
+
+    class FakeProcess:
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    def fake_prepare(source: Path, destination: Path) -> None:
+        prepare_calls.append((source, destination))
+        destination.touch()
+
+    def fake_popen(command: list[str], **kwargs: object) -> FakeProcess:
+        popen_calls.append(command)
+        return FakeProcess()
+
+    monkeypatch.setenv("AI_RADAR_PLAYWRIGHT_BASE_URL", external_url)
+    monkeypatch.setattr(
+        fixture_module,
+        "resolve_db_path",
+        lambda: pytest.fail("external mode must not resolve AI_RADAR_DB"),
+    )
+    monkeypatch.setattr(fixture_module, "_prepare_session_db", fake_prepare)
+    monkeypatch.setattr(
+        fixture_module,
+        "_free_port",
+        lambda: pytest.fail("external mode must not select or bind a port"),
+    )
+    monkeypatch.setattr(fixture_module, "_wait_for_health", lambda url, process: None)
+    monkeypatch.setattr(fixture_module.subprocess, "Popen", fake_popen)
+
+    session_db = playwright_db_path.__wrapped__(FakeTmpPathFactory())
+    fixture = base_url.__wrapped__(session_db)
+    actual_url = next(fixture)
+    fixture.close()
+
+    assert actual_url == external_url
+    assert tmp_factory_calls == []
+    assert prepare_calls == []
+    assert not expected_db.parent.exists()
+    assert not expected_db.exists()
+    assert popen_calls == []
 
 
 def test_playwright_session_db_is_a_migrated_snapshot_and_serve_uses_it(
     monkeypatch,
     tmp_path: Path,
 ) -> None:  # noqa: ANN001
+    monkeypatch.delenv("AI_RADAR_PLAYWRIGHT_BASE_URL", raising=False)
     source = tmp_path / "production-sentinel.db"
     with sqlite3.connect(source) as connection:
         connection.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
@@ -93,4 +157,4 @@ def test_playwright_session_db_is_a_migrated_snapshot_and_serve_uses_it(
             """
         )
         connection.execute("INSERT INTO curated_items VALUES ('r','i',1,1,'{}',NULL)")
-    assert historical_date.__wrapped__(session_db) == "2026-07-18"
+    assert historical_date.__wrapped__(session_db, "http://unused.invalid") == "2026-07-18"
