@@ -218,3 +218,23 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - 事后评估：Codex 是独立 harness，不受 Claude Code hook 影响，文件编辑工具链完好。该场景下"把 spec 明确的批量编辑单元委派给 codeagent-wrapper --backend codex"很可能更快更稳。
 - 建议：在 delegation-policy（或 durable-solution-carriers 指认的更合适载体）增加一条路由信号：主 harness 编辑工具链因 hook/权限故障退化、且故障本 session 不可修复时，优先评估跨 harness 委派而非 shell 层 workaround。
 - Fix APPLIED 2026-08-02 (ai-agent-config `e9af26a`): 落在两层——`delegation-policy.md` 的 Eligibility 新增该规则（条件收窄为「主 harness **自身工具层**故障」，因为括号里的论证只对 harness 层成立，文件系统级故障会让 Codex 同样瘫痪），Codex 专属理由移入「Harness transport」节末段。关键补充：user CLAUDE.md 的「Delegation Boundary」新增三行 when-to-delegate 场景表——审查指出仅改 reference 这条规则**在自己的触发场景下永远读不到**（该文件只在「委派前」被读，而规则要纠正的恰是没打算委派的 agent，且 always-loaded 层已有「Resolve Blockers, Don't Bypass」这条竞争默认）。表格内容经用户裁决保留（其要求 always-loaded 层给出常见适合委派场景清单）。
+
+## 2026-08-04 补充观察（AIHOT 复刻 live 对照 session）
+
+### `web-ui-observation.md` 缺一条：参照站与我方响应式架构不同时，抄录清单会**忠实地**投影出错误
+
+- **现象**：AIHOT 用两棵 DOM 树做响应式——≤960 时 `.feed-desktop{display:none}` 隐藏整棵 `.timeline-*`，改用 `.m-*` 树。但它的 CSS 里仍留着 **34 条 `.timeline-*` 规则写在 `≤640`/`≤960` 媒体块内**，在 AIHOT 上全部作用于隐藏子树、一个像素都不渲染（引入 `.m-feed` 之前的遗留死代码）。我方按 ADR-012 只用一棵树，`.timeline-*` 就是 ≤960 可见的 UI，于是每抄一条死规则就把它从"不渲染"变成"我方可见"。实测：`measured-tokens C.1 M03` 抄了 `.timeline-time{font-size:16px}`，我方 641–960 档时间戳因此是 16px，而 AIHOT 可见值（`.m-row-time`）是 12px——大 33%，正落在用户点名的「缩放时候的字体」区间。
+
+- **为什么现有方法论挡不住**：`web-ui-observation.md` 已有「反向完备性」（参照里有、清单没抄的规则）与「别把抄录清单当权威」（清单是有损投影）。但本例中清单**没有漏抄、也没有抄错**——它忠实记录了一条 AIHOT 真实存在的规则。缺的是第三个属性：**该规则在参照站上是否渲染**。逐值溯源问"我方这条值有没有出处"（有），ledger 忠实度问"清单这行是否忠于参照"（忠实），两条都通过。没有任何一条问过"参照站上它渲染吗"。
+
+- **放大效应**：上一轮的 CSS 忠实度审计朝这些死规则的方向"修正"过我方的值（把 `--tl-dot-top` 中档改成 16、把 `.timeline-time` 改回 12.5px/1.1）。**审计越忠实，可见缺陷越多**——这是一个负向反馈，比单纯漏抄危险。
+
+- **建议**：`~/.claude/references/web-ui-observation.md` 的「有参照产品时的对比纪律」增加一条——参照站与我方响应式架构不同（尤其两棵 DOM 树 vs 一棵）时，抄录的每条规则必须附**参照站上的可见性**判定；只有在参照站上实际渲染的规则才构成我方的目标值，隐藏子树上的规则要映射到参照站**可见**的对应件、或明确记为不适用。判据来自参照站自己的 `display:none`/`display:contents` 与冻结 DOM，不能凭 selector 名字猜。同时「必须覆盖的轴」可提示：参照站在断点两侧切换的是**哪棵树**，而不只是哪套值。
+
+- **未就地修的原因**：目标载体在 `ai-agent-config` 仓库，本轮该仓库有另一 session 在活跃写入（36 个 dirty 文件、我方 `cd9d426` 之上已有新 commit），按 `concurrent-plan-isolation` 不在此刻跨仓库写。本条留待该仓库空闲时落地。
+
+### supervisor 从 CSS 源码推断层叠结果，得出与实际相反的结论
+
+- **现象**：看到 `.more-page{width:min(640px,100%); max-width:1160px}` 就断定 `max-width` 永不可能生效、reviewer 报的回归是误报、修复是 no-op。实测 computed `width` 是 **1160px** ——`width:min(640px,100%)` 被更高优先级规则覆盖，从来没生效过；`max-width` 确实在起作用，回归与修复都是真的。
+- **性质**：`web-ui-observation.md` 已有「某属性是否生效 → 读 `getComputedStyle`，而非 grep 源码」。本例是**同一条规则的另一种违反形态**——不是 grep 找存在性，而是**阅读源码推演层叠优先级**。既有措辞（"grep 源码"）不足以覆盖"我读了完整规则并推理"这种更自信、也更容易出错的形态。
+- **建议**：把该行的错误做法从「grep 源码」扩写为「grep 或阅读源码推演层叠结果」，并点明多 media / 多 selector 叠加时源码推演不可靠。
