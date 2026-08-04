@@ -384,3 +384,19 @@
 - Priority: medium
 - Discovered: 2026-07-26 idle-only probe 收尾第五轮对抗复审（reviewer 019f92af）；pre-existing（HEAD 即 `except (OSError, PlaywrightError) → hard_failure=True`），按用户裁决单独排期。
 - Description: page 就绪后的 site-operation 阶段，若探针自身的 selector/API 契约不兼容（如 `PlaywrightError: Unexpected token "?" while parsing css selector` 或 `Protocol error: Invalid parameters`），该错误既不匹配 `_is_browser_runtime_loss` 的 target/browser-closed marker、也不是 `AttributeError`，于是落到 `outcome="observed", hard_failure=True`（browser_probe.py:246）当成真实站点故障；连续 22 次后 evaluator 产生 firing 并写入可信 `firing_basis="observed"`，误发"站点慢" page，且此后即使 probe 转 infra，round-5 统一迁移规则还会把这个错误 provenance 当可信 observed firing 持有（reviewer 只读复现 classification observed True→count 22→evaluation True observed）。这是探针自身故障被误报为站点退化的方向——与 launch/crash 分类同类，但发生在启动后、且原授权曾把"启动后 error 保留 page"划在 scope 外，故本轮 defer。实务风险低：selector 是代码静态常量、部署测试全绿，仅 Playwright 升级破坏 API 契约才触发（可检测的部署/升级时风险）。Fix 方向：新增一个 invalid-API 分类谓词（匹配 invalid selector/protocol 的 PlaywrightError 签名，与 `AttributeError→browser_runtime:invalid_api` 同归），把探针自身契约错误归为 non-firing `browser_runtime:invalid_api` infra，使其永不 page、也不取得 observed provenance；注意与真实站点驱动的 PlaywrightError（导航/连接失败）区分，后者仍 fire。
+
+## 2026-08-04 Playwright 套件对隔离快照过拟合：换真实数据 5 条失败
+
+**现象**：同一份代码，对隔离快照实例（8011，`data/radar.db` 为 VACUUM 快照）跑 `tests/playwright` 是 **114 passed**；对生产库实例（8010，默认 DB，pipeline 每 15 分钟写入）跑同一套是 **109 passed / 5 failed**。逐条查证，**5 条都不是产品缺陷**：
+
+| 用例 | 失败形态 | 判定 |
+|---|---|---|
+| `test_parity_home_scroll_reaches_api_total_without_duplicates` | `KeyError: 12`（不是断言失败） | 并发写入使批次键漂移。**测试健壮性问题**——它应当以清晰断言失败，而不是 KeyError。契约本身只在"滚动期间无采集写入"时承诺精确等式 |
+| `test_parity_hot_times_and_related_sources_are_data_conditional` | 期望 1 个信源名，得到 `['', '']` | **测试提取逻辑过拟合**。实测生产数据下展开正确渲染 `Hacker News AI/LLM (ddp26)` 与 `(mckennameyer)` 两个真实名（API 返回 3 条同名 related，DOM 已按信源+作者去重）；测试期望 `<li>` 结构而实际名字在子 span 里（实测 `li` 计数为 0） |
+| `test_parity_unique_navigation_tags_and_favicons_are_preserved` | 期望 Google favicon 代理 URL，实得真实微信头像 `mmbiz.qpic.cn` | **测试断言的是 fallback 分支**。生产数据已 backfill 真实公众号头像，走的是更好的那条路径 |
+| `test_parity_daily_and_changelog_journeys_match_dynamic_content` | `all(...)` 为 False | 依赖当期日报内容形态 |
+| `test_v10d_all_page_preserves_aihot_media_score_and_selected_reason` | `assert 27 == 0` | 生产库 `/all` 有 27 条精选条目带标记，快照里是 0。断言把"快照恰好为 0"当成了不变量 |
+
+**为什么值得记**：契约规定的 L2-3 gate 用隔离实例，所以这 5 条不阻塞本轮交付。但它意味着**这套 Playwright 不能对真实数据运行**——若将来接 CI 或用生产快照验收，会得到 5 个假失败。修复方向是让断言表达数据无关的不变量（"每个展开项都有非空信源名"而非"恰好是这一个名字"；"精选标记数等于 API 报告的精选数"而非"等于 0"），而不是继续绑定某一份快照的具体取值。
+
+**并发写入的证据**：本次运行期间 `data/radar.db` mtime 为 18:01、运行时刻 18:08，crontab 有 5 条 pipeline 条目（每 15 分钟一轮）。
