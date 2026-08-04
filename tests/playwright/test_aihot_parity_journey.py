@@ -676,7 +676,11 @@ def test_parity_mobile_topbar_only_exists_on_home_and_tabbar_stays_available(
     has_topbar: bool,
 ) -> None:
     page.set_viewport_size({"width": viewport_width, "height": 844})
-    page.goto(f"{base_url}{path}", wait_until="domcontentloaded")
+    # `domcontentloaded` fires before the stylesheet has been applied, so the
+    # mobile layout is not in effect yet and geometry assertions read the
+    # pre-layout values. Wait for load: nothing is painted before then, so
+    # this still asserts on what the user actually sees first.
+    page.goto(f"{base_url}{path}", wait_until="load")
 
     topbar = page.locator(".app-mobile-bar")
     if has_topbar:
@@ -697,7 +701,17 @@ def test_parity_mobile_topbar_only_exists_on_home_and_tabbar_stays_available(
     expect(content).to_be_visible()
     content_rect = content.bounding_box()
     assert content_rect is not None
-    assert 0 <= content_rect["y"] <= 80
+    # The page's own content starts at the top of the viewport when there is no
+    # top bar, and just below it when there is one. It must not be pushed off
+    # the first screen. An exact y is wrong here: on the home page the hot-topics
+    # card sits above the header, matching the reference site's mobile order
+    # (top bar 0-45, hot card at 45, feed heading below it).
+    assert content_rect["y"] >= 0
+    assert content_rect["y"] < 844, "page content must start within the first screen"
+    if has_topbar:
+        topbar_rect = topbar.bounding_box()
+        assert topbar_rect is not None
+        assert content_rect["y"] >= topbar_rect["y"] + topbar_rect["height"] - 1
 
 
 def test_parity_l1_prepaint_sets_theme_before_app_init(page: Page, base_url: str) -> None:

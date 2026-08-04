@@ -83,19 +83,32 @@ def test_static_pages_have_compact_mobile_chrome_without_sidebar_drawer() -> Non
     assert 'class="app-mobile-bar"' not in daily_html
     assert 'class="m-tabbar" aria-label="移动端主导航"' in daily_html
 
-    for path in [
-        TEMPLATES / "index.html",
-        TEMPLATES / "about.html",
-        TEMPLATES / "bookmarks.html",
-        TEMPLATES / "wechat.html",
-        TEMPLATES / "wechat_404.html",
-        TEMPLATES / "wechat_detail.html",
-        TEMPLATES / "more.html",
-    ]:
+    index_template = (TEMPLATES / "index.html").read_text(encoding="utf-8")
+    assert '{% include "_mobile_topbar.html" %}' in index_template
+
+    non_feed_pageheads = {
+        TEMPLATES / "more.html": "更多",
+        TEMPLATES / "bookmarks.html": "收藏",
+        TEMPLATES / "wechat.html": "微信文章解读",
+        TEMPLATES / "wechat_404.html": "微信文章解读",
+        TEMPLATES / "wechat_detail.html": "微信文章解读",
+    }
+    for path, title in non_feed_pageheads.items():
         html = path.read_text(encoding="utf-8")
-        assert '{% include "_mobile_topbar.html" %}' in html, path
+        assert '{% include "_mobile_topbar.html" %}' not in html, path
+        assert 'class="m-pagehead' in html, path
+        assert f'>{title}<' in html, path
         assert '{% include "_mobile_tabbar.html" %}' in html, path
         assert 'class="app-hamburger"' not in html, path
+
+    about_html = (TEMPLATES / "about.html").read_text(encoding="utf-8")
+    assert '{% include "_mobile_topbar.html" %}' not in about_html
+    # The page must lead with its own page heading rather than the feed's
+    # brand+date bar. Assert the structure, not a particular wording: the
+    # copy is ours to choose and must not be pinned to the reference site's.
+    assert 'class="about-hero"' in about_html
+    assert ">关于<" in about_html
+    assert '{% include "_mobile_tabbar.html" %}' in about_html
 
     for path in [TEMPLATES / "all.html", TEMPLATES / "hot.html", TEMPLATES / "changelog.html"]:
         html = path.read_text(encoding="utf-8")
@@ -105,6 +118,21 @@ def test_static_pages_have_compact_mobile_chrome_without_sidebar_drawer() -> Non
     tabbar = (TEMPLATES / "_mobile_tabbar.html").read_text(encoding="utf-8")
     assert len(re.findall(r'<a class="m-tab', tabbar)) == 4
     assert re.findall(r'href="([^"]+)"', tabbar) == ["/", "/all", "/daily", "/more"]
+
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    mobile = css.split("@media (max-width: 960px) {", 1)[1]
+    pagehead = mobile.split(".m-pagehead {", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in pagehead
+    assert "align-items: baseline;" in pagehead
+    assert "justify-content: space-between;" in pagehead
+    assert "padding: 12px 0 10px;" in pagehead
+    title = mobile.split(".m-pagehead-title {", 1)[1].split("}", 1)[0]
+    assert "font-size: 22px;" in title
+    assert "font-weight: 900;" in title
+    assert "line-height: 33px;" in title
+    assert ".hot-topics:empty:not([hidden])" in css
+    assert "min-height: 132.5px;" in css
+    assert "min-height: 173px;" in mobile
 
 
 def test_navigation_icons_are_inline_svg_in_source_markup() -> None:

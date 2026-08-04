@@ -2115,6 +2115,7 @@ async function renderHotTopics(container) {
     const items = Array.isArray(data.items) ? data.items : [];
     if (!items.length) {
       container.hidden = true;
+      container.removeAttribute("aria-busy");
       return;
     }
     container.innerHTML = `
@@ -2132,8 +2133,10 @@ async function renderHotTopics(container) {
           <span class="hot-topics-meta hot-topics-heat">${esc(String(item.heat ?? ""))} 热度</span>
         </li>`).join("")}
       </ol>`;
+    container.removeAttribute("aria-busy");
   } catch {
     container.hidden = true;
+    container.removeAttribute("aria-busy");
   }
 }
 

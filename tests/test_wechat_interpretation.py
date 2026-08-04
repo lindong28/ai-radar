@@ -625,6 +625,8 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
 
     listing = client.get("/wechat")
     assert listing.status_code == 200
+    assert 'class="app-mobile-bar"' not in listing.text
+    assert 'class="m-pagehead"' in listing.text
     assert "微信文章解读" in listing.text
     assert "新文章" in listing.text
     assert "/wechat/newer-slug" in listing.text
@@ -635,6 +637,8 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
 
     detail = client.get("/wechat/newer-slug")
     assert detail.status_code == 200
+    assert 'class="app-mobile-bar"' not in detail.text
+    assert 'class="m-pagehead mobile-context-head"' in detail.text
     assert 'data-item-id="item-newer"' in detail.text
     assert "‹ 返回列表" in detail.text
     for heading in ("文章概况", "独特亮点", "可动手实践", "可复用认知", "关键词", "价值判断"):
@@ -655,6 +659,8 @@ def test_wechat_pages_render_preload_detail_and_sanitize_markdown(tmp_path: Path
 
     skipped = client.get("/wechat/skip-slug")
     assert skipped.status_code == 404
+    assert 'class="app-mobile-bar"' not in skipped.text
+    assert 'class="m-pagehead mobile-context-head"' in skipped.text
     assert "微信文章解读" in skipped.text
     assert 'href="/wechat"' in skipped.text
     assert "side-link-active" in skipped.text

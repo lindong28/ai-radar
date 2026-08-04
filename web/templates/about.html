@@ -38,12 +38,11 @@
     </aside>
     {% set mobile_active = "more" %}
     <main class="app-main">
-{% include "_mobile_topbar.html" %}
-      <section class="page-header">
-        <div>
-          <h1>关于</h1>
-          <p class="page-subtitle">产品定位、来源（信源池）、设计原则、联系方式</p>
-        </div>
+      <section class="page-header about-page-header">
+        <header class="about-hero">
+          <h1 class="about-title">关于</h1>
+          <p class="page-subtitle about-tag">产品定位、来源（信源池）、设计原则、联系方式</p>
+        </header>
         <div class="feed-filter">
           <input id="search" type="search" placeholder="搜索当前页面...">
         </div>

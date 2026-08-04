@@ -41,7 +41,7 @@ PRELOAD_ITEM_KEYS.difference_update(
     if isinstance(field.json_schema_extra, dict) and field.json_schema_extra.get("preload") is False
 )
 SHANGHAI_TZ = timezone(timedelta(hours=8))
-PREPAINT_ITEM_LIMIT = 12
+PREPAINT_ITEM_LIMIT = 40
 WECHAT_FALLBACK_ICON = "/wechat-icon.svg?v=20260601"
 WECHAT_PAGE_LIMIT = 50
 PUBLIC_PAGINATION_CACHE_CONTROL = "public, max-age=90, stale-while-revalidate=30"
@@ -132,6 +132,32 @@ def _mobile_date_parts(value: datetime | None, now: datetime | None = None) -> t
 def _mobile_date_label(value: datetime | None, now: datetime | None = None) -> str:
     main, sub = _mobile_date_parts(value, now)
     return f"{main} {sub}".strip()
+
+
+def _mobile_topbar_label(now: datetime | None = None) -> str:
+    current = (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ)
+    weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[current.weekday()]
+    return f"{current.month}月{current.day}日 · {weekday}"
+
+
+def _curated_header_meta(items: object) -> str:
+    if not isinstance(items, list):
+        return "AI 自动挑选的高价值内容"
+    timestamps = [
+        parsed
+        for item in items
+        if isinstance(item, dict)
+        if (parsed := _parse_item_datetime(item.get("published_at") or item.get("fetched_at")))
+        is not None
+    ]
+    if not timestamps:
+        return "AI 自动挑选的高价值内容"
+    latest = max(timestamps)
+    weekday = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[latest.weekday()]
+    return (
+        f"{latest.year}年{latest.month}月{latest.day}日{weekday} · "
+        "AI 自动挑选的高价值内容"
+    )
 
 
 def _author_handle(value: object) -> str:
@@ -521,14 +547,19 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         limit: int = 40,
     ) -> HTMLResponse:
         payload = curated.curated(request, category=category, q=q, page=page, limit=limit)
+        context = _preload_context(
+            cast(dict[str, object], payload["data"]),
+            timeline_page=False,
+            show_tags=False,
+        )
+        preload = cast(dict[str, object], context["preload"])
+        context["run_meta"] = _curated_header_meta(preload.get("items"))
+        context["mobile_topbar_date"] = _mobile_topbar_label()
+        context["show_hot_topics"] = not (q or "").strip() and not (category or "").strip()
         return templates.TemplateResponse(
             request,
             "index.html",
-            _preload_context(
-                cast(dict[str, object], payload["data"]),
-                timeline_page=False,
-                show_tags=False,
-            ),
+            context,
         )
 
     @app.get("/all", include_in_schema=False)

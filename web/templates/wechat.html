@@ -39,12 +39,11 @@
     </aside>
     {% set mobile_active = "more" %}
     <main class="app-main">
-{% include "_mobile_topbar.html" %}
-      <section class="page-header">
-        <div>
-          <h1>微信文章解读</h1>
+      <section class="page-header non-feed-page-header">
+        <header class="m-pagehead">
+          <h1 class="m-pagehead-title">微信文章解读</h1>
           <p class="page-subtitle">来自已订阅公众号的结构化总结</p>
-        </div>
+        </header>
         <div class="feed-toolbar-row">
           <form class="feed-filter" action="/wechat" method="get">
             <input id="search" type="search" name="q" placeholder="搜索标题/公众号/摘要/标签…">

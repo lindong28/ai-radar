@@ -43,7 +43,7 @@
       <section class="page-header">
         <div>
           <h1><span class="desktop-heading">精选</span><span class="mobile-heading">最新精选</span></h1>
-          <p id="run-meta" class="page-subtitle">AI 自动挑选的高价值内容</p>
+          <p id="run-meta" class="page-subtitle">{{ run_meta }}</p>
         </div>
         <div class="feed-toolbar-row">
           <div class="seg-list" data-category-filter aria-label="内容分类">
@@ -62,7 +62,7 @@
           </form>
         </div>
       </section>
-      <section id="hot-topics" class="card hot-topics" hidden aria-label="当前热点"></section>
+      <section id="hot-topics" class="card hot-topics"{% if not show_hot_topics %} hidden{% else %} aria-busy="true"{% endif %} aria-label="当前热点"></section>
       <section id="list" class="timeline" aria-live="polite">
 {% include "_prepaint_list.html" %}
       </section>

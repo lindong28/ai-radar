@@ -20,6 +20,7 @@ from airadar.web.app import (
     WECHAT_FALLBACK_ICON,
     _mobile_date_label,
     _mobile_date_parts,
+    _mobile_topbar_label,
     _prepaint_items,
     create_app,
 )
@@ -636,17 +637,17 @@ def test_prepaint_day_count_uses_full_payload_and_all_hides_related_discussions(
             "source_name": "OpenAI Blog",
             "source_kind": "feed",
             "author": "Ada",
-            "published_at": f"2026-06-01T{index:02d}:00:00Z",
+            "published_at": "2026-06-01T12:00:00Z",
             "related_discussions": [{"source_id": "x", "author": "someone"}],
         }
-        for index in range(13)
+        for index in range(41)
     ]
 
     all_prepaint = _prepaint_items(items, timeline_page=True)
     home_prepaint = _prepaint_items(items, timeline_page=False)
 
-    assert len(all_prepaint) == 12
-    assert {item["date_count"] for item in all_prepaint} == {13}
+    assert len(all_prepaint) == 40
+    assert {item["date_count"] for item in all_prepaint} == {41}
     assert all(item["related_discussions"] == [] for item in all_prepaint)
     assert home_prepaint[0]["related_discussions"] == [{"source_id": "x", "author": "someone"}]
 
@@ -917,6 +918,7 @@ def test_mobile_date_labels_use_shanghai_today_yesterday_and_absolute_fallback()
     assert _mobile_date_label(datetime(2026, 8, 2, 16, 30, tzinfo=UTC), now) == "今天 8月3日 周一"
     assert _mobile_date_label(now - timedelta(days=1), now) == "昨天 8月2日 周日"
     assert _mobile_date_label(now - timedelta(days=2), now) == "8月1日 周六"
+    assert _mobile_topbar_label(now) == "8月3日 · 周一"
 
 
 def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
@@ -929,6 +931,9 @@ def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
 
     assert home.status_code == 200
     assert all_page.status_code == 200
+    assert "2026年5月8日星期五 · AI 自动挑选的高价值内容" in home.text
+    assert '<section id="hot-topics" class="card hot-topics" aria-busy="true"' in home.text
+    assert 'class="card hot-topics" hidden' not in home.text
     home_preload = _extract_preload(home.text)
     all_preload = _extract_preload(all_page.text)
     assert len(home_preload["items"]) >= 1
@@ -968,6 +973,9 @@ def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
 
     assert 'class="source-line"' in home.text
     assert 'class="timeline-selected-badge">精选</span>' in home.text
+
+    filtered = client.get("/?q=OpenAI")
+    assert '<section id="hot-topics" class="card hot-topics" hidden' in filtered.text
 
 
 def test_home_page_ssr_preload_is_curated_page_aware(tmp_path: Path) -> None:

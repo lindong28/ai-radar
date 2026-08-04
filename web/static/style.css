@@ -559,6 +559,10 @@ button:disabled {
   display: none;
 }
 
+.mobile-context-head {
+  display: none;
+}
+
 .m-tabbar,
 .mobile-heading,
 .mobile-search-link,
@@ -810,6 +814,10 @@ button:disabled {
   padding: 0;
   margin-bottom: 16px;
   overflow: hidden;
+}
+
+.hot-topics:empty:not([hidden]) {
+  min-height: 132.5px;
 }
 
 .hot-topics-head {
@@ -2339,6 +2347,83 @@ button:disabled {
     padding: 4px 0 0;
   }
 
+  .m-pagehead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 12px;
+    padding: 12px 0 10px;
+  }
+
+  .m-pagehead-title {
+    margin: 0;
+    color: var(--ink-strong);
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 900;
+    line-height: 33px;
+  }
+
+  .page-header .m-pagehead-title {
+    font-size: 22px;
+    line-height: 33px;
+  }
+
+  .m-pagehead .page-subtitle,
+  .more-page-head p {
+    display: none;
+  }
+
+  .non-feed-page-header {
+    gap: 14px;
+    padding-top: 0;
+  }
+
+  .more-page-head {
+    margin-bottom: 14px;
+  }
+
+  .mobile-context-head {
+    display: flex;
+    margin-bottom: 14px;
+  }
+
+  .about-page-header {
+    gap: 0;
+    padding: 0;
+  }
+
+  .about-hero {
+    width: auto;
+    margin: 52px 18px 26px;
+  }
+
+  .about-eyebrow {
+    margin-bottom: 16px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 400;
+    line-height: 15.75px;
+  }
+
+  .about-hero .about-title {
+    margin: 0 0 10px;
+    color: var(--ink-strong);
+    font-size: 25px;
+    font-weight: 700;
+    line-height: 33.75px;
+    letter-spacing: -0.015em;
+  }
+
+  .about-tag {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 22.4px;
+  }
+
   .page-header h1 {
     font-size: 21px;
     font-weight: 900;
@@ -2674,6 +2759,10 @@ button:disabled {
 
   .hot-topics {
     margin-bottom: 12px;
+  }
+
+  .hot-topics:empty:not([hidden]) {
+    min-height: 173px;
   }
 
   .hot-topics-title-desktop {

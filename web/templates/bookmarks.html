@@ -39,12 +39,11 @@
     </aside>
     {% set mobile_active = "more" %}
     <main class="app-main">
-{% include "_mobile_topbar.html" %}
-      <section class="page-header">
-        <div>
-          <h1>收藏</h1>
+      <section class="page-header non-feed-page-header">
+        <header class="m-pagehead">
+          <h1 class="m-pagehead-title">收藏</h1>
           <p id="run-meta" class="page-subtitle">保存在本设备浏览器的收藏内容</p>
-        </div>
+        </header>
         <div class="bookmarks-toolbar">
           <button type="button" id="bookmark-export" class="wide-action">导出 JSON</button>
           <button type="button" id="bookmark-import" class="wide-action">导入 JSON</button>
