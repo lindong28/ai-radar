@@ -67,7 +67,7 @@ def test_app_import_names_collects_multiple_module_imports() -> None:
 
 
 def test_static_pages_have_compact_mobile_chrome_without_sidebar_drawer() -> None:
-    for path in [STATIC / "index.html", STATIC / "all.html", STATIC / "daily.html", STATIC / "item.html"]:
+    for path in [STATIC / "index.html", STATIC / "all.html", STATIC / "item.html"]:
         html = path.read_text(encoding="utf-8")
         assert 'class="app-mobile-bar"' in html
         assert 'class="app-mobile-brand"' in html
@@ -79,15 +79,17 @@ def test_static_pages_have_compact_mobile_chrome_without_sidebar_drawer() -> Non
         assert 'class="sidebar-close"' in html
         assert 'id="refresh"' not in html
 
+    daily_html = (STATIC / "daily.html").read_text(encoding="utf-8")
+    assert 'class="app-mobile-bar"' not in daily_html
+    assert 'class="m-tabbar" aria-label="移动端主导航"' in daily_html
+
     for path in [
         TEMPLATES / "index.html",
-        TEMPLATES / "all.html",
         TEMPLATES / "about.html",
         TEMPLATES / "bookmarks.html",
         TEMPLATES / "wechat.html",
         TEMPLATES / "wechat_404.html",
         TEMPLATES / "wechat_detail.html",
-        TEMPLATES / "hot.html",
         TEMPLATES / "more.html",
     ]:
         html = path.read_text(encoding="utf-8")
@@ -95,9 +97,34 @@ def test_static_pages_have_compact_mobile_chrome_without_sidebar_drawer() -> Non
         assert '{% include "_mobile_tabbar.html" %}' in html, path
         assert 'class="app-hamburger"' not in html, path
 
+    for path in [TEMPLATES / "all.html", TEMPLATES / "hot.html", TEMPLATES / "changelog.html"]:
+        html = path.read_text(encoding="utf-8")
+        assert '{% include "_mobile_topbar.html" %}' not in html, path
+        assert '{% include "_mobile_tabbar.html" %}' in html, path
+
     tabbar = (TEMPLATES / "_mobile_tabbar.html").read_text(encoding="utf-8")
     assert len(re.findall(r'<a class="m-tab', tabbar)) == 4
     assert re.findall(r'href="([^"]+)"', tabbar) == ["/", "/all", "/daily", "/more"]
+
+
+def test_navigation_icons_are_inline_svg_in_source_markup() -> None:
+    icon_pattern = re.compile(
+        r'<span class="[^"]*(?:side-icon|m-tab-icon)[^"]*"[^>]*>(?P<body>.*?)</span>',
+        re.DOTALL,
+    )
+    paths = [*THEMED_PUBLIC_PAGES, TEMPLATES / "_mobile_tabbar.html"]
+    for path in paths:
+        html = path.read_text(encoding="utf-8")
+        icons = [match.group("body") for match in icon_pattern.finditer(html)]
+        assert icons, path
+        assert all("<svg " in icon and "<path " in icon for icon in icons), path
+
+
+def test_wechat_ssr_mobile_date_uses_the_shared_two_part_contract() -> None:
+    html = (TEMPLATES / "wechat.html").read_text(encoding="utf-8")
+
+    assert '<span class="m-daybar-main">{{ item.mobile_date_main }}</span>' in html
+    assert '<span class="m-daybar-sub">{{ item.mobile_date_sub }}</span>' in html
 
 
 def test_daily_page_declares_date_controls_and_fallback_banner() -> None:
@@ -478,6 +505,7 @@ def test_theme_toggle_uses_moon_monitor_sun_order_on_every_public_page() -> None
         html = path.read_text(encoding="utf-8")
         prefs = re.findall(r'data-theme-pref="(dark|system|light)"', html)
         assert prefs == ["dark", "system", "light"], path
+        assert html.count('class="theme-toggle-thumb"') == 1, path
 
 
 def test_phase1_chrome_css_matches_measured_contract() -> None:
@@ -661,8 +689,9 @@ def test_phase2a_selected_badge_score_and_tags_match_aihot_contract() -> None:
     assert 'content: "\\2726";' in css
     assert "timeline-score" in score_pill
     assert 'class="timeline-score' in template
-    assert "#${esc(normalizedTagLabel(tag))}" in js
-    assert "#{{ tag }}" in template
+    assert '<span class="tag">${esc(normalizedTagLabel(tag))}</span>' in js
+    assert '<span class="tag">{{ tag }}</span>' in template
+    assert '.tag::before {' in css
     assert "tag tag-hot" not in js
     assert "parts.unshift" not in js
 

@@ -15,7 +15,14 @@ from airadar.db import migrate
 from airadar.enrich.schema import EnrichOutput
 from airadar.presentation import summary as presentation_summary
 from airadar.presentation.media import proxy_image_url
-from airadar.web.app import SHANGHAI_TZ, WECHAT_FALLBACK_ICON, _mobile_date_label, _prepaint_items, create_app
+from airadar.web.app import (
+    SHANGHAI_TZ,
+    WECHAT_FALLBACK_ICON,
+    _mobile_date_label,
+    _mobile_date_parts,
+    _prepaint_items,
+    create_app,
+)
 from airadar.web.routes import request_db, search
 from airadar.web.routes import timeline as timeline_routes
 
@@ -903,6 +910,9 @@ def test_more_page_lists_only_the_approved_mobile_destinations(tmp_path: Path) -
 def test_mobile_date_labels_use_shanghai_today_yesterday_and_absolute_fallback() -> None:
     now = datetime(2026, 8, 3, 12, tzinfo=SHANGHAI_TZ)
 
+    assert _mobile_date_parts(now, now) == ("今天", "8月3日 周一")
+    assert _mobile_date_parts(now - timedelta(days=1), now) == ("昨天", "8月2日 周日")
+    assert _mobile_date_parts(now - timedelta(days=2), now) == ("8月1日", "周六")
     assert _mobile_date_label(now, now) == "今天 8月3日 周一"
     assert _mobile_date_label(datetime(2026, 8, 2, 16, 30, tzinfo=UTC), now) == "今天 8月3日 周一"
     assert _mobile_date_label(now - timedelta(days=1), now) == "昨天 8月2日 周日"
@@ -939,7 +949,6 @@ def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
         assert 'class="timeline-rail"' in html
         assert 'class="timeline-dot"' in html
         assert 'class="timeline-score ' in html
-        assert 'class="tag">#' in html
         article_pos = html.index('<article class="item-row timeline-card')
         time_pos = html.index('class="timeline-time"')
         rail_pos = html.index('class="timeline-rail"')
@@ -949,6 +958,13 @@ def test_home_and_all_pages_render_ssr_preload(tmp_path: Path) -> None:
         assert module_preload_pos < preload_pos
         assert time_pos < rail_pos < article_pos < preload_pos
         assert preload_pos < module_pos
+
+    assert 'class="tag">' not in home.text
+    # The "#" prefix moved from DOM text to CSS (`.tag::before{content:"#"}`,
+    # GAP-70) so /all tag text stays equal to the input data. The homepage no
+    # longer renders tags, matching AIHOT's page-specific contract (GAP-84).
+    assert 'class="tag">' in all_page.text
+    assert 'class="tag">#' not in all_page.text
 
     assert 'class="source-line"' in home.text
     assert 'class="timeline-selected-badge">精选</span>' in home.text

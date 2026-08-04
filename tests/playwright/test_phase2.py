@@ -161,9 +161,11 @@ def test_v07_v08_v09_v11_cards_links_and_score_gating(
             expect(card.locator(".source-icon")).to_be_visible()
             expect(entry.locator(".timeline-time")).to_be_visible()
             expect(card.locator(".summary")).to_be_visible()
-            expect(card.locator(".tags")).to_be_visible()
             if path == "/":
+                assert card.locator(".tags").count() == 0
                 expect(card.locator(".reason")).to_be_visible()
+            else:
+                expect(card.locator(".tags")).to_be_visible()
 
             source_id = card.get_attribute("data-source-id")
             assert source_id
@@ -187,8 +189,16 @@ def test_curated_page_does_not_duplicate_selected_badge_in_tags(page: Page, base
     assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() >= 1
     assert page.locator(".timeline-card .source-line .timeline-selected-badge", has_text="精选").count() >= 1
     assert page.locator(".card-topline-end .timeline-selected-badge").count() == 0
+    assert page.locator(".timeline-card .tags").count() == 0
+
+    _goto(page, base_url, "/all", cards=True)
     assert page.locator(".timeline-card .tags .tag", has_text="精选").count() == 0
-    assert all(label.startswith("#") for label in page.locator(".timeline-card .tags .tag").all_inner_texts())
+    tag_locator = page.locator(".timeline-card .tags .tag")
+    assert tag_locator.count() >= 1
+    assert all(not label.startswith("#") for label in tag_locator.all_inner_texts())
+    assert tag_locator.evaluate_all(
+        "nodes => nodes.every(node => getComputedStyle(node, '::before').content === '\"#\"')"
+    )
 
 
 def test_v10_x_cards_keep_original_title_link_but_render_body_first(page: Page, base_url: str) -> None:

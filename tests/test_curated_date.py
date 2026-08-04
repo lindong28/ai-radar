@@ -186,6 +186,12 @@ def test_curated_date_filters_items_by_published_day(tmp_path: Path) -> None:
     assert data["date"] == history.isoformat()
     assert data["count"] == 1
     assert [item["id"] for item in data["items"]] == ["item-history"]
+    assert data["daily_metrics"] == {
+        "events": 1,
+        "first_party": 1,
+        "new_models": 0,
+        "sources": 1,
+    }
 
 
 def test_curated_date_includes_items_curated_only_in_older_runs(tmp_path: Path) -> None:
@@ -244,3 +250,9 @@ def test_curated_empty_history_date_returns_count_zero(tmp_path: Path) -> None:
     assert data["date"] == "2025-01-01"
     assert data["count"] == 0
     assert data["items"] == []
+    assert data["daily_metrics"] == {
+        "events": 0,
+        "first_party": 0,
+        "new_models": 0,
+        "sources": 0,
+    }

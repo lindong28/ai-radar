@@ -58,12 +58,20 @@ class CuratedArchiveResponse(_ResponseModel):
     limit: int
 
 
+class DailyMetrics(_ResponseModel):
+    events: int
+    first_party: int
+    new_models: int
+    sources: int
+
+
 class CuratedDigestResponse(_ResponseModel):
     run_id: str | None
     ruleset_version: str | None
     items: list[FeedItem]
     date: str | None
     count: int
+    daily_metrics: DailyMetrics | None = None
 
 
 class WechatItem(_ResponseModel):

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from markdown_it import MarkdownIt
 
 from airadar.db import migrate
-from airadar.web.app import create_app
+from airadar.web.app import _render_changelog_markdown, create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = ROOT / "CHANGELOG.md"
@@ -87,6 +87,8 @@ def _markdown_blocks(markdown: str) -> list[tuple[str, str, tuple[str, ...]]]:
 def _dom_blocks(container: object) -> list[tuple[str, str, tuple[str, ...]]]:
     blocks: list[tuple[str, str, tuple[str, ...]]] = []
     for element in container.select("h1, h2, h3, h4, h5, h6, p, li, pre"):
+        if "cl-tag" in element.get("class", []):
+            continue
         if element.find_parent("li") is not None:
             continue
         kind = (
@@ -98,10 +100,16 @@ def _dom_blocks(container: object) -> list[tuple[str, str, tuple[str, ...]]]:
             if element.name == "pre"
             else "paragraph"
         )
+        text_element = element.select_one(".cl-day-date") or element
+        text = (
+            str(text_element.get("datetime"))
+            if text_element.has_attr("datetime")
+            else _normalize(text_element.get_text(" ", strip=True))
+        )
         blocks.append(
             (
                 kind,
-                _normalize(element.get_text(" ", strip=True)),
+                text,
                 tuple(str(link.get("href")) for link in element.select("a[href]")),
             )
         )
@@ -136,6 +144,20 @@ def test_changelog_route_matches_every_source_block_and_link(tmp_path: Path) -> 
     active = soup.select(".side-link-active")
     assert len(active) == 1
     assert active[0].get("href") == "/changelog"
+
+
+def test_changelog_renderer_adds_intro_weekday_and_inline_code_semantics() -> None:
+    rendered = _render_changelog_markdown("# Changelog\n\n## 2026-08-03\n\n- 改进 `probe` 输出。\n")
+    soup = BeautifulSoup(str(rendered), "html.parser")
+
+    assert soup.select_one("h1.cl-title + p.cl-tag").get_text(strip=True) == "记录 AI Radar 每一次可见改进与运行能力变化。"
+    day_head = soup.select_one("h2.cl-day-head")
+    assert day_head is not None
+    day_date = day_head.select_one(".cl-day-date")
+    assert day_date.get_text(strip=True) == "2026 年 8 月 3 日"
+    assert day_date.get("datetime") == "2026-08-03"
+    assert day_head.select_one(".cl-day-weekday").get_text(strip=True) == "周一"
+    assert soup.select_one("code.md-inline-code").get_text(strip=True) == "probe"
 
 
 def test_every_desktop_sidebar_consumer_links_changelog_once() -> None:
@@ -279,6 +301,30 @@ def test_daily_masthead_uses_effective_date_and_non_sample_story_count() -> None
     assert result["#daily-volume"]["textContent"] == "VOL.2026.08.01"
     assert result[".daily-story-count"]["textContent"] == "3 STORIES"
     assert result[".daily-readable-date"]["datetime"] == "2026-08-01"
+
+
+def test_daily_metrics_use_ai_radar_definitions_and_render_four_cells() -> None:
+    result = _run_daily_module(
+        """
+        const root = { hidden: true, innerHTML: '' };
+        globalThis.document = { querySelector(selector) { return selector === '#daily-metrics' ? root : null; } };
+        const items = [
+          { source_id: 'official-feed', source_kind: 'feed', tier: 'T1', topic_tags: ['模型发布'] },
+          { source_id: 'official-x', source_kind: 'x', tier: 'T1', topic_tags: ['模型发布'] },
+          { source_id: 'official-feed', source_kind: 'feed', tier: 'T1', topic_tags: ['模型发布', '教程/实践'] },
+          { source_id: 'news', source_kind: 'feed', tier: 'T2', topic_tags: ['行业动态'] },
+        ];
+        const metrics = daily.dailyMetrics(items);
+        daily.renderDailyMetrics(metrics);
+        console.log(JSON.stringify({ metrics, hidden: root.hidden, html: root.innerHTML }));
+        """
+    )
+
+    assert result["metrics"] == {"events": 4, "first_party": 2, "new_models": 2, "sources": 3}
+    soup = BeautifulSoup(result["html"], "html.parser")
+    assert result["hidden"] is False
+    assert [node.get_text() for node in soup.select(".daily-metric-value")] == ["4", "2", "2", "3"]
+    assert [node.get_text() for node in soup.select(".daily-metric-label")] == ["今日事件", "一手报道", "新模型", "信源"]
 
 
 def test_daily_date_resolution_separates_invalid_future_and_valid_empty_dates() -> None:

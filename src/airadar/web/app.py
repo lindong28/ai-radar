@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
+from markdown_it.token import Token
 from markupsafe import Markup
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
@@ -116,16 +117,21 @@ def _js_iso_datetime(value: datetime | None) -> str:
     return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _mobile_date_label(value: datetime | None, now: datetime | None = None) -> str:
+def _mobile_date_parts(value: datetime | None, now: datetime | None = None) -> tuple[str, str]:
     if value is None:
-        return "日期未知"
+        return "日期未知", ""
     current = (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ).date()
     local_value = value.astimezone(SHANGHAI_TZ)
     item_date = local_value.date()
     relative = "今天" if item_date == current else "昨天" if item_date == current - timedelta(days=1) else ""
     weekday = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[local_value.weekday()]
-    prefix = f"{relative} " if relative else ""
-    return f"{prefix}{local_value.month}月{local_value.day}日 {weekday}"
+    date_label = f"{local_value.month}月{local_value.day}日"
+    return (relative, f"{date_label} {weekday}") if relative else (date_label, weekday)
+
+
+def _mobile_date_label(value: datetime | None, now: datetime | None = None) -> str:
+    main, sub = _mobile_date_parts(value, now)
+    return f"{main} {sub}".strip()
 
 
 def _author_handle(value: object) -> str:
@@ -193,11 +199,42 @@ def _hot_template_items(items: object, generated_at: object) -> list[dict[str, o
 
 def _render_changelog_markdown(markdown: str) -> Markup:
     tokens = _CHANGELOG_MARKDOWN.parse(markdown)
-    for token in tokens:
+    weekday_labels = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+    date_headings: dict[int, tuple[str, str, str]] = {}
+    for index, token in enumerate(tokens[:-1]):
+        if token.type != "heading_open" or token.tag != "h2":
+            continue
+        date_text = tokens[index + 1].content.strip()
+        try:
+            parsed_date = datetime.strptime(date_text, "%Y-%m-%d")
+        except ValueError:
+            continue
+        display_date = f"{parsed_date.year} 年 {parsed_date.month} 月 {parsed_date.day} 日"
+        date_headings[index] = (date_text, display_date, weekday_labels[parsed_date.weekday()])
+
+    rendered_tokens: list[Token] = []
+    for index, token in enumerate(tokens):
         if token.type == "heading_open":
-            token.attrSet("class", "cl-title" if token.tag == "h1" else "cl-day-date")
+            token.attrSet(
+                "class",
+                "cl-title" if token.tag == "h1" else "cl-day-head" if index in date_headings else "cl-day-date",
+            )
             if token.tag == "h1":
                 token.attrSet("id", "changelog-title")
+        elif token.type == "inline":
+            for child in token.children or []:
+                if child.type == "code_inline":
+                    child.attrJoin("class", "md-inline-code")
+            heading_index = index - 1
+            if heading_index in date_headings:
+                date_text, display_date, weekday = date_headings[heading_index]
+                token.children = [
+                    Token("html_inline", "", 0, content=f'<time class="cl-day-date" datetime="{date_text}">'),
+                    Token("text", "", 0, content=display_date),
+                    Token("html_inline", "", 0, content='</time><span class="cl-day-weekday">'),
+                    Token("text", "", 0, content=weekday),
+                    Token("html_inline", "", 0, content="</span>"),
+                ]
         elif token.type in {"bullet_list_open", "ordered_list_open"}:
             token.attrSet("class", "cl-entries")
         elif token.type == "list_item_open":
@@ -206,7 +243,17 @@ def _render_changelog_markdown(markdown: str) -> Markup:
             token.attrSet("class", "cl-p")
         elif token.type in {"fence", "code_block"}:
             token.attrJoin("class", "cl-code")
-    rendered = _CHANGELOG_MARKDOWN.renderer.render(tokens, _CHANGELOG_MARKDOWN.options, {})
+        rendered_tokens.append(token)
+        if token.type == "heading_close" and token.tag == "h1":
+            rendered_tokens.append(
+                Token(
+                    "html_block",
+                    "",
+                    0,
+                    content='<p class="cl-tag">记录 AI Radar 每一次可见改进与运行能力变化。</p>\n',
+                )
+            )
+    rendered = _CHANGELOG_MARKDOWN.renderer.render(rendered_tokens, _CHANGELOG_MARKDOWN.options, {})
     return Markup(rendered)
 
 
@@ -293,6 +340,7 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
         )
         timestamp = raw_item.get("published_at") or raw_item.get("fetched_at")
         dt = _parse_item_datetime(timestamp)
+        mobile_date_main, mobile_date_sub = _mobile_date_parts(dt)
         score_value = raw_item.get("weighted_score")
         score = int(float(score_value) * 10 + 0.5) if isinstance(score_value, int | float) else None
         selected = raw_item.get("rank") is not None
@@ -320,6 +368,8 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
                 "date_bucket": dt.strftime("%Y-%m-%d") if dt else "",
                 "date_label": f"{dt.month}月{dt.day}日" if dt else "日期未知",
                 "mobile_date_label": _mobile_date_label(dt),
+                "mobile_date_main": mobile_date_main,
+                "mobile_date_sub": mobile_date_sub,
                 "weekday_label": ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[dt.weekday()] if dt else "",
                 "date_count": date_counts.get(dt.strftime("%Y-%m-%d") if dt else "", 0),
                 "time_label": dt.strftime("%H:%M") if dt else "",
@@ -348,11 +398,14 @@ def _prepaint_wechat_items(items: object) -> list[dict[str, object]]:
             continue
         item = dict(raw_item)
         dt = _parse_item_datetime(item.get("published_at"))
+        mobile_date_main, mobile_date_sub = _mobile_date_parts(dt)
         item.update(
             {
                 "date_bucket": dt.strftime("%Y-%m-%d") if dt else "",
                 "date_label": f"{dt.month}月{dt.day}日" if dt else "日期未知",
                 "mobile_date_label": _mobile_date_label(dt),
+                "mobile_date_main": mobile_date_main,
+                "mobile_date_sub": mobile_date_sub,
                 "weekday_label": (
                     ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[dt.weekday()]
                     if dt
@@ -367,11 +420,17 @@ def _prepaint_wechat_items(items: object) -> list[dict[str, object]]:
     return prepaint
 
 
-def _preload_context(data: dict[str, object], *, timeline_page: bool) -> dict[str, object]:
+def _preload_context(
+    data: dict[str, object],
+    *,
+    timeline_page: bool,
+    show_tags: bool,
+) -> dict[str, object]:
     preload = _compact_preload(data)
     return {
         "preload": preload,
         "prepaint_items": _prepaint_items(preload.get("items"), timeline_page=timeline_page),
+        "show_tags": show_tags,
     }
 
 
@@ -465,7 +524,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "index.html",
-            _preload_context(cast(dict[str, object], payload["data"]), timeline_page=False),
+            _preload_context(
+                cast(dict[str, object], payload["data"]),
+                timeline_page=False,
+                show_tags=False,
+            ),
         )
 
     @app.get("/all", include_in_schema=False)
@@ -490,7 +553,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "all.html",
-            _preload_context(cast(dict[str, object], payload["data"]), timeline_page=True),
+            _preload_context(
+                cast(dict[str, object], payload["data"]),
+                timeline_page=True,
+                show_tags=True,
+            ),
         )
 
     @app.get("/wechat", include_in_schema=False)

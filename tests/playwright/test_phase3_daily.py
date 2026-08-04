@@ -133,7 +133,7 @@ def test_v13e_mobile_daily_keeps_aihot_reading_flow(page: Page, base_url: str) -
     first_article = page.locator(".daily-article").first.bounding_box()
     assert first_section is not None
     assert first_article is not None
-    expect(page.locator(".app-mobile-bar")).to_be_visible()
+    expect(page.locator(".app-mobile-bar")).to_have_count(0)
     expect(page.locator(".m-tabbar")).to_be_visible()
     assert first_section["width"] <= 354
     assert first_section["y"] < 550
@@ -146,7 +146,7 @@ def test_v13f_zoomed_desktop_daily_uses_aihot_narrow_reading_flow(page: Page, ba
     page.goto(f"{base_url}/daily", wait_until="domcontentloaded")
     _wait_for_daily_report(page)
 
-    expect(page.locator(".app-mobile-bar")).to_be_visible()
+    expect(page.locator(".app-mobile-bar")).to_have_count(0)
     expect(page.locator(".m-tabbar")).to_be_visible()
     assert page.locator(".app-hamburger").count() == 0
     archive = page.locator(".daily-archive-panel").bounding_box()

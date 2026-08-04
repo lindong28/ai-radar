@@ -6,7 +6,7 @@ from datetime import date as date_cls
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..envelope import ok
-from . import curated_archive, curated_digest
+from . import curated_archive, curated_digest, daily_metrics
 from .categories import CATEGORY_TAGS
 from .request_db import conn_from_request
 
@@ -98,6 +98,7 @@ def curated(
                     "items": items,
                     "date": selected_date,
                     "count": len(items),
+                    "daily_metrics": daily_metrics.compute(items),
                 }
             )
 

@@ -59,7 +59,7 @@ MODEL_FIELD_SNAPSHOTS = {
         "page",
         "limit",
     },
-    CuratedDigestResponse: {"run_id", "ruleset_version", "items", "date", "count"},
+    CuratedDigestResponse: {"run_id", "ruleset_version", "items", "date", "count", "daily_metrics"},
     WechatItem: {
         "slug",
         "title",

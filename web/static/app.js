@@ -64,13 +64,16 @@ function shortWeekdayKey(value) {
   return weekdayKey(value).replace("星期", "周");
 }
 
-function mobileDateKey(value, now = Date.now()) {
+function mobileDateParts(value, now = Date.now()) {
   const bucket = dateBucket(value);
   const today = dateBucket(now);
   const yesterday = dateBucket(now - 86_400_000);
-  const relative = bucket && bucket === today ? "今天 " : bucket && bucket === yesterday ? "昨天 " : "";
+  const date = dateKey(value);
+  const relative = bucket && bucket === today ? "今天" : bucket && bucket === yesterday ? "昨天" : "";
   const weekday = shortWeekdayKey(value);
-  return `${relative}${dateKey(value)}${weekday ? ` ${weekday}` : ""}`;
+  const main = relative || date;
+  const sub = relative ? `${date}${weekday ? ` ${weekday}` : ""}` : weekday;
+  return { main, sub };
 }
 
 function mobileTopbarDate(value = Date.now()) {
@@ -253,6 +256,7 @@ function updateChannelControls(root, activeChannel, activeCategory = "all") {
   const q = document.querySelector("#search")?.value.trim() || "";
   if (root.tagName === "SELECT") {
     root.value = CHANNEL_URL_VALUES[activeChannel] || "";
+    root.classList.toggle("feed-channel-select-active", activeChannel !== "all");
     updateHiddenFeedInputs(activeCategory, "", activeChannel);
     return;
   }
@@ -272,9 +276,21 @@ function bindChannelControls(onChange) {
   const root = document.querySelector("[data-channel-filter]");
   if (!root) return () => {};
   if (root.tagName === "SELECT") {
+    if (!root.parentElement?.classList.contains("feed-channel-select-wrap")) {
+      const wrap = document.createElement("span");
+      wrap.className = "feed-channel-select-wrap";
+      root.before(wrap);
+      wrap.append(root);
+      wrap.insertAdjacentHTML(
+        "beforeend",
+        '<svg class="feed-channel-select-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      );
+      root.classList.add("feed-channel-select");
+    }
     root.addEventListener("change", () => {
       onChange(CHANNEL_FROM_URL[root.value] || "all");
     });
+    root.dataset.channelFilterBound = "true";
     return (activeChannel, activeCategory = "all") => updateChannelControls(root, activeChannel, activeCategory);
   }
   root.addEventListener("click", (event) => {
@@ -283,6 +299,7 @@ function bindChannelControls(onChange) {
     event.preventDefault();
     onChange(control.dataset.channel || "all");
   });
+  root.dataset.channelFilterBound = "true";
   return (activeChannel, activeCategory = "all") => updateChannelControls(root, activeChannel, activeCategory);
 }
 
@@ -290,7 +307,7 @@ function badges(item) {
   const sourceTags = Array.isArray(item.enriched_tags) ? item.enriched_tags : item.topic_tags;
   const topics = Array.isArray(sourceTags) ? sourceTags.slice(0, 4) : [];
   if (!topics.length) topics.push(item.source_kind === "x" ? "社交" : "AI");
-  const parts = topics.map((tag) => `<span class="tag">#${esc(normalizedTagLabel(tag))}</span>`);
+  const parts = topics.map((tag) => `<span class="tag">${esc(normalizedTagLabel(tag))}</span>`);
   return parts.join("");
 }
 
@@ -346,15 +363,16 @@ function authorHandle(value) {
   return !author || author.startsWith("@") ? author : `@${author}`;
 }
 
-function sourceLine(item, selected = false) {
+function sourceLine(item, selected = false, compactMobile = false) {
   const homepage = item.source_homepage_url || item.url || "#";
   const icon = safeCssUrl(sourceAvatarUrl(item));
-  const img = icon ? `<img class="source-avatar" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
-  const author = item.author && item.source_kind !== "wechat" ? `<span class="source-author">${esc(authorHandle(item.author))}</span>` : "";
+  const img = !compactMobile && icon ? `<img class="source-avatar" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
+  const sourceIcon = compactMobile ? "" : `<span class="source-icon">${img}<span class="source-initial">${esc(sourceInitial(item))}</span></span>`;
+  const author = !compactMobile && item.author && item.source_kind !== "wechat" ? `<span class="source-author">${esc(authorHandle(item.author))}</span>` : "";
   const selectedBadge = selected ? '<span class="timeline-selected-badge">精选</span>' : "";
   return `<div class="source-line">
     <a class="source-link" href="${esc(homepage)}" target="_blank" rel="noopener noreferrer">
-      <span class="source-icon">${img}<span class="source-initial">${esc(sourceInitial(item))}</span></span>
+      ${sourceIcon}
       <span class="source-name">${esc(sourceDisplayName(item))}</span>
     </a>
     ${author}
@@ -397,6 +415,7 @@ function relatedDiscussions(item) {
 
 function itemCard(item, showScore, options = {}) {
   const compact = Boolean(options.compact);
+  const mobileFeed = Boolean(options.mobileFeed) && window.matchMedia("(max-width: 960px)").matches;
   const showReason = options.showReason === "selected" ? item.rank != null : options.showReason !== false;
   const reason = !compact && showReason && item.reasoning ? `<div class="reason"><span class="reason-label">推荐理由：</span>${esc(item.reasoning)}</div>` : "";
   const showRelated = !compact && options.showRelated !== false;
@@ -408,13 +427,13 @@ function itemCard(item, showScore, options = {}) {
   const media = compact ? "" : articleMedia(item);
   return `<article class="item-row timeline-card${isX ? " x-card" : ""}${compact ? " compact-card" : ""}${options.clampSummary ? " clamped-card" : ""}" data-item-id="${esc(item.id)}" data-source-id="${esc(item.source_id)}" data-published-date="${esc(itemDateBucket(item))}" data-published-at="${esc(isoDateTime(itemTime(item)))}">
     <div class="card-topline">
-      ${sourceLine(item, item.rank != null)}
-      <span class="card-topline-end">${showScore ? scorePill(item) : ""}${bookmarkButton(item)}</span>
+      ${sourceLine(item, item.rank != null && !mobileFeed, mobileFeed)}
+      <span class="card-topline-end">${showScore ? scorePill(item) : ""}${mobileFeed ? "" : bookmarkButton(item)}</span>
     </div>
     ${title}
     <p class="summary">${esc(excerpt(item))}</p>
     ${media}
-    <div class="tags">${badges(item)}</div>
+    ${options.showTags === false || mobileFeed ? "" : `<div class="tags">${badges(item)}</div>`}
     ${showRelated ? relatedDiscussions(item) : ""}
     ${reason ? '<hr class="timeline-divider">' : ""}
     ${reason}
@@ -459,7 +478,8 @@ function renderTimeline(container, items, options = {}) {
     const bucket = itemDateBucket(item);
     let group = groups.at(-1);
     if (!group || group.bucket !== bucket) {
-      group = { bucket, day: dateKey(itemTime(item)), mobileDay: mobileDateKey(itemTime(item)), weekday: weekdayKey(itemTime(item)), items: [] };
+      const mobileDay = mobileDateParts(itemTime(item));
+      group = { bucket, day: dateKey(itemTime(item)), mobileDay, weekday: weekdayKey(itemTime(item)), items: [] };
       groups.push(group);
     }
     group.items.push(item);
@@ -471,14 +491,17 @@ function renderTimeline(container, items, options = {}) {
         compact,
         showReason: options.showReason,
         showRelated: options.showRelated,
+        showTags: options.showTags,
         clampSummary: options.clampSummary,
+        mobileFeed: options.mobileFeed,
       })}
     </div>`;
+  const dayControl = (group) => window.matchMedia("(max-width: 960px)").matches
+    ? `<div class="timeline-day-toggle"><time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label"><span class="m-daybar-main">${esc(group.mobileDay.main)}</span> <span class="m-daybar-sub">${esc(group.mobileDay.sub)}</span></span></time></div>`
+    : `<button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 ${esc(group.day)}"><time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label"><span class="m-daybar-main">${esc(group.mobileDay.main)}</span> <span class="m-daybar-sub">${esc(group.mobileDay.sub)}</span></span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span></button>`;
   const dayMarkup = (group) => `<section class="timeline-day date-group" data-date="${esc(group.bucket)}">
     <div class="timeline-day-head timeline-date">
-      <button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 ${esc(group.day)}">
-        <time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label">${esc(group.mobileDay)}</span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span>
-      </button>
+      ${dayControl(group)}
       <span class="timeline-day-meta">${group.weekday ? `${esc(group.weekday)} · ` : ""}<span class="date-count">${group.items.length} 条</span></span>
     </div>
     <div class="timeline-day-items">${group.items.map((item) => itemMarkup(item, group.bucket)).join("")}</div>
@@ -532,6 +555,34 @@ function bindDateGroupCollapse(container) {
   });
 }
 
+function bindResponsiveTimeline(container, rerender) {
+  if (!container || container.dataset.responsiveTimelineBound === "true") return;
+  container.dataset.responsiveTimelineBound = "true";
+  const media = window.matchMedia("(max-width: 960px)");
+  let wasMobile = media.matches;
+  const desktopCollapsedDates = new Set();
+  const rebuild = () => {
+    if (media.matches === wasMobile) return;
+    if (!wasMobile) {
+      desktopCollapsedDates.clear();
+      container.querySelectorAll(".timeline-day.date-group-collapsed[data-date]").forEach((group) => {
+        desktopCollapsedDates.add(group.dataset.date);
+      });
+    }
+    wasMobile = media.matches;
+    rerender();
+    if (wasMobile || !desktopCollapsedDates.size) return;
+    container.querySelectorAll(".timeline-day[data-date]").forEach((group) => {
+      if (!desktopCollapsedDates.has(group.dataset.date)) return;
+      group.classList.add("date-group-collapsed");
+      group.querySelector(".date-collapse")?.setAttribute("aria-expanded", "false");
+      group.querySelectorAll(".timeline-entry").forEach((entry) => entry.classList.add("entry-hidden"));
+    });
+  };
+  if (media.addEventListener) media.addEventListener("change", rebuild);
+  else media.addListener(rebuild);
+}
+
 function wechatCard(item) {
   const tags = Array.isArray(item.tags) ? item.tags.slice(0, 5) : [];
   const avatar = safeCssUrl(item.avatar_url || WECHAT_FALLBACK_ICON);
@@ -552,7 +603,7 @@ function wechatCard(item) {
     </div>
     <a class="item-title" href="${esc(detailUrl)}">${esc(item.title || "")}</a>
     <p class="summary">${esc(item.abstract || "")}</p>
-    <div class="tags">${tags.map((tag) => `<span class="tag">#${esc(normalizedTagLabel(tag))}</span>`).join("")}</div>
+    <div class="tags">${tags.map((tag) => `<span class="tag">${esc(normalizedTagLabel(tag))}</span>`).join("")}</div>
   </article>`;
 }
 
@@ -571,7 +622,8 @@ function renderWechatTimeline(container, items, { hasQuery = false } = {}) {
     const bucket = dateBucket(when);
     let group = groups.at(-1);
     if (!group || group.bucket !== bucket) {
-      group = { bucket, day: dateKey(when), mobileDay: mobileDateKey(when), weekday: weekdayKey(when), items: [] };
+      const mobileDay = mobileDateParts(when);
+      group = { bucket, day: dateKey(when), mobileDay, weekday: weekdayKey(when), items: [] };
       groups.push(group);
     }
     group.items.push(item);
@@ -584,11 +636,12 @@ function renderWechatTimeline(container, items, { hasQuery = false } = {}) {
       ${wechatCard(item)}
     </div>`;
   };
+  const dayControl = (group) => window.matchMedia("(max-width: 960px)").matches
+    ? `<div class="timeline-day-toggle"><time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label"><span class="m-daybar-main">${esc(group.mobileDay.main)}</span> <span class="m-daybar-sub">${esc(group.mobileDay.sub)}</span></span></time></div>`
+    : `<button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 ${esc(group.day)}"><time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label"><span class="m-daybar-main">${esc(group.mobileDay.main)}</span> <span class="m-daybar-sub">${esc(group.mobileDay.sub)}</span></span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span></button>`;
   container.innerHTML = groups.map((group) => `<section class="timeline-day date-group" data-date="${esc(group.bucket)}">
     <div class="timeline-day-head timeline-date">
-      <button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 ${esc(group.day)}">
-        <time datetime="${esc(group.bucket)}" title="${esc(group.bucket)}"><span class="desktop-date-label">${esc(group.day)}</span><span class="mobile-date-label">${esc(group.mobileDay)}</span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span>
-      </button>
+      ${dayControl(group)}
       <span class="timeline-day-meta">${group.weekday ? `${esc(group.weekday)} · ` : ""}<span class="date-count">${group.items.length} 条</span></span>
     </div>
     <div class="timeline-day-items">${group.items.map((item) => itemMarkup(item, group.bucket)).join("")}</div>
@@ -596,11 +649,69 @@ function renderWechatTimeline(container, items, { hasQuery = false } = {}) {
   bindDateGroupCollapse(container);
 }
 
+function bindHotTopicTooltips() {
+  document.querySelectorAll("details.hot-rank-sources").forEach((details) => {
+    if (details.dataset.hoverBound === "true") return;
+    details.dataset.hoverBound = "true";
+    let closeTimer = 0;
+    details.addEventListener("mouseenter", () => {
+      window.clearTimeout(closeTimer);
+      details.open = true;
+    });
+    details.addEventListener("mouseleave", () => {
+      window.clearTimeout(closeTimer);
+      closeTimer = window.setTimeout(() => {
+        if (!details.matches(":hover, :focus-within")) details.open = false;
+      }, 160);
+    });
+  });
+}
+
+const NAV_ICON_PATHS = {
+  "/": '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>',
+  "/all": '<path d="M3 12h4l3-9 4 18 3-9h4"/>',
+  "/hot": '<path d="M12 6v6l4 2"/><path d="M21 12a9 9 0 1 1-9-9"/>',
+  "/wechat": '<path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/>',
+  "/daily": '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/>',
+  "/bookmarks": '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"/>',
+  "/about": '<path d="M12 16v-4M12 8h.01"/><path d="M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9Z"/>',
+  "/changelog": '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+  "/more": '<path d="M4 6h16M4 12h16M4 18h16"/>',
+};
+
+function hydrateNavigationIcons() {
+  document.querySelectorAll(".side-link .side-icon, .m-tab .m-tab-icon").forEach((icon) => {
+    const href = icon.closest("a")?.getAttribute("href") || "";
+    const paths = NAV_ICON_PATHS[href];
+    if (!paths || icon.querySelector("svg")) return;
+    icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+  });
+}
+
+function hydrateHotPageContainer() {
+  const main = document.querySelector("main.app-main.hot-page");
+  if (!main) return;
+  main.classList.remove("hot-page");
+  main.classList.add("hot-page-main");
+  const container = document.createElement("div");
+  container.className = "hot-page";
+  Array.from(main.children).filter((child) => !child.classList.contains("app-mobile-bar")).forEach((child) => {
+    container.append(child);
+  });
+  main.append(container);
+}
+
 function initNavigation() {
+  hydrateNavigationIcons();
+  hydrateHotPageContainer();
+  document.querySelectorAll(".tag").forEach((tag) => {
+    tag.textContent = normalizedTagLabel(tag.textContent);
+  });
   const label = mobileTopbarDate();
   document.querySelectorAll("[data-mobile-date]").forEach((date) => {
     date.textContent = label;
   });
+  bindHotTopicTooltips();
 }
 
 export function initNavigationOnly() {
@@ -800,6 +911,7 @@ export async function initWechat() {
   const search = document.querySelector("#search");
   if (!search) return;
   let currentPage = pageFromUrl();
+  let currentItems = [];
   const loadWechatPage = memoizedApi();
 
   function wechatApiPath(page) {
@@ -831,7 +943,8 @@ export async function initWechat() {
   normalizeFeedUrl("/wechat", wechatUrlParams(currentPage));
 
   function renderView(data) {
-    renderWechatTimeline(list, Array.isArray(data.items) ? data.items : [], {
+    currentItems = Array.isArray(data.items) ? data.items : [];
+    renderWechatTimeline(list, currentItems, {
       hasQuery: Boolean(search.value.trim()),
     });
     renderWechatPagination(pagination, data, search.value.trim());
@@ -896,6 +1009,9 @@ export async function initWechat() {
   } else {
     await load(currentPage, "replace", false);
   }
+  bindResponsiveTimeline(list, () => {
+    renderWechatTimeline(list, currentItems, { hasQuery: Boolean(search.value.trim()) });
+  });
   restoreListScroll();
 }
 
@@ -957,6 +1073,7 @@ export async function initTimeline() {
     showReason: "selected",
     showRelated: false,
     clampSummary: true,
+    mobileFeed: true,
   };
 
   const feed = attachInfiniteFeed({
@@ -1062,6 +1179,10 @@ export async function initTimeline() {
   } else {
     await load({ page: currentPage, updateUrl: false });
   }
+  bindResponsiveTimeline(list, () => {
+    if (!itemsById.size) return;
+    renderTimeline(list, [...itemsById.values()], { ...cardOptions, sortByScore: false });
+  });
   restoreListScroll();
 }
 
@@ -1124,7 +1245,7 @@ export async function initCurated() {
       if (gen !== generation) return null;
       currentPage = Number(data.page || currentPage + 1);
       rememberItems(data.items);
-      renderTimeline(list, data.items, { showScore: true, append: true });
+      renderTimeline(list, data.items, { showScore: true, showTags: false, mobileFeed: true, append: true });
       return feedHasMore(data, currentPage);
     },
   });
@@ -1142,6 +1263,8 @@ export async function initCurated() {
     rememberItems(rawItems);
     renderTimeline(list, rawItems, {
       showScore: true,
+      showTags: false,
+      mobileFeed: true,
       sortByScore: false,
       emptyTitle: q ? "没有匹配条目" : activeCategory === "all" ? "暂无精选条目" : `${CATEGORY_LABELS[activeCategory]}分类暂无精选`,
       emptyBody: q ? "清空搜索后可回到默认列表。" : "可以切换到全部继续浏览精选内容。",
@@ -1221,6 +1344,15 @@ export async function initCurated() {
   } else {
     await load({ page: currentPage, updateUrl: false });
   }
+  bindResponsiveTimeline(list, () => {
+    if (!itemsById.size) return;
+    renderTimeline(list, [...itemsById.values()], {
+      showScore: true,
+      showTags: false,
+      mobileFeed: true,
+      sortByScore: false,
+    });
+  });
   restoreListScroll();
 }
 
@@ -1260,6 +1392,8 @@ const DAILY_SECTION_DEFS = [
     title: "模型发布/更新",
     subtitle: "MODEL RELEASES",
     tags: ["模型发布", "评测/基准"],
+    metricTag: "模型发布",
+    metricExcludeTags: ["教程/实践"],
   },
   {
     key: "product",
@@ -1375,6 +1509,39 @@ export function dailyReadingStats(root) {
   const characters = Array.from(root.querySelectorAll(".daily-article-summary"))
     .reduce((total, node) => total + dailyVisibleCjkCount(node), 0);
   return { characters, minutes: dailyReadingMinutes(characters) };
+}
+
+export function dailyMetrics(items) {
+  const sourceIds = new Set();
+  let firstParty = 0;
+  let newModels = 0;
+  const modelRule = DAILY_SECTION_DEFS.find((section) => section.key === "model");
+  for (const item of items || []) {
+    if (item?.source_id) sourceIds.add(item.source_id);
+    if (item?.source_kind !== "x" && item?.tier === "T1") firstParty += 1;
+    const tags = Array.isArray(item?.topic_tags) ? item.topic_tags : [];
+    if (modelRule?.metricTag && tags.includes(modelRule.metricTag)
+      && !(modelRule.metricExcludeTags || []).some((tag) => tags.includes(tag))) newModels += 1;
+  }
+  return { events: (items || []).length, first_party: firstParty, new_models: newModels, sources: sourceIds.size };
+}
+
+export function renderDailyMetrics(metrics) {
+  const root = document.querySelector("#daily-metrics");
+  if (!root) return;
+  if (!metrics || !Number(metrics.events)) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  const cells = [
+    [metrics.events, "今日事件"],
+    [metrics.first_party, "一手报道"],
+    [metrics.new_models, "新模型"],
+    [metrics.sources, "信源"],
+  ];
+  root.hidden = false;
+  root.innerHTML = cells.map(([value, label]) => `<div class="daily-metric"><div class="daily-metric-value">${Number(value) || 0}</div><div class="daily-metric-label">${label}</div></div>`).join("");
 }
 
 export function resolveDailyRequest(requestedDate, latestDate, today = todayIso()) {
@@ -1611,6 +1778,7 @@ export async function initDaily() {
       updateUrl("replace", resolvedDate);
     }
     renderDailyReport(list, data.items, resolvedDate);
+    renderDailyMetrics(data.daily_metrics || dailyMetrics(data.items));
     const renderedCount = list.querySelectorAll(".daily-article").length;
     renderDailyHeader(resolvedDate, renderedCount);
     renderDailyHighlights(list);
@@ -1740,10 +1908,18 @@ export function initThemeToggle() {
   const toggle = document.querySelector(".theme-toggle");
   if (!toggle || toggle.dataset.bound === "true") return;
   toggle.dataset.bound = "true";
+  let thumb = toggle.querySelector(".theme-toggle-thumb");
+  if (!thumb) {
+    thumb = document.createElement("span");
+    thumb.className = "theme-toggle-thumb";
+    thumb.setAttribute("aria-hidden", "true");
+    toggle.prepend(thumb);
+  }
   const buttons = toggle.querySelectorAll(".theme-btn[data-theme-pref]");
   const sync = () => {
     const pref = themePreference();
     applyThemePreference(pref);
+    thumb.dataset.pos = pref === "system" ? "auto" : pref;
     buttons.forEach((btn) => {
       btn.setAttribute("aria-pressed", btn.dataset.themePref === pref ? "true" : "false");
     });
@@ -1863,7 +2039,9 @@ function bookmarkButton(item) {
 
 function syncBookmarkButtons(container) {
   container.querySelectorAll(".bookmark-btn[data-bookmark-id]").forEach((btn) => {
-    btn.setAttribute("aria-pressed", BookmarkStore.has(btn.dataset.bookmarkId) ? "true" : "false");
+    const saved = BookmarkStore.has(btn.dataset.bookmarkId);
+    btn.setAttribute("aria-pressed", saved ? "true" : "false");
+    btn.closest(".timeline-item")?.classList.toggle("timeline-item-starred", saved);
   });
 }
 

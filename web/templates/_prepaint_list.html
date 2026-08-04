@@ -5,7 +5,7 @@
           <section class="timeline-day date-group" data-date="{{ item.date_bucket }}">
             <div class="timeline-day-head timeline-date">
               <button type="button" class="timeline-day-toggle date-collapse" aria-expanded="true" aria-label="折叠 {{ item.date_label }}">
-                <time datetime="{{ item.date_bucket }}" title="{{ item.date_bucket }}"><span class="desktop-date-label">{{ item.date_label }}</span><span class="mobile-date-label">{{ item.mobile_date_label }}</span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span>
+                <time datetime="{{ item.date_bucket }}" title="{{ item.date_bucket }}"><span class="desktop-date-label">{{ item.date_label }}</span><span class="mobile-date-label"><span class="m-daybar-main">{{ item.mobile_date_main }}</span> <span class="m-daybar-sub">{{ item.mobile_date_sub }}</span></span></time><span class="timeline-day-chevron" aria-hidden="true">⌄</span>
               </button>
               <span class="timeline-day-meta">{% if item.weekday_label %}{{ item.weekday_label }} · {% endif %}<span class="date-count">{{ item.date_count }} 条</span></span>
             </div>
@@ -49,11 +49,13 @@
                 {% endfor %}
               </div>
             {% endif %}
-            <div class="tags">
-              {% for tag in item.tags %}
-                <span class="tag">#{{ tag }}</span>
-              {% endfor %}
-            </div>
+            {% if show_tags %}
+              <div class="tags">
+                {% for tag in item.tags %}
+                  <span class="tag">{{ tag }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
             {% if item.related_discussions %}
               <span class="timeline-dup-count timeline-dup-hover">关联讨论 {{ item.related_discussions | length }} 条<span class="dup-tooltip">
                 {% for entry in item.related_discussions %}<span class="dup-tooltip-item">{% if entry.source_kind == 'x' %}X{% else %}来源{% endif %}：{{ entry.source_name or entry.source_id }}{% if entry.author %} ({{ entry.author if entry.author.startswith('@') else '@' ~ entry.author }}){% endif %}</span>{% endfor %}
