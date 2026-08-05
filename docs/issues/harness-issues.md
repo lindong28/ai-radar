@@ -238,3 +238,25 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - **现象**：看到 `.more-page{width:min(640px,100%); max-width:1160px}` 就断定 `max-width` 永不可能生效、reviewer 报的回归是误报、修复是 no-op。实测 computed `width` 是 **1160px** ——`width:min(640px,100%)` 被更高优先级规则覆盖，从来没生效过；`max-width` 确实在起作用，回归与修复都是真的。
 - **性质**：`web-ui-observation.md` 已有「某属性是否生效 → 读 `getComputedStyle`，而非 grep 源码」。本例是**同一条规则的另一种违反形态**——不是 grep 找存在性，而是**阅读源码推演层叠优先级**。既有措辞（"grep 源码"）不足以覆盖"我读了完整规则并推理"这种更自信、也更容易出错的形态。
 - **建议**：把该行的错误做法从「grep 源码」扩写为「grep 或阅读源码推演层叠结果」，并点明多 media / 多 selector 叠加时源码推演不可靠。
+
+## 2026-08-05 codeagent-wrapper 源码侧（mid-termination 文档 review 期间由 reviewer 独立发现）
+
+以下两条脱离本轮文档改动仍成立，目标载体在 `~/research/ccg-workflow/codeagent-wrapper`，不在本仓库，故记录而非就地修。
+
+### `cleanupOldLogs` 在 macOS 上静默不生效——临时日志的回收是个 no-op
+
+- **现象**：`cleanupOldLogs()` 的安全检查 `isUnsafeFile(path, tempDir)` 判定日志文件 `file is outside tempDir` 并跳过，原因是 `os.TempDir()` 返回 `/var/folders/...` 而实际路径解析为 `/private/var/folders/...`（macOS 上 `/var` 是指向 `/private/var` 的 symlink）。两位 reviewer 各自独立观测到同一现象。
+- **后果**：孤儿日志从不被回收。表面看是"日志留得更久、更好查"，但它同时意味着**这条清理路径从未被验证过**——一旦 `os.TempDir()` 的返回形态变化或迁到 Linux，行为会突然从"永不删"翻转成"每次启动都删"，而任何依赖日志存活的恢复流程都会在那一刻失效且无告警。
+- **旁证**：本机 29 份持久 record 对 7 份存活日志。日志数少于 record 数是别的原因（OS 自身清扫、手动删除），不是 wrapper 清理的结果。
+- **注**：`background-agent-monitoring.md` 现在按**源码语义**（下次启动即回收）写，偏保守、方向安全；不依赖本 bug 是否修复。
+
+### `backend.go` 的注释与唯一 `SetDir` 调用点矛盾
+
+- **现象**：`backend.go` 有注释称 gemini 以 `cmd.Dir=$HOME` 运行，但代码中唯一的 `SetDir` 调用点把 `cfg.WorkDir` 交给了除 codex 之外的全部 backend。
+- **后果**：读注释推导 workdir 语义会得到错误结论。本轮文档正是要写清三个 backend 的 workdir 承重方式，若采信该注释会写错 gemini 那一支（实际按可执行路径判定，注释是陈旧的）。
+
+### shim 里 `CODEX_SANDBOX` guard 的注释理由与上游实现相反
+
+- **现象**：`ai-agent-config/claude/bin/codeagent-wrapper:32-34` 的注释称用精确大小写比较是因为 `case` 会受继承的 `nocasematch` 影响，而"artifact 只认小写 `read-only`"。实测上游 `codeagent-wrapper/executor.go:821` 是 `strings.EqualFold(strings.TrimSpace(os.Getenv("CODEX_SANDBOX")), "read-only")`，`main.go:606` 的 help 亦写明大小写不敏感且容忍空白。
+- **后果**：行为方向保守（把上游本会接受的 `READ-ONLY` 变成硬错误，不构成提权），所以不紧急；但注释陈述的理由是错的，后续按它推导会得出上游更严格的错误印象。
+- **未就地修的原因**：判断该改注释还是改比较逻辑，取决于上游是否有意保持大小写不敏感，跨 ai-agent-config 与 ccg-workflow 两仓。
