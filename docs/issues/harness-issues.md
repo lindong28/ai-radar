@@ -260,3 +260,29 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - **现象**：`ai-agent-config/claude/bin/codeagent-wrapper:32-34` 的注释称用精确大小写比较是因为 `case` 会受继承的 `nocasematch` 影响，而"artifact 只认小写 `read-only`"。实测上游 `codeagent-wrapper/executor.go:821` 是 `strings.EqualFold(strings.TrimSpace(os.Getenv("CODEX_SANDBOX")), "read-only")`，`main.go:606` 的 help 亦写明大小写不敏感且容忍空白。
 - **后果**：行为方向保守（把上游本会接受的 `READ-ONLY` 变成硬错误，不构成提权），所以不紧急；但注释陈述的理由是错的，后续按它推导会得出上游更严格的错误印象。
 - **未就地修的原因**：判断该改注释还是改比较逻辑，取决于上游是否有意保持大小写不敏感，跨 ai-agent-config 与 ccg-workflow 两仓。
+
+### `until ! pgrep -f "<pattern>"` 的轮询循环会等自己消失，永不退出
+
+- **现象**：本 session 用 `run_in_background` 起了三个 `until ! pgrep -f "pytest" >/dev/null; do sleep N; done; <报告>` 的等待循环，等 pytest 跑完后汇报结果。三个都空转了约 15 小时、输出 0 行，直到用户发现才被回收。
+- **根因**：`pgrep -f` 匹配**完整命令行**，而轮询循环自己的命令行里就含 `pytest` 这个串——于是它永远匹配到自身，条件永不满足。同类写法 `ps aux | grep pytest`（不加 `[p]ytest` 技巧）有同一性质。判据把自己算进了被判据的集合。
+- **为什么没被发现**：失败形态是**进程存活、零输出、永不退出**，恰好是 `background-agent-monitoring.md` 第一节说的"静默挂起"——不触发完成回调，所以 15 小时里没有任何信号。它甚至不像失败：主 session 只会觉得"还在跑"。
+- **正确写法**：`pgrep -f "[p]ytest"`（让 pattern 本身不匹配自己），或改用 Bash `run_in_background` + 目标进程的 PID（`wait $PID`），或按 Monitor 工具的建议用能自然终止的条件。
+- **通用判据**：任何用"在进程表里搜自己关心的字符串"来判活性的循环，写之前先问——**这条命令自己的命令行会不会命中这个 pattern**。
+
+### stop-gate.js 的 LLM 判官在本 session 误报 3/3
+
+- **现象**：本 session 内 `stop-gate.js` 阻断三次，三次的指控都不成立——分别指我「请用户执行 `git rebase --autostash`」「请用户去检查/验证文件内容」「请用户执行清理夹具、重设版本并送回 reviewer」。三件事全部是我自己执行并附了输出的。真阳性 0 次。
+- **共同形态**：我在**叙述自己刚做完的操作**时，判官把叙述读成了指派。三次都发生在总结性汇报里——那正是操作动词密度最高的文本。
+- **代价不对称**：误报的代价是每次多一整轮（要求重发完整交付物）；而它在真正该拦的那次（带着三个卡死后台 shell 宣告完成）完全沉默，因为它的输入里没有进程状态。判官的召回与精度在本 session 同时为差。
+- **可能方向**（未验证，留给专门评估）：判官 prompt 里区分「过去时叙述自己已执行」与「祈使/请求用户执行」；或把已在转录里出现过的、由 agent 自己跑过的命令作为负面证据喂给判官——现在判官只拿最后一条消息，看不到那条命令其实是 agent 跑的。
+- **注**：新增的 `bg-shell-reclaim-check.js` 不依赖判官，走确定性进程事实，与本条无关。
+
+### Stop hook 拿不到「本会话有哪些后台任务」，只能靠外部重建
+
+- **现象**：为堵住「agent 宣告完成时后台 shell 仍在跑」的矛盾状态，新增了 `claude/hooks/bg-shell-reclaim-check.js`。实现中最难的一环不是判断卡死，而是**确定哪些后台任务属于本会话**——Stop hook 的 stdin 只有 `{session_id, transcript_path, stop_hook_active}`，其中 `session_id` 是**转录 UUID**，与任务输出目录 `<tmp>/claude-<uid>/<slug>/<runtime-id>/tasks/` 的 `runtime-id` **不是同一个**，没有任何字段能把两者关联起来。
+- **试过的三条重建路径与各自的失败面**：
+  1. 用 `session_id` 拼路径 → 恒解析失败，hook 每次静默放行（合成测试因直接喂对目录名而全绿，掩盖了这个假设）。
+  2. 从转录正则扫 `.../tasks/<id>.output` → 这些串也出现在普通 `user`/`attachment`/`queue-operation` 记录里，锚点不构成来源证明；且一个转录可对应多个任务目录（resume 会新建），缓存单个会永久漏掉新的。
+  3. **进程血缘**（当前实现）→ 走祖先链找到宿主 `claude`，枚举后代中以写模式持有符合 harness 路径形态的 `.output` 的进程。来源证明成立、不会误报别的会话。
+- **当前已知不完备**：任务若自我 daemonize（中间 shell 退出、子进程被重挂到 init）就掉出后代集合、检测不到。曾尝试"由后代反推目录、再扫目录下全部写者"来补，但那一步无法证明目录独占（并发 session / resume 是否共用未经实证）、也无法排除本会话普通程序写出的同形路径，故按「提醒型 hook 宁可漏报不可误报」删除。
+- **根因与上游建议**：这是 harness 的信息缺失，不是实现问题。若 Stop hook 的 stdin 能带上本会话的后台任务清单（或任务目录的 `runtime-id`），上述全部重建与其失败面都不必存在。值得向上游反馈。
