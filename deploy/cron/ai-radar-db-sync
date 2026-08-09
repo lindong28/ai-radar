@@ -1,0 +1,7 @@
+# Push the primary DB to the serving replica every 5 hours.
+# run-or-alert (im-notify family) pages once per failure streak and re-arms on
+# success; the wrapper discovers the logged-in user's ssh-agent and reports
+# when the server's accepted-snapshot receipt is older than its freshness
+# threshold (see ADR-013; the alerting lives inside this cron entry, so cron
+# itself not running is NOT detected).
+41 1,6,11,16,21 * * * /path/to/.local/bin/run-or-alert --key ai-radar-db-sync -- /path/to/ai-radar/deploy/sync/sync-db-cron.sh >/dev/null 2>&1
