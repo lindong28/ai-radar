@@ -16,6 +16,8 @@ from ..llm_usage import LlmUsageRecord, estimate_cost_usd, record_llm_usage, usa
 from ..wechat_text import has_wechat_title_artifacts, normalize_wechat_title, wechat_slug_seed
 
 DEFAULT_INTERPRET_USER = "default"
+ERROR_RETRY_MAX = 8
+ERROR_RETRY_BASE_MINUTES = 15
 DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
 MISSING_ROOT_MESSAGE = "interpret enabled but AI_ASSISTANT_ROOT is not set"
 SUMMARY_AGENT_DIR = Path("agents") / "summary-agent"
@@ -339,6 +341,11 @@ def _copy_batch_files_for_slug(batch_dir: Path, source_slug: str, target_slug: s
         target = batch_dir / f"{target_slug}_{kind}.md"
         if not source.is_file():
             raise FileNotFoundError(str(source))
+        # Slugs differing only by letter case resolve to the same file on
+        # case-insensitive filesystems (macOS default); copying would raise
+        # SameFileError and the file is already readable under either name.
+        if target.exists() and source.samefile(target):
+            continue
         shutil.copyfile(source, target)
 
 
@@ -401,14 +408,16 @@ def _save_interpretation(
     model: str | None,
     kb_synced: bool,
     error: str | None,
+    error_retry_count: int = 0,
 ) -> None:
     conn.execute(
         """
         INSERT INTO wechat_interpretations (
           item_id, slug, recommendation, save_decision, save_reason, abstract,
-          tags_json, summary_md, model, kb_synced, processed_at, error
+          tags_json, summary_md, model, kb_synced, processed_at, error,
+          error_retry_count
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(item_id) DO UPDATE SET
           slug=excluded.slug,
           recommendation=excluded.recommendation,
@@ -420,7 +429,8 @@ def _save_interpretation(
           model=excluded.model,
           kb_synced=excluded.kb_synced,
           processed_at=excluded.processed_at,
-          error=excluded.error
+          error=excluded.error,
+          error_retry_count=excluded.error_retry_count
         """,
         (
             row["id"],
@@ -435,6 +445,7 @@ def _save_interpretation(
             1 if kb_synced else 0,
             _utc_now(),
             error,
+            error_retry_count,
         ),
     )
     conn.commit()
@@ -445,6 +456,13 @@ def _record_error(conn: sqlite3.Connection, row: sqlite3.Row, error: BaseExcepti
     if isinstance(error, subprocess.CalledProcessError):
         stderr = error.stderr.decode("utf-8", errors="replace") if isinstance(error.stderr, bytes) else error.stderr
         message = stderr or str(error)
+    previous = conn.execute(
+        "SELECT error, error_retry_count FROM wechat_interpretations WHERE item_id=?",
+        (row["id"],),
+    ).fetchone()
+    # Match the candidate query's `error IS NOT NULL` semantics: an empty error
+    # string still marks a retryable failure, so it must advance the counter.
+    retry_count = int(previous["error_retry_count"]) + 1 if previous is not None and previous["error"] is not None else 0
     slug = _unique_slug(conn, f"error-{row['id']}", row["id"])
     _save_interpretation(
         conn,
@@ -459,18 +477,26 @@ def _record_error(conn: sqlite3.Connection, row: sqlite3.Row, error: BaseExcepti
         model=None,
         kb_synced=False,
         error=message[:2000],
+        error_retry_count=retry_count,
     )
 
 
 def _candidate_rows(conn: sqlite3.Connection, *, limit: int | None) -> list[sqlite3.Row]:
-    query = """
+    query = f"""
         SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.enabled AS source_enabled
         FROM items i
         JOIN sources s ON s.id=i.source_id
+        LEFT JOIN wechat_interpretations wi ON wi.item_id=i.id
         WHERE COALESCE(s.kind, 'feed')='wechat'
           AND s.enabled=1
-          AND NOT EXISTS (
-            SELECT 1 FROM wechat_interpretations wi WHERE wi.item_id=i.id
+          AND (
+            wi.item_id IS NULL
+            OR (
+              wi.error IS NOT NULL
+              AND wi.error_retry_count < {ERROR_RETRY_MAX}
+              AND (julianday('now') - julianday(wi.processed_at)) * 1440.0
+                  >= {ERROR_RETRY_BASE_MINUTES} * (1 << wi.error_retry_count)
+            )
           )
         ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
     """
@@ -672,7 +698,7 @@ def run_interpret(
     user: str | None = None,
     tmp_root: str | Path | None = None,
 ) -> InterpretSummary:
-    del backfill  # Existing rows are always skipped; backfill selects the same unprocessed enabled scope.
+    del backfill  # Successful rows are always skipped and errored rows retry on their own backoff schedule; backfill selects the same scope.
     if not _env_flag_enabled("AI_RADAR_ENABLE_INTERPRET"):
         return InterpretSummary(skipped=True, message=DISABLED_MESSAGE)
 

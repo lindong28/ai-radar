@@ -186,3 +186,7 @@ AI Radar expects this file to be a JSON array. Each entry may include:
 ```
 
 The runner uses `metadata.url` for URL hits and `output.summary_file_path` or `output.summary_file` for slug and summary-file lookup.
+
+## Failure retry semantics
+
+Each item's interpretation outcome is upserted into `wechat_interpretations`; failures record the message in `error`. Errored items are retried automatically with exponential backoff: the first failure becomes eligible again after 15 minutes, and each further failure doubles the wait (15m, 30m, 1h, ... tracked in `error_retry_count`). After 8 retries the item is skipped permanently until its row is deleted by hand. A successful interpretation clears `error` and resets the counter. `pipeline.sh` caps each run at `--limit 30` items so a large error backlog drains across runs instead of holding the pipeline lock for hours.

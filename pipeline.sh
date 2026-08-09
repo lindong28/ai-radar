@@ -277,7 +277,10 @@ run_stage prefilter --since 24h
 run_stage score --since 24h
 run_stage enrich --since 24h
 run_stage curate
-run_stage interpret
+# Bounded batch per run: an unbounded interpret over a large error backlog can
+# hold the pipeline lock for hours, starving fetch and inviting stale-lock
+# reclaim races. Steady-state volume is a handful of items per cycle.
+run_stage interpret --limit 30
 
 find "$LOG_DIR" -name 'pipeline-*.log' -mtime +7 -delete
 

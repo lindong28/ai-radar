@@ -1431,3 +1431,261 @@ def test_pipeline_runs_interpret_after_curate() -> None:
 
     assert "run_stage interpret" in pipeline
     assert pipeline.index("run_stage curate") < pipeline.index("run_stage interpret")
+
+
+def _insert_errored_interpretation(
+    db_path: Path,
+    *,
+    item_id: str = "item-1",
+    processed_at: str = "2026-06-02T10:05:00Z",
+    retry_count: int = 0,
+) -> None:
+    conn = _connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO wechat_interpretations (
+          item_id, slug, save_decision, tags_json, summary_md,
+          kb_synced, processed_at, error, error_retry_count
+        )
+        VALUES (?, ?, 0, '[]', '', 0, ?, 'Error: endpoint down', ?)
+        """,
+        (item_id, f"error-{item_id}", processed_at, retry_count),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _fake_skip_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    if "--check-url" in cmd:
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+    batch_dir = Path(str(kwargs.get("cwd"))) / "batch"
+    batch_dir.mkdir(exist_ok=True)
+    (batch_dir / "retry-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
+    return subprocess.CompletedProcess(
+        cmd,
+        0,
+        stdout=json.dumps(
+            {
+                "ok": True,
+                "batch_dir": str(batch_dir),
+                "result": {"slug": "retry-slug", "save_decision": False, "recommendation": "可跳过"},
+            },
+            ensure_ascii=False,
+        ),
+        stderr="",
+    )
+
+
+def test_interpret_runner_retries_errored_row_after_backoff_and_resets_counter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    _insert_errored_interpretation(db_path, processed_at="2026-06-02T10:05:00Z", retry_count=3)
+
+    monkeypatch.setattr(subprocess, "run", _fake_skip_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    assert summary.processed == 1
+    assert summary.errors == 0
+    assert row["error"] is None
+    assert row["error_retry_count"] == 0
+    assert row["slug"] == "retry-slug"
+
+
+def test_interpret_runner_error_retry_respects_backoff_window_and_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    assistant_root = _assistant_root(tmp_path)
+    monkeypatch.setattr(subprocess, "run", _fake_skip_run)
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    # Inside the backoff window: retry_count=3 needs >= 2 hours since processed_at.
+    db_recent = _seed_runner_db(tmp_path / "recent")
+    _insert_errored_interpretation(db_recent, processed_at=now, retry_count=3)
+    with _connect(db_recent) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+    assert summary.processed == 0
+    assert summary.errors == 0
+
+    # At the retry cap: never retried again, even long after.
+    db_capped = _seed_runner_db(tmp_path / "capped")
+    _insert_errored_interpretation(db_capped, processed_at="2026-06-02T10:05:00Z", retry_count=8)
+    with _connect(db_capped) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+    assert summary.processed == 0
+    assert summary.errors == 0
+
+
+def test_interpret_runner_increments_retry_counter_on_repeated_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    _insert_errored_interpretation(db_path, processed_at="2026-06-02T10:05:00Z", retry_count=2)
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(returncode=2, cmd=cmd, stderr="still down")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    assert summary.errors == 1
+    assert "still down" in row["error"]
+    assert row["error_retry_count"] == 3
+
+
+def test_copy_batch_files_skips_copy_when_slugs_resolve_to_same_file(tmp_path: Path) -> None:
+    from airadar.interpret.runner import _copy_batch_files_for_slug
+
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    for kind in ("article", "summary"):
+        (batch_dir / f"AI文章_{kind}.md").write_text(f"{kind} body", encoding="utf-8")
+
+    # On a case-insensitive filesystem (macOS default) "ai文章" opens the same
+    # file as "AI文章"; the copy must be skipped instead of raising SameFileError.
+    _copy_batch_files_for_slug(batch_dir, "AI文章", "ai文章")
+
+    assert (batch_dir / "ai文章_article.md").read_text(encoding="utf-8") == "article body"
+    assert (batch_dir / "ai文章_summary.md").read_text(encoding="utf-8") == "summary body"
+
+
+def test_interpret_runner_first_failure_starts_retry_counter_at_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(returncode=2, cmd=cmd, stderr="boom")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    assert row["error_retry_count"] == 0
+
+
+def test_interpret_runner_empty_error_message_still_advances_retry_counter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise ValueError()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        first = conn.execute(
+            "SELECT error, error_retry_count FROM wechat_interpretations WHERE item_id='item-1'"
+        ).fetchone()
+        # Age the row past the first backoff window, then fail again.
+        conn.execute(
+            "UPDATE wechat_interpretations SET processed_at='2026-06-02T10:05:00Z' WHERE item_id='item-1'"
+        )
+        conn.commit()
+        run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        second = conn.execute(
+            "SELECT error_retry_count FROM wechat_interpretations WHERE item_id='item-1'"
+        ).fetchone()
+
+    assert first["error"] == ""
+    assert first["error_retry_count"] == 0
+    assert second["error_retry_count"] == 1
+
+
+def test_interpret_runner_backoff_window_boundary_for_retry_count_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    assistant_root = _assistant_root(tmp_path)
+    monkeypatch.setattr(subprocess, "run", _fake_skip_run)
+
+    def _iso(minutes_ago: int) -> str:
+        stamp = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=minutes_ago)
+        return stamp.isoformat().replace("+00:00", "Z")
+
+    # retry_count=3 needs >= 15 * 2**3 = 120 minutes since processed_at.
+    db_inside = _seed_runner_db(tmp_path / "inside")
+    _insert_errored_interpretation(db_inside, processed_at=_iso(118), retry_count=3)
+    with _connect(db_inside) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+    assert summary.processed == 0
+
+    db_past = _seed_runner_db(tmp_path / "past")
+    _insert_errored_interpretation(db_past, processed_at=_iso(122), retry_count=3)
+    with _connect(db_past) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+    assert summary.processed == 1
+
+
+def test_interpret_runner_eighth_retry_failure_reaches_cap_and_stops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import ERROR_RETRY_MAX, run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    _insert_errored_interpretation(db_path, processed_at="2026-06-02T10:05:00Z", retry_count=ERROR_RETRY_MAX - 1)
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(returncode=2, cmd=cmd, stderr="still down")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT error_retry_count FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+        assert summary.errors == 1
+        assert row["error_retry_count"] == ERROR_RETRY_MAX
+
+        # Age the row far past every window: the cap must keep it out for good.
+        conn.execute(
+            "UPDATE wechat_interpretations SET processed_at='2026-01-01T00:00:00Z' WHERE item_id='item-1'"
+        )
+        conn.commit()
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+
+    assert summary.processed == 0
+    assert summary.errors == 0
