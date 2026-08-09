@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# post-receive stub: parse the ref line, then hand off to deploy_code.py.
+#
+# Deliberately this thin. Two shell versions of the full deploy logic each
+# failed adversarial review on bash-specific grounds (`fn || handler` disables
+# errexit inside fn; no transactional state) -- the state lives in Python now,
+# where those classes do not exist. This stub runs on system python3, so it
+# works before any venv exists.
+set -euo pipefail
+
+AI_RADAR_HOME="${AI_RADAR_HOME:-$HOME/ai-radar}"
+
+new_sha=""
+while read -r _old new ref; do
+  [[ "$ref" == "refs/heads/main" ]] && new_sha="$new"
+done
+[[ -n "$new_sha" ]] || { echo "[deploy] no update to main; nothing to deploy"; exit 0; }
+
+exec python3 "$AI_RADAR_HOME/deploy/sync/deploy_code.py" "$new_sha"

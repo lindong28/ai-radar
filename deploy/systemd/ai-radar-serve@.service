@@ -26,7 +26,11 @@ EnvironmentFile=/etc/ai-radar/slots/%i.env
 
 Environment=PYTHONPATH=@AI_RADAR_HOME@/src
 
-ExecStart=@AI_RADAR_UV@ run python -m airadar.cli serve --host 127.0.0.1 --port %i --pre-migrated-db
+# The venv's interpreter directly, not `uv run`: the deploy hook has already
+# built and verified this environment with `uv sync --locked`, and uv run
+# could resolve/update the environment at start time -- letting a service
+# restart silently diverge from what the deploy verified.
+ExecStart=@AI_RADAR_HOME@/.venv/bin/python3 -m airadar.cli serve --host 127.0.0.1 --port %i --pre-migrated-db
 
 Restart=on-failure
 RestartSec=5

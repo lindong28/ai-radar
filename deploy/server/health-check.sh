@@ -9,6 +9,8 @@
 #   disk       - will the next database sync have room to land?
 #   freshness  - is the replica still being updated? (sync can stop silently
 #                while every other check stays green)
+#   deploy     - did the last code push fail? (post-receive cannot fail the
+#                git push itself, so its failure marker is paged on here)
 #
 # Delivery goes through im-notify, the same path the Mac side already uses.
 # Alerts are deduplicated by key so a persistent fault does not page on every
@@ -141,7 +143,34 @@ check_sync_freshness() {
   fi
 }
 
+check_deploy_failed() {
+  local marker="${AI_RADAR_DEPLOY_FAILED_MARKER:-$AI_RADAR_HOME/data/.deploy-failed}"
+  local journal="${AI_RADAR_CODE_JOURNAL:-$AI_RADAR_HOME/data/code-deploy-journal.json}"
+  if [[ -f "$marker" ]]; then
+    notify deploy page "last code deploy failed: $(head -c 160 "$marker")"
+    return
+  fi
+  # A deploy killed (SIGKILL/power loss) writes no marker; the journal is the
+  # only trace. ANY non-idle state left older than a normal deploy means an
+  # interrupted deploy no push has reconciled -- page regardless of which phase
+  # (promoting/activating/serving), since each leaves a real inconsistency
+  # (half-updated tree, un-recorded serving version, pending receipt). Normal
+  # deploys pass through all of them in seconds.
+  if [[ -f "$journal" ]] \
+     && grep -qE '"state": *"(promoting|activating|serving)"' "$journal" 2>/dev/null; then
+    local age_min state
+    age_min=$(( ( $(date +%s) - $(stat -c %Y "$journal") ) / 60 ))
+    state="$(grep -oE '"state": *"[a-z]+"' "$journal" | grep -oE '[a-z]+"$' | tr -d '"')"
+    if (( age_min > 15 )); then
+      notify deploy page "code deploy stuck in '${state}' for ${age_min}m (interrupted mid-deploy)"
+      return
+    fi
+  fi
+  resolve deploy
+}
+
 check_serve
 check_healthz
 check_disk
 check_sync_freshness
+check_deploy_failed
