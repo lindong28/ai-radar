@@ -203,41 +203,121 @@ class CodeDeploy:
     # ---------------- primitives ----------------
 
     def materialize(self, sha: str, tree: Path, index: Path, base: str | None) -> None:
-        """Bring `tree` to exactly `sha`'s tracked content.
+        """Bring `tree`'s tracked files to exactly `sha`, propagate deletions,
+        preserve untracked files, and leave the bare repo's HEAD alone.
 
-        With a base, the two-tree read (`-m -u base sha`) propagates deletions
-        while leaving untracked files alone. It needs the index to reflect
-        `base` first, so when the index is missing or stale the base tree is
-        reloaded into a fresh index (`read-tree base`, no `-u`) BEFORE the
-        two-tree read -- rather than falling back to a single-tree `--reset`,
-        which cannot delete files the new commit removed and would reintroduce
-        the orphan problem exactly on the recovery path that matters most.
+        Force-based, not merge-based. `git checkout-index -f -a` writes every
+        tracked file from `sha` unconditionally, so materialize does not depend
+        on the worktree already matching `base` and cannot hit the "entry not
+        uptodate" that a stat-less `read-tree -m -u` raises the instant a
+        deploy must OVERWRITE (not merely add) a tracked file. A freshly
+        `read-tree`'d base index records no stat, so `-m` treats every entry as
+        potentially dirty and refuses any path it must change; that only stayed
+        hidden because earlier deploys happened to add files (.python-version)
+        rather than change them, and it broke rollback the same way -- rollback
+        passes base=the failed `new`, but a promote that died before touching
+        the worktree leaves it at `old`, so `-m -u new old` also failed
+        "not uptodate". Both are measured against the real bare repo.
+
+        Order matters and is the opposite of the obvious one: DELETIONS FIRST,
+        then checkout. A path that changed file<->directory between base and sha
+        (a `pkg` file becoming `pkg/mod.py`, or the reverse) would otherwise
+        have the stale file/dir block checkout-index; removing the base-only
+        paths and pruning emptied ancestors first clears the way. The deletion
+        set uses `--no-renames` so a rename shows as delete+add (default rename
+        detection reports `R`, which `--diff-filter=D` drops, orphaning the old
+        path), and `-z`/NUL parsing so paths with spaces or newlines are exact.
+
+        Force overwrite has one edge the merge form guarded for free: it will
+        clobber an untracked runtime file if a commit ever tracks that path.
+        `_guard_runtime_paths` fails the deploy closed before any live write,
+        so a mistaken `git add` of .env / .venv / a slot DB / logs cannot
+        irreversibly destroy live state that rollback (git-only) can't restore.
         """
         env = {
             "GIT_DIR": str(self.cfg.bare),
             "GIT_WORK_TREE": str(tree),
             "GIT_INDEX_FILE": str(index),
         }
-        if base:
-            # Establish a trustworthy `base` index (index-only, no worktree
-            # touch), then diff base->sha onto the worktree.
-            if index.exists():
-                index.unlink()
-            if not self.r.ok("git", "read-tree", base, env=env):
-                raise DeployError(f"could not load base tree {base} for a precise update")
-            if not self.r.ok("git", "read-tree", "-m", "-u", base, sha, env=env):
-                raise DeployError(
-                    f"two-tree update {base}->{sha} failed; refusing the imprecise "
-                    "single-tree fallback that could leave orphaned files"
-                )
-            return
-        # No base: full reset read, correct only for a fresh directory. On a
-        # tree with unknown history it cannot know what to delete, which is why
-        # the first deploy requires an empty tracked tree.
+        # Refuse, before touching the tree, any commit that tracks a
+        # runtime-owned path -- checkout-index -f would overwrite live state.
+        self._guard_runtime_paths(sha, env)
+        # A pre-existing (possibly empty) index file is fatal to git -- "index
+        # file smaller than expected" -- so start each materialize clean.
         if index.exists():
             index.unlink()
-        if not self.r.ok("git", "read-tree", "--reset", "-u", sha, env=env):
-            raise DeployError(f"could not materialize {sha} into {tree}")
+        # Deletions before checkout so a file<->directory swap does not block it.
+        if base:
+            self._apply_deletions(base, sha, tree, env)
+        # -c core.bare=false: the source is a bare repo; GIT_WORK_TREE lets
+        # these commands operate on a worktree, and being explicit avoids any
+        # "must be run in a work tree" refusal on hosts whose git is stricter.
+        if not self.r.ok("git", "-c", "core.bare=false", "read-tree", sha, env=env):
+            raise DeployError(f"could not read tree {sha} into the deploy index")
+        if not self.r.ok("git", "-c", "core.bare=false", "checkout-index", "-f", "-a", env=env):
+            raise DeployError(f"could not check out {sha} into {tree}")
+
+    # data/ is runtime-owned except for these intentionally-tracked config
+    # files; everything under .env (the exact secrets file), .venv/, and logs/
+    # is live state git must never write over. .env.example is not .env, so it
+    # is not caught.
+    _RUNTIME_ALLOW = frozenset({"data/sources.toml"})
+
+    @classmethod
+    def _is_runtime_owned(cls, path: str) -> bool:
+        if path in cls._RUNTIME_ALLOW:
+            return False
+        return (
+            path == ".env"
+            or path.startswith(".venv/")
+            or path.startswith("logs/")
+            or path.startswith("data/")
+        )
+
+    def _guard_runtime_paths(self, sha: str, env: dict) -> None:
+        res = self.r.run("git", "-c", "core.bare=false", "ls-tree", "-r",
+                         "--name-only", "-z", sha, env=env)
+        if res.returncode != 0:
+            raise DeployError(
+                f"could not list tree {sha}: {(res.stderr or res.stdout)[-200:]}"
+            )
+        offenders = sorted(
+            p for p in res.stdout.split("\0") if p and self._is_runtime_owned(p)
+        )
+        if offenders:
+            raise DeployError(
+                "refusing to deploy: commit tracks runtime-owned paths that "
+                "checkout would overwrite (live state git cannot restore): "
+                + ", ".join(offenders[:10])
+            )
+
+    def _apply_deletions(self, base: str, sha: str, tree: Path, env: dict) -> None:
+        diff = self.r.run("git", "-c", "core.bare=false", "diff", "--no-renames",
+                          "--name-only", "--diff-filter=D", "-z", base, sha, env=env)
+        if diff.returncode != 0:
+            raise DeployError(
+                f"could not compute deletions {base}->{sha}: "
+                f"{(diff.stderr or diff.stdout)[-200:]}"
+            )
+        for rel in diff.stdout.split("\0"):
+            if not rel:  # NUL-separated; trailing empty field, never strip()
+                continue
+            target = tree / rel
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass  # already gone; deletion is idempotent
+            except OSError as exc:
+                raise DeployError(f"could not delete {rel} removed in {sha}: {exc}")
+            # Prune ancestors emptied by the deletion, so a directory that
+            # became a file in sha is not blocked by the leftover empty dir.
+            parent = target.parent
+            while parent != tree:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break  # non-empty or already gone; stop climbing
+                parent = parent.parent
 
     def uv_sync_locked(self, tree: Path) -> None:
         # --locked, not --frozen: frozen trusts a stale lock silently; locked
