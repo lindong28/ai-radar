@@ -510,8 +510,8 @@ def test_global_visual_tokens_light_default_with_dark_variant() -> None:
     # 每个现有 public HTML consumer 的 head 都内联完整主题 bootstrap，避免 FOUC。
     for path in THEMED_PUBLIC_PAGES:
         html = path.read_text(encoding="utf-8")
-        assert '<meta name="theme-color" content="#f4f5f6">' in html
-        assert 'localStorage.getItem("ai-radar:theme")||"light"' in html
+        assert '<meta name="theme-color" content="#10151c">' in html
+        assert 'localStorage.getItem("ai-radar:theme")||"dark"' in html
         assert "dataset.theme" in html
         assert "dataset.themeMode" in html
         assert 'querySelector(\'meta[name="theme-color"]\')' in html

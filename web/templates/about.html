@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f4f5f6">
-    <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');try{var t=localStorage.getItem("ai-radar:theme")||"light";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;m.setAttribute("content",d?"#10151c":"#f4f5f6");}catch(e){r.dataset.theme="light";r.dataset.themeMode="light";m.setAttribute("content","#f4f5f6");}})();</script>
+    <meta name="theme-color" content="#10151c">
+    <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');try{var t=localStorage.getItem("ai-radar:theme")||"dark";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;m.setAttribute("content",d?"#10151c":"#f4f5f6");}catch(e){r.dataset.theme="dark";r.dataset.themeMode="dark";m.setAttribute("content","#10151c");}})();</script>
     <title>AI Radar · 关于</title>
     <link rel="stylesheet" href="/style.css?v=20260808-icp2">
   </head>
@@ -119,7 +119,7 @@
     </main>
 {% include "_mobile_tabbar.html" %}
     <script type="module">
-      import { initAbout } from "/app.js?v=20260802-redesign1";
+      import { initAbout } from "/app.js?v=20260809-dark";
       initAbout();
     </script>
   </body>

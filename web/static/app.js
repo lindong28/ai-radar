@@ -1885,14 +1885,14 @@ function missingItem(title) {
   </section>`;
 }
 
-/* ---------- theme (浅色默认 + 暗色变体 + 跟随系统) ---------- */
+/* ---------- theme (暗色默认 + 浅色变体 + 跟随系统) ---------- */
 
 const THEME_KEY = "ai-radar:theme";
 const THEME_COLORS = { light: "#f4f5f6", dark: "#10151c" };
 
 function themePreference() {
   const value = localStorage.getItem(THEME_KEY);
-  return value === "dark" || value === "system" || value === "light" ? value : "light";
+  return value === "dark" || value === "system" || value === "light" ? value : "dark";
 }
 
 function applyThemePreference(pref) {
