@@ -14,6 +14,10 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# The lockfile is committed for reproducible deploys (uv sync --locked on the
+# server). A global gitignore excludes uv.lock by default; override it here.
+!uv.lock
+
 # IDE
 .idea/
 .vscode/
