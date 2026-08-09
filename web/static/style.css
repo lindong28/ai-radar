@@ -462,6 +462,49 @@ button:disabled {
   gap: 10px;
 }
 
+/* ICP filing number. Required to be visible on a mainland-hosted site, but it
+   is legal boilerplate rather than navigation, so it sits below the theme
+   toggle at the smallest legible size and does not compete with the nav. */
+.icp-footer {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.icp-footer a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.icp-footer a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+/* The sidebar collapses on a phone, taking its copy of the footer with it, so
+   every page carries a second copy at the end of <main>. Exactly one is visible
+   at a time: this one only below the 960px breakpoint that swaps the sidebar
+   for .m-tabbar. Placed inside <main>, which already reserves bottom padding
+   for the fixed tab bar. */
+.mobile-icp {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .mobile-icp {
+    display: block;
+    /* .app-main is a flex column whose children are explicitly ordered (see
+       .home-page rules, order 1-5). Being last in the DOM is therefore not
+       enough -- an unordered child defaults to order 0 and jumps to the top.
+       This must stay above every ordered sibling. */
+    order: 99;
+    margin-top: 24px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+}
+
 /* ---------- theme toggle ---------- */
 
 .theme-toggle {

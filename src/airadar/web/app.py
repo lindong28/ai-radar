@@ -484,6 +484,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.state.db_path = str(db.resolve_db_path(db_path))
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
     templates.env.policies["json.dumps_kwargs"] = {"ensure_ascii": False}
+    # Exposed as a callable so it is evaluated per render, matching how the
+    # /about route reads it, instead of freezing env vars at app creation.
+    templates.env.globals["site_config"] = get_site_config
     configure_cors(app)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     api_prefix = "/api/v1"

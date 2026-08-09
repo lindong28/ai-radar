@@ -9,6 +9,9 @@ DEFAULT_MAINTAINER = "your-name"
 VISION_ANCHOR = "#4-%E6%A0%B8%E5%BF%83%E5%8E%9F%E5%88%99-binding"
 
 
+BEIAN_REGISTRY_URL = "https://beian.miit.gov.cn/"
+
+
 @dataclass(frozen=True)
 class SiteConfig:
     domain: str
@@ -16,6 +19,14 @@ class SiteConfig:
     maintainer: str
     maintainer_url: str
     x_url: str
+    # Mainland China requires a domestically hosted site to display its ICP
+    # record number. Kept as configuration rather than a constant so a fork
+    # never inherits this deployment's filing; empty means render nothing.
+    icp_beian: str = ""
+
+    @property
+    def beian_registry_url(self) -> str:
+        return BEIAN_REGISTRY_URL
 
     @property
     def repo_label(self) -> str:
@@ -66,4 +77,5 @@ def get_site_config() -> SiteConfig:
         maintainer=_env_text("AI_RADAR_SITE_MAINTAINER", DEFAULT_MAINTAINER),
         maintainer_url=_env_text("AI_RADAR_SITE_MAINTAINER_URL"),
         x_url=_env_text("AI_RADAR_SITE_X_URL"),
+        icp_beian=_env_text("AI_RADAR_ICP_BEIAN"),
     )

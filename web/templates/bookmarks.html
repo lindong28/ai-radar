@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#f4f5f6">
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');try{var t=localStorage.getItem("ai-radar:theme")||"light";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;m.setAttribute("content",d?"#10151c":"#f4f5f6");}catch(e){r.dataset.theme="light";r.dataset.themeMode="light";m.setAttribute("content","#f4f5f6");}})();</script>
     <link rel="modulepreload" href="/app.js?v=20260802-redesign1">
-    <link rel="stylesheet" href="/style.css?v=20260802-redesign1">
+    <link rel="stylesheet" href="/style.css?v=20260808-icp2">
   </head>
   <body>
     <aside id="app-sidebar" class="sidebar" aria-label="主导航">
@@ -35,6 +35,7 @@
           <button type="button" class="theme-btn" data-theme-pref="system" aria-pressed="false" title="跟随系统" aria-label="跟随系统"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M9 20.5h6M12 17v3.5"/></svg></button>
           <button type="button" class="theme-btn" data-theme-pref="light" aria-pressed="false" title="浅色主题" aria-label="浅色主题"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5 5l1.8 1.8M17.2 17.2 19 19M19 5l-1.8 1.8M6.8 17.2 5 19"/></svg></button>
         </div>
+{% include "_icp_footer.html" %}
       </div>
     </aside>
     {% set mobile_active = "more" %}
@@ -51,6 +52,9 @@
         </div>
       </section>
       <section id="list" class="timeline" aria-live="polite"></section>
+      <div class="mobile-icp">
+{% include "_icp_footer.html" %}
+      </div>
     </main>
 {% include "_mobile_tabbar.html" %}
     <script type="module">

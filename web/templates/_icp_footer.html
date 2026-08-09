@@ -1,0 +1,5 @@
+{% set icp = site_config() %}{% if icp.icp_beian %}
+        <div class="icp-footer">
+          <a href="{{ icp.beian_registry_url }}" target="_blank" rel="noopener noreferrer">{{ icp.icp_beian }}</a>
+        </div>
+{% endif %}
