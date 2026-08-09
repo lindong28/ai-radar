@@ -1,0 +1,16 @@
+[Unit]
+Description=Periodic AI Radar database apply
+
+[Timer]
+# Interval is decided from measured sync cost, not guessed here. install-server.sh
+# writes the operator's choice into a drop-in; this value is only the fallback
+# for a host installed before that decision was made.
+OnBootSec=10min
+OnUnitActiveSec=30min
+# Without this a host that was asleep at the scheduled time silently skips the
+# window, and the replica quietly falls further behind with nothing to show it.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

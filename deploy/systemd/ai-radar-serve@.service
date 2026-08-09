@@ -1,0 +1,37 @@
+[Unit]
+# Templated on the listening port so two slots can run at once: a candidate is
+# started, verified against its own database, and only then does nginx swing
+# over to it. A single-instance unit would force a stop-start window on every
+# database sync.
+Description=AI Radar web serve (port %i)
+After=network.target
+
+[Service]
+Type=simple
+
+# @TOKEN@ placeholders are substituted by deploy/server/install-server.sh, not
+# by systemd. systemd expands neither User= nor the ExecStart executable path
+# (that path is resolved when the unit is parsed), and EnvironmentFile values
+# are read with load_env_file(), which performs no ${VAR} expansion at all.
+# Host paths therefore have to be baked in at install time -- but they are
+# baked in from a tracked template, so a rebuilt host is still reproducible.
+User=@AI_RADAR_USER@
+WorkingDirectory=@AI_RADAR_HOME@
+
+# Values that genuinely are runtime configuration stay in env files:
+#   server.env   - shared: AI_RADAR_SITE_DOMAIN, AI_RADAR_ICP_BEIAN, ...
+#   slots/%i.env - per-slot: AI_RADAR_DB for this slot's release descriptor
+EnvironmentFile=/etc/ai-radar/server.env
+EnvironmentFile=/etc/ai-radar/slots/%i.env
+
+Environment=PYTHONPATH=@AI_RADAR_HOME@/src
+
+ExecStart=@AI_RADAR_UV@ run python -m airadar.cli serve --host 127.0.0.1 --port %i --pre-migrated-db
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:@AI_RADAR_LOG_DIR@/serve-%i.log
+StandardError=append:@AI_RADAR_LOG_DIR@/serve-%i.err.log
+
+[Install]
+WantedBy=multi-user.target

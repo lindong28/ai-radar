@@ -1,0 +1,25 @@
+[Unit]
+# The server becomes the only production entry point at cutover, so this has to
+# be installed and enabled *before* the site goes public -- a one-off drill
+# proves the rules fire, but only a running timer catches the real outage.
+Description=AI Radar server health checks (serve, healthz, disk, sync freshness)
+After=network.target
+
+[Service]
+Type=oneshot
+# @TOKEN@ placeholders substituted at install time.
+User=@AI_RADAR_USER@
+WorkingDirectory=@AI_RADAR_HOME@
+EnvironmentFile=/etc/ai-radar/server.env
+Environment=PYTHONPATH=@AI_RADAR_HOME@/src
+# im-notify lives in the operator's ~/.local/bin, which is not on a systemd
+# service's default PATH.
+Environment=PATH=@AI_RADAR_LOCAL_BIN@:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=@AI_RADAR_HOME@/deploy/server/health-check.sh
+
+StandardOutput=append:@AI_RADAR_LOG_DIR@/alert.log
+StandardError=append:@AI_RADAR_LOG_DIR@/alert.err.log
+
+[Install]
+WantedBy=multi-user.target

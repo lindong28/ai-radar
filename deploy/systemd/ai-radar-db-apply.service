@@ -1,0 +1,22 @@
+[Unit]
+# Applies a database snapshot that the Mac has already pushed. Does not pull:
+# the Mac owns the primary and decides when a consistent snapshot exists.
+Description=AI Radar database apply (verify candidate, then switch slots)
+After=network.target
+
+[Service]
+Type=oneshot
+# @TOKEN@ placeholders substituted at install time -- see ai-radar-serve@.service
+# for why systemd cannot expand these itself.
+User=@AI_RADAR_USER@
+WorkingDirectory=@AI_RADAR_HOME@
+EnvironmentFile=/etc/ai-radar/server.env
+Environment=PYTHONPATH=@AI_RADAR_HOME@/src
+
+ExecStart=@AI_RADAR_HOME@/.venv/bin/python3 @AI_RADAR_HOME@/deploy/sync/apply_db_update.py
+
+StandardOutput=append:@AI_RADAR_LOG_DIR@/db-apply.log
+StandardError=append:@AI_RADAR_LOG_DIR@/db-apply.err.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic AI Radar server health checks
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
