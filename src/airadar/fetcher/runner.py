@@ -420,6 +420,14 @@ def _checkpoint_after_fetch(db_path: Path | None) -> None:
         db.checkpoint_db(db_path)
     except Exception as exc:
         logger.warning("Failed to checkpoint database after fetch round: %s", exc)
+    # Bounded FTS merge rides the same end-of-round hook: since migration 003
+    # stopped rebuilding the index every round, this is what keeps incremental
+    # segments from accumulating (see db.maintain_fts). Failure is non-fatal
+    # for the same reason checkpointing is -- the fetch itself succeeded.
+    try:
+        db.maintain_fts(db_path)
+    except Exception as exc:
+        logger.warning("Failed FTS maintenance after fetch round: %s", exc)
 
 
 def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSummary:
