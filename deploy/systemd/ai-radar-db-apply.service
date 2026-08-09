@@ -6,7 +6,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-# @TOKEN@ placeholders substituted at install time -- see ai-radar-serve@.service
+# The @-delimited placeholders are substituted at install time -- see ai-radar-serve@.service
 # for why systemd cannot expand these itself.
 User=@AI_RADAR_USER@
 WorkingDirectory=@AI_RADAR_HOME@

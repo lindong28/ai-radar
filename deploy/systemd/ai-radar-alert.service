@@ -7,7 +7,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-# @TOKEN@ placeholders substituted at install time.
+# The @-delimited placeholders are substituted at install time.
 User=@AI_RADAR_USER@
 WorkingDirectory=@AI_RADAR_HOME@
 EnvironmentFile=/etc/ai-radar/server.env

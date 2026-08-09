@@ -9,8 +9,9 @@ After=network.target
 [Service]
 Type=simple
 
-# @TOKEN@ placeholders are substituted by deploy/server/install-server.sh, not
-# by systemd. systemd expands neither User= nor the ExecStart executable path
+# The @-delimited placeholders below are substituted by
+# deploy/server/install-server.sh, not by systemd. systemd expands neither
+# User= nor the ExecStart executable path
 # (that path is resolved when the unit is parsed), and EnvironmentFile values
 # are read with load_env_file(), which performs no ${VAR} expansion at all.
 # Host paths therefore have to be baked in at install time -- but they are
