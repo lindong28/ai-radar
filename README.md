@@ -155,7 +155,7 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 ./run.sh admin db slim   [--keep-days N] [--dry-run]  # 清缓存 + VACUUM 回收磁盘（仅低频磁盘维护）
 ```
 
-`--dry-run` 零写、只报待清行数与字节。`slim` 显式返回 `retained`/`compacted` 两阶段结果；它只服务本机低频磁盘回收，独立于 DB sync。Mac producer `deploy/sync/sync-db-to-server.sh` 会从 live WAL 库创建 `query_only` 一致快照，把非 FTS 逻辑变化就地应用到持久 base-only shipping replica，再用 GNU rsync 传输；服务器在候选槽重建并验证 FTS 后才切流。对 live DB 做 VACUUM 只会重排 SQLite 页面，不能改善这条逻辑增量链路。瘦身细节见 [docs/operations/db-slimming.md](docs/operations/db-slimming.md)，同步职责、验证与故障证据见 [docs/operations/services.md](docs/operations/services.md#db-sync-职责验证与故障证据)。
+`--dry-run` 零写、只报待清行数与字节。`slim` 显式返回 `retained`/`compacted` 两阶段结果；它只服务本机低频磁盘回收，独立于 DB sync——同步链路自行从 live 库取一致快照做逻辑增量，对 live DB 手动 VACUUM 不会改善它。瘦身细节见 [docs/operations/db-slimming.md](docs/operations/db-slimming.md)；同步机制、职责与故障证据见 [docs/operations/services.md](docs/operations/services.md#db-sync-职责验证与故障证据) 与 [docs/architecture.md](docs/architecture.md)。
 
 ## 配置
 
@@ -231,13 +231,13 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 
 | 服务 | Supervisor | 作用 |
 |---|---|---|
-| `serve` | launchd | FastAPI web server on :8000 |
-| `tunnel` | launchd | Cloudflare tunnel 到你的公网域名 |
+| `serve` | launchd | FastAPI web server（fork 默认 :8000；本产线 Mac 实例绑 8010 仅作局域网预览，公网生产由腾讯服务器承载 `news.aiplanet.live`） |
+| `tunnel` | launchd | Cloudflare tunnel 到你的公网域名（本产线旧 `aiplanet.live` 入口已退役待域名下线；tunnel 仍承载同机其他站点） |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A4 以 severity lifecycle 决定 firing / resolved，page 通过 `im-notify --alert` 发往 `ALERT`，notice 通过 `im-notify` 发往 `NOTIFICATION` |
 | `performance-probe` | launchd, StartInterval=300 | 每 5 分钟经 `./run.sh performance-probe` 启动；只保存 pipeline idle 窗样本，22 条确认窗后超预算以 page 投递 |
 | `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
-| `DB sync → 腾讯服务器` | cron（`41 1,6,11,16,21 * * *`） | Mac producer 每 5 小时生成 base-only transfer artifact，触发服务器候选槽重建/验证并等待 `committed`；这是公网副本持续新鲜的生产入口 |
+| `DB sync → 腾讯服务器` | cron（5 小时级，最终频率待 G2 定稿） | Mac producer 同步 base-only 副本并等服务器重建/验证到 `committed`；公网副本新鲜度的生产入口，排期与细节见 [services.md](docs/operations/services.md#db-sync-职责验证与故障证据) |
 
 ### 部署 / 移除 / 查状态
 

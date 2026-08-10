@@ -58,7 +58,7 @@
 
 ## Mac 主库一次性物理瘦身 + 回滚（停写维护窗口）
 
-本段只处理 Mac primary 的 `data/radar.db` 原地 VACUUM；腾讯服务器上的只读 serving replica 由独立的 strip/rebuild 同步状态机管理，不在这里原地瘦身。整个流程 **fail-closed 严格有序**，任一 gate 不满足即停在该步：
+本段只处理 Mac primary 的 `data/radar.db` 原地 VACUUM；腾讯服务器上的只读 serving replica 由独立的 base-only 逻辑增量 + 服务器候选槽重建的同步状态机管理，不在这里原地瘦身。整个流程 **fail-closed 严格有序**，任一 gate 不满足即停在该步：
 
 1. **停写放行门**（正向取证，非"发个停止命令"）：`crontab -l` / launchd 清点并 disable 本项目**全部**定时项（pipeline、performance-probe、DB sync 等）；`pipeline.sh` 终态以 `.pipeline.lock` 目录不存在为准（不用子进程 pgrep，父进程 stage 间隙无子进程仍会启下一 writer）；`PRAGMA wal_checkpoint(TRUNCATE)` 返回 `busy=0` 证无活跃写事务。
 2. **停本机 reader**：任何仍指向该 primary 的本机 serve 都经既有 supervisor 正常 stop，非直接 kill。至此宿主对 `radar.db` 无打开连接。

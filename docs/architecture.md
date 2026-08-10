@@ -20,7 +20,7 @@ src/airadar/
 ├── stage_common.py     # Pipeline stage 共享原语（时间、ProviderItem、evaluation 写入）
 ├── topics.py           # 受控标签词表 + 确定性标签规则
 ├── wechat_text.py      # 微信标题文本归一化
-├── migrations/         # SQL 迁移脚本（001-014），幂等执行
+├── migrations/         # SQL 迁移脚本（001-015），幂等执行
 │
 ├── sources/            # 信源管理
 │   ├── loader.py       #   解析 data/sources.toml -> SourceConfig

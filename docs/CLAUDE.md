@@ -69,6 +69,8 @@
 | [README.md](issues/README.md) | Domain 索引 |
 | [ux-issues.md](issues/ux-issues.md) | 端到端测试发现的产品 UX 问题（contract 在实际产品中被 broken） |
 | [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时）；append-only queue |
+| [deploy.md](issues/deploy.md) | 部署与 DB 同步链路的运维问题（sync/apply/cron/verifier，含影响其验收的测试基线） |
+| [docs-quality.md](issues/docs-quality.md) | 文档自身的质量债（README 定位/重复/可观察性等审查遗留） |
 | [general.md](issues/general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
 | [harness-issues.md](issues/harness-issues.md) | Agent harness、wrapper、hook 或 skill 行为问题 |
 
@@ -114,6 +116,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260809-fts-rebuild-sync/](plans/20260809-fts-rebuild-sync/) | DB 跨洋同步改造：持久 base-only replica + 服务器候选槽重建 FTS，稳态 16.39MB<20MB、零停机 3500/3500 |
 | [20260720-db-slimming/](plans/20260720-db-slimming/) | radar.db 瘦身：清可再生 `summary_json` 缓存 + VACUUM + 常驻保留（Option A），生产 2.28GB→1.495GB |
 | [20260607-wechat-read-original-link/](plans/20260607-wechat-read-original-link/) | `/wechat` 详情页与列表卡片新增显式「访问原文」链接跳转公众号原文 |
 | [20260607-wechat-interpretation-search/](plans/20260607-wechat-interpretation-search/) | 微信文章解读页 `/wechat` 支持按标题、公众号、摘要和标签搜索 |

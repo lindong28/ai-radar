@@ -14,7 +14,7 @@
 | performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**：homepage 误标缺陷已修复，但仍须部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing 才按文档手动安装 | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 | DB sync → 腾讯服务器 (5h) | cron (`41 1,6,11,16,21 * * *`)，`run-or-alert --key ai-radar-db-sync` 包裹，失败经 im-notify 告警、成功自复位 | 已启用；这是公网副本持续新鲜的 Mac producer | 手动跑：`deploy/sync/sync-db-cron.sh`（完整 cron wrapper）或 `deploy/sync/sync-db-to-server.sh`（裸 producer） | [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) · [ADR-013](../adr/013-db-sync-cron-agent-socket-auth.md) · [ADR-014](../adr/014-ship-base-only-db-and-rebuild-fts.md) |
 
-`./install.sh` / `./uninstall.sh` / `./status.sh` 管理 serve、tunnel、pipeline、alert、performance-probe 这 5 个服务。probe 的专属 plist 经 `./run.sh performance-probe` 启动，保留 external watchdog；pipeline 继续使用既有 `*/15` user crontab，未迁移到 launchd。remediation（按上表 gate）与 DB sync 这两条 cron 不在 `install.sh`/`uninstall.sh`/`status.sh` 管理范围内，手工按 [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) 模板增删、`crontab -l` 查状态。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
+`./install.sh` / `./uninstall.sh` / `./status.sh` 管理 serve、tunnel、pipeline、alert、performance-probe 这 5 个服务。probe 的专属 plist 经 `./run.sh performance-probe` 启动，保留 external watchdog；pipeline 继续使用既有 `*/15` user crontab，未迁移到 launchd。remediation（按上表 gate）与 DB sync 这两条 cron 不在 `install.sh`/`uninstall.sh`/`status.sh` 管理范围内：DB sync 手工按 [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) 模板增删，remediation 的 cron 行用 README「用户旅程性能监控」节的写入片段；两者都用 `crontab -l` 查状态。脚本契约见维护者机器上的 `~/.claude/references/service-operations-protocol.md` §3.3（agent 配置仓文件，不随本仓分发）。
 
 `./install.sh` 会逐服务检查脚本可判定的依赖。缺少 `pipeline` 的 LLM key 时，交互式终端会询问 `DEEPSEEK_API_KEY` 并写入项目 `.env`；`alert` 则要求 `FEISHU_GENERAL_ALERT_WEBHOOK` 和 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` **两者同时存在**，任缺一个都 fail-closed，不生成部分 launchd 配置。交互式终端会逐个询问缺失 webhook 并写入 `.env`；非交互环境跳过 alert 并在 summary 列出缺失 key。`alert` 运行时还需要部署机已从 `ai-agent-config` 安装 `~/.local/bin/im-notify`；tracked launchd 模板已把 `~/.local/bin` 加入该作业的 `PATH`。默认服务 `performance-probe` 与微信原文抓取都依赖 Playwright Chromium；部署前必须显式运行 `uv run playwright install chromium`，`install.sh` 不自动下载或校验该浏览器。`tunnel` 缺少 `deploy/cloudflared/config.yml` 时不会询问密钥，需先从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置后重跑 `./install.sh tunnel`。环境变量依赖读取顺序为当前进程环境、项目 `.env`、`~/.claude/.env`。
 
@@ -89,9 +89,9 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 
 ## Cloudflare Cache Rule（public 分页边缘缓存）
 
-`aiplanet.live` 上有一条 **repo 外**的 Cloudflare 边缘缓存配置，用于把公开旅程的翻页延迟从边缘直接命中，而不是每次回源。它不是 launchd / cron 服务，`install.sh` / `status.sh` 不管理，改动只在 Cloudflare dashboard 上做；此处记录其运维事实，避免唯一副本留在会被清理的 `plans/` 工作区。
+`aiplanet.live` zone 上有一条 **repo 外**的 Cloudflare 边缘缓存配置（Cache Rule）。**当前生产不在其路径上**：`news.aiplanet.live` DNS 直解腾讯服务器 IP、不经 Cloudflare 代理（响应无 `cf-ray`/`CF-Cache-Status`），故边缘缓存与其 HIT 验证暂不适用；origin 侧缓存头契约仍在生效并已实测正确。本节保留规则事实与验证步骤，供公网主机将来重新经 Cloudflare 代理时启用。它不是 launchd / cron 服务，`install.sh` / `status.sh` 不管理，改动只在 Cloudflare dashboard 上做。
 
-规则名 **`AI Radar short public pagination TTL`**（当前 **Active**），位置 Cloudflare dashboard → `aiplanet.live` → **Caching** → **Cache Rules**。
+规则名 **`AI Radar short public pagination TTL`**（当前 **Active**），位置 Cloudflare dashboard → zone `aiplanet.live` → **Caching** → **Cache Rules**。公网主机名现为 `news.aiplanet.live` 且暂不经 Cloudflare（见上）；将来重新代理时先在 dashboard 核对规则表达式是否覆盖该主机名。
 
 | 项 | 值 |
 |---|---|
@@ -108,16 +108,16 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 
 ```bash
 # 1. origin 直连——四条 cache-safe 路径应回 public,max-age=90,swr=30
-curl -sS -D - -o /dev/null 'http://127.0.0.1:8000/wechat?page=1'
-curl -sS -D - -o /dev/null 'http://127.0.0.1:8000/api/v1/curated?page=2&limit=40'
+curl -sS -D - -o /dev/null 'http://127.0.0.1:8010/wechat?page=1'   # 端口按本机 serve 实际绑定（本产线 Mac=8010）
+curl -sS -D - -o /dev/null 'http://127.0.0.1:8010/api/v1/curated?page=2&limit=40'
 # q= / 筛选 / 非 200 应回 private,no-store
-curl -sS -D - -o /dev/null 'http://127.0.0.1:8000/wechat?q=&page=1'
+curl -sS -D - -o /dev/null 'http://127.0.0.1:8010/wechat?q=&page=1'
 
 # 2. 经 CF——同一 cache-safe URL 两秒内请求两次，第二次应 CF-Cache-Status: HIT 且带 Age
-curl -sS --compressed -D - -o /dev/null 'https://aiplanet.live/wechat?page=1'; sleep 2
-curl -sS --compressed -D - -o /dev/null 'https://aiplanet.live/wechat?page=1'
+curl -sS --compressed -D - -o /dev/null 'https://news.aiplanet.live/wechat?page=1'; sleep 2
+curl -sS --compressed -D - -o /dev/null 'https://news.aiplanet.live/wechat?page=1'
 # 3. 搜索仍不可缓存——q= 请求应 private,no-store，无 Age、无 HIT
-curl -sS --compressed -D - -o /dev/null 'https://aiplanet.live/wechat?q=OpenAI&page=1'
+curl -sS --compressed -D - -o /dev/null 'https://news.aiplanet.live/wechat?q=OpenAI&page=1'
 ```
 
 第二次仍是 `DYNAMIC`/`BYPASS` 时，依次检查规则顺序、表达式、Edge TTL 模式与 origin header，再考虑动应用代码。命中效果反映在 `performance-probe` 的旅程延迟样本上（翻页 API 实测 3-5s → 0.5-1.4s），细节见 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控)。
@@ -130,14 +130,15 @@ The `ai-radar` tunnel is now a shared production dependency for two public sites
 
 | Hostname | Local service | Owner repo | Notes |
 |---|---|---|---|
-| `aiplanet.live` | `http://127.0.0.1:8000` | `~/research/ai-radar` | Primary AI Radar web app. |
-| `sjtu.aiplanet.live` | `http://localhost:8100` | `~/research/sjtu-aaa` | SJTU 3A alumni site. `/admin` and `/api/admin` must stay blocked by the tunnel-level `http_status:403` rule above the SJTU main ingress rule. |
+| `aiplanet.live` | `http://127.0.0.1:8000` | `~/research/ai-radar` | **已退役入口**：Mac serve 已改绑 8010（本地 plist 明文禁止回绑 8000，仅限局域网/tailscale 预览），该 ingress 现回 502；域名下线待上游 P5。AI Radar 公网生产 = 腾讯服务器双槽承载的 `news.aiplanet.live` |
+| `sjtu.aiplanet.live` | `http://localhost:8100` | `~/research/sjtu-aaa` | SJTU 3A alumni site. `/admin` 门禁由 Cloudflare Access 承担（2026-08 起；**不得**在 tunnel 配置加回历史上的 `http_status:403` 规则——见 `~/research/sjtu-aaa/docs/operations/services.md` 的禁止说明，以该仓为权威）。 |
 
 Before editing, reinstalling, or removing this tunnel, inspect `~/research/sjtu-aaa/docs/operations/services.md` and preserve the SJTU ingress rules. A catch-all or rewritten tunnel config that only keeps `aiplanet.live` will silently take the SJTU site offline even if AI Radar still looks healthy. After any tunnel change, verify both:
 
 ```bash
-curl -sf https://aiplanet.live/api/v1/healthz
-curl -sf https://sjtu.aiplanet.live/api/v1/healthz
+curl -sf https://news.aiplanet.live/api/v1/healthz   # AI Radar 公网生产（腾讯服务器，不经此 tunnel）
+curl -sf https://sjtu.aiplanet.live/api/v1/healthz    # SJTU 站仍经本 tunnel，改动前后必须验证
+# 旧 https://aiplanet.live 现回 502（Mac serve 已移 8010），是预期状态、非故障
 curl -s -o /dev/null -w '%{http_code}\n' https://sjtu.aiplanet.live/admin
 ```
 
@@ -145,8 +146,8 @@ curl -s -o /dev/null -w '%{http_code}\n' https://sjtu.aiplanet.live/admin
 
 ```bash
 ./status.sh                                        # 5 行总览
-curl -sf http://127.0.0.1:8000/api/v1/healthz && echo serve_ok
-curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok
+curl -sf http://127.0.0.1:8010/api/v1/healthz && echo serve_ok   # 本产线 Mac serve 现绑 8010（generic fork 按自己的端口）
+curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok   # 仅适用于经本 tunnel 发布的 fork；本产线该检查已不适用（本机 env 的 SITE_DOMAIN 仍指向已退役的 aiplanet.live，公网核查用 https://news.aiplanet.live）
 test -x "$HOME/.local/bin/im-notify"
 bash -lc 'source deploy/lib/services.sh; if missing="$(alert_webhook_missing_keys)"; then echo "missing: $missing"; exit 1; else echo "both webhook keys configured"; fi'
 plutil -p deploy/launchd/ai-radar-alert.plist | rg -o 'FEISHU_GENERAL_(ALERT|NOTIFICATION)_WEBHOOK' | sort -u

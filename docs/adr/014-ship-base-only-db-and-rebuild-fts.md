@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-10
-- 关联: `plans/20260809-fts-rebuild-sync`；ADR-013 的 5 小时 Mac producer 调度
+- 关联: [docs/plans/20260809-fts-rebuild-sync/](../plans/20260809-fts-rebuild-sync/)；ADR-013 的 5 小时 Mac producer 调度
 
 ## Context
 
