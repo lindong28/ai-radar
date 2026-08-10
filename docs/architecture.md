@@ -215,6 +215,42 @@ data/sources.toml
 
 每个阶段只处理尚未完成对应评估的新条目。`pipeline.sh` 按顺序调度全部阶段，`interpret` 位于最后且 preflight 缺 ai-assistant 依赖时跳过，不阻断前置抓取/精选。
 
+### Mac primary → Tencent serving replica
+
+公网副本同步采用“传 base、服务器重建 FTS”，而不是传输 primary 的 FTS 页面。FTS5 segment merge 会重写、重定位大量索引页；旧链路因此在真实增量窗口实发约 1.9GB，而基础表逻辑变化只有很小一部分。每轮重新 DROP/VACUUM 或 fresh-copy base-only DB 同样会重编号大部分 SQLite 页面，所以当前机制维护一份跨轮持久的 base-only shipping replica，并在原布局上应用逻辑差异。
+
+```text
+Mac live radar.db (WAL, pipeline keeps writing)
+        │ query_only SQLite backup API
+        ▼
+immutable point-in-time snapshot (含真实 items_fts oracle)
+        ├── manifest v2: snapshot-bound FTS digest + raw/HTTP probes
+        │
+        └── PK logical diff ──▶ persistent base-only shipping replica
+                                  │ full non-FTS schema/table reconcile
+                                  │ GNU rsync 4KiB delta vs last accepted basis
+                                  ▼
+Tencent immutable claimed base-only artifact + hash-keyed manifest sidecar
+                                  │ copy to inactive slot
+                                  ▼
+mutable serving candidate: create/rebuild FTS → equality/MATCH/HTTP gates
+                                  │ nginx switch → canonical consumer/route gates
+                                  ▼
+committed serving slot + base-only basis/receipt
+```
+
+Mac `sync-db-to-server.sh` 是 producer：它从 live DB 的标准 WAL reader 连接立即设置并回读 `PRAGMA query_only=ON`，经 SQLite backup API 创建一致 snapshot；live DB 与 snapshot/replica/manifest 必须 path 与 inode 均不同。`logical_delta.py` 动态枚举全部非 FTS schema/table，以稳定 PK 计算 INSERT/UPDATE/DELETE（`sqlite_sequence` 单独处理），暂停普通 trigger 后就地更新 persistent replica，再做全表 count/digest 双向对账。对账失败时丢弃 replica 并 base-only bootstrap 自愈；该轮不伪装成稳态小增量。
+
+每轮对账后的 shipping replica 字节态成为 immutable base-only transfer artifact，其完整 SHA-256 是 `snapshot_id`。它不含 `items_fts`、FTS shadow tables 或写这些对象的 triggers，但保留 `items`、`sources`、`item_evaluations` 等重建依赖。GNU rsync 使用 `--no-whole-file --block-size=4096`，两端支持时加 zstd level 3；delta basis 只能是服务器最后接受的同形 base-only artifact。2026-08-10 生产 steady round 的 DB 实发 16.39M（manifest 822.90K，合计约 17.21M），相对旧约 1.9G 降约 99.1%。
+
+`build_fts_manifest.py` 生成 snapshot-bound manifest v2 sidecar。`snapshot_id` 绑定 transfer artifact，`manifest_sha256` 是 canonical manifest 自哈希；FTS oracle 包含六字段全表 row count/digest，以及 title/content_text/source_name/author/title_zh 五个字段专属 probe。每个 probe 同时保存 raw FTS5 `matches`/`field_matches`/`unqualified_matches`，以及按应用真实去重、prefilter/scoring visibility 计算的 `timeline_http_matches`。前者裁判 SQLite MATCH 与全量 FTS 重建，后者裁判 candidate/canonical `/api/v1/timeline`；两套集合不能互相替代。sidecar 先按完整 snapshot hash 发布，再原子发布 `radar.db.incoming`，consumer 只接受 identity 完全匹配的组合。
+
+Server `apply_db_update.py` 是 consumer：claim 后保留 immutable base-only artifact，复制成 inactive slot 的 mutable serving candidate，在 candidate 上按 migration/trigger 语义创建并重建 FTS，再依次验证 base fidelity、六字段全量等价、raw MATCH、candidate HTTP、canonical route/public search。transfer artifact 与 serving candidate 是两种 identity：前者持有 rollback/snapshot authority，也是下一轮 basis 的唯一来源；后者因 FTS rebuild 改变字节，只能服务，绝不能反向成为 basis。
+
+切流采用 delayed final commit。post-switch consumer gates 全部通过前，旧槽、旧 basis 与旧 receipt 始终可恢复；失败时自动切回旧槽、复验 canonical 旧状态、quarantine 新 candidate，且不推进 basis/receipt。只有 durable `consumer_verified` 可以 finalize：从 immutable claimed base 推进 `basis/radar.db.upload`，写 schema v2 receipt，再进入 `committed`。因此 public traffic 已短暂指向 candidate 也不等于 snapshot 已获复制 authority。
+
+崩溃重试 authority 是 `(snapshot_id, manifest_sha256, verifier_identity)`。当前 verifier identity 为 `fts-apply-v4`；identity 不变时，pre-switch crash 每 snapshot 最多允许一次 fresh rebuild retry，第二次 crash 或 deterministic gate failure 进入 durable quarantine。verifier 语义变化必须显式 bump `VERIFIER_VERSION`；已绑定 artifact/manifest 的 `rebuilding` / `prepared` retry checkpoint 遇到新版本时进入 `retry_blocked_verifier_changed`，禁止新 verifier 静默继承 retry。若漂移发生在尚未绑定 manifest 的 `claiming`，则 fail closed 并 quarantine。post-switch pending states 只允许回滚/quarantine，不允许向前猜测；journal、receipt、quarantine failure record 都持久绑定证据。完整决策见 [ADR-014](adr/014-ship-base-only-db-and-rebuild-fts.md)，运维入口见 [operations/services.md](operations/services.md#db-sync-职责验证与故障证据)。
+
 ## Performance Monitoring and Remediation
 
 `performance-probe` 是 CLI 入口层下的只读浏览器探针：专属 per-file LaunchAgent 以 `StartInterval=300` 经 `./run.sh performance-probe` 启动，依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定。每条旅程测量前后都读取 `.pipeline.lock` 与 pipeline 持久 activity generation；只有两端都证明 idle 且 generation 未变时，`performance/journey_monitor.py` 才把该样本写入 `logs/performance/`，并让 `PERF:<journey>:<vantage>:idle` 窗口消费它。pipeline 正在运行、owner 不可信或测量期间 activity 变化时跳过该次旅程尝试，不保存对应样本、不让 non-idle 输入进入规则。每个 cell 保留 20 个 warm samples + 3 个逐样本窗口，首个 confirmed firing 需要 22 条有效 idle 样本，P75/P95 超预算或 hard failure 连续满足确认窗后直接输出 page。样本和诊断证据保留 14 天；两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
@@ -435,6 +471,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | 修改真实计数缓存或页码 clamp | `web/routes/pagination.py`, `web/routes/timeline.py`, `web/routes/curated_archive.py`, `web/routes/wechat.py` |
 | 修改 pipeline stage 通用 evaluation 原语 | `stage_common.py` + `prefilter/runner.py`, `scorer/runner.py`, `enrich/runner.py` |
 | 修改数据库 schema | `migrations/` 下新建 SQL 文件 |
+| 修改 Mac→Tencent DB 同步、FTS oracle 或 server apply 状态机 | `deploy/sync/sync-db-to-server.sh`, `logical_delta.py`, `snapshot_db.py`, `build_fts_manifest.py`, `apply_db_update.py` + [ADR-014](adr/014-ship-base-only-db-and-rebuild-fts.md) |
 | 修改标签词表 | `topics.py`（CONTROLLED_VOCABULARY） |
 | 前端页面修改 | `web/templates/`（`/`、`/all` SSR 首屏）+ `web/static/`（JS/CSS 与静态页面） |
 | 调整微信文章解读 | `interpret/runner.py`、`web/routes/wechat.py`、`web/templates/wechat*.html` |

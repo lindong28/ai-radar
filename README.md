@@ -152,10 +152,10 @@ RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich
 
 ```bash
 ./run.sh admin db retain [--keep-days N] [--dry-run]  # 只清超窗口的历史 summary 缓存
-./run.sh admin db slim   [--keep-days N] [--dry-run]  # 清缓存 + VACUUM 回收磁盘（DB 同步前跑）
+./run.sh admin db slim   [--keep-days N] [--dry-run]  # 清缓存 + VACUUM 回收磁盘（仅低频磁盘维护）
 ```
 
-`--dry-run` 零写、只报待清行数与字节。`slim` 显式返回 `retained`/`compacted` 两阶段结果，细节与生产 apply/回滚见 [docs/operations/db-slimming.md](docs/operations/db-slimming.md)。
+`--dry-run` 零写、只报待清行数与字节。`slim` 显式返回 `retained`/`compacted` 两阶段结果；它只服务本机低频磁盘回收，独立于 DB sync。Mac producer `deploy/sync/sync-db-to-server.sh` 会从 live WAL 库创建 `query_only` 一致快照，把非 FTS 逻辑变化就地应用到持久 base-only shipping replica，再用 GNU rsync 传输；服务器在候选槽重建并验证 FTS 后才切流。对 live DB 做 VACUUM 只会重排 SQLite 页面，不能改善这条逻辑增量链路。瘦身细节见 [docs/operations/db-slimming.md](docs/operations/db-slimming.md)，同步职责、验证与故障证据见 [docs/operations/services.md](docs/operations/services.md#db-sync-职责验证与故障证据)。
 
 ## 配置
 
@@ -237,6 +237,7 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A4 以 severity lifecycle 决定 firing / resolved，page 通过 `im-notify --alert` 发往 `ALERT`，notice 通过 `im-notify` 发往 `NOTIFICATION` |
 | `performance-probe` | launchd, StartInterval=300 | 每 5 分钟经 `./run.sh performance-probe` 启动；只保存 pipeline idle 窗样本，22 条确认窗后超预算以 page 投递 |
 | `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
+| `DB sync → 腾讯服务器` | cron（`41 1,6,11,16,21 * * *`） | Mac producer 每 5 小时生成 base-only transfer artifact，触发服务器候选槽重建/验证并等待 `committed`；这是公网副本持续新鲜的生产入口 |
 
 ### 部署 / 移除 / 查状态
 
@@ -247,6 +248,8 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 ```
 
 服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+
+DB sync cron 不由上述三个通用生命周期脚本管理；用 `crontab -l` 核对排期，以 `deploy/sync/sync-db-cron.sh` 手动走完整 cron wrapper。详见 [服务清单的 DB sync runbook](docs/operations/services.md#db-sync-职责验证与故障证据)。
 
 `./install.sh` 会检查各服务能由脚本判定的依赖；Playwright Chromium 是需按快速开始步骤显式安装的运行时前置：
 

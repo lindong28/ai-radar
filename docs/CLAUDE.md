@@ -32,7 +32,7 @@
 | [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access、用户旅程性能监控与边缘缓存 runbook |
 | [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、真名头像 backfill、迁移留尾记录 |
 | [ai-assistant-integration.md](operations/ai-assistant-integration.md) | 可选外部 summary-agent 集成：启用条件、`./run.sh interpret` 契约、默认关闭语义 |
-| [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留（随 curate 自动、keep_days 默认 7）、`admin db retain`/`admin db slim` 用法、VACUUM 时机、freelist 须在 `.backup` 副本测的坑、生产 apply+回滚 |
+| [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
 
 ### docs/references/ [Developer]
 
@@ -91,6 +91,8 @@
 | [010-db-slimming-clear-regenerable-cache.md](adr/010-db-slimming-clear-regenerable-cache.md) | radar.db 瘦身选清可再生 summary 缓存（Option A）+ 常驻保留 + 历史 digest TTL |
 | [011-perf-idle-only-probing.md](adr/011-perf-idle-only-probing.md) | PERF 改为 idle-only 探测并用 per-file launchd 调度（仅 supersede ADR-008 的 PERF F1/F4） |
 | [012-single-dom-mobile-layer.md](adr/012-single-dom-mobile-layer.md) | 移动层用单套 DOM + media query 重塑，不复制参考站的双 DOM |
+| [013-db-sync-cron-agent-socket-auth.md](adr/013-db-sync-cron-agent-socket-auth.md) | DB sync 自动化用 launchd ssh-agent socket 发现做 cron SSH 认证 |
+| [014-ship-base-only-db-and-rebuild-fts.md](adr/014-ship-base-only-db-and-rebuild-fts.md) | DB sync 传输持久 base-only artifact，并在服务器候选槽重建与验证 FTS |
 
 ### docs/experiences/ [Agent]
 

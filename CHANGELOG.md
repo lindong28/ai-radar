@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-10
+
+- 数据同步现只传 Mac primary 的非 FTS base artifact，并在腾讯服务器 inactive candidate 上重建、逐字段验证 FTS 后切流；同步不再要求事先 `admin db slim` / VACUUM。真实 steady round 的 DB 传输从旧链路约 1.9GB 降到 16.39M（连同 822.90K manifest 约 17.21M，低于 20MB gate），两轮切换共 3500/3500 个公网 health 样本全为 200，title/content/source/author/title_zh 五字段搜索 IDs/count 均与 Mac snapshot oracle 一致。失败 snapshot 会保留旧 serving release并进入可诊断 quarantine或 manual-block，Mac producer 等待绑定本轮 identity 的 `committed` 后才报成功；既有每 5 小时 cron继续作为 freshness入口。
+
 ## 2026-08-09
 
 - 站点数据同步（Mac 主库 → 腾讯服务器只读副本）从纯手动改为每 5 小时自动执行（cron + `run-or-alert` 失败告警；SSH 认证经 launchd ssh-agent socket 发现，见 ADR-013）。此前同步靠手动触发，8 月 8 日起无人执行导致公网整站停更约一天半；本次同时补上「远端拒绝快照」的检测（每轮同步前按服务器自身时钟核对已接受快照的年龄，超过 11 小时阈值后在下一采样点上报，最坏约 16 小时发现）。

@@ -12,11 +12,57 @@
 | alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1–A4 以 per-severity lifecycle 决定 firing / resolved，page 走 `im-notify --alert` 的 `ALERT` webhook，notice 走 `im-notify` 的 `NOTIFICATION` webhook；launchd 进程崩溃由 fleet watchdog 覆盖 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
 | performance probe (5min) | launchd, `StartInterval=300`, `RunAtLoad=true` | per-file LaunchAgent；只在 pipeline idle 窗保存/评估样本 | `./install.sh performance-probe` / `./uninstall.sh performance-probe` / `./status.sh performance-probe` | [ai-radar-performance-probe.plist.example](../../deploy/launchd/ai-radar-performance-probe.plist.example) · [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 | performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**：homepage 误标缺陷已修复，但仍须部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing 才按文档手动安装 | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
-| DB sync → 腾讯服务器 (5h) | cron (`41 1,6,11,16,21 * * *`)，`run-or-alert --key ai-radar-db-sync` 包裹，失败经 im-notify 告警、成功自复位 | 在 user crontab（2026-08-09 起；此前手动） | 手动跑：`deploy/sync/sync-db-cron.sh`（wrapper）或 `deploy/sync/sync-db-to-server.sh`（裸 sync） | [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) · [ADR-013](../adr/013-db-sync-cron-agent-socket-auth.md) |
+| DB sync → 腾讯服务器 (5h) | cron (`41 1,6,11,16,21 * * *`)，`run-or-alert --key ai-radar-db-sync` 包裹，失败经 im-notify 告警、成功自复位 | 已启用；这是公网副本持续新鲜的 Mac producer | 手动跑：`deploy/sync/sync-db-cron.sh`（完整 cron wrapper）或 `deploy/sync/sync-db-to-server.sh`（裸 producer） | [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) · [ADR-013](../adr/013-db-sync-cron-agent-socket-auth.md) · [ADR-014](../adr/014-ship-base-only-db-and-rebuild-fts.md) |
 
 `./install.sh` / `./uninstall.sh` / `./status.sh` 管理 serve、tunnel、pipeline、alert、performance-probe 这 5 个服务。probe 的专属 plist 经 `./run.sh performance-probe` 启动，保留 external watchdog；pipeline 继续使用既有 `*/15` user crontab，未迁移到 launchd。remediation（按上表 gate）与 DB sync 这两条 cron 不在 `install.sh`/`uninstall.sh`/`status.sh` 管理范围内，手工按 [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) 模板增删、`crontab -l` 查状态。脚本契约见 [service-operations-protocol §3.3](~/.claude/references/service-operations-protocol.md)。
 
 `./install.sh` 会逐服务检查脚本可判定的依赖。缺少 `pipeline` 的 LLM key 时，交互式终端会询问 `DEEPSEEK_API_KEY` 并写入项目 `.env`；`alert` 则要求 `FEISHU_GENERAL_ALERT_WEBHOOK` 和 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` **两者同时存在**，任缺一个都 fail-closed，不生成部分 launchd 配置。交互式终端会逐个询问缺失 webhook 并写入 `.env`；非交互环境跳过 alert 并在 summary 列出缺失 key。`alert` 运行时还需要部署机已从 `ai-agent-config` 安装 `~/.local/bin/im-notify`；tracked launchd 模板已把 `~/.local/bin` 加入该作业的 `PATH`。默认服务 `performance-probe` 与微信原文抓取都依赖 Playwright Chromium；部署前必须显式运行 `uv run playwright install chromium`，`install.sh` 不自动下载或校验该浏览器。`tunnel` 缺少 `deploy/cloudflared/config.yml` 时不会询问密钥，需先从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置后重跑 `./install.sh tunnel`。环境变量依赖读取顺序为当前进程环境、项目 `.env`、`~/.claude/.env`。
+
+## DB sync 职责、验证与故障证据
+
+### 职责边界与 freshness path
+
+| 位置 | 责任 | 不负责 |
+|---|---|---|
+| Mac cron + `deploy/sync/sync-db-cron.sh` | 每 5 小时启动 producer，恢复 cron 的 ssh-agent 环境，检查服务器 receipt age，并把 producer 非零退出交给 `run-or-alert` | 不接受 snapshot、不决定切流 |
+| Mac `deploy/sync/sync-db-to-server.sh` | 以 `query_only` WAL reader 创建一致快照；更新并逐表对账持久 base-only shipping replica；生成 manifest v2；用 GNU rsync 发布 sidecar + DB；触发 server apply；轮询本轮 snapshot 直到 `committed`、`quarantined`、manual-block 或超时 | 不修改 live primary；不把 FTS 传到服务器；不把“上传完成”当“已服务” |
+| Server `ai-radar-db-apply.service` | oneshot consumer：claim base-only artifact，在 inactive candidate 上重建 FTS，做 SQLite/HTTP/route gates，切换、回滚或 quarantine，并只在 consumer gates 全过后推进 basis/receipt | 不 pull Mac 数据，不产生新 snapshot，不承担 freshness 排期 |
+| Server `ai-radar-db-apply.timer` | 安装但生产当前 disabled/inactive；若将来显式启用，只能 reconcile 已存在的 incoming/journal | 不是 producer，不能让公网数据自行变新 |
+
+当前 5 小时 Mac cron 是持续新鲜的唯一生产入口；单轮生产实测约 32–35 分钟。该排期已启用，但上游 P3 仍需用三轮连续自动成功证据完成验证，并由 G2 对照传输量、端到端耗时、陈旧度与资源成本确认最终频率；“cron 存在”本身不等于这些 gate 已完成。
+
+### 只读验证入口
+
+```bash
+# Mac：下列匹配必须恰输出一条当前 DB sync entry；日志末尾应出现本轮 terminal state committed
+crontab -l | rg '^[[:space:]]*41 1,6,11,16,21 \* \* \* .*run-or-alert --key ai-radar-db-sync -- .*/deploy/sync/sync-db-cron\.sh'
+tail -n 200 logs/sync-cron.log
+
+# Server：unit、active slot、serving snapshot、最近 apply 结果
+ssh tencent-webserver-china 'cd ~/ai-radar && deploy/server/status-server.sh'
+
+# Server authority：journal、已接受 receipt、apply 输出；不要用最新文件 mtime 代替 accepted receipt
+ssh tencent-webserver-china 'cd ~/ai-radar && cat data/switch-journal.json && cat data/accepted-snapshot.json'
+ssh tencent-webserver-china 'cd ~/ai-radar && tail -n 200 logs/db-apply.log && tail -n 200 logs/db-apply.err.log'
+
+# 真实入口仍须健康；需要验证一轮内容时再按 manifest 的五字段 probe 比 IDs/count
+curl -sf https://news.aiplanet.live/api/v1/healthz
+```
+
+成功终态必须同时满足：producer 报 `terminal state committed`；`switch-journal.json` 为 schema v2 `committed`；`accepted-snapshot.json` 的 `snapshot_id`、`manifest_sha256`、`serving_port` 与 journal 一致；server `basis/radar.db.upload` 的 SHA-256 等于该 `snapshot_id` 且没有 FTS objects；canonical health/search 命中新槽语义。只看到 rsync 成功、systemd oneshot 退出或 DB 文件出现都不是“已服务”的充分证据。
+
+### 可能遇到的非成功状态
+
+| journal state / producer 现象 | 含义与自动动作 | 证据位置 / 下一步 |
+|---|---|---|
+| `quarantining` / `quarantined` | 确定性 manifest、rebuild、等价或 consumer gate 失败，或 fresh retry 已耗尽；active release 保持或已回滚，失败 snapshot 不再自动回 incoming | `data/switch-journal.json` 给出 `failure_id/path/sha256` 绑定；`data/quarantine/<snapshot_id>/` 持久保存当时可捕获的 base/candidate/manifest 与 failure record，后者的 `evidence_status` 标明每项是 `captured`、`missing-at-failure` 或 `not-applicable`。先读 failure record 与 apply logs，不要删除 quarantine 或手改 journal |
+| `retry_blocked_verifier_changed` | checkpoint 的 `verifier_identity` 与当前 verifier 不同，自动 fresh retry 被阻止，`recovery_action=manual-intervention` | journal 的旧/新 verifier identity + last failure；确认 consumer-first rollout 与 authority 后再决定处置，不能靠重启绕过 |
+| `rollback_blocked_invalid_oracle` | post-switch 回滚 oracle 无法证明旧服务状态，basis/receipt 不推进，需人工裁决 | journal 的 `rollback_evidence`、`last_failure_*`，以及 apply logs；先保全两槽和旧 basis/receipt |
+| `finalize_blocked_invalid_authority` | `consumer_verified` 后 artifact/manifest/active route authority 漂移，final commit 被阻止，需人工裁决 | journal 的 `authority_evidence`、`last_failure_*`；basis/receipt 仍未推进 |
+| `rollback_failed` | consumer gate 失败后回切未收敛；journal 保留 `rollback-to-previous-serving` 恢复动作 | 先查 canonical health、active include、两槽 unit 与 journal；保留旧槽，按证据修复后才重新触发 apply reconcile |
+| producer terminal poll timeout | 本轮是否已接受未知；apply 可能仍在运行，也可能停在非 terminal 状态 | 立即读 journal、receipt、`systemctl status ai-radar-db-apply.service` 与两份 apply log；不要直接再启动第二轮 producer |
+
+`VERIFIER_VERSION` 当前为 `fts-apply-v4`。它是 retry authority 的一部分，不是展示版本：凡 base verification、candidate rebuild、manifest/row equality、raw MATCH、candidate/public HTTP probes 或直接契约输入发生语义变化，都必须随代码显式 bump。已绑定 artifact/manifest 的 `rebuilding` / `prepared` retry checkpoint 因版本不同进入 `retry_blocked_verifier_changed`；尚未绑定 manifest 的 `claiming` 则 fail closed 并 quarantine。两者都不能由新 verifier 静默继承一次 retry 权限。
 
 ### Alert 判定与 lifecycle
 
