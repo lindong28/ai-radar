@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -10,16 +11,46 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "deploy" / "sync" / "sync-db-to-server.sh"
+SNAPSHOT_HELPER = REPO_ROOT / "deploy" / "sync" / "snapshot_db.py"
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_snapshot_helper() -> ModuleType:
+    assert SNAPSHOT_HELPER.is_file(), "tracked snapshot helper is missing"
+    spec = importlib.util.spec_from_file_location("snapshot_db_fixture", SNAPSHOT_HELPER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _logical_digest(path: Path) -> str:
+    connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=rw", uri=True)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        dump = "\n".join(connection.iterdump()).encode("utf-8")
+    finally:
+        connection.close()
+    return hashlib.sha256(dump).hexdigest()
+
+
+def _assert_snapshot_consistent(source: Path, snapshot: Path) -> None:
+    assert snapshot.is_file()
+    assert _logical_digest(snapshot) == _logical_digest(source)
+    with sqlite3.connect(snapshot) as connection:
+        assert connection.execute("PRAGMA quick_check").fetchone() == ("ok",)
 
 
 def _create_live_db(path: Path) -> None:
@@ -269,6 +300,171 @@ def _run_producer(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_snapshot_helper_enables_and_verifies_query_only_before_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = _load_snapshot_helper()
+    source = tmp_path / "source.db"
+    snapshot = tmp_path / "snapshot.db"
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute("CREATE TABLE guarded (value TEXT)")
+        connection.execute("INSERT INTO guarded VALUES ('original')")
+        connection.commit()
+    finally:
+        connection.close()
+
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    class TrackingSource(sqlite3.Connection):
+        def execute(self, sql: str, parameters: Any = (), /):  # noqa: ANN201
+            statements.append(sql)
+            return super().execute(sql, parameters)
+
+        def backup(self, target: sqlite3.Connection, **kwargs: Any) -> None:
+            assert self.execute("PRAGMA query_only").fetchone() == (1,)
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                self.execute("INSERT INTO guarded VALUES ('forbidden')")
+            super().backup(target, **kwargs)
+
+    def tracking_connect(database: Any, *args: Any, **kwargs: Any):  # noqa: ANN202
+        if str(database).startswith("file:") and "mode=rw" in str(database):
+            kwargs["factory"] = TrackingSource
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(helper.sqlite3, "connect", tracking_connect)
+
+    helper.backup_database(source, snapshot)
+
+    assert statements[:2] == ["PRAGMA query_only=ON", "PRAGMA query_only"]
+    _assert_snapshot_consistent(source, snapshot)
+
+
+def test_wal_snapshot_succeeds_without_sidecars_and_preserves_source_bytes(
+    tmp_path: Path,
+) -> None:
+    helper = _load_snapshot_helper()
+    source = tmp_path / "source.db"
+    snapshot = tmp_path / "snapshot.db"
+    _create_live_db(source)
+    connection = sqlite3.connect(source)
+    try:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        connection.execute(
+            "UPDATE items SET fetched_at='2026-02-03T04:05:06Z' WHERE id='i-title'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    assert not Path(f"{source}-wal").exists()
+    assert not Path(f"{source}-shm").exists()
+    expected_digest = _logical_digest(source)
+    assert not Path(f"{source}-wal").exists()
+    assert not Path(f"{source}-shm").exists()
+    source_inode = source.stat().st_ino
+    source_sha256 = _sha256(source)
+
+    helper.backup_database(source, snapshot)
+
+    assert source.stat().st_ino == source_inode
+    assert _sha256(source) == source_sha256
+    assert _logical_digest(source) == expected_digest
+    _assert_snapshot_consistent(source, snapshot)
+
+
+def test_wal_snapshot_succeeds_with_active_writer_sidecars(tmp_path: Path) -> None:
+    helper = _load_snapshot_helper()
+    source = tmp_path / "source.db"
+    snapshot = tmp_path / "snapshot.db"
+    _create_live_db(source)
+    writer = sqlite3.connect(source)
+    try:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            "UPDATE items SET fetched_at='2026-03-04T05:06:07Z' WHERE id='i-title'"
+        )
+        writer.commit()
+        assert Path(f"{source}-wal").stat().st_size > 0
+        assert Path(f"{source}-shm").is_file()
+        expected_digest = _logical_digest(source)
+
+        helper.backup_database(source, snapshot)
+
+        assert _logical_digest(source) == expected_digest
+        _assert_snapshot_consistent(source, snapshot)
+    finally:
+        writer.close()
+
+
+def test_wal_snapshot_is_consistent_when_writer_starts_mid_backup(
+    tmp_path: Path,
+) -> None:
+    helper = _load_snapshot_helper()
+    source = tmp_path / "source.db"
+    snapshot = tmp_path / "snapshot.db"
+    connection = sqlite3.connect(source)
+    try:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        connection.execute("CREATE TABLE payload (id INTEGER PRIMARY KEY, value BLOB)")
+        connection.executemany(
+            "INSERT INTO payload(value) VALUES (?)",
+            [(b"x" * 2048,) for _ in range(3000)],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    assert not Path(f"{source}-wal").exists()
+    assert not Path(f"{source}-shm").exists()
+    writer_start = threading.Event()
+    writer_done = threading.Event()
+    writer_errors: list[BaseException] = []
+
+    def write_transaction() -> None:
+        try:
+            assert writer_start.wait(timeout=5)
+            with sqlite3.connect(source, timeout=5) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                writer.execute("INSERT INTO payload(value) VALUES (?)", (b"first",))
+                writer.execute("INSERT INTO payload(value) VALUES (?)", (b"second",))
+                writer.commit()
+        except BaseException as exc:  # preserve thread failures for the test thread
+            writer_errors.append(exc)
+        finally:
+            writer_done.set()
+
+    writer = threading.Thread(target=write_transaction)
+    writer.start()
+    started_mid_backup = False
+
+    def start_writer(_status: int, remaining: int, _total: int) -> None:
+        nonlocal started_mid_backup
+        if not started_mid_backup and remaining > 0:
+            started_mid_backup = True
+            writer_start.set()
+            assert writer_done.wait(timeout=5)
+
+    try:
+        helper.backup_database(source, snapshot, pages=1, progress=start_writer)
+    finally:
+        writer_start.set()
+        writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not writer_errors
+    assert started_mid_backup
+    with sqlite3.connect(snapshot) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM payload").fetchone() == (3002,)
+    _assert_snapshot_consistent(source, snapshot)
+
+
+def test_producer_default_apply_timeout_has_measured_headroom() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'APPLY_TIMEOUT_S="${AI_RADAR_SYNC_APPLY_TIMEOUT_S:-3600}"' in source
+
+
 def test_bootstrap_then_incremental_publish_content_addressed_manifest_first(
     tmp_path: Path,
 ) -> None:
@@ -502,12 +698,15 @@ def test_live_path_alias_is_refused_before_snapshot_removal(tmp_path: Path) -> N
     assert "radar.db.upload" not in calls
 
 
-def test_wal_live_database_is_backed_up_through_readonly_cli_mode(tmp_path: Path) -> None:
+@pytest.mark.parametrize("keep_writer_open", [False, True])
+def test_producer_snapshots_wal_with_or_without_sidecars(
+    tmp_path: Path, keep_writer_open: bool
+) -> None:
     if shutil.which("sqlite3") is None:
         pytest.skip("sqlite3 CLI is not installed")
     live = tmp_path / "live.db"
     _create_live_db(live)
-    writer = sqlite3.connect(live)
+    writer: sqlite3.Connection | None = sqlite3.connect(live)
     try:
         assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
         writer.execute("PRAGMA wal_autocheckpoint=0")
@@ -515,7 +714,14 @@ def test_wal_live_database_is_backed_up_through_readonly_cli_mode(tmp_path: Path
             "UPDATE items SET fetched_at='2026-02-03T04:05:06Z' WHERE id='i-title'"
         )
         writer.commit()
-        assert Path(f"{live}-wal").stat().st_size > 0
+        if keep_writer_open:
+            assert Path(f"{live}-wal").stat().st_size > 0
+            assert Path(f"{live}-shm").is_file()
+        else:
+            writer.close()
+            writer = None
+            assert not Path(f"{live}-wal").exists()
+            assert not Path(f"{live}-shm").exists()
         env = _producer_env(tmp_path, live)
 
         completed = _run_producer(env)
@@ -531,8 +737,7 @@ def test_wal_live_database_is_backed_up_through_readonly_cli_mode(tmp_path: Path
             for line in Path(env["FAKE_CALL_LOG"]).read_text(encoding="utf-8").splitlines()
             if line.startswith("SQLITE3")
         ]
-        assert sqlite_calls == [
-            f"SQLITE3 <-readonly> <{live}> <.backup '{snapshot}'>"
-        ]
+        assert sqlite_calls == []
     finally:
-        writer.close()
+        if writer is not None:
+            writer.close()

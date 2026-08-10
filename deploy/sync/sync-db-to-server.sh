@@ -9,6 +9,8 @@
 #   .backup, not a file copy   Copying a live database while the pipeline writes
 #                              produces a torn file. `VACUUM INTO` was tried and
 #                              rejected -- it corrupts the FTS5 inverted index.
+#                              The standard WAL reader is made query-only first;
+#                              read-only mode cannot create a missing WAL shm.
 #
 #   GNU rsync, or nothing      macOS ships Apple's openrsync (protocol 29). Its
 #                              negotiation with the server's rsync 3.x has been
@@ -39,7 +41,7 @@ REMOTE_APPLY_TRIGGER="${AI_RADAR_SYNC_REMOTE_APPLY_TRIGGER:-sudo systemctl start
 REMOTE_JOURNAL="${AI_RADAR_SYNC_REMOTE_JOURNAL:-$REMOTE_DATA/switch-journal.json}"
 REMOTE_RECEIPT="${AI_RADAR_SYNC_REMOTE_RECEIPT:-$REMOTE_DATA/accepted-snapshot.json}"
 REMOTE_PYTHON="${AI_RADAR_SYNC_REMOTE_PYTHON:-python3}"
-APPLY_TIMEOUT_S="${AI_RADAR_SYNC_APPLY_TIMEOUT_S:-900}"
+APPLY_TIMEOUT_S="${AI_RADAR_SYNC_APPLY_TIMEOUT_S:-3600}"
 APPLY_POLL_INTERVAL_S="${AI_RADAR_SYNC_APPLY_POLL_INTERVAL_S:-5}"
 SNAPSHOT="${AI_RADAR_SYNC_SNAPSHOT:-$REPO_ROOT/data/radar.db.snapshot}"
 REPLICA="${AI_RADAR_SYNC_REPLICA:-$REPO_ROOT/data/radar.db.shipping}"
@@ -284,7 +286,9 @@ main() {
   if [[ -e "$SNAPSHOT" || -L "$SNAPSHOT" ]]; then
     rm -- "$SNAPSHOT"
   fi
-  sqlite3 -readonly "$DB" ".backup '$SNAPSHOT'" || fail "read-only snapshot failed"
+  "$PYTHON" "$SCRIPT_DIR/snapshot_db.py" \
+    --source "$DB" --destination "$SNAPSHOT" \
+    || fail "query-only WAL snapshot failed"
   log "snapshot: $(du -h "$SNAPSHOT" | cut -f1)"
 
   # Verify before shipping: sending a snapshot the server will only reject
