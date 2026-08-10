@@ -118,6 +118,33 @@ def _execute_migration_idempotent(conn: sqlite3.Connection, sql: str) -> None:
 
 _FTS_MIGRATION = "003_add_fts5_search.sql"
 
+_FTS_PRECISE_REBUILD_SQL = """
+DELETE FROM items_fts;
+
+INSERT INTO items_fts(item_id, title, content_text, source_name, author, title_zh)
+SELECT
+  i.id,
+  i.title,
+  i.content_text,
+  COALESCE(s.name, ''),
+  COALESCE(i.author, ''),
+  COALESCE(
+    (
+      SELECT json_extract(e.output_json, '$.title_zh')
+      FROM item_evaluations e
+      WHERE e.item_id = i.id
+        AND e.stage = 'enrich'
+        AND e.error IS NULL
+        AND e.output_json IS NOT NULL
+      ORDER BY e.evaluated_at DESC, e.id DESC
+      LIMIT 1
+    ),
+    ''
+  )
+FROM items i
+LEFT JOIN sources s ON s.id = i.source_id;
+"""
+
 # 003 drops six triggers but creates five: evals_ai_fts is retired. Comparing
 # live schema against the DROP list would read its correct absence as drift and
 # rebuild the index on every run, which is the cost this skip exists to avoid.
@@ -291,6 +318,28 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> None:
         if _migration_already_applied(conn, migration.name):
             continue
         _execute_migration_idempotent(conn, migration.read_text(encoding="utf-8"))
+
+
+def rebuild_fts(path: str | Path) -> None:
+    """Create the migration-owned FTS schema, then rebuild its exact contents.
+
+    The migration remains the schema/trigger source of truth. Its historical
+    backfill is followed by the apply-side derivation contract, which ignores
+    failed and NULL-output enrich events and orders valid events by
+    ``evaluated_at DESC, id DESC``. Runtime ``enrich_ai_fts`` deliberately has
+    different semantics: every later successful INSERT overwrites title_zh.
+    The snapshot-bound manifest, not either derivation, is the final oracle.
+    """
+    migration_sql = (MIGRATIONS_DIR / _FTS_MIGRATION).read_text(encoding="utf-8")
+    conn = get_conn(path)
+    try:
+        _execute_migration_idempotent(conn, migration_sql)
+        conn.executescript(_FTS_PRECISE_REBUILD_SQL)
+        if not _fts_schema_matches(conn):
+            raise sqlite3.DatabaseError("FTS schema differs after explicit rebuild")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def migrate(path: str | Path | None = None) -> None:
