@@ -10,8 +10,10 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -857,6 +859,144 @@ def test_http_gate_warms_once_then_judges_with_configured_timeout(
             assert call[timeout_at + 1] == "37"
 
 
+def test_http_verifier_paces_warmup_and_judged_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = _make_deploy(tmp_path, monkeypatch)
+    deploy.cfg.http_probe_interval_s = 1.25
+    sleeps: list[float] = []
+    monkeypatch.setattr(adu.time, "sleep", sleeps.append)
+
+    class SuccessfulRunner(FakeRunner):
+        def run(self, *argv: str, check: bool = True):  # noqa: ANN201
+            if argv[0] != "curl" or "/api/v1/timeline" not in argv[-1]:
+                return super().run(*argv, check=check)
+            self.calls.append(argv)
+
+            class Result:
+                returncode = 0
+                stdout = json.dumps(
+                    {"success": True, "data": {"total": 1, "items": [{"id": "item"}]}}
+                )
+                stderr = ""
+
+            return Result()
+
+    deploy.r = SuccessfulRunner()
+
+    assert deploy._http_search_results(
+        "http://127.0.0.1:18000/api/v1/timeline", "term"
+    ) == {"count": 1, "item_ids": ["item"]}
+    assert sleeps == [1.25, 1.25]
+
+
+def test_route_proof_selects_canonical_vhost_instead_of_default_vhost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = _make_deploy(tmp_path, monkeypatch)
+    seen_hosts: list[str] = []
+
+    class TwoVhostHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            host = self.headers.get("Host", "")
+            seen_hosts.append(host)
+            item_id = "canonical" if host.split(":", 1)[0] == "news.example.invalid" else "default"
+            body = json.dumps(
+                {"success": True, "data": {"total": 1, "items": [{"id": item_id}]}}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), TwoVhostHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    loopback_url = f"http://127.0.0.1:{port}/api/v1/timeline"
+    deploy.cfg.route_proof_search_url = loopback_url
+    deploy.cfg.public_search_url = (
+        f"http://news.example.invalid:{port}/api/v1/timeline"
+    )
+    deploy.cfg.http_probe_interval_s = 0
+    deploy.r = adu.Runner()
+    try:
+        plain = subprocess.run(
+            [
+                "curl",
+                "-sS",
+                "--noproxy",
+                "*",
+                deploy._http_search_url(loopback_url, "term", 1),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads(plain.stdout)["data"]["items"] == [{"id": "default"}]
+
+        assert deploy._http_search_results(loopback_url, "term") == {
+            "count": 1,
+            "item_ids": ["canonical"],
+        }
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert any(host.startswith("127.0.0.1:") for host in seen_hosts)
+    assert seen_hosts[-2:] == [
+        f"news.example.invalid:{port}",
+        f"news.example.invalid:{port}",
+    ]
+
+
+def test_route_proof_preserves_public_https_authority_and_maps_only_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = _make_deploy(tmp_path, monkeypatch)
+    deploy.cfg.public_search_url = (
+        "https://news.example.invalid:8443/api/v1/timeline"
+    )
+    deploy.cfg.route_proof_search_url = (
+        "https://127.0.0.1:9443/api/v1/timeline"
+    )
+
+    args = deploy._curl_search_args(
+        deploy.cfg.route_proof_search_url, "term", 2
+    )
+
+    assert args[:4] == (
+        "--noproxy",
+        "*",
+        "--connect-to",
+        "news.example.invalid:8443:127.0.0.1:9443",
+    )
+    assert args[-1].startswith(
+        "https://news.example.invalid:8443/api/v1/timeline?"
+    )
+    assert "page=2" in args[-1]
+
+
+def test_route_proof_rejects_transport_semantics_that_differ_from_public_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = _make_deploy(tmp_path, monkeypatch)
+    deploy.cfg.public_search_url = (
+        "https://news.example.invalid/api/v1/timeline"
+    )
+    deploy.cfg.route_proof_search_url = (
+        "http://127.0.0.1/api/v1/timeline"
+    )
+
+    with pytest.raises(adu.ApplyError, match="scheme must match"):
+        deploy._curl_search_args(deploy.cfg.route_proof_search_url, "term", 1)
+
+
 def test_judged_wrong_http_results_still_quarantine_after_warmup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -964,8 +1104,11 @@ def test_pre_switch_http_timeout_keeps_prepared_retry_transient(
     assert deploy.cfg.claimed.is_file()
 
 
-def test_v2_prepared_checkpoint_blocks_under_v3_without_migration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("checkpoint_identity", ["fts-apply-v2", "fts-apply-v3"])
+def test_older_prepared_checkpoint_blocks_under_v4_without_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    checkpoint_identity: str,
 ) -> None:
     deploy = _make_deploy(tmp_path, monkeypatch)
     snapshot_id, manifest, _primary = _stage_bundle(deploy, tmp_path)
@@ -976,7 +1119,7 @@ def test_v2_prepared_checkpoint_blocks_under_v3_without_migration(
         snapshot_id,
         manifest_sha256=manifest["manifest_sha256"],
         retry_count=0,
-        verifier_identity="fts-apply-v2",
+        verifier_identity=checkpoint_identity,
         last_failure_category="pre-switch-preparation-failed",
         last_failure_message="cold HTTP query exceeded the old timeout",
         last_failure_at="2026-08-10T00:40:18Z",
@@ -985,7 +1128,7 @@ def test_v2_prepared_checkpoint_blocks_under_v3_without_migration(
         deploy,
         "_continue_release",
         lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("v2 prepared checkpoint resumed under verifier v3")
+            AssertionError("older prepared checkpoint resumed under verifier v4")
         ),
     )
 
@@ -994,8 +1137,8 @@ def test_v2_prepared_checkpoint_blocks_under_v3_without_migration(
 
     blocked = json.loads(deploy.cfg.journal.read_text())
     assert blocked["state"] == "retry_blocked_verifier_changed"
-    assert blocked["verifier_identity"] == "fts-apply-v2"
-    assert blocked["observed_verifier_identity"] == "fts-apply-v3"
+    assert blocked["verifier_identity"] == checkpoint_identity
+    assert blocked["observed_verifier_identity"] == "fts-apply-v4"
     assert blocked["recovery_action"] == "manual-intervention"
     assert blocked["automatic_fresh_rebuild_retries_used"] == 0
 
@@ -1351,6 +1494,84 @@ def test_post_switch_rollback_retirement_failure_does_not_move_live_candidate(
     failure, _failure_path = _failure_record(deploy)
     candidate_evidence = _failure_evidence(failure, "candidate")
     assert candidate_evidence is not None and candidate_evidence.is_file()
+
+
+def test_rollback_keeps_candidate_serving_during_nginx_drain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = _make_deploy(tmp_path, monkeypatch)
+    _snapshot_id, manifest, _primary = _stage_bundle(deploy, tmp_path)
+    _install_search_oracle(deploy, manifest, monkeypatch, fail_new_public=True)
+    deploy.cfg.nginx_rollback_drain_s = 93.0
+    events: list[tuple[str, str | bool, bool]] = []
+    drain_sleeps: list[float] = []
+    original_switch = deploy._switch_include
+    original_retire = deploy._retire_candidate
+    original_public = deploy._verify_public_baseline
+    original_route = deploy._verify_route_proof_baseline
+
+    def recording_switch(port: str) -> None:
+        original_switch(port)
+        events.append(("switch", port, deploy.r.slot_active["8001"]))
+
+    def recording_retire(port: str) -> None:
+        events.append(("retire", port, deploy.r.slot_active["8001"]))
+        original_retire(port)
+
+    def recording_public(rollback: dict[str, object]) -> None:
+        original_public(rollback)
+        events.append(("verify-public", True, deploy.r.slot_active["8001"]))
+
+    def recording_route(rollback: dict[str, object]) -> None:
+        original_route(rollback)
+        events.append(("verify-route", True, deploy.r.slot_active["8001"]))
+
+    def recording_sleep(seconds: float) -> None:
+        if seconds > 90:
+            drain_sleeps.append(seconds)
+            events.append(("drain", True, deploy.r.slot_active["8001"]))
+
+    monkeypatch.setattr(deploy, "_switch_include", recording_switch)
+    monkeypatch.setattr(deploy, "_retire_candidate", recording_retire)
+    monkeypatch.setattr(deploy, "_verify_public_baseline", recording_public)
+    monkeypatch.setattr(deploy, "_verify_route_proof_baseline", recording_route)
+    monkeypatch.setattr(adu.time, "sleep", recording_sleep)
+
+    with pytest.raises(adu.ApplyError, match="consumer gate failed"):
+        deploy.apply()
+
+    rollback_switch = events.index(("switch", "8000", True))
+    rollback_events = events[rollback_switch + 1 :]
+    verify_public = rollback_events.index(("verify-public", True, True))
+    verify_route = rollback_events.index(("verify-route", True, True))
+    drain = rollback_events.index(("drain", True, True))
+    retirement = rollback_events.index(("retire", "8001", True))
+    assert verify_public < verify_route < drain < retirement
+    assert drain_sleeps == [pytest.approx(93.0, abs=0.1)]
+
+
+def test_rollback_validation_failure_is_not_delayed_by_nginx_drain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deploy = _make_deploy(tmp_path, monkeypatch)
+    _snapshot_id, manifest, _primary = _stage_bundle(deploy, tmp_path)
+    _install_search_oracle(deploy, manifest, monkeypatch, fail_new_public=True)
+    deploy.cfg.nginx_rollback_drain_s = 93.0
+    sleeps: list[float] = []
+
+    def fail_rollback_public(_rollback: dict[str, object]) -> None:
+        raise adu.ApplyError("old public baseline is unhealthy")
+
+    monkeypatch.setattr(deploy, "_verify_public_baseline", fail_rollback_public)
+    monkeypatch.setattr(adu.time, "sleep", sleeps.append)
+
+    with pytest.raises(adu.ApplyError, match="rollback failed"):
+        deploy.apply()
+
+    assert deploy.active_port() == "8000"
+    assert deploy.r.slot_active["8001"] is True
+    assert json.loads(deploy.cfg.journal.read_text())["state"] == "rollback_failed"
+    assert not any(seconds > 90 for seconds in sleeps)
 
 
 def test_crash_after_switch_before_consumer_gate_rolls_back_on_reconcile(

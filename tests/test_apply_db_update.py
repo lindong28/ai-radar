@@ -253,6 +253,9 @@ def test_config_from_env_preserves_production_control_defaults(
         "AI_RADAR_NGINX_BIN",
         "AI_RADAR_NGINX_PREFIX",
         "AI_RADAR_HTTP_PROBE_TIMEOUT_S",
+        "AI_RADAR_HTTP_PROBE_INTERVAL_S",
+        "AI_RADAR_NGINX_ROLLBACK_DRAIN_S",
+        "AI_RADAR_ROUTE_PROOF_SEARCH_URL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -280,6 +283,8 @@ def test_config_from_env_preserves_production_control_defaults(
         "reload",
     )
     assert cfg.http_probe_timeout_s == 30
+    assert cfg.http_probe_interval_s == 1.0
+    assert cfg.nginx_rollback_drain_s == 90.0
 
 
 def test_config_from_env_routes_every_control_effect_through_overrides(
@@ -305,6 +310,8 @@ def test_config_from_env_routes_every_control_effect_through_overrides(
         "AI_RADAR_NGINX_BIN": "/opt/isolated/bin/nginx",
         "AI_RADAR_NGINX_PREFIX": str(tmp_path / "nginx-root"),
         "AI_RADAR_HTTP_PROBE_TIMEOUT_S": "47",
+        "AI_RADAR_HTTP_PROBE_INTERVAL_S": "1.5",
+        "AI_RADAR_NGINX_ROLLBACK_DRAIN_S": "95.5",
     }
     for name, value in overrides.items():
         monkeypatch.setenv(name, value)
@@ -320,6 +327,11 @@ def test_config_from_env_routes_every_control_effect_through_overrides(
     assert cfg.journal == data / "switch-journal.json"
     assert cfg.lock == data / ".deploy.lock"
     assert cfg.http_probe_timeout_s == 47
+    assert cfg.http_probe_interval_s == 1.5
+    assert cfg.nginx_rollback_drain_s == 95.5
+    assert cfg.route_proof_search_url == (
+        "https://127.0.0.1/api/v1/timeline"
+    )
     assert cfg.serve_unit("19001") == "ai-radar-isolated@19001.service"
     expected_systemctl = (
         "/opt/isolated/bin/systemctl",
@@ -343,6 +355,19 @@ def test_config_from_env_routes_every_control_effect_through_overrides(
     runner.slot_active["19001"] = True
     runner.healthz["19001"] = True
     deploy = adu.Deploy(cfg, runner)
+
+    route_args = deploy._curl_search_args(
+        cfg.route_proof_search_url, "term", 1
+    )
+    assert route_args[:4] == (
+        "--noproxy",
+        "*",
+        "--connect-to",
+        "isolated.invalid:443:127.0.0.1:443",
+    )
+    assert route_args[-1].startswith(
+        "https://isolated.invalid/api/v1/timeline?"
+    )
 
     assert deploy.slot_serving("19001")
     deploy._switch_include("19001")
@@ -390,6 +415,20 @@ def test_config_from_env_rejects_invalid_http_probe_timeout(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     monkeypatch.setenv("AI_RADAR_HTTP_PROBE_TIMEOUT_S", value)
+
+    with pytest.raises(ValueError):
+        adu.Config.from_env()
+
+
+@pytest.mark.parametrize("name", [
+    "AI_RADAR_HTTP_PROBE_INTERVAL_S",
+    "AI_RADAR_NGINX_ROLLBACK_DRAIN_S",
+])
+@pytest.mark.parametrize("value", ["-0.1", "nan", "not-a-number"])
+def test_config_from_env_rejects_invalid_nonnegative_durations(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
 
     with pytest.raises(ValueError):
         adu.Config.from_env()

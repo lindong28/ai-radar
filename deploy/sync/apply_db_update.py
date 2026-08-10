@@ -11,11 +11,17 @@ and nginx control come from ``AI_RADAR_PORTS``, ``AI_RADAR_UNIT_PREFIX``,
 ``AI_RADAR_SYSTEMCTL``, ``AI_RADAR_NGINX_BIN``, and
 ``AI_RADAR_NGINX_PREFIX``. Search gates use
 ``AI_RADAR_HTTP_PROBE_TIMEOUT_S`` (default 30 seconds) for both a single-page,
-non-verdict warm-up and the subsequent judged requests. Command overrides are
-shell-split once into argv and all effects then use those typed tuples. With no
-control overrides, argv remains exactly the production commands used before
-this surface existed. The nginx prefix is passed as ``-p``, so an isolated
-instance resolves its own configuration and runtime files beneath that root.
+non-verdict warm-up and the subsequent judged requests, with
+``AI_RADAR_HTTP_PROBE_INTERVAL_S`` (default 1 second) between verifier
+requests. Loopback route proofs connect to
+``AI_RADAR_ROUTE_PROOF_SEARCH_URL`` but send the canonical host (and HTTPS SNI)
+derived from ``AI_RADAR_PUBLIC_SEARCH_URL``. Rollback keeps the just-replaced
+slot alive for ``AI_RADAR_NGINX_ROLLBACK_DRAIN_S`` (default 90 seconds) after
+nginx reload so old workers can drain. Command overrides are shell-split once
+into argv and all effects then use those typed tuples. With no control
+overrides, argv remains exactly the production commands used before this
+surface existed. The nginx prefix is passed as ``-p``, so an isolated instance
+resolves its own configuration and runtime files beneath that root.
 This module consumes
 the environment already supplied to its process; production systemd selects
 ``/etc/ai-radar/server.env``, while an isolated producer trigger must select an
@@ -79,6 +85,7 @@ import fcntl
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import shlex
@@ -117,7 +124,7 @@ VERIFIER_ID_RE = re.compile(r"fts-apply-v[1-9][0-9]*")
 # behavior. Bump whenever base verification, candidate rebuild, manifest/row
 # equivalence, MATCH probes, candidate HTTP probes, or their direct contract
 # inputs change. A missed bump can incorrectly authorize one fresh retry.
-VERIFIER_VERSION = "fts-apply-v3"
+VERIFIER_VERSION = "fts-apply-v4"
 FTS_SHADOW_TABLES = {
     "items_fts_config",
     "items_fts_content",
@@ -146,6 +153,27 @@ def _env_positive_int(name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return value
+
+
+def _env_nonnegative_float(name: str, default: float) -> float:
+    value = float(os.environ.get(name, str(default)))
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be a finite nonnegative number")
+    return value
+
+
+def _default_route_proof_url(public_search_url: str) -> str:
+    parsed = urlparse(public_search_url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        return "http://127.0.0.1/api/v1/timeline"
+    try:
+        port = parsed.port
+    except ValueError:
+        return "http://127.0.0.1/api/v1/timeline"
+    authority = "127.0.0.1"
+    if port is not None:
+        authority += f":{port}"
+    return parsed._replace(netloc=authority).geturl()
 
 
 def _env_ports() -> tuple[str, str]:
@@ -185,11 +213,22 @@ class Config:
     probe_terms: tuple[str, ...] = ("OpenAI", "Anthropic", "GPU")
     health_wait_s: int = 120
     http_probe_timeout_s: int = 30
+    http_probe_interval_s: float = 1.0
+    nginx_rollback_drain_s: float = 90.0
 
     @classmethod
     def from_env(cls) -> Config:
         home = _env_path("AI_RADAR_HOME", REPO_ROOT)
         data = _env_path("AI_RADAR_DATA_DIR", home / "data")
+        public_search_url = (
+            os.environ.get("AI_RADAR_PUBLIC_SEARCH_URL", "").rstrip("/")
+            or (
+                os.environ.get("AI_RADAR_PUBLIC_URL", "").rstrip("/")
+                + "/api/v1/timeline"
+                if os.environ.get("AI_RADAR_PUBLIC_URL", "").strip()
+                else ""
+            )
+        )
         return cls(
             home=home,
             data_dir=data,
@@ -210,18 +249,10 @@ class Config:
             ),
             lock=_env_path("AI_RADAR_DEPLOY_LOCK", data / ".deploy.lock"),
             quarantine_dir=_env_path("AI_RADAR_QUARANTINE_DIR", data / "quarantine"),
-            public_search_url=(
-                os.environ.get("AI_RADAR_PUBLIC_SEARCH_URL", "").rstrip("/")
-                or (
-                    os.environ.get("AI_RADAR_PUBLIC_URL", "").rstrip("/")
-                    + "/api/v1/timeline"
-                    if os.environ.get("AI_RADAR_PUBLIC_URL", "").strip()
-                    else ""
-                )
-            ),
+            public_search_url=public_search_url,
             route_proof_search_url=os.environ.get(
                 "AI_RADAR_ROUTE_PROOF_SEARCH_URL",
-                "http://127.0.0.1/api/v1/timeline",
+                _default_route_proof_url(public_search_url),
             ).rstrip("/"),
             nginx_link=_env_path(
                 "AI_RADAR_NGINX_LINK",
@@ -245,6 +276,12 @@ class Config:
             health_wait_s=int(os.environ.get("AI_RADAR_HEALTH_WAIT_S", "120")),
             http_probe_timeout_s=_env_positive_int(
                 "AI_RADAR_HTTP_PROBE_TIMEOUT_S", 30
+            ),
+            http_probe_interval_s=_env_nonnegative_float(
+                "AI_RADAR_HTTP_PROBE_INTERVAL_S", 1.0
+            ),
+            nginx_rollback_drain_s=_env_nonnegative_float(
+                "AI_RADAR_NGINX_ROLLBACK_DRAIN_S", 90.0
             ),
         )
 
@@ -950,6 +987,61 @@ class Deploy:
             {"q": term, "page": page, "limit": 100}
         )
 
+    def _route_proof_curl_target(self, term: str, page: int) -> tuple[str, ...]:
+        route = urlparse(self.cfg.route_proof_search_url)
+        public = urlparse(self.cfg.public_search_url)
+        if (
+            public.scheme not in {"http", "https"}
+            or public.hostname is None
+            or public.username is not None
+            or public.password is not None
+        ):
+            raise ApplyError(
+                "AI_RADAR_PUBLIC_SEARCH_URL must provide the canonical HTTP(S) "
+                "host for loopback route proof"
+            )
+        try:
+            public_port = public.port or (443 if public.scheme == "https" else 80)
+            route_port = route.port or (443 if route.scheme == "https" else 80)
+        except ValueError as exc:
+            raise ApplyError("route-proof URL has an invalid port") from exc
+        if route.scheme != public.scheme:
+            raise ApplyError(
+                "AI_RADAR_ROUTE_PROOF_SEARCH_URL scheme must match the canonical "
+                "public search URL"
+            )
+        if route.path != public.path or route.query != public.query:
+            raise ApplyError(
+                "AI_RADAR_ROUTE_PROOF_SEARCH_URL path/query must match the canonical "
+                "public search URL"
+            )
+        route_address = route.hostname
+        if route_address == "localhost":
+            route_address = "127.0.0.1"
+        if route_address is None:
+            raise ApplyError("route-proof URL has no loopback address")
+        if ":" in route_address:
+            route_address = f"[{route_address}]"
+        public_connect_host = public.hostname
+        if ":" in public_connect_host:
+            public_connect_host = f"[{public_connect_host}]"
+        canonical_url = self._http_search_url(self.cfg.public_search_url, term, page)
+        connect_to = (
+            f"{public_connect_host}:{public_port}:{route_address}:{route_port}"
+        )
+        return "--noproxy", "*", "--connect-to", connect_to, canonical_url
+
+    def _curl_search_args(self, api_url: str, term: str, page: int) -> tuple[str, ...]:
+        request_url = self._http_search_url(api_url, term, page)
+        if api_url == self.cfg.route_proof_search_url:
+            self._validated_route_proof_url()
+            return self._route_proof_curl_target(term, page)
+        return (request_url,)
+
+    def _pace_http_probe(self) -> None:
+        if self.cfg.http_probe_interval_s > 0:
+            time.sleep(self.cfg.http_probe_interval_s)
+
     def _warm_http_search(self, api_url: str, term: str) -> None:
         """Exercise the real page-one search path without contributing a verdict."""
         self.r.run(
@@ -958,9 +1050,10 @@ class Deploy:
             "-f",
             "--max-time",
             str(self.cfg.http_probe_timeout_s),
-            self._http_search_url(api_url, term, 1),
+            *self._curl_search_args(api_url, term, 1),
             check=False,
         )
+        self._pace_http_probe()
 
     def _http_search_results(self, api_url: str, term: str) -> dict[str, object]:
         self._warm_http_search(api_url, term)
@@ -968,16 +1061,16 @@ class Deploy:
         total: int | None = None
         item_ids: list[str] = []
         while True:
-            url = self._http_search_url(api_url, term, page)
             result = self.r.run(
                 "curl",
                 "-sS",
                 "-f",
                 "--max-time",
                 str(self.cfg.http_probe_timeout_s),
-                url,
+                *self._curl_search_args(api_url, term, page),
                 check=False,
             )
+            self._pace_http_probe()
             if result.returncode != 0:
                 raise HttpProbeInfrastructureError(
                     f"search HTTP probe failed rc={result.returncode} url={api_url}"
@@ -1066,6 +1159,7 @@ class Deploy:
     def _validated_route_proof_url(self) -> str:
         parsed = urlparse(self.cfg.route_proof_search_url)
         try:
+            parsed.port
             loopback = parsed.hostname == "localhost" or (
                 parsed.hostname is not None
                 and ipaddress.ip_address(parsed.hostname).is_loopback
@@ -2055,7 +2149,7 @@ class Deploy:
         try:
             self._ensure_slot_serving(old)
             self._switch_include(old)
-            self._retire_candidate(candidate)
+            rollback_started = time.monotonic()
             if not self.slot_serving(old):
                 raise ApplyError(f"old slot {old} is not serving after rollback")
             self._assert_file_binding(
@@ -2067,6 +2161,12 @@ class Deploy:
             )
             self._verify_public_baseline(bound)
             self._verify_route_proof_baseline(bound)
+            drain_remaining = self.cfg.nginx_rollback_drain_s - (
+                time.monotonic() - rollback_started
+            )
+            if drain_remaining > 0:
+                time.sleep(drain_remaining)
+            self._retire_candidate(candidate)
         except ApplyError as exc:
             failure_message = f"{reason}; rollback failed: {exc}"
             self._record_pending_failure(
