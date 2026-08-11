@@ -114,14 +114,16 @@ def test_chat_json_persists_completion_usage_for_attributed_call(monkeypatch, tm
         row = conn.execute(
             """
             SELECT stage, provider, model, item_id, input_tokens, output_tokens,
-                   total_tokens, input_item_count, input_char_count, cost_usd, attribution_json
+                   total_tokens, input_item_count, input_char_count, cost_usd,
+                   cached_input_tokens, attribution_json
             FROM llm_usage
             """
         ).fetchone()
 
     assert result.model == "deepseek-v4-flash-response"
     assert row[:10] == ("prefilter", "deepseek", "deepseek-v4-flash-response", "item-1", 123, 45, 168, 1, 37, None)
-    assert json.loads(row[10])["cached_input_tokens"] == 23
+    assert row[10] == 23
+    assert json.loads(row[11])["cached_input_tokens"] == 23
 
 
 def test_chat_json_preserves_paid_result_when_metering_write_fails(

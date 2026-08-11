@@ -14,7 +14,6 @@ from typing import Any
 from .. import db
 from ..llm_usage import (
     LlmUsageRecord,
-    cache_usage_attribution,
     record_llm_usage_best_effort,
     usage_int,
 )
@@ -677,7 +676,6 @@ def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
     attribution = {key: value for key, value in metadata.items() if key != "usage"}
     attribution["source"] = "summary-agent"
     attribution["summary_slug"] = result.get("slug")
-    attribution.update(cache_usage_attribution(usage))
     record_llm_usage_best_effort(
         LlmUsageRecord(
             stage="interpret",
@@ -690,7 +688,8 @@ def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
             input_item_count=1,
             input_char_count=usage_int(metadata, "input_char_count"),
             attribution=attribution,
-        )
+        ),
+        usage=usage,
     )
 
 

@@ -982,7 +982,7 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
             """
             SELECT stage, provider, model, item_id, input_tokens, output_tokens,
                    total_tokens, input_item_count, input_char_count, cost_usd,
-                   attribution_json
+                   cached_input_tokens, attribution_json
             FROM llm_usage
             """
         ).fetchone()
@@ -991,7 +991,8 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     assert summary.errors == 0
     assert summarize_call[summarize_call.index("--model") + 1] == "ai-radar-interpret-deepseek"
     assert usage_row[:10] == ("interpret", "ark", "ark-actual-model", "item-1", 100, 20, 120, 1, 4321, None)
-    attribution = json.loads(usage_row[10])
+    assert usage_row[10] == 40
+    attribution = json.loads(usage_row[11])
     assert attribution["requested_model"] == "ai-radar-interpret-deepseek"
     assert attribution["backend_attempted"] == "deepseek-ark-first"
     assert attribution["cached_input_tokens"] == 40

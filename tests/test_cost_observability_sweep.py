@@ -50,7 +50,9 @@ def _usage_db(path: Path, rows: list[tuple[object, ...]], *, with_cache_column: 
     migrate_usage_db(usage_db_path=path, main_db_path=path.with_name("missing-main.db"))
     with sqlite3.connect(path) as conn:
         if with_cache_column:
-            conn.execute("ALTER TABLE llm_usage ADD COLUMN cached_input_tokens INTEGER")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(llm_usage)")}
+            if "cached_input_tokens" not in columns:
+                conn.execute("ALTER TABLE llm_usage ADD COLUMN cached_input_tokens INTEGER")
         cache_column = ", cached_input_tokens" if with_cache_column else ""
         cache_value = ", ?" if with_cache_column else ""
         parameters = rows if with_cache_column else [row[:-1] for row in rows]

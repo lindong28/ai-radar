@@ -11,7 +11,6 @@ from openai import OpenAI
 
 from ..llm_usage import (
     LlmUsageRecord,
-    cache_usage_attribution,
     record_llm_usage_best_effort,
     usage_int,
 )
@@ -152,10 +151,10 @@ def chat_json(
                             "requested_model": model,
                             "model_env": model_env,
                             "ark_model_env": ark_model_env,
-                            **cache_usage_attribution(usage),
                         },
                     ),
                     db_path=db_path,
+                    usage=usage,
                 )
             content = completion.choices[0].message.content
             if content is None:

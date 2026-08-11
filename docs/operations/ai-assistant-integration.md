@@ -112,7 +112,10 @@ For a new article, `summarize.sh` must return:
         "completion_tokens": 200,
         "total_tokens": 1200,
         "input_tokens": 1000,
-        "output_tokens": 200
+        "output_tokens": 200,
+        "prompt_tokens_details": {
+          "cached_tokens": 800
+        }
       }
     }
   }
@@ -125,7 +128,7 @@ Recognized fields:
 - `result.slug`: base slug. AI Radar may normalize it for WeChat title artifacts or uniqueness.
 - `result.save_decision`: true means save back to the external KB and show the article on `/wechat`.
 - `result.save_reason`, `result.recommendation`, `result.tags`, `result.model` or `result.model_name`: metadata copied into `wechat_interpretations`.
-- `result.llm_metadata.provider`, `backend_model`, `usage`, and `input_char_count`: optional but required for LLM usage metering. When present, AI Radar writes one `llm_usage` row with `stage='interpret'`. `usage` may use either OpenAI names (`prompt_tokens`, `completion_tokens`, `total_tokens`) or normalized names (`input_tokens`, `output_tokens`, `total_tokens`).
+- `result.llm_metadata.provider`, `backend_model`, `usage`, and `input_char_count`: optional but required for LLM usage metering. When present, AI Radar writes one `llm_usage` row with `stage='interpret'`. `usage` may use either OpenAI names (`prompt_tokens`, `completion_tokens`, `total_tokens`) or normalized names (`input_tokens`, `output_tokens`, `total_tokens`). Cache usage is normalized into nullable `llm_usage.cached_input_tokens` from `prompt_cache_hit_tokens`, then `prompt_tokens_details.cached_tokens`, or—when only miss tokens are present—`input_tokens - prompt_cache_miss_tokens`; absent facts remain `NULL`, while contradictory or out-of-bounds provider fields fail metering loudly without turning the already-paid summary into a provider retry.
 
 AI Radar reads the Markdown summary from:
 
