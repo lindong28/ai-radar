@@ -6,6 +6,7 @@ from pathlib import Path
 
 from airadar import cli
 from airadar.admin.alerts import AlertSignals
+from airadar.admin.cost_audit import CostAuditReport
 from airadar.db import migrate
 
 
@@ -83,6 +84,28 @@ def test_admin_db_checkpoint_command_prints_passive_result(monkeypatch, capsys, 
     output = capsys.readouterr().out
     assert seen == {"path": str(db_path)}
     assert "checkpoint busy=0 log=42 checkpointed=41" in output
+
+
+def test_admin_cost_audit_prints_reconciliation_and_returns_report_status(monkeypatch, capsys) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        cli,
+        "run_cost_audit",
+        lambda **kwargs: CostAuditReport(
+            passed=True,
+            human_lines=("LLM cost reconciliation: CONSISTENT",),
+            kv_lines=(
+                "group stage=interpret provider=deepseek model=deepseek-v4-pro expected_usd=1.0 derived_usd=1.0 admin_usage_usd=1.0 PASS",
+                "cost-audit PASS groups=1",
+            ),
+            json_payload={"consistent": True},
+            resolution_unverified=(),
+        ),
+    )
+    args = cli.build_parser().parse_args(["admin", "cost-audit"])
+
+    assert cli._admin(args) == 0
+    output = capsys.readouterr().out
+    assert output == "LLM cost reconciliation: CONSISTENT\n"
 
 
 def test_performance_probe_cli_wires_runtime_paths_and_prints_samples(

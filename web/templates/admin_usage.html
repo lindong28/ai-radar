@@ -82,21 +82,6 @@
         color: #667085;
         font-weight: 600;
       }
-      .usage-day {
-        margin-top: 18px;
-      }
-      .usage-day h3 {
-        margin: 0 0 10px;
-        font-size: 16px;
-      }
-      .usage-examples {
-        margin: 6px 0 0;
-        padding-left: 18px;
-        color: #475467;
-      }
-      .muted {
-        color: #667085;
-      }
       @media (max-width: 860px) {
         .metric-row {
           grid-template-columns: 1fr;
@@ -114,94 +99,62 @@
       <header class="admin-header">
         <div>
           <h1>LLM 用量</h1>
-          <p class="admin-meta">时间窗口：{{ usage.window.start_date }} 至 {{ usage.window.end_date }} · {{ usage.timezone }}</p>
+          <p class="admin-meta">时间窗口：{{ usage.window.start }} 至 {{ usage.window.end }} · {{ usage.timezone }}</p>
         </div>
         <a href="/admin">返回运维监控</a>
       </header>
 
       <section class="admin-panel" aria-label="LLM 用量总览">
-        <h2>最近 30 天总览</h2>
+        <h2>最近 {{ usage.window.days }} 天总览</h2>
         <div class="metric-row">
           <div class="metric"><span class="metric-label">LLM calls</span><span class="metric-value">{{ num(usage.totals.calls) }}</span></div>
           <div class="metric"><span class="metric-label">Input tokens</span><span class="metric-value">{{ num(usage.totals.input_tokens) }}</span></div>
           <div class="metric"><span class="metric-label">Output tokens</span><span class="metric-value">{{ num(usage.totals.output_tokens) }}</span></div>
           <div class="metric"><span class="metric-label">输入字符规模</span><span class="metric-value">{{ num(usage.totals.input_chars) }}</span></div>
+          <div class="metric"><span class="metric-label">可计算成本（USD）</span><span class="metric-value">${{ "%.4f"|format(usage.totals.known_cost_usd) }}</span></div>
+          <div class="metric"><span class="metric-label">可计算成本（人民币投影）</span><span class="metric-value">¥{{ "%.2f"|format(usage.totals.known_cost_cny) }}</span></div>
+          <div class="metric"><span class="metric-label">priced 实价成本</span><span class="metric-value">${{ "%.4f"|format(usage.totals.priced_cost_usd) }}</span></div>
+          <div class="metric"><span class="metric-label">nominal 挂牌价成本</span><span class="metric-value">${{ "%.4f"|format(usage.totals.nominal_cost_usd) }}</span></div>
+          <div class="metric"><span class="metric-label">Nominal 成本占比</span><span class="metric-value">{% if usage.nominal_share is not none %}{{ "%.1f"|format(usage.nominal_share * 100) }}%{% else %}无数据{% endif %}</span></div>
+          <div class="metric"><span class="metric-label">未定价模型组</span><span class="metric-value">{{ usage.unpriced|length }}</span></div>
+          <div class="metric"><span class="metric-label">缓存 token 拆分</span><span class="metric-value">{% if usage.totals.cached_input_tokens is none %}未采集{% else %}{{ num(usage.totals.uncached_input_tokens) }} 未缓存 + {{ num(usage.totals.cached_input_tokens) }} cache-read{% endif %}</span></div>
+          <div class="metric"><span class="metric-label">缓存拆分覆盖</span><span class="metric-value">{{ usage.totals.cache_split_coverage.calls_with_split }}/{{ usage.totals.cache_split_coverage.calls_total }}</span></div>
+          <div class="metric"><span class="metric-label">已采集子集 Cache 命中率</span><span class="metric-value">{% if usage.totals.cache_hit_rate is not none %}{{ "%.1f"|format(usage.totals.cache_hit_rate * 100) }}%{% else %}无数据{% endif %}</span></div>
         </div>
-        <p class="admin-meta">成本字段来自 `AI_RADAR_LLM_PRICING_JSON` 可选配置；未配置时按 0 记录。</p>
+        <p class="admin-meta">成本按查询时定价表派生，不读取历史存储成本。人民币按 1 USD = {{ usage.exchange_rate_usd_cny }} CNY 换算；nominal 表示 ARK 挂牌价，不代表套餐实付。</p>
+        <p class="admin-meta">缓存拆分覆盖分母是 calls；Cache 命中率分母是已采集子集的 input tokens。</p>
+        {% if "stale" in usage.pricing_freshness %}<p><strong>注意：当前成本含按过期价估算的条目。</strong></p>{% endif %}
+        {% if "due-review" in usage.pricing_freshness %}<p><strong>注意：当前成本含到期待复核的 supplement 价格。</strong></p>{% endif %}
+        {% if usage.pricing_source.state == "stale" %}<p><strong>LiteLLM 定价源刷新失败；本页保留显示已标注来源状态的价格。</strong></p>{% endif %}
+        {% if usage.unpriced %}
+        <p><strong>未定价：</strong>{% for row in usage.unpriced %}{{ row.provider }}/{{ row.model }}（{{ row.calls }} 次）{% if not loop.last %}、{% endif %}{% endfor %}</p>
+        {% endif %}
       </section>
 
-      <section class="admin-panel" aria-label="按天按模型 LLM 用量">
-        <h2>按天 / 模型</h2>
-        {% if usage.totals.calls == 0 %}
-        <p class="muted">暂无 LLM 用量记录；新数据会在 prefilter / score / enrich 后开始出现。</p>
-        {% endif %}
-        {% for day in usage.daily %}
-          {% if day.models %}
-          <div class="usage-day">
-            <h3>{{ day.date }}</h3>
-            <table class="admin-table">
-              <thead>
-                <tr>
-                  <th>模型</th>
-                  <th>Provider</th>
-                  <th>LLM call</th>
-                  <th>Input tokens</th>
-                  <th>Output tokens</th>
-                  <th>Total tokens</th>
-                  <th>估算成本</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for model in day.models %}
-                <tr>
-                  <td>{{ model.model }}</td>
-                  <td>{{ model.providers|join(", ") }}</td>
-                  <td>{{ num(model.calls) }}</td>
-                  <td>{{ num(model.input_tokens) }}</td>
-                  <td>{{ num(model.output_tokens) }}</td>
-                  <td>{{ num(model.total_tokens) }}</td>
-                  <td>${{ "%.6f"|format(model.cost_usd) }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          {% endif %}
-        {% endfor %}
-      </section>
-
-      <section class="admin-panel" aria-label="LLM 用量归因">
-        <h2>归因解释</h2>
-        {% if usage.totals.calls == 0 %}
-        <p class="muted">暂无可归因的 LLM 调用。</p>
-        {% endif %}
-        {% for day in usage.daily %}
-          {% for model in day.models %}
-            {% for stage in model.stages %}
-            <div class="usage-day">
-              <h3>{{ day.date }} · {{ model.model }} · {{ stage.stage }}</h3>
-              <table class="admin-table">
-                <tbody>
-                  <tr><th>调用用途</th><td>{{ stage.stage }} pipeline stage/service</td></tr>
-                  <tr><th>调用次数</th><td>{{ num(stage.calls) }}</td></tr>
-                  <tr><th>处理输入条目数</th><td>{{ num(stage.input_items) }}</td></tr>
-                  <tr><th>输入规模</th><td>{{ num(stage.input_chars) }} chars · {{ num(stage.input_tokens) }} input tokens</td></tr>
-                  <tr>
-                    <th>输入样例</th>
-                    <td>
-                      <ul class="usage-examples">
-                        {% for example in stage.examples %}
-                        <li>{{ example.title }}{% if example.source_name %} · {{ example.source_name }}{% endif %}{% if example.item_id %} · {{ example.item_id }}{% endif %}</li>
-                        {% endfor %}
-                      </ul>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+      <section class="admin-panel" aria-label="LLM 来源单价">
+        <h2>来源单价</h2>
+        <p class="admin-meta">仅供参考，不构成路由对比结论。</p>
+        <p class="admin-meta">catalog 来源状态：{{ usage.pricing_source.state }} · {{ usage.pricing_source.source }}</p>
+        <table class="admin-table">
+          <thead><tr><th>Provider / 模型</th><th>来源币种单价（输入 / cache / 输出）</th><th>USD 投影（输入 / cache / 输出）</th><th>引用时点 / 匹配</th><th>口径 / 新鲜度</th><th>来源 / 时间边界</th></tr></thead>
+          <tbody>
+            {% for price in usage.pricing_table %}
+            <tr>
+              <td>{{ price.provider }}/{{ price.model }}</td>
+              {% if price.status == "unpriced" %}
+              <td>未定价</td>
+              <td>无</td>
+              {% else %}
+              <td>{% if price.source_currency %}{{ price.source_currency }} {{ price.source_input_per_million_tokens }}/{{ price.source_cache_read_per_million_tokens }}/{{ price.source_output_per_million_tokens }} per M{% else %}来源币种未声明{% endif %}</td>
+              <td>${{ "%.6f"|format(price.input_per_million_tokens_usd) }} / ${{ "%.6f"|format(price.cache_read_per_million_tokens_usd) }} / ${{ "%.6f"|format(price.output_per_million_tokens_usd) }} per M</td>
+              {% endif %}
+              <td>{% if price.quote_as_of %}as of {{ price.quote_as_of }}{% else %}无{% endif %}{% if price.matched_key %}<br>匹配 {{ price.matched_key }} · {{ price.match_kind }}{% if price.match_kind == "fuzzy" %}（{{ "已审计" if price.match_reviewed else "未审计" }}）{% endif %}{% else %}<br>未匹配{% endif %}</td>
+              <td>{{ "nominal 挂牌价" if price.nominal else price.status }} · {{ price.freshness or "无" }}</td>
+              <td>{% if price.source %}<a href="{{ price.source }}">定价来源</a>{% else %}无{% endif %}{% if price.verified_at %} · 核对 {{ price.verified_at }}{% endif %}{% if price.fetched_at %} · 抓取 {{ price.fetched_at }}{% endif %}{% if price.effective_from %} · 有效期 {{ price.effective_from }} 至 {{ price.effective_to or "当前" }}{% endif %}</td>
+            </tr>
             {% endfor %}
-          {% endfor %}
-        {% endfor %}
+          </tbody>
+        </table>
       </section>
     </main>
   </body>

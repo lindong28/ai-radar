@@ -2,6 +2,7 @@
 
 ## 2026-08-10
 
+- LLM 成本改为查询时按 LiteLLM 社区定价、项目内 ARK 挂牌价补充表与 7 天缓存派生；三个 deprecated `cost_usd` carrier 的历史值迁移为 `NULL`，新 writer 只写 `NULL`，滚动发布期间允许但完全忽略旧 writer 遗留 numeric。严格计量写入仍会抛出 SQLite 拒绝；模型结果已经成功返回时，计量失败改走独立、可计数的错误日志并保留已付费结果，不再误触发 provider fallback 或 interpret 重试。旧 `AI_RADAR_LLM_PRICING_JSON` 配置已退役且设置时显式报错，由受管定价 catalog 和 `AI_RADAR_USD_CNY` 汇率配置取代。`/admin/usage` 收窄为窗口总额三态拆分、来源单价、unpriced 清单与 cache 覆盖率；ARK 来源币种与 USD 投影分开展示，supplement 按 usage 时间选有效区间。`item_evaluations.cost_usd` 不再伪造 `$0`，管理 metrics 与告警信号也不再发布该假值。`./run.sh admin cost-audit` 从 raw catalog 独立读取 matched key 与费率，对费率提取错误也会失败，并显式打印两种 CNY 口径的差额与三个 deprecated carrier 的退出计数；机器视图通过 `--format=kv|json` 显式选择。
 - 数据同步现只传 Mac primary 的非 FTS base artifact，并在腾讯服务器 inactive candidate 上重建、逐字段验证 FTS 后切流；同步不再要求事先 `admin db slim` / VACUUM。真实 steady round 的 DB 传输从旧链路约 1.9GB 降到 16.39M（连同 822.90K manifest 约 17.21M，低于 20MB gate），两轮切换共 3500/3500 个公网 health 样本全为 200，title/content/source/author/title_zh 五字段搜索 IDs/count 均与 Mac snapshot oracle 一致。失败 snapshot 会保留旧 serving release并进入可诊断 quarantine或 manual-block，Mac producer 等待绑定本轮 identity 的 `committed` 后才报成功；既有每 5 小时 cron继续作为 freshness入口。
 
 ## 2026-08-09

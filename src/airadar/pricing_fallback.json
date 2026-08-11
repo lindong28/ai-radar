@@ -1,0 +1,12 @@
+{
+  "deepseek/deepseek-v4-flash": {
+    "cache_read_input_token_cost": 2.8e-09,
+    "input_cost_per_token": 1.4e-07,
+    "output_cost_per_token": 2.8e-07
+  },
+  "deepseek/deepseek-v4-pro": {
+    "cache_read_input_token_cost": 3.625e-09,
+    "input_cost_per_token": 4.35e-07,
+    "output_cost_per_token": 8.7e-07
+  }
+}

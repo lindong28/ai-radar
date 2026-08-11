@@ -1,5 +1,7 @@
 -- Phase 2: server-side search over title, body, source_name, author, and title_zh.
 -- Rebuilt idempotently on every migrate() via DROP ... IF EXISTS.
+-- Keep item_evaluations/enrich_ai_fts DDL byte-equivalent after normalization
+-- across migrations 003, 004, and 016.
 
 DROP TRIGGER IF EXISTS items_ai_fts;
 DROP TRIGGER IF EXISTS items_au_fts;

@@ -222,7 +222,7 @@ def count_rows_in_window(db_path: Path, table: str, column: str, start: datetime
 
 def evaluation_stage_metrics(db_path: Path, start: datetime, end: datetime) -> dict[str, dict[str, Any]]:
     grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
-    for row in db_rows(db_path, "SELECT stage, latency_ms, cost_usd, error, evaluated_at FROM item_evaluations"):
+    for row in db_rows(db_path, "SELECT stage, latency_ms, error, evaluated_at FROM item_evaluations"):
         if in_window(row["evaluated_at"], start, end):
             grouped[str(row["stage"])].append(row)
     expected: dict[str, dict[str, Any]] = {}
@@ -231,14 +231,12 @@ def evaluation_stage_metrics(db_path: Path, start: datetime, end: datetime) -> d
         latencies = [int(row["latency_ms"]) for row in rows]
         errors = sum(1 for row in rows if row["error"])
         processed = len(rows)
-        cost = round(sum(float(row["cost_usd"] or 0.0) for row in rows), 6)
         expected[stage] = {
             "processed": processed,
             "errors": errors,
             "error_rate": errors / processed if processed else 0.0,
             "p50_latency_ms": percentile(latencies, 0.5),
             "p95_latency_ms": percentile(latencies, 0.95),
-            "cost_usd": cost,
         }
     return expected
 

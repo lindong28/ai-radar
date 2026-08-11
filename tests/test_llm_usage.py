@@ -3,8 +3,18 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from airadar import db
-from airadar.llm_usage import LlmUsageRecord, active_usage_db_path, migrate_usage_db, record_llm_usage
+from airadar.llm_usage import (
+    LlmUsageRecord,
+    active_usage_db_path,
+    cache_usage_attribution,
+    derive_cost_usd,
+    migrate_usage_db,
+    record_llm_usage,
+)
+from airadar.pricing import get_pricing
 
 
 def test_active_usage_db_path_ignores_main_db_and_defaults_to_dedicated_file(
@@ -119,7 +129,7 @@ def test_usage_db_migration_adds_interpret_stage_idempotently(tmp_path: Path) ->
             )
             VALUES (
               'interpret', 'ark', 'ark-model', 'item-1',
-              100, 20, 120, 1, 1000, 0.01, '{}',
+              100, 20, 120, 1, 1000, NULL, '{}',
               '2026-06-23T10:05:00Z'
             )
             """
@@ -134,3 +144,108 @@ def test_usage_db_migration_adds_interpret_stage_idempotently(tmp_path: Path) ->
         ("interpret", "ark", "ark-model"),
     ]
     assert ("002_add_interpret_stage", 1) in migrations
+
+
+def test_derive_cost_prices_unknown_cache_as_miss_without_claiming_a_split(tmp_path: Path) -> None:
+    catalog = get_pricing(
+        cache_path=tmp_path / "pricing-cache.json",
+        fetcher=lambda: {
+            "deepseek/deepseek-v4-pro": {
+                "input_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 0.1e-6,
+                "output_cost_per_token": 2e-6,
+            }
+        },
+        persist=False,
+    )
+
+    result = derive_cost_usd(
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "input_tokens": 100, "output_tokens": 20},
+        catalog=catalog,
+    )
+
+    assert result.cost_usd == pytest.approx(0.00014)
+    assert result.status == "priced"
+    assert result.cached_input_tokens is None
+    assert result.uncached_input_tokens is None
+
+
+def test_derive_cost_splits_cached_and_uncached_input(tmp_path: Path) -> None:
+    catalog = get_pricing(
+        cache_path=tmp_path / "pricing-cache.json",
+        fetcher=lambda: {
+            "deepseek/deepseek-v4-pro": {
+                "input_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 0.1e-6,
+                "output_cost_per_token": 2e-6,
+            }
+        },
+        persist=False,
+    )
+
+    result = derive_cost_usd(
+        {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "input_tokens": 100,
+            "cached_input_tokens": 80,
+            "output_tokens": 20,
+        },
+        catalog=catalog,
+    )
+
+    assert result.cost_usd == pytest.approx(0.000068)
+    assert result.cached_input_tokens == 80
+
+
+def test_derive_cost_reports_nominal_and_unpriced_without_zero_substitution(tmp_path: Path) -> None:
+    catalog = get_pricing(
+        cache_path=tmp_path / "pricing-cache.json",
+        fetcher=lambda: {},
+        persist=False,
+    )
+
+    nominal = derive_cost_usd(
+        {"provider": "ark", "model": "deepseek-v4-pro-260425", "input_tokens": 100, "output_tokens": 20},
+        catalog=catalog,
+    )
+    unpriced = derive_cost_usd(
+        {"provider": "unknown", "model": "missing", "input_tokens": 100, "output_tokens": 20},
+        catalog=catalog,
+    )
+
+    assert nominal.status == "nominal"
+    assert nominal.cost_usd is not None and nominal.cost_usd > 0
+    assert unpriced.status == "unpriced"
+    assert unpriced.cost_usd is None
+
+
+def test_record_llm_usage_keeps_deprecated_stored_cost_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    usage_db_path = tmp_path / "llm_usage.db"
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
+
+    record_llm_usage(
+        LlmUsageRecord(
+            stage="score",
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+        )
+    )
+
+    with sqlite3.connect(usage_db_path) as conn:
+        assert conn.execute("SELECT cost_usd FROM llm_usage").fetchone()[0] is None
+
+
+def test_cache_usage_attribution_normalizes_provider_shapes() -> None:
+    assert cache_usage_attribution({"prompt_cache_hit_tokens": 12}) == {
+        "cached_input_tokens": 12,
+        "cached_input_tokens_source": "prompt_cache_hit_tokens",
+    }
+    assert cache_usage_attribution({"prompt_tokens_details": {"cached_tokens": 9}}) == {
+        "cached_input_tokens": 9,
+        "cached_input_tokens_source": "prompt_tokens_details.cached_tokens",
+    }
+    assert cache_usage_attribution({"prompt_tokens": 100}) == {}

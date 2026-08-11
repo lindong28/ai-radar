@@ -301,7 +301,7 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 
 - **去重策略**：`items` 表通过 `(source_id, content_hash)` 唯一约束去重。`content_hash` 是内容文本的 SHA1 前 16 位。同 URL 不同内容视为更新
 - **多阶段评估**：`item_evaluations` 通过 `stage` 字段区分 prefilter / scoring / enrich，共用同一张表。每条记录保存完整的 input/output/numeric JSON
-- **LLM 用量归因**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 调用写一行，阶段值使用 prefilter / score / enrich，记录实际响应模型、prompt/completion token、item_id、输入条目数和输入字符规模；写入和聚合读取都走 `data/llm_usage.db`，`/admin/usage` 查询时再从主库补 item/source 展示元数据。首次初始化会把旧 `radar.db.llm_usage` 历史行复制到独立库，旧表保留但不再写入。
+- **LLM 用量与派生成本**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 以及 interpret 调用写一行，记录实际 provider/model、input/output token、item_id 和输入字符规模；写入和查询都走 `data/llm_usage.db`。`/admin/usage` 只发布收窄后的窗口总额三态、来源单价、未定价清单与 cache 采集覆盖，不提供按天、按模型或输入归因明细。首次初始化会把旧 `radar.db.llm_usage` 历史行复制到独立库，旧表保留但不再写入；两个库中的 `cost_usd` 都是 deprecated carrier，值必须为 `NULL`，真实成本只在查询时派生。
 - **Ruleset 版本**：格式 `YYYY-MM-DD.rN`，用于跟踪 prompt 和规则的变更。同一条目可以有不同 ruleset 版本的评估记录
 - **信源层级**：T1（官方一手源，乘数 1.25）/ T1.5（高质量聚合，乘数 1.0）/ T2（社区源，乘数 0.75）
 - **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。
@@ -362,7 +362,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/daily` | `web/static/daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
 | `/about` | `web/static/about.html` | 关于页 |
 | `/admin` | `web/templates/admin.html` | 内部运维 dashboard；需 Cloudflare Access 或显式本地 bypass |
-| `/admin/usage` | `web/templates/admin_usage.html` | 内部 LLM token/cost 归因页面；需 Cloudflare Access 或显式本地 bypass，不挂公开导航 |
+| `/admin/usage` | `web/templates/admin_usage.html` | 内部 LLM 成本最小视图：窗口总额三态、来源单价、未定价清单与 cache 采集覆盖；需 Cloudflare Access 或显式本地 bypass，不挂公开导航 |
 | `/item.html` | `web/static/item.html` | 单条详情页（StaticFiles 隐式提供） |
 
 ### SSR preload contract

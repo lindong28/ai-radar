@@ -6,6 +6,7 @@ data/*.db.bak*
 data/alert-events.jsonl
 data/alert-events.lock
 data/alert-state.json
+data/pricing_cache.json
 
 # Python
 __pycache__/

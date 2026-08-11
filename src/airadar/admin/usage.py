@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from .. import db
-from ..llm_usage import migrate_usage_db
+from ..llm_usage import DerivedCost, derive_cost_usd, migrate_usage_db
+from ..pricing import (
+    PricingCatalog,
+    get_pricing,
+    is_reviewed_fuzzy_match,
+    resolve_price,
+    usd_cny_rate,
+)
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -29,7 +36,7 @@ def _window(days: int, now: datetime | None) -> tuple[datetime, datetime]:
     if current.tzinfo is None:
         current = current.replace(tzinfo=SHANGHAI_TZ)
     current = current.astimezone(SHANGHAI_TZ)
-    end = current.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    end = current.replace(microsecond=0)
     return end - timedelta(days=days), end
 
 
@@ -69,65 +76,160 @@ def _round_cost(value: object) -> float:
     return round(_float(value), 8)
 
 
-def _date_range_desc(start: datetime, end: datetime) -> list[str]:
-    days: list[str] = []
-    cursor = end.date() - timedelta(days=1)
-    first = start.date()
-    while cursor >= first:
-        days.append(cursor.isoformat())
-        cursor -= timedelta(days=1)
-    return days
-
-
-def _safe_json(value: object) -> dict[str, Any]:
-    if not value:
-        return {}
-    try:
-        parsed = json.loads(str(value))
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _item_metadata(db_path: str | Path | None, item_ids: set[str]) -> dict[str, dict[str, str]]:
-    if not item_ids:
-        return {}
-    main_path = db.resolve_db_path(db_path)
-    if not main_path.exists():
-        return {}
-    metadata: dict[str, dict[str, str]] = {}
-    ordered_ids = sorted(item_ids)
-    with db.get_conn(main_path) as conn:
-        for index in range(0, len(ordered_ids), 900):
-            batch = ordered_ids[index : index + 900]
-            placeholders = ",".join("?" for _ in batch)
-            rows = conn.execute(
-                f"""
-                SELECT i.id, i.title AS item_title, s.name AS source_name
-                FROM items i
-                LEFT JOIN sources s ON s.id = i.source_id
-                WHERE i.id IN ({placeholders})
-                """,
-                batch,
-            ).fetchall()
-            for row in rows:
-                metadata[str(row["id"])] = {
-                    "item_title": str(row["item_title"] or ""),
-                    "source_name": str(row["source_name"] or ""),
-                }
-    return metadata
-
-
-def _empty_totals() -> dict[str, int | float]:
+def _empty_totals() -> dict[str, Any]:
     return {
         "calls": 0,
         "input_tokens": 0,
+        "cached_input_tokens": None,
+        "uncached_input_tokens": None,
         "output_tokens": 0,
-        "total_tokens": 0,
-        "input_items": 0,
         "input_chars": 0,
-        "cost_usd": 0.0,
+        "known_cost_usd": 0.0,
+        "known_cost_cny": 0.0,
     }
+
+
+def _add_usage(target: dict[str, Any], *, row: Any, derived: DerivedCost) -> None:
+    target["calls"] = _int(target.get("calls")) + 1
+    target["input_tokens"] = _int(target.get("input_tokens")) + _int(row["input_tokens"])
+    if derived.cached_input_tokens is None or derived.uncached_input_tokens is None:
+        target["_cache_split_unknown"] = True
+        target["cached_input_tokens"] = None
+        target["uncached_input_tokens"] = None
+    else:
+        target["_cache_split_calls"] = _int(target.get("_cache_split_calls")) + 1
+        target["_covered_input_tokens"] = _int(target.get("_covered_input_tokens")) + _int(
+            row["input_tokens"]
+        )
+        target["_covered_cached_input_tokens"] = _int(
+            target.get("_covered_cached_input_tokens")
+        ) + derived.cached_input_tokens
+        if not target.get("_cache_split_unknown"):
+            target["cached_input_tokens"] = (
+                _int(target.get("cached_input_tokens")) + derived.cached_input_tokens
+            )
+            target["uncached_input_tokens"] = (
+                _int(target.get("uncached_input_tokens")) + derived.uncached_input_tokens
+            )
+    target["output_tokens"] = _int(target.get("output_tokens")) + _int(row["output_tokens"])
+    target["input_chars"] = _int(target.get("input_chars")) + _int(row["input_char_count"])
+    status_calls = f"{derived.status}_calls"
+    target[status_calls] = _int(target.get(status_calls)) + 1
+    if derived.cost_usd is not None:
+        target["known_cost_usd"] = _float(target.get("known_cost_usd")) + derived.cost_usd
+        status_cost = f"{derived.status}_cost_usd"
+        target[status_cost] = _float(target.get(status_cost)) + derived.cost_usd
+
+
+def _finalize_cost(target: dict[str, Any], rate: float) -> None:
+    known_cost_usd = _round_cost(target.get("known_cost_usd"))
+    target["known_cost_usd"] = known_cost_usd
+    target["known_cost_cny"] = round(known_cost_usd * rate, 6)
+    for status in ("priced", "nominal", "unpriced"):
+        calls_key = f"{status}_calls"
+        target[calls_key] = _int(target.get(calls_key))
+        if status != "unpriced":
+            cost_key = f"{status}_cost_usd"
+            status_cost = _round_cost(target.get(cost_key))
+            target[cost_key] = status_cost
+    calls = _int(target.get("calls"))
+    calls_with_split = _int(target.pop("_cache_split_calls", 0))
+    covered_input = _int(target.pop("_covered_input_tokens", 0))
+    covered_cached = _int(target.pop("_covered_cached_input_tokens", 0))
+    target.pop("_cache_split_unknown", None)
+    target["cache_split_coverage"] = {
+        "calls_with_split": calls_with_split,
+        "calls_total": calls,
+        "ratio": round(calls_with_split / calls, 6) if calls else None,
+    }
+    target["cache_hit_rate"] = (
+        round(covered_cached / covered_input, 6) if covered_input else None
+    )
+    for status in ("priced", "nominal", "unpriced"):
+        target.pop(f"{status}_calls", None)
+
+
+def _pricing_table(
+    observed_pairs: dict[tuple[str, str], datetime],
+    catalog: PricingCatalog,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    rows: list[dict[str, Any]] = []
+    freshness_states: set[str] = set()
+    for provider, model in sorted(observed_pairs):
+        quote_as_of = observed_pairs[(provider, model)].isoformat()
+        quote = resolve_price(
+            provider,
+            model,
+            catalog,
+            effective_at=observed_pairs[(provider, model)],
+        )
+        if quote is None:
+            rows.append(
+                {
+                    "provider": provider,
+                    "model": model,
+                    "quote_as_of": quote_as_of,
+                    "matched_key": None,
+                    "match_kind": None,
+                    "match_reviewed": None,
+                    "status": "unpriced",
+                    "nominal": False,
+                    "freshness": None,
+                    "input_per_million_tokens_usd": None,
+                    "cache_read_per_million_tokens_usd": None,
+                    "output_per_million_tokens_usd": None,
+                    "source": None,
+                    "source_currency": None,
+                    "source_input_per_million_tokens": None,
+                    "source_cache_read_per_million_tokens": None,
+                    "source_output_per_million_tokens": None,
+                    "verified_at": None,
+                    "fetched_at": None,
+                    "effective_from": None,
+                    "effective_to": None,
+                }
+            )
+            continue
+        freshness_states.add(quote.freshness)
+        match_reviewed = (
+            is_reviewed_fuzzy_match(provider, model, quote.matched_key)
+            if quote.match_kind == "fuzzy"
+            else None
+        )
+        rows.append(
+            {
+                "provider": provider,
+                "model": model,
+                "quote_as_of": quote_as_of,
+                "matched_key": quote.matched_key,
+                "match_kind": quote.match_kind,
+                "match_reviewed": match_reviewed,
+                "status": "nominal" if quote.nominal else "priced",
+                "nominal": quote.nominal,
+                "freshness": quote.freshness,
+                "input_per_million_tokens_usd": round(
+                    quote.input_cost_per_token * 1_000_000, 9
+                ),
+                "cache_read_per_million_tokens_usd": round(
+                    quote.cache_read_input_token_cost * 1_000_000, 9
+                ),
+                "output_per_million_tokens_usd": round(
+                    quote.output_cost_per_token * 1_000_000, 9
+                ),
+                "source": quote.source,
+                "source_currency": quote.source_currency,
+                "source_input_per_million_tokens": quote.source_input_per_million_tokens,
+                "source_cache_read_per_million_tokens": (
+                    quote.source_cache_read_per_million_tokens
+                ),
+                "source_output_per_million_tokens": quote.source_output_per_million_tokens,
+                "verified_at": quote.verified_at,
+                "fetched_at": quote.fetched_at,
+                "effective_from": quote.effective_from,
+                "effective_to": quote.effective_to,
+            }
+        )
+    return rows, sorted(freshness_states)
 
 
 def collect_usage(
@@ -136,140 +238,90 @@ def collect_usage(
     usage_db_path: str | Path | None = None,
     days: int = 30,
     now: datetime | None = None,
+    pricing_catalog: PricingCatalog | None = None,
+    rows_snapshot: Sequence[Any] | None = None,
 ) -> dict[str, object]:
     start, end = _window(days, now)
-    day_order = _date_range_desc(start, end)
-    days_by_date: dict[str, dict[str, Any]] = {
-        day: {"date": day, "models": [], "totals": _empty_totals()} for day in day_order
-    }
-    model_maps: dict[str, dict[str, dict[str, Any]]] = {day: {} for day in day_order}
-
-    active_usage_db_path = migrate_usage_db(usage_db_path=usage_db_path, main_db_path=db_path)
-    with db.get_conn(active_usage_db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT
-              u.id, u.stage, u.provider, u.model, u.item_id, u.input_tokens,
-              u.output_tokens, u.total_tokens, u.input_item_count, u.input_char_count,
-              u.cost_usd, u.attribution_json, u.created_at
-            FROM llm_usage u
-            WHERE u.created_at >= ? AND u.created_at < ?
-            ORDER BY u.created_at DESC, u.id DESC
-            """,
-            (_utc_iso(start), _utc_iso(end)),
-        ).fetchall()
-    metadata = _item_metadata(db_path, {str(row["item_id"]) for row in rows if row["item_id"]})
-
-    for row in rows:
-        created = _parse_dt(row["created_at"])
-        if created is None:
-            continue
-        day_key = created.date().isoformat()
-        if day_key not in days_by_date:
-            continue
-        day_entry = days_by_date[day_key]
-        model_key = str(row["model"] or "unknown")
-        model_map = model_maps[day_key]
-        model_entry = model_map.setdefault(
-            model_key,
-            {
-                "model": model_key,
-                "providers": set(),
-                "calls": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "input_items": 0,
-                "input_chars": 0,
-                "cost_usd": 0.0,
-                "_stages": {},
-            },
+    rate = usd_cny_rate()
+    catalog = pricing_catalog or get_pricing()
+    if rows_snapshot is None:
+        active_usage_db_path = migrate_usage_db(
+            usage_db_path=usage_db_path,
+            main_db_path=db_path,
         )
-        provider = str(row["provider"] or "unknown")
-        input_tokens = _int(row["input_tokens"])
-        output_tokens = _int(row["output_tokens"])
-        total_tokens = _int(row["total_tokens"])
-        input_items = _int(row["input_item_count"])
-        input_chars = _int(row["input_char_count"])
-        cost_usd = _float(row["cost_usd"])
-
-        for target in (day_entry["totals"], model_entry):
-            target["calls"] += 1
-            target["input_tokens"] += input_tokens
-            target["output_tokens"] += output_tokens
-            target["total_tokens"] += total_tokens
-            target["input_items"] += input_items
-            target["input_chars"] += input_chars
-            target["cost_usd"] = _round_cost(target["cost_usd"]) + cost_usd
-            target["cost_usd"] = _round_cost(target["cost_usd"])
-        model_entry["providers"].add(provider)
-
-        stage_key = str(row["stage"] or "unknown")
-        stages = model_entry["_stages"]
-        stage_entry = stages.setdefault(
-            stage_key,
-            {
-                "stage": stage_key,
-                "calls": 0,
-                "input_items": 0,
-                "input_chars": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "examples": [],
-            },
-        )
-        stage_entry["calls"] += 1
-        stage_entry["input_items"] += input_items
-        stage_entry["input_chars"] += input_chars
-        stage_entry["input_tokens"] += input_tokens
-        stage_entry["output_tokens"] += output_tokens
-
-        examples = stage_entry["examples"]
-        if len(examples) < 5:
-            attribution = _safe_json(row["attribution_json"])
-            item_meta = metadata.get(str(row["item_id"] or ""), {})
-            examples.append(
-                {
-                    "item_id": row["item_id"],
-                    "title": item_meta.get("item_title") or attribution.get("title") or row["item_id"] or "unknown input",
-                    "source_name": item_meta.get("source_name") or attribution.get("source_id") or "",
-                    "created_at": created.isoformat(),
-                }
+        conn = db.get_conn(active_usage_db_path)
+        try:
+            usage_columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(llm_usage)")
+            }
+            cached_input_select = (
+                "u.cached_input_tokens"
+                if "cached_input_tokens" in usage_columns
+                else "NULL AS cached_input_tokens"
             )
-
-    for day in day_order:
-        models = []
-        for model_entry in model_maps[day].values():
-            stage_values = list(model_entry.pop("_stages").values())
-            stage_values.sort(key=lambda entry: str(entry["stage"]))
-            model_entry["providers"] = sorted(model_entry["providers"])
-            model_entry["stages"] = stage_values
-            models.append(model_entry)
-        models.sort(key=lambda entry: (-int(entry["calls"]), str(entry["model"])))
-        days_by_date[day]["models"] = models
+            rows = conn.execute(
+                f"""
+                SELECT
+                  u.id, u.stage, u.provider, u.model, u.item_id, u.input_tokens,
+                  {cached_input_select},
+                  u.output_tokens, u.input_char_count,
+                  u.attribution_json, u.created_at
+                FROM llm_usage u
+                WHERE u.created_at >= ? AND u.created_at < ?
+                ORDER BY u.created_at DESC, u.id DESC
+                """,
+                (_utc_iso(start), _utc_iso(end)),
+            ).fetchall()
+        finally:
+            conn.close()
+    else:
+        rows = [
+            row
+            for row in rows_snapshot
+            if (created := _parse_dt(row["created_at"])) is not None
+            and start <= created < end
+        ]
 
     totals = _empty_totals()
-    active_days = 0
-    for day in day_order:
-        day_totals = days_by_date[day]["totals"]
-        if day_totals["calls"]:
-            active_days += 1
-        for key in totals:
-            if key == "cost_usd":
-                totals[key] = _round_cost(totals[key]) + _round_cost(day_totals[key])
-                totals[key] = _round_cost(totals[key])
-            else:
-                totals[key] = _int(totals[key]) + _int(day_totals[key])
+    unpriced_counts: dict[tuple[str, str], int] = {}
+    observed_pairs: dict[tuple[str, str], datetime] = {}
+    for row in rows:
+        provider = str(row["provider"] or "unknown")
+        model = str(row["model"] or "unknown")
+        derived = derive_cost_usd(row, catalog=catalog)
+        _add_usage(totals, row=row, derived=derived)
+        if derived.status == "unpriced":
+            pair = (provider, model)
+            unpriced_counts[pair] = unpriced_counts.get(pair, 0) + 1
+        created_at = _parse_dt(row["created_at"])
+        pair = (provider, model)
+        if created_at is not None and (
+            pair not in observed_pairs or created_at > observed_pairs[pair]
+        ):
+            observed_pairs[pair] = created_at
 
+    _finalize_cost(totals, rate)
+    pricing_table, pricing_freshness = _pricing_table(observed_pairs, catalog)
+    known_cost = _float(totals["priced_cost_usd"]) + _float(totals["nominal_cost_usd"])
     return {
-        "generated_at": (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ).isoformat(),
         "timezone": "Asia/Shanghai",
         "window": {
-            "start_date": start.date().isoformat(),
-            "end_date": (end.date() - timedelta(days=1)).isoformat(),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
             "days": days,
         },
         "totals": totals,
-        "active_days": active_days,
-        "daily": [days_by_date[day] for day in day_order],
+        "exchange_rate_usd_cny": rate,
+        "nominal_share": (
+            round(_float(totals["nominal_cost_usd"]) / known_cost, 6)
+            if known_cost
+            else None
+        ),
+        "unpriced": [
+            {"provider": provider, "model": model, "calls": calls}
+            for (provider, model), calls in sorted(unpriced_counts.items())
+        ],
+        "pricing_freshness": pricing_freshness,
+        "pricing_source": {"state": catalog.freshness, "source": catalog.source},
+        "pricing_table": pricing_table,
     }

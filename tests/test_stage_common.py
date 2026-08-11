@@ -101,7 +101,7 @@ def _evaluation_conn() -> sqlite3.Connection:
           output_json TEXT NOT NULL,
           numeric_json TEXT,
           latency_ms INTEGER NOT NULL,
-          cost_usd REAL NOT NULL,
+          cost_usd REAL,
           evaluated_at TEXT NOT NULL,
           error TEXT
         )
@@ -135,7 +135,7 @@ def _runner_conn() -> _CountingConnection:
           output_json TEXT NOT NULL,
           numeric_json TEXT,
           latency_ms INTEGER NOT NULL,
-          cost_usd REAL NOT NULL,
+          cost_usd REAL,
           evaluated_at TEXT NOT NULL,
           error TEXT
         );
@@ -226,7 +226,7 @@ def test_shared_evaluation_insert_preserves_complete_row_shape(
         '{"ok":true}' if error is None else '{"ok":false}',
         '{"score":7}' if error is None else None,
         123,
-        0.0,
+        None,
         "2026-07-14T01:02:03Z",
         error,
     )
@@ -251,7 +251,7 @@ def test_prefilter_evaluation_row_shape_is_unchanged(error: str | None) -> None:
         json_dumps(output),
         json_dumps(numeric.model_dump()) if numeric else None,
         17,
-        0.0,
+        None,
     )
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", str(row[9]))
     assert row[10] == error
@@ -288,7 +288,7 @@ def test_scoring_evaluation_row_shape_is_unchanged(error: str | None) -> None:
         json_dumps(output),
         json_dumps(numeric.model_dump()) if numeric else None,
         23,
-        0.0,
+        None,
     )
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", str(row[9]))
     assert row[10] == error
@@ -322,7 +322,7 @@ def test_enrich_evaluation_row_shape_is_unchanged(error: str | None) -> None:
         json_dumps(enriched.model_dump() if enriched else output),
         None,
         31,
-        0.0,
+        None,
     )
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", str(row[9]))
     assert row[10] == error

@@ -51,6 +51,7 @@ Manifest v2 是与 transfer artifact 原子配对的 sidecar oracle。它以 `sn
 ## Consequences
 
 - 2026-08-10 生产 steady round 的 DB rsync `Total bytes sent=16.39M`，manifest 822.90K，合计约 17.21M，低于 `<20MB` gate；相对旧约 1.9GB 降约 99.1%。Bootstrap 转换轮仍可能传输 GB 级，明确免除 steady cap。
+- 2026-08-11 的 migration 016 为把 `item_evaluations.cost_usd` 改为 nullable，已在 Mac primary 重写 388.6MB 表并改变非 FTS schema；下一轮 logical delta 会按设计触发 base-copy 自愈，历史同类实测为 972MB–1.28GB。这是一次性 schema-transition exception，不属于 `<20MB` steady-state gate，也不能把 sync 最终 exit 0 当作小增量证据；该轮应安排在有人观察 stderr、传输字节和远端 schema/数据等价性的时段。是否调整生产 cron 或改 sync fail-open 行为不由该迁移自行决定。
 - Candidate 在旧槽继续服务时完成 FTS rebuild、全量等价与 HTTP probes；生产两轮切换窗口共 3500/3500 个 canonical HTTPS health samples 全为 200，五字段 IDs/count 与 title_zh exclusivity 均匹配 manifest。
 - 复制 authority 不再等于 serving DB bytes。所有恢复、receipt、journal、basis、sidecar cleanup与 operator 验证都必须按 base-only snapshot identity判断，不能对 serving candidate 取 hash后反推 basis。
 - `quarantined` 会把当时可捕获的 base/candidate/manifest 与 failure record 持久保存到 `data/quarantine/<snapshot_id>/`；failure record 的 `evidence_status` 明确记录未捕获或不适用的 artifact。`retry_blocked_verifier_changed`、`rollback_blocked_invalid_oracle`、`finalize_blocked_invalid_authority` 是人工处置状态。运维入口与证据路径见 [services.md](../operations/services.md#db-sync-职责验证与故障证据)。

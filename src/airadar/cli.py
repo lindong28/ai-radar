@@ -13,6 +13,7 @@ from time import monotonic
 
 from . import db, runtime_env
 from .admin.alerts import collect_alert_signals, run_alert_state_machine
+from .admin.cost_audit import run_cost_audit
 from .admin.metrics import SHANGHAI_TZ
 from .curator.precompute import (
     DEFAULT_KEEP_DAYS,
@@ -510,6 +511,19 @@ def _admin(args: argparse.Namespace) -> int:
             status = "firing" if raw.get("firing") else "ok"
             emit(f"{raw.get('rule_id')} {status} {raw.get('title')} - {raw.get('detail')}")
         return 0
+    if args.admin_command == "cost-audit":
+        report = run_cost_audit(
+            db_path=args.db_path,
+            usage_db_path=args.usage_db_path,
+            days=args.days,
+        )
+        if args.format == "json":
+            print(json.dumps(report.json_payload, ensure_ascii=False, sort_keys=True))
+            return 0 if report.passed else 1
+        lines = report.kv_lines if args.format == "kv" else report.human_lines
+        for line in lines:
+            print(line)
+        return 0 if report.passed else 1
     return _not_implemented("admin")
 
 
@@ -635,6 +649,14 @@ def build_parser() -> argparse.ArgumentParser:
     admin_subparsers.add_parser("rerun-eval")
     alert_check = admin_subparsers.add_parser("alert-check")
     alert_check.add_argument("--state-path", default=str(db.PROJECT_ROOT / "data" / "alert-state.json"))
+    cost_audit = admin_subparsers.add_parser(
+        "cost-audit",
+        help="Reconcile cost calculations against the loaded pricing catalog",
+    )
+    cost_audit.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
+    cost_audit.add_argument("--usage-db-path")
+    cost_audit.add_argument("--days", type=int, default=30)
+    cost_audit.add_argument("--format", choices=("human", "kv", "json"), default="human")
 
     return parser
 

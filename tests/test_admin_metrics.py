@@ -120,7 +120,7 @@ def test_collect_metrics_combines_db_and_pipeline_logs_with_score_mapping(tmp_pa
     assert stages["prefilter"]["p95_latency_ms"] is None
     assert stages["scoring"]["processed"] == 3
     assert stages["scoring"]["errors"] == 1
-    assert stages["scoring"]["cost_usd"] == 0.06
+    assert "cost_usd" not in stages["scoring"]
     assert stages["scoring"]["latest_run_status"] == "ok"
     assert stages["scoring"]["latest_run_duration_ms"] == 120000
     assert stages["curate"]["latest_run_duration_ms"] == 90000
@@ -317,13 +317,13 @@ def test_alert_windows_exclude_outside_and_unprovable_samples_without_changing_d
     assert dashboard_stage["error_rate"] == 2 / 4
     assert dashboard_stage["p50_latency_ms"] == 1_150
     assert dashboard_stage["p95_latency_ms"] == 26_000
-    assert dashboard_stage["cost_usd"] == 0.04
     assert alert_stage["processed"] == 3
     assert alert_stage["errors"] == 1
     assert alert_stage["error_rate"] == 1 / 3
     assert alert_stage["p50_latency_ms"] == dashboard_stage["p50_latency_ms"]
     assert alert_stage["p95_latency_ms"] == dashboard_stage["p95_latency_ms"]
-    assert alert_stage["cost_usd"] == dashboard_stage["cost_usd"]
+    assert "cost_usd" not in dashboard_stage
+    assert "cost_usd" not in alert_stage
 
     assert dashboard["users"]["pv"] == 4
     assert dashboard["users"]["status_counts"] == {200: 2, 500: 2}

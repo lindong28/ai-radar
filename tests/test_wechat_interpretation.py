@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import subprocess
@@ -12,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from airadar.db import migrate
+from airadar.llm_usage import migrate_usage_db
 from airadar.web.app import create_app
 
 SUMMARY_MD = """### 📋 文章概况
@@ -911,17 +913,6 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     usage_db_path = tmp_path / "llm_usage.db"
     monkeypatch.setenv("AI_RADAR_DB", str(db_path))
     monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
-    monkeypatch.setenv(
-        "AI_RADAR_LLM_PRICING_JSON",
-        json.dumps(
-            {
-                "ark-actual-model": {
-                    "input_per_million_tokens_usd": 1.0,
-                    "output_per_million_tokens_usd": 2.0,
-                }
-            }
-        ),
-    )
     assistant_root = _assistant_root(tmp_path)
     batch_dir = tmp_path / "batch"
     batch_dir.mkdir()
@@ -962,6 +953,7 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
                                     "total_tokens": 120,
                                     "input_tokens": 100,
                                     "output_tokens": 20,
+                                    "prompt_cache_hit_tokens": 40,
                                 },
                             },
                         },
@@ -998,10 +990,84 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     assert summary.processed == 1
     assert summary.errors == 0
     assert summarize_call[summarize_call.index("--model") + 1] == "ai-radar-interpret-deepseek"
-    assert usage_row[:10] == ("interpret", "ark", "ark-actual-model", "item-1", 100, 20, 120, 1, 4321, 0.00014)
+    assert usage_row[:10] == ("interpret", "ark", "ark-actual-model", "item-1", 100, 20, 120, 1, 4321, None)
     attribution = json.loads(usage_row[10])
     assert attribution["requested_model"] == "ai-radar-interpret-deepseek"
     assert attribution["backend_attempted"] == "deepseek-ark-first"
+    assert attribution["cached_input_tokens"] == 40
+
+
+def test_interpret_preserves_paid_summary_when_metering_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from airadar.interpret import runner
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    usage_db_path = tmp_path / "llm_usage.db"
+    migrate_usage_db(usage_db_path=usage_db_path, main_db_path=db_path)
+    with sqlite3.connect(usage_db_path) as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER reject_usage BEFORE INSERT ON llm_usage
+            BEGIN SELECT RAISE(ABORT, 'injected metering failure'); END
+            """
+        )
+
+    monkeypatch.setenv("AI_RADAR_DB", str(db_path))
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
+    assistant_root = _assistant_root(tmp_path)
+    summarize_calls = 0
+
+    def fake_summarize_item(**kwargs: Any) -> dict[str, Any]:
+        nonlocal summarize_calls
+        summarize_calls += 1
+        assert kwargs["row"]["id"] == "item-1"
+        return {
+            "slug": "paid-summary",
+            "recommendation": "值得一看",
+            "save_decision": True,
+            "save_reason": "已经付费生成",
+            "tags": ["Agent"],
+            "summary_md": SUMMARY_MD,
+            "model": "paid-summary-model",
+            "kb_synced": False,
+            "llm_metadata": {
+                "provider": "ark",
+                "backend_model": "paid-summary-model",
+                "input_char_count": 4321,
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                },
+            },
+        }
+
+    monkeypatch.setattr(runner, "_summarize_item", fake_summarize_item)
+
+    with caplog.at_level(logging.ERROR, logger="airadar.llm_usage"):
+        with _connect(db_path) as conn:
+            summary = runner.run_interpret(
+                conn,
+                backfill=True,
+                assistant_root=assistant_root,
+                tmp_root=tmp_path / "tmp",
+            )
+            saved = conn.execute(
+                "SELECT summary_md, error FROM wechat_interpretations WHERE item_id = 'item-1'"
+            ).fetchone()
+
+    assert summary.processed == 1
+    assert summary.errors == 0
+    assert summarize_calls == 1
+    assert tuple(saved) == (SUMMARY_MD, None)
+    assert caplog.messages == [
+        "llm_usage_metering_failure stage=interpret provider=ark "
+        "model=paid-summary-model item_id=item-1 error=IntegrityError:injected metering failure"
+    ]
 
 
 def test_interpret_runner_skips_kb_for_not_worth_reading(

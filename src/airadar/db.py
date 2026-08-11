@@ -233,15 +233,42 @@ def _fts_schema_matches(conn: sqlite3.Connection) -> bool:
 
 
 def _migration_already_applied(conn: sqlite3.Connection, migration_name: str) -> bool:
-    if migration_name == "004_enrich_stage.sql":
+    migration_ids = {
+        "004_enrich_stage.sql": "004_enrich_stage",
+        "016_nullable_evaluation_cost.sql": "016_nullable_evaluation_cost",
+        "017_cleanup_deprecated_cost_residue.sql": "017_cleanup_deprecated_cost_residue",
+    }
+    if migration_name in migration_ids:
         table = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='airadar_migrations'"
         ).fetchone()
         if table is None:
             return False
-        return bool(
-            conn.execute("SELECT 1 FROM airadar_migrations WHERE id='004_enrich_stage'").fetchone()
+        applied = bool(
+            conn.execute(
+                "SELECT 1 FROM airadar_migrations WHERE id=?",
+                (migration_ids[migration_name],),
+            ).fetchone()
         )
+        if applied:
+            return True
+        if migration_name == "016_nullable_evaluation_cost.sql":
+            legacy_marker = conn.execute(
+                "SELECT 1 FROM airadar_migrations WHERE id='014_nullable_evaluation_cost'"
+            ).fetchone()
+            cost_column = next(
+                (
+                    row
+                    for row in conn.execute("PRAGMA table_info(item_evaluations)")
+                    if row[1] == "cost_usd"
+                ),
+                None,
+            )
+            # 016 was briefly shipped as 014. Only accept that alias when the
+            # nullable schema proves the rewrite already happened; migration
+            # 017 normalizes the marker without replaying the 388 MiB table.
+            return legacy_marker is not None and cost_column is not None and int(cost_column[3]) == 0
+        return False
     if migration_name == _FTS_MIGRATION:
         # 003 rebuilds the whole FTS5 index. The pipeline migrates every 15
         # minutes and serve migrates on startup, so running it unconditionally

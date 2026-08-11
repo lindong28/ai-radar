@@ -123,7 +123,7 @@ repo=$PWD
 | 更新日志 | `/changelog` | 渲染仓库根 `CHANGELOG.md` |
 | 更多 | `/more` | **仅 ≤960px 有入口**（底部 tab 栏第 4 项）：微信文章解读 / 收藏 / 关于 / 更新日志 |
 | 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
-| LLM 用量 | `/admin/usage` | 内部页面，展示最近 30 天 prefilter / score / enrich / interpret 的按天、按模型 token 用量与输入归因；公网需 Cloudflare Access |
+| LLM 用量 | `/admin/usage` | 内部页面，展示最近 30 天窗口成本三态、来源单价、未定价清单和 cache 采集覆盖；公网需 Cloudflare Access |
 
 **响应式**：断点 640 / 960 / 1200px。`>960px` 为侧栏 + 内容区的桌面布局，内容区填满可用宽度；日期分组头与卡片共用同一套网格轨道（日期右对齐落在时间列内，与下方时间戳共一条右边界），一条连续竖线贯穿同一日期分组的全部条目。
 
@@ -217,7 +217,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 也支持 `heuristics` 作为无 LLM 的纯规则后备方案。
 
-DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent LLM usage，都会把 `completion.usage` 写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）中的 `llm_usage` 表，每次 LLM call 一行，记录阶段（prefilter / score / enrich / interpret）、provider、模型、input/output token、item_id 和输入字符规模。内部 `/admin/usage` 页面按查询时聚合展示最近 30 天用量；可选设置 `AI_RADAR_LLM_PRICING_JSON` 为模型提供 per-million-token 价格，用于估算成本。
+DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent LLM usage，都会把 `completion.usage` 写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）中的 `llm_usage` 表，每次 LLM call 一行，记录阶段（prefilter / score / enrich / interpret）、provider、模型、input/output token、item_id 和输入字符规模。内部 `/admin/usage` 页面按查询时从 LiteLLM catalog 与项目内 ARK supplement 派生最近 30 天成本，并分开展示实价、挂牌价、未定价和 cache 拆分覆盖。人民币投影汇率可用 `AI_RADAR_USD_CNY` 设置；旧 `AI_RADAR_LLM_PRICING_JSON` 已退役，如仍设置会显式报错。
 
 ## 测试
 

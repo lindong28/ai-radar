@@ -53,7 +53,7 @@
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `item_evaluations` (~28.6k) | **prefilter/scoring/enrich 健康金矿** | `stage` (CHECK IN `'prefilter','scoring','enrich'`)、`model_id`、`latency_ms`、`cost_usd`、`error`(NULL=成功)、`evaluated_at` |
+| `item_evaluations` (~28.6k) | **prefilter/scoring/enrich 健康金矿** | `stage` (CHECK IN `'prefilter','scoring','enrich'`)、`model_id`、`latency_ms`、`error`(NULL=成功)、`evaluated_at`；`cost_usd` 已退役且恒为 NULL |
 | `items` (~11.4k) | 文章总量 | `fetched_at`、`source_id` |
 | `curated_items` (~64.9k) | 策展产出 | `curation_run_id`、`rank` |
 | `curation_runs` (~1.6k) | curate 轮次 | `created_at` |
@@ -64,7 +64,7 @@
 
 | 阶段 | 数据源 | 取法 |
 |---|---|---|
-| prefilter / scoring / enrich | `item_evaluations` | 按 `stage` 聚合：处理量 `COUNT(*)`、错误率 `error IS NOT NULL` 占比、耗时 `latency_ms` 分位、成本 `SUM(cost_usd)` |
+| prefilter / scoring / enrich | `item_evaluations` | 按 `stage` 聚合：处理量 `COUNT(*)`、错误率 `error IS NOT NULL` 占比、耗时 `latency_ms` 分位；成本不得从已退役的 `cost_usd` 聚合，统一改由 `llm_usage` 查询时派生 |
 | fetch | `logs/pipeline-*.log` | 行 `OK <source> fetched=N inserted=M` / `FAIL <source> <err>` / `=== attempted=N inserted=M failed=K`；阶段耗时 = `=== fetch START ===` 与 `=== fetch OK ===` 时间戳差 |
 | curate | `logs/pipeline-*.log` + `curation_runs` | 同上时间戳差 + curation_runs 增量 |
 

@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from .. import db
-from ..llm_usage import LlmUsageRecord, estimate_cost_usd, record_llm_usage, usage_int
+from ..llm_usage import (
+    LlmUsageRecord,
+    cache_usage_attribution,
+    record_llm_usage_best_effort,
+    usage_int,
+)
 from ..wechat_text import has_wechat_title_artifacts, normalize_wechat_title, wechat_slug_seed
 
 DEFAULT_INTERPRET_USER = "default"
@@ -672,7 +677,8 @@ def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
     attribution = {key: value for key, value in metadata.items() if key != "usage"}
     attribution["source"] = "summary-agent"
     attribution["summary_slug"] = result.get("slug")
-    record_llm_usage(
+    attribution.update(cache_usage_attribution(usage))
+    record_llm_usage_best_effort(
         LlmUsageRecord(
             stage="interpret",
             provider=provider,
@@ -683,7 +689,6 @@ def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
             total_tokens=total_tokens,
             input_item_count=1,
             input_char_count=usage_int(metadata, "input_char_count"),
-            cost_usd=estimate_cost_usd(model, input_tokens, output_tokens),
             attribution=attribution,
         )
     )

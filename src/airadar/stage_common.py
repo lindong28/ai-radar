@@ -58,7 +58,7 @@ def insert_evaluation(
           item_id, stage, ruleset_version, model_id, input_json, output_json,
           numeric_json, latency_ms, cost_usd, evaluated_at, error
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
         """,
         (
             item_id,

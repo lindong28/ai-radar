@@ -166,7 +166,6 @@
                 <th>处理量</th>
                 <th>错误率</th>
                 <th>P95 ms</th>
-                <th>成本</th>
                 <th>最近状态</th>
               </tr>
             </thead>
@@ -178,7 +177,6 @@
                 <td>{{ row.processed }}</td>
                 <td>{{ "%.1f%%"|format(row.error_rate * 100) }}</td>
                 <td>{{ row.p95_latency_ms if row.p95_latency_ms is not none else "—" }}</td>
-                <td>{{ "%.4f"|format(row.cost_usd) }}</td>
                 <td>{{ row.latest_run_status or "—" }}</td>
               </tr>
               {% endfor %}

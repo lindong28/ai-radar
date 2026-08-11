@@ -2,6 +2,8 @@
 -- db.py skips this entire file after airadar_migrations records 004_enrich_stage.
 -- On cold databases this file still rebuilds item_evaluations once, so it must
 -- recreate the enrich_ai_fts trigger after the RENAME below.
+-- Keep item_evaluations/enrich_ai_fts DDL byte-equivalent after normalization
+-- across migrations 003, 004, and 016.
 
 CREATE TABLE IF NOT EXISTS airadar_migrations (
   id TEXT PRIMARY KEY,

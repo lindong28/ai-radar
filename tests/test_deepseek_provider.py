@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -7,6 +9,7 @@ from typing import Any
 import pytest
 
 from airadar.db import migrate
+from airadar.llm_usage import migrate_usage_db
 from airadar.provider import deepseek_chat
 from airadar.provider.base import ProviderItem
 from airadar.provider.deepseek_v4_pro import DeepSeekV4ProEnricher, DeepSeekV4ProScorer
@@ -67,6 +70,7 @@ def test_chat_json_persists_completion_usage_for_attributed_call(monkeypatch, tm
         prompt_tokens = 123
         completion_tokens = 45
         total_tokens = 168
+        prompt_tokens_details = {"cached_tokens": 23}
 
     class FakeCompletions:
         def create(self, **kwargs):  # noqa: ANN001
@@ -110,13 +114,104 @@ def test_chat_json_persists_completion_usage_for_attributed_call(monkeypatch, tm
         row = conn.execute(
             """
             SELECT stage, provider, model, item_id, input_tokens, output_tokens,
-                   total_tokens, input_item_count, input_char_count
+                   total_tokens, input_item_count, input_char_count, cost_usd, attribution_json
             FROM llm_usage
             """
         ).fetchone()
 
     assert result.model == "deepseek-v4-flash-response"
-    assert row == ("prefilter", "deepseek", "deepseek-v4-flash-response", "item-1", 123, 45, 168, 1, 37)
+    assert row[:10] == ("prefilter", "deepseek", "deepseek-v4-flash-response", "item-1", 123, 45, 168, 1, 37, None)
+    assert json.loads(row[10])["cached_input_tokens"] == 23
+
+
+def test_chat_json_preserves_paid_result_when_metering_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    main_db = tmp_path / "radar.db"
+    usage_db = tmp_path / "llm_usage.db"
+    migrate(main_db)
+    migrate_usage_db(usage_db_path=usage_db, main_db_path=main_db)
+    with sqlite3.connect(usage_db) as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER reject_usage BEFORE INSERT ON llm_usage
+            BEGIN SELECT RAISE(ABORT, 'injected metering failure'); END
+            """
+        )
+
+    calls: list[str] = []
+    breaker_failures: list[Exception] = []
+
+    class Usage:
+        prompt_tokens = 10
+        completion_tokens = 5
+        total_tokens = 15
+
+    class FakeCompletions:
+        def __init__(self, base_url: str) -> None:
+            self.base_url = base_url
+
+        def create(self, **kwargs):  # noqa: ANN001, ARG002
+            calls.append(self.base_url)
+
+            class Message:
+                content = '{"ok": true}'
+
+            class Choice:
+                message = Message()
+
+            class Completion:
+                model = "paid-result-model"
+                usage = Usage()
+                choices = [Choice()]
+
+            return Completion()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN001
+            self.chat = type(
+                "Chat",
+                (),
+                {"completions": FakeCompletions(str(kwargs["base_url"]))},
+            )()
+
+    monkeypatch.setattr(deepseek_chat, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(deepseek_chat.ark_breaker, "is_open", lambda: False)
+    monkeypatch.setattr(
+        deepseek_chat.ark_breaker,
+        "record_failure",
+        breaker_failures.append,
+    )
+    monkeypatch.setenv("AI_RADAR_DB", str(main_db))
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db))
+    monkeypatch.setenv("ARK_API_KEY", "ark-test-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test-key")
+    monkeypatch.delenv("ARK_BASE_URL", raising=False)
+    monkeypatch.delenv("AI_RADAR_ARK_BASE_URL", raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="airadar.llm_usage"):
+        result = deepseek_chat.chat_json(
+            system="Return JSON only.",
+            user='Return {"ok": true}.',
+            default_model="deepseek-v4-flash",
+            model_env="AI_RADAR_DEEPSEEK_PREFILTER_MODEL",
+            ark_model_env="AI_RADAR_ARK_PREFILTER_MODEL",
+            temperature=0,
+            stage="prefilter",
+            item_id="item-paid",
+            db_path=usage_db,
+        )
+
+    assert result.json == {"ok": True}
+    assert result.provider == "ark"
+    assert calls == ["https://ark.cn-beijing.volces.com/api/v3"]
+    assert breaker_failures == []
+    assert caplog.messages == [
+        "llm_usage_metering_failure stage=prefilter provider=ark "
+        "model=paid-result-model item_id=item-paid error=IntegrityError:injected metering failure"
+    ]
 
 
 def test_deepseek_providers_tag_usage_by_pipeline_stage(monkeypatch, tmp_path: Path) -> None:

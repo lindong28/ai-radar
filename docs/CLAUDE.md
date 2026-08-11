@@ -95,6 +95,8 @@
 | [012-single-dom-mobile-layer.md](adr/012-single-dom-mobile-layer.md) | 移动层用单套 DOM + media query 重塑，不复制参考站的双 DOM |
 | [013-db-sync-cron-agent-socket-auth.md](adr/013-db-sync-cron-agent-socket-auth.md) | DB sync 自动化用 launchd ssh-agent socket 发现做 cron SSH 认证 |
 | [014-ship-base-only-db-and-rebuild-fts.md](adr/014-ship-base-only-db-and-rebuild-fts.md) | DB sync 传输持久 base-only artifact，并在服务器候选槽重建与验证 FTS |
+| [015-interval-aware-supplement-pricing.md](adr/015-interval-aware-supplement-pricing.md) | Supplement tariff 按 usage 时间选有效区间，防止调价静默重算历史 |
+| [016-rollout-compatible-deprecated-cost-column.md](adr/016-rollout-compatible-deprecated-cost-column.md) | 废弃成本列在滚动发布期接受但不消费旧 numeric，拒绝写入显式失败 |
 
 ### docs/experiences/ [Agent]
 

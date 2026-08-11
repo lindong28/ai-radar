@@ -210,7 +210,6 @@ def _base_stage_metrics() -> dict[str, dict[str, object]]:
             "error_rate": 0.0,
             "p50_latency_ms": None,
             "p95_latency_ms": None,
-            "cost_usd": 0.0,
             "latest_run_status": None,
             "latest_run_duration_ms": None,
         }
@@ -233,7 +232,7 @@ def _evaluation_stage_metrics(
     rate_start = stage_since if stage_since is not None else start
     with db.get_conn(db_path) as conn:
         rows = conn.execute(
-            "SELECT stage, latency_ms, cost_usd, error, evaluated_at FROM item_evaluations ORDER BY evaluated_at"
+            "SELECT stage, latency_ms, error, evaluated_at FROM item_evaluations ORDER BY evaluated_at"
         ).fetchall()
     for row in rows:
         evaluated_at = _parse_dt(row["evaluated_at"])
@@ -255,17 +254,12 @@ def _evaluation_stage_metrics(
         latencies = [int(str(row["latency_ms"])) for row in daily_rows]
         errors = sum(1 for row in rate_rows if row.get("error"))
         processed = len(rate_rows)
-        cost_total = 0.0
-        for row in daily_rows:
-            cost = row.get("cost_usd")
-            cost_total += float(str(cost)) if cost is not None else 0.0
         metrics[stage] = {
             "processed": processed,
             "errors": errors,
             "error_rate": errors / processed if processed else 0.0,
             "p50_latency_ms": _percentile_ms(latencies, 0.5),
             "p95_latency_ms": _percentile_ms(p95_latencies.get(stage, []), 0.95),
-            "cost_usd": round(cost_total, 6),
         }
     return metrics
 

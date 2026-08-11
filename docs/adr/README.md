@@ -18,3 +18,6 @@
 | [012](./012-single-dom-mobile-layer.md) | 移动层用单套 DOM + media query 重塑，不复制参考站双 DOM | accepted | 2026-08-03 |
 | [013](./013-db-sync-cron-agent-socket-auth.md) | DB sync 自动化用 launchd ssh-agent socket 发现做 cron SSH 认证 | accepted | 2026-08-09 |
 | [014](./014-ship-base-only-db-and-rebuild-fts.md) | 传输 base-only DB 并在服务器候选槽重建 FTS | accepted | 2026-08-10 |
+| [015](./015-interval-aware-supplement-pricing.md) | Supplement 定价按调用时间选择有效区间 | accepted | 2026-08-11 |
+| [016](./016-rollout-compatible-deprecated-cost-column.md) | 废弃成本列在滚动发布期接受但不消费旧数值 | accepted | 2026-08-11 |
+| [017](./017-preserve-paid-results-on-metering-failure.md) | 计量失败不得伪装成模型失败 | accepted | 2026-08-11 |

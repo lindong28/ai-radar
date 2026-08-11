@@ -9,7 +9,12 @@ from typing import Any
 import json_repair
 from openai import OpenAI
 
-from ..llm_usage import LlmUsageRecord, estimate_cost_usd, record_llm_usage, usage_int
+from ..llm_usage import (
+    LlmUsageRecord,
+    cache_usage_attribution,
+    record_llm_usage_best_effort,
+    usage_int,
+)
 from . import ark_breaker
 
 
@@ -131,7 +136,7 @@ def chat_json(
                 input_tokens = usage_int(usage, "prompt_tokens")
                 output_tokens = usage_int(usage, "completion_tokens")
                 total_tokens = usage_int(usage, "total_tokens") or input_tokens + output_tokens
-                record_llm_usage(
+                record_llm_usage_best_effort(
                     LlmUsageRecord(
                         stage=stage,
                         provider=provider,
@@ -142,12 +147,12 @@ def chat_json(
                         total_tokens=total_tokens,
                         input_item_count=input_item_count,
                         input_char_count=input_char_count if input_char_count is not None else len(system) + len(user),
-                        cost_usd=estimate_cost_usd(actual_model, input_tokens, output_tokens),
                         attribution={
                             **(attribution or {}),
                             "requested_model": model,
                             "model_env": model_env,
                             "ark_model_env": ark_model_env,
+                            **cache_usage_attribution(usage),
                         },
                     ),
                     db_path=db_path,

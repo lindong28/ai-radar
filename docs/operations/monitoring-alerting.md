@@ -21,17 +21,13 @@
 |---|---|---|
 | 用户量 | access log 过滤 bot/static/scanner 后的 PV/UV；`raw_unique_ips` 作为上界参考 | 看真实用户访问是否骤降，结合 5xx 率判断是否用户侧故障 |
 | 文章摄取 | 今日 items 增量、最新 fetch 插入/失败、最近 curation run | 看内容是否仍在进入系统；fetch 失败率高或今日增量低会触发 A4 |
-| Pipeline 阶段健康 | fetch/prefilter/scoring/enrich/curate 的处理量、错误率、P50/P95、成本；prefilter P95 使用最近 2 小时滑动窗口，避免已恢复后旧慢样本保留到午夜 | 定位是哪一阶段异常；日志中的 `score` 已归一为 dashboard 的 `scoring` |
-| LLM 用量（`/admin/usage`） | 独立 `data/llm_usage.db` 中的 `llm_usage` per-call 行按最近 30 天查询时聚合：每天、每模型的 calls/input tokens/output tokens，并按 prefilter/score/enrich/interpret 展示 item_id、输入字符数和样例标题 | 看 LLM 花费来自哪个阶段、哪个模型、处理了多少条/多大输入；旧 `radar.db.llm_usage` 历史会在首次初始化时复制到独立库 |
+| Pipeline 阶段健康 | fetch/prefilter/scoring/enrich/curate 的处理量、错误率、P50/P95；prefilter P95 使用最近 2 小时滑动窗口，避免已恢复后旧慢样本保留到午夜 | 定位是哪一阶段异常；日志中的 `score` 已归一为 dashboard 的 `scoring` |
+| LLM 用量（`/admin/usage`） | 独立 `data/llm_usage.db` 中的 per-call 行按滚动 30 天查询时聚合，成本由 LiteLLM catalog + ARK supplement 派生；窗口总额按实价、nominal 挂牌价、unpriced 拆分，并展示来源单价、新鲜度、unpriced 清单和 cache 采集覆盖 | 判断当前窗口有多少可计算成本、多少挂牌价估算、是否存在未定价或 cache 未采集；分阶段、分 provider、环比和 daily 明细待周报与成本告警消费契约确定后再提供 |
 | 当前告警 | A1-A4 规则的当前状态、触发数值、处置方向 | 先看故障类别，再看具体对象和下一步动作 |
 
 时间口径固定为 `Asia/Shanghai`。access log 当前写入 `logs/serve-access.log`，pipeline 日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
 
-`/admin/usage` 的成本列默认显示 0，因为 token 单价会随供应商和模型变化。需要估算美元成本时，在运行环境设置 `AI_RADAR_LLM_PRICING_JSON`，格式为每百万 token 价格：
-
-```bash
-AI_RADAR_LLM_PRICING_JSON='{"deepseek-v4-pro":{"input_per_million_tokens_usd":0.14,"output_per_million_tokens_usd":0.28}}'
-```
+`/admin/usage` 不读取历史 `cost_usd` 列：它使用受管定价 catalog 查询时派生成本。无定价的 pair 显示「未定价」，cache token 拆分未采集时显示「未采集」，命中率显示「无数据」，不会用 0 代替。可用 `AI_RADAR_USD_CNY` 调整人民币投影汇率；`AI_RADAR_LLM_PRICING_JSON` 已退役，必须从运行环境移除。
 
 ## 告警规则
 

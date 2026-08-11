@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from airadar.db import migrate
+from airadar.llm_usage import migrate_usage_db
+from airadar.pricing import get_pricing
 from airadar.web.app import create_app
 
 
@@ -48,6 +50,7 @@ def _seed_admin_db(tmp_path: Path) -> Path:
 def _seed_usage_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "llm_usage.db"
     migrate(db_path)
+    observed_at = (datetime.now(UTC) - timedelta(minutes=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
@@ -61,7 +64,20 @@ def _seed_usage_db(tmp_path: Path) -> Path:
           100, 20, 120, 1, 4321, 0, '{"source":"test"}', ?
         )
         """,
-        (datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),),
+        (observed_at,),
+    )
+    conn.execute(
+        """
+        INSERT INTO llm_usage (
+          stage, provider, model, item_id, input_tokens, output_tokens,
+          total_tokens, input_item_count, input_char_count, cost_usd,
+          attribution_json, created_at
+        ) VALUES (
+          'enrich', 'unknown', 'missing-model', 'item-1',
+          50, 10, 60, 1, 500, 99, '{}', ?
+        )
+        """,
+        (observed_at,),
     )
     conn.execute(
         """
@@ -75,7 +91,7 @@ def _seed_usage_db(tmp_path: Path) -> Path:
           1000, 200, 1200, 1, 12345, 0, '{"source":"summary-agent"}', ?
         )
         """,
-        (datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),),
+        (observed_at,),
     )
     conn.commit()
     return db_path
@@ -195,6 +211,18 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     main_db_path = _seed_admin_db(tmp_path)
     usage_db_path = _seed_usage_db(tmp_path)
     monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
+    pricing = get_pricing(
+        cache_path=tmp_path / "pricing-cache.json",
+        fetcher=lambda: {
+            "deepseek/deepseek-v4-flash": {
+                "input_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 0.1e-6,
+                "output_cost_per_token": 2e-6,
+            }
+        },
+        persist=False,
+    )
+    monkeypatch.setattr("airadar.admin.usage.get_pricing", lambda: pricing)
     app = create_app(main_db_path)
     app.state.pipeline_log_dir = str(tmp_path / "logs")
     app.state.access_log_paths = []
@@ -209,24 +237,76 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     assert page.status_code == 200
     assert "LLM 用量" in page.text
     assert "deepseek-v4-flash" in page.text
-    assert "prefilter" in page.text
     assert "deepseek-v4-pro-260425" in page.text
-    assert "interpret" in page.text
-    assert "Item 1" in page.text
-    assert "4,321" in page.text
+    assert "人民币" in page.text
+    assert "未定价" in page.text
+    assert "定价来源" in page.text
+    assert "来源 / 时间边界" in page.text
+    assert "仅供参考，不构成路由对比结论" in page.text
+    assert "缓存拆分覆盖分母是 calls" in page.text
+    assert "Cache 命中率分母是已采集子集的 input tokens" in page.text
+    assert "catalog 来源状态" in page.text
+    assert "litellm-live" in page.text
+    assert "deepseek/deepseek-v4-flash" in page.text
+    assert "exact" in page.text
+    assert "成本分组与前窗对比" not in page.text
+    assert "按天 / 模型" not in page.text
+    assert "归因解释" not in page.text
     assert api.status_code == 200
     data = api.json()["data"]
-    model_row = next(row for day in data["daily"] for row in day["models"] if row["model"] == "deepseek-v4-flash")
-    assert model_row["calls"] == 1
-    assert model_row["input_tokens"] == 100
-    assert model_row["output_tokens"] == 20
-    interpret_model_row = next(
-        row for day in data["daily"] for row in day["models"] if row["model"] == "deepseek-v4-pro-260425"
+    assert data["totals"]["known_cost_usd"] > 0
+    assert data["totals"]["known_cost_cny"] > 0
+    assert data["exchange_rate_usd_cny"] == 7.2
+    assert data["unpriced"] == [{"provider": "unknown", "model": "missing-model", "calls": 1}]
+    assert {"stage_costs", "provider_costs", "cost_groups", "comparison", "daily"}.isdisjoint(
+        data
     )
-    interpret_stages = {stage["stage"]: stage for stage in interpret_model_row["stages"]}
-    assert set(interpret_stages) == {"interpret"}
-    assert interpret_stages["interpret"]["calls"] == 1
-    assert interpret_stages["interpret"]["input_tokens"] == 1000
+
+
+def test_admin_usage_page_flags_unreviewed_fuzzy_matches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    main_db_path = _seed_admin_db(tmp_path)
+    usage_db_path = tmp_path / "llm_usage.db"
+    migrate_usage_db(usage_db_path=usage_db_path, main_db_path=tmp_path / "missing.db")
+    observed_at = (datetime.now(UTC) - timedelta(minutes=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(usage_db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO llm_usage (
+              stage, provider, model, item_id, input_tokens, output_tokens,
+              total_tokens, input_item_count, input_char_count, cost_usd,
+              attribution_json, created_at
+            )
+            VALUES (
+              'interpret', 'deepseek', 'deepseek-v4-fla', 'item-1',
+              100, 20, 120, 1, 4321, NULL, '{}', ?
+            )
+            """,
+            (observed_at,),
+        )
+        conn.commit()
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
+    pricing = get_pricing(
+        cache_path=tmp_path / "pricing-cache.json",
+        fetcher=lambda: {
+            "deepseek/deepseek-v4-flash": {
+                "input_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 0.1e-6,
+                "output_cost_per_token": 2e-6,
+            }
+        },
+        persist=False,
+    )
+    monkeypatch.setattr("airadar.admin.usage.get_pricing", lambda: pricing)
+    client = TestClient(create_app(main_db_path))
+
+    page = client.get("/admin/usage", headers={"Cf-Access-Jwt-Assertion": "test"})
+
+    assert page.status_code == 200
+    assert "deepseek/deepseek-v4-flash" in page.text
+    assert "fuzzy（未审计）" in page.text
 
 
 def test_admin_usage_is_not_linked_from_public_navigation() -> None:

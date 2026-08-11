@@ -47,7 +47,7 @@ def _evaluation_baselines(db_path: str | Path | None, start: datetime) -> tuple[
     all_rows: list[dict[str, object]] = []
     with db.get_conn(db_path) as conn:
         rows = conn.execute(
-            "SELECT stage, latency_ms, cost_usd, error, evaluated_at FROM item_evaluations ORDER BY evaluated_at"
+            "SELECT stage, latency_ms, error, evaluated_at FROM item_evaluations ORDER BY evaluated_at"
         ).fetchall()
     for row in rows:
         parsed = _parse_dt(row["evaluated_at"])
