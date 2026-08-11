@@ -26,6 +26,8 @@
 
 `deploy/sync/logical_delta.py::_apply_delta` 在检出 schema 不等（`ReplicaInvalid`）后自愈为 `_replace_with_base_copy()` 整库替换。该路径**只打一行 stderr，sync 仍报成功**——于是一次 1GB 量级的异常传输与一次 16MB 的稳态轮在退出码上不可区分。
 
+**2026-08-11 实测收口**：11:41 那一轮由 supervisor 观察全程。日志确认 `[replica] !!! SELF-HEAL: non-FTS schema differs from snapshot; rebuilding the base-only shipping replica`；主库传输 `Total file size: 1.68G / Total bytes sent: 1.26G / speedup 1.32`，即**实传 1.26 GB**（稳态轮 16–34 MB），11:41:01 起、12:15:51 止，耗时 34 分钟。**最终结局是 `sync OK`** —— 该轮在退出状态上与一次健康轮完全不可区分，fail-open 由代码推断升级为实测事实。自愈前的逐表核对全部 `match=1`，故触发原因确实只是 schema 不等、数据本身一致。
+
 本次触发源：migration 016 为把 `item_evaluations.cost_usd` 改可空而整表重写（实测 388.8 MB / 93,499 行 / 99,532 页）。016/017 已把这次一次性豁免写进头注释与 ADR-014/016，但**该 fail-open 行为本身未修**，属 db-sync 的范围。
 
 **闭合方式**：让异常 base-copy 至少在退出码或告警上与稳态轮可区分。

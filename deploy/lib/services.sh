@@ -4,7 +4,7 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-ALL_SERVICES=(serve tunnel pipeline alert performance-probe)
+ALL_SERVICES=(serve tunnel pipeline alert performance-probe cost-report)
 LLM_PROVIDER_ENV_KEYS=(DEEPSEEK_API_KEY ARK_API_KEY OPENAI_API_KEY GLM_API_KEY)
 LLM_PROVIDER_ENV_KEYS_TEXT="DEEPSEEK_API_KEY, ARK_API_KEY, OPENAI_API_KEY, GLM_API_KEY"
 SERVICE_DEPENDENCY_SKIP_REASON=""
@@ -19,7 +19,7 @@ service_label() {
     tunnel)   echo "live.aiplanet.ai-radar.tunnel" ;;
     alert)    echo "live.aiplanet.ai-radar.alert" ;;
     performance-probe) echo "live.aiplanet.ai-radar.performance-probe" ;;
-    pipeline) echo "" ;;
+    pipeline|cost-report) echo "" ;;
     *) return 1 ;;
   esac
 }
@@ -30,7 +30,7 @@ service_plist_name() {
     tunnel) echo "ai-radar-tunnel.plist" ;;
     alert)  echo "ai-radar-alert.plist" ;;
     performance-probe) echo "ai-radar-performance-probe.plist" ;;
-    pipeline) echo "" ;;
+    pipeline|cost-report) echo "" ;;
     *) return 1 ;;
   esac
 }
@@ -331,6 +331,7 @@ service_desc() {
     alert)    echo "Monitoring alert check (launchd, 5 min)" ;;
     performance-probe) echo "Idle-gated performance probe (launchd, 5 min)" ;;
     pipeline) echo "Incremental fetch/score/enrich/curate (cron, 15 min)" ;;
+    cost-report) echo "Weekly LLM cost report (cron, Monday 09:17)" ;;
     *) return 1 ;;
   esac
 }
@@ -445,6 +446,13 @@ service_dependency_missing_reason() {
       echo "missing $missing_webhooks"
       return 0
       ;;
+    cost-report)
+      if runtime_env_value FEISHU_GENERAL_NOTIFICATION_WEBHOOK >/dev/null; then
+        return 1
+      fi
+      echo "missing FEISHU_GENERAL_NOTIFICATION_WEBHOOK"
+      return 0
+      ;;
     tunnel)
       if [[ -f "$REPO_ROOT/deploy/cloudflared/config.yml" ]]; then
         return 1
@@ -477,14 +485,21 @@ ensure_install_dependency() {
 
   case "$slug" in
     pipeline) key="DEEPSEEK_API_KEY" ;;
-    alert)
+    alert|cost-report)
       if [[ ! -t 0 ]]; then
         SERVICE_DEPENDENCY_SKIP_REASON="$reason; stdin is not a TTY"
         echo "⚠ $slug: $SERVICE_DEPENDENCY_SKIP_REASON; skipping." >&2
         return 1
       fi
       echo "⚠ $slug: $reason." >&2
-      for key in FEISHU_GENERAL_ALERT_WEBHOOK FEISHU_GENERAL_NOTIFICATION_WEBHOOK; do
+      if [[ "$slug" == "alert" ]]; then
+        pending_keys=(FEISHU_GENERAL_ALERT_WEBHOOK FEISHU_GENERAL_NOTIFICATION_WEBHOOK)
+      else
+        pending_keys=(FEISHU_GENERAL_NOTIFICATION_WEBHOOK)
+      fi
+      local -a required_keys=("${pending_keys[@]}")
+      pending_keys=()
+      for key in "${required_keys[@]}"; do
         runtime_env_value "$key" >/dev/null && continue
         read -r -p "Enter $key to save to ./.env and install $slug, or press Enter to skip: " value
         if [[ -z "$value" ]]; then

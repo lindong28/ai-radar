@@ -5,6 +5,8 @@ import json
 import logging
 import math
 import os
+import plistlib
+import shlex
 import stat
 import subprocess
 import tempfile
@@ -12,7 +14,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -20,10 +22,16 @@ import httpx
 
 from .. import db
 from .calibration import SCHEMA_ERROR_RE, _is_upstream_error
+from .cost_report import (
+    _load_usage_rows,
+    _pipeline_activity,
+    _window_metering,
+    evaluate_a6_cost,
+)
 from .metrics import SHANGHAI_TZ, _parse_dt, collect_metrics
 from .thresholds import ALERT_THRESHOLDS
 
-RULESET = ("A1", "A2", "A3", "A4")
+RULESET = ("A1", "A2", "A3", "A4", "A5", "A6")
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
 DEFAULT_EVENT_PATH = db.PROJECT_ROOT / "data" / "alert-events.jsonl"
 COOLDOWN = timedelta(minutes=30)
@@ -39,15 +47,20 @@ EVALUATION_SEQUENCE_STATE_KEY = "evaluation_sequence"
 # under the app API prefix /api/v1.
 DEFAULT_HEALTHZ_URL = "http://127.0.0.1:8000/api/v1/healthz"
 DEFAULT_HEALTHZ_TIMEOUT_SECONDS = 2.0
+DEFAULT_SERVE_LAUNCH_AGENT_PATH = (
+    Path.home() / "Library" / "LaunchAgents" / "live.aiplanet.ai-radar.serve.plist"
+)
 # Project label prefixed on every alert so a shared Feishu webhook (used by
 # multiple projects) lets the reader tell which project an alert came from.
 ALERT_SOURCE = "AI Radar"
 AlertSeverity = Literal["page", "notice"]
+EvaluationState = Literal["healthy", "degraded", "in_progress"]
 FiringBasis = Literal["observed"]
 PAGE_SEVERITY: Literal["page"] = "page"
 NOTICE_SEVERITY: Literal["notice"] = "notice"
 ALERT_CHANNEL = "ALERT"
 NOTIFICATION_CHANNEL = "NOTIFICATION"
+INTERNAL_CHANNEL = "INTERNAL"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -87,6 +100,24 @@ class AlertSignals:
     healthz_consecutive_failures: int = 0
     stage_sample_count: dict[str, int] = field(default_factory=dict)
     server_pv: int = 0
+    hours_since_successful_interpretation: float | None = 0.0
+    wechat_pending_count: int = 0
+    wechat_frozen_count: int = 0
+    oldest_wechat_pending_title: str | None = None
+    a5_enabled: bool = True
+    a6_evaluable: bool = False
+    a6_measurement_in_progress: bool = False
+    a6_current_cost_cny: float = 0.0
+    a6_baseline_median_cny: float | None = None
+    a6_threshold_cny: float | None = None
+    a6_page_threshold_cny: float | None = None
+    a6_baseline_days: int = 0
+    a6_excluded_coverage_days: int = 0
+    a6_top_driver: str | None = None
+    a6_unpriced_calls: int = 0
+    a6_pricing_freshness: str = "unknown"
+    a6_metering_complete: bool = True
+    a6_metering_failure_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -101,6 +132,9 @@ class AlertRuleResult:
     impact: str = ""
     urgency: str = ""
     firing_basis: FiringBasis | None = None
+    evaluation_state: EvaluationState = "healthy"
+    suppressed_by: str | None = None
+    suppression_reason: str | None = None
 
 
 def _threshold_section(thresholds: dict[str, object], key: str) -> dict[str, Any]:
@@ -150,6 +184,8 @@ def evaluate_rules(
     a2 = _threshold_section(active_thresholds, "a2")
     a3 = _threshold_section(active_thresholds, "a3")
     a4 = _threshold_section(active_thresholds, "a4")
+    a5 = _threshold_section(active_thresholds, "a5")
+    a6 = _threshold_section(active_thresholds, "a6")
 
     a1_min_samples = _int_threshold(a1, "min_samples", 5)
     a1_rate = _float_threshold(a1, "upstream_error_rate", 0.5)
@@ -186,9 +222,12 @@ def evaluate_rules(
             if signals.consecutive_skip_logs
             else ""
         )
-        stage_reasons.append(
-            f"最近成功 pipeline 已超过 {signals.minutes_since_successful_pipeline} 分钟{skip_note}"
+        elapsed_text = (
+            "尚无成功 pipeline 记录"
+            if signals.minutes_since_successful_pipeline >= 10_000
+            else f"最近成功 pipeline 已超过 {signals.minutes_since_successful_pipeline} 分钟"
         )
+        stage_reasons.append(f"{elapsed_text}{skip_note}")
 
     a3_rate = _float_threshold(a3, "server_error_rate", 0.05)
     a3_min_pv = _int_threshold(a3, "min_pv", math.ceil(1 / a3_rate) if a3_rate > 0 else 1)
@@ -234,6 +273,52 @@ def evaluate_rules(
     else:
         a4_impact = ""
         a4_urgency = ""
+
+    a5_hours = _float_threshold(a5, "no_success_hours", 4.0)
+    a5_stalled = (
+        signals.hours_since_successful_interpretation is None
+        or signals.hours_since_successful_interpretation >= a5_hours
+    )
+    a5_firing = signals.a5_enabled and a5_stalled and signals.wechat_pending_count > 0
+    a5_degraded = bool(
+        signals.a5_enabled
+        and a5_stalled
+        and not signals.wechat_pending_count
+    )
+    a5_elapsed_text = (
+        "尚无成功记录"
+        if signals.hours_since_successful_interpretation is None
+        else f"已 {signals.hours_since_successful_interpretation:.1f} 小时无成功解读"
+    )
+    a6_floor = _float_threshold(a6, "daily_floor_cny", 20.0)
+    a6_multiplier = _float_threshold(a6, "spike_multiplier", 3.0)
+    a6_lower_bound_evaluable = bool(
+        signals.a6_measurement_in_progress
+        and signals.a6_threshold_cny is not None
+    )
+    a6_firing = (
+        (signals.a6_evaluable or a6_lower_bound_evaluable)
+        and signals.a6_threshold_cny is not None
+        and signals.a6_current_cost_cny > signals.a6_threshold_cny
+    )
+    a6_notes: list[str] = []
+    if signals.a6_unpriced_calls:
+        a6_notes.append(f"另有 {signals.a6_unpriced_calls} 次未定价调用未计入金额")
+    if signals.a6_pricing_freshness in {"stale", "due-review"}:
+        a6_notes.append(f"价格状态 {signals.a6_pricing_freshness}，金额需复核")
+    if signals.a6_metering_failure_count:
+        a6_notes.append(f"至少 {signals.a6_metering_failure_count} 次计量写入失败，金额可能低估")
+    if signals.a6_measurement_in_progress:
+        a6_notes.append("pipeline 正在运行；当前金额为未封口下界，只用于越阈值的正向判断")
+    elif not signals.a6_metering_complete:
+        a6_notes.append("近 24 小时计量日志不完整")
+    a6_degraded = not signals.a6_evaluable and not signals.a6_measurement_in_progress
+    a6_severity: AlertSeverity = (
+        PAGE_SEVERITY
+        if signals.a6_page_threshold_cny is not None
+        and signals.a6_current_cost_cny > signals.a6_page_threshold_cny
+        else NOTICE_SEVERITY
+    )
 
     return [
         AlertRuleResult(
@@ -308,6 +393,101 @@ def evaluate_rules(
             impact=a4_impact,
             urgency=a4_urgency,
         ),
+        AlertRuleResult(
+            rule_id="A5",
+            title="微信解读产出停滞",
+            firing=a5_firing,
+            detail=(
+                "解读功能未启用，本规则不评估"
+                if not signals.a5_enabled
+                else (
+                f"{a5_elapsed_text}；"
+                f"等待文章 {signals.wechat_pending_count} 篇；"
+                f"最老待处理：{signals.oldest_wechat_pending_title or '未知标题'}；"
+                f"重试耗尽冻结 {signals.wechat_frozen_count} 篇"
+                if a5_firing
+                else (
+                    (
+                        "尚无成功记录；"
+                        if signals.hours_since_successful_interpretation is None
+                        else f"距成功解读 {signals.hours_since_successful_interpretation:.1f} 小时；"
+                    )
+                    + f"满足年龄与重试资格的等待文章 {signals.wechat_pending_count} 篇；"
+                    + f"重试耗尽冻结 {signals.wechat_frozen_count} 篇"
+                )
+                )
+            ),
+            action=(
+                "先查近 4 小时 pipeline 与 interpret 日志中的成功/错误；再核对 DeepSeek/ARK 余额和配额。"
+                "data/ark-breaker.json 仅在 opened_at 仍处于 2 小时 cooldown 内时可作当前故障证据；"
+                "若仍在 cooldown，402 表示余额不足，429 AccountQuotaExceeded 表示方舟配额。"
+            ),
+            values={
+                "hours_since_successful_interpretation": signals.hours_since_successful_interpretation,
+                "pending_count": signals.wechat_pending_count,
+                "frozen_count": signals.wechat_frozen_count,
+                "oldest_pending_title": signals.oldest_wechat_pending_title,
+                "no_success_hours": a5_hours,
+            },
+            impact="微信文章解读停止更新，待处理或冻结文章不会产出",
+            urgency="是——有合格积压时立即核查；无合格积压时先恢复可评估性",
+            evaluation_state="degraded" if a5_degraded else "healthy",
+        ),
+        AlertRuleResult(
+            rule_id="A6",
+            title="LLM 近 24 小时成本突变",
+            firing=a6_firing,
+            detail=(
+                f"近 24 小时 cache 中性目录价估算 ¥{signals.a6_current_cost_cny:.2f}；"
+                + (
+                    f"14 UTC 日中 {signals.a6_baseline_days} 个可比日中位数 "
+                    f"¥{float(signals.a6_baseline_median_cny):.2f}，阈值 ¥{float(signals.a6_threshold_cny):.2f}"
+                    if (signals.a6_evaluable or a6_lower_bound_evaluable)
+                    and signals.a6_baseline_median_cny is not None
+                    and signals.a6_threshold_cny is not None
+                    else (
+                        (
+                            f"已有 {signals.a6_baseline_days} 个基线日，pipeline 运行中，暂缓评估"
+                            if signals.a6_measurement_in_progress
+                            else f"已有 {signals.a6_baseline_days} 个基线日，但当前不可评估"
+                        )
+                        if signals.a6_baseline_days >= 3
+                        else f"仅 {signals.a6_baseline_days} 个基线日（少于 3），当前不可评估"
+                    )
+                )
+                + (f"；Top 驱动 {signals.a6_top_driver}" if signals.a6_top_driver else "")
+                + (f"；{'；'.join(a6_notes)}" if a6_notes else "")
+                + "。两侧均按当前费率和 cache 未命中重算；金额含 nominal 目录价估算，并非账单实付"
+            ),
+            action=(
+                "sqlite3 data/llm_usage.db \"SELECT stage,provider,model,COUNT(*),SUM(input_tokens),"
+                "SUM(output_tokens) FROM llm_usage WHERE julianday(created_at) > julianday('now','-24 hours') "
+                "AND julianday(created_at) <= julianday('now') "
+                "GROUP BY 1,2,3 ORDER BY 5+6 DESC;\""
+            ),
+            values={
+                "current_cost_cny": signals.a6_current_cost_cny,
+                "baseline_median_cny": signals.a6_baseline_median_cny,
+                "threshold_cny": signals.a6_threshold_cny,
+                "page_threshold_cny": signals.a6_page_threshold_cny,
+                "baseline_days": signals.a6_baseline_days,
+                "daily_floor_cny": a6_floor,
+                "spike_multiplier": a6_multiplier,
+                "cohort": "评估时仍可定价的实价与目录价调用，cache 统一按未命中",
+            },
+            severity=a6_severity,
+            impact="近 24 小时 LLM 用量结构对应的目录价估算显著高于近期基线",
+            urgency=(
+                "是——超过高档阈值，立即核查"
+                if a6_severity == PAGE_SEVERITY and a6_firing
+                else "否——先核查 Top 驱动与调用量，确认后再调整资源"
+            ),
+            evaluation_state=(
+                "in_progress"
+                if signals.a6_measurement_in_progress
+                else ("degraded" if a6_degraded else "healthy")
+            ),
+        ),
     ]
 
 
@@ -331,7 +511,54 @@ def _format_firing(result: AlertRuleResult) -> str:
 
 def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
     suffix = f"（since {since}）" if since else ""
-    return f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}"
+    if result.evaluation_state == "degraded":
+        return (
+            f"【{ALERT_SOURCE}】🟡 {result.rule_id} {result.title} 转为不可评估{suffix}\n"
+            f"当前证据：{result.detail}\n处置方向：{result.action}"
+        )
+    return (
+        f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}\n"
+        f"恢复证据：{result.detail}"
+    )
+
+
+def _correlate_alert_results(
+    results: list[AlertRuleResult], *, heartbeat_fresh: bool
+) -> list[AlertRuleResult]:
+    by_id = {result.rule_id: result for result in results}
+    if not (by_id.get("A5") and by_id["A5"].firing):
+        return results
+    carrier = "A5" if heartbeat_fresh else "A2"
+    carrier_result = by_id.get(carrier)
+    if carrier_result is None or not carrier_result.firing:
+        return results
+    suppressed_ids = (
+        {"A1", "A2"}
+        if heartbeat_fresh
+        else {"A5"}
+    )
+    correlated = []
+    related = [rule_id for rule_id in sorted(suppressed_ids) if by_id.get(rule_id) and by_id[rule_id].firing]
+    for result in results:
+        if result.rule_id == carrier and related:
+            correlated.append(
+                replace(result, detail=f"{result.detail}；已合并关联信号 {','.join(related)}")
+            )
+        elif result.rule_id in related:
+            correlated.append(
+                replace(
+                    result,
+                    suppressed_by=carrier,
+                    suppression_reason=(
+                        "pipeline 心跳新鲜，同一 provider/阶段事故由 A5 合并通知"
+                        if heartbeat_fresh
+                        else "pipeline 心跳已过期，宿主/流水线事故由 A2 合并通知"
+                    ),
+                )
+            )
+        else:
+            correlated.append(result)
+    return correlated
 
 
 def _normalize_severity(value: object) -> AlertSeverity:
@@ -396,6 +623,11 @@ def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
         "announced": state == "firing" and _entry_announced(entry),
         "notification_sequence": notification_sequence,
         "pending_notification": pending_notification,
+        "evaluation_state": (
+            entry.get("evaluation_state")
+            if entry.get("evaluation_state") in {"degraded", "in_progress"}
+            else "healthy"
+        ),
     }
     if (firing_basis := _normalize_firing_basis(entry.get("firing_basis"))) is not None:
         normalized["firing_basis"] = firing_basis
@@ -417,7 +649,11 @@ def _normalize_lifecycles(entry: dict[str, object]) -> dict[AlertSeverity, dict[
     return lifecycles
 
 
-def _ok_lifecycle(lifecycle: dict[str, object], detail: str) -> dict[str, object]:
+def _ok_lifecycle(
+    lifecycle: dict[str, object],
+    detail: str,
+    evaluation_state: EvaluationState = "healthy",
+) -> dict[str, object]:
     return {
         "state": "ok",
         "since": None,
@@ -426,6 +662,7 @@ def _ok_lifecycle(lifecycle: dict[str, object], detail: str) -> dict[str, object
         "announced": False,
         "notification_sequence": lifecycle.get("notification_sequence", 0),
         "pending_notification": None,
+        "evaluation_state": evaluation_state,
     }
 
 
@@ -456,6 +693,7 @@ def _project_lifecycles(
         "severity": projected_severity,
         "announced": active_severity is not None and _entry_announced(projected),
         "lifecycles": lifecycles,
+        "evaluation_state": projected.get("evaluation_state", "healthy"),
     }
     if active_severity is not None and (
         firing_basis := _normalize_firing_basis(projected.get("firing_basis"))
@@ -520,6 +758,7 @@ def _invoke_sender(
         "send_result": send_result,
         "delivered": delivered,
         "notification_nonce": notification_nonce,
+        "episode_since": episode_since,
     }
 
 
@@ -640,19 +879,14 @@ def _write_ledger_rows(event_path: Path, rows: list[dict[str, object]]) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
-def _record_notification_events(
+def _record_event_rows(
     event_path: str | Path,
     *,
     current: datetime,
-    delivered: list[tuple[dict[str, object], AlertRuleResult]],
+    new_rows: list[dict[str, object]],
 ) -> None:
     try:
-        successful = [
-            (receipt, result)
-            for receipt, result in delivered
-            if receipt.get("delivered") is True
-        ]
-        if not successful:
+        if not new_rows:
             return
         path = Path(event_path)
         _check_ledger_size(path)
@@ -679,18 +913,7 @@ def _record_notification_events(
             try:
                 _check_ledger_size(path)
                 rows = _read_ledger_rows(path)
-                rows.extend(
-                    {
-                        "ts": current.isoformat(),
-                        "rule_id": receipt["rule_id"],
-                        "severity": receipt["effective_severity"],
-                        "type": receipt["type"],
-                        "detail": result.detail,
-                        "values": result.values,
-                        "channel": receipt["channel"],
-                    }
-                    for receipt, result in successful
-                )
+                rows.extend(new_rows)
                 cutoff = current - timedelta(days=RETENTION_DAYS)
                 retained = [
                     row
@@ -710,6 +933,33 @@ def _record_notification_events(
             )
         except BaseException:
             pass
+
+
+def _record_notification_events(
+    event_path: str | Path,
+    *,
+    current: datetime,
+    delivered: list[tuple[dict[str, object], AlertRuleResult]],
+) -> None:
+    _record_event_rows(
+        event_path,
+        current=current,
+        new_rows=[
+            {
+                "ts": current.isoformat(),
+                "rule_id": receipt["rule_id"],
+                "severity": receipt["effective_severity"],
+                "type": receipt["type"],
+                "detail": result.detail,
+                "values": result.values,
+                "channel": receipt["channel"],
+                "episode_since": receipt.get("episode_since"),
+                "notification_nonce": receipt.get("notification_nonce"),
+            }
+            for receipt, result in delivered
+            if receipt.get("delivered") is True
+        ],
+    )
 
 
 def _load_state(path: Path) -> dict[str, dict[str, object]]:
@@ -848,15 +1098,74 @@ def _probe_healthz(url: str, timeout: float) -> bool:
     return payload.get("success") is True and isinstance(data, dict) and data.get("ok") is True
 
 
+def _serve_port_from_tokens(tokens: list[str]) -> int | None:
+    try:
+        serve_index = tokens.index("serve")
+    except ValueError:
+        return None
+    for index, token in enumerate(tokens[serve_index + 1 :], start=serve_index + 1):
+        raw_port: str | None = None
+        if token == "--port" and index + 1 < len(tokens):
+            raw_port = tokens[index + 1]
+        elif token.startswith("--port="):
+            raw_port = token.removeprefix("--port=")
+        if raw_port is None:
+            continue
+        try:
+            port = int(raw_port)
+        except ValueError:
+            return None
+        return port if 1 <= port <= 65535 else None
+    return None
+
+
+def _serve_port_from_plist(path: str | Path) -> int | None:
+    try:
+        with Path(path).open("rb") as handle:
+            payload = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException):
+        return None
+    arguments = payload.get("ProgramArguments") if isinstance(payload, dict) else None
+    if not isinstance(arguments, list) or not all(isinstance(arg, str) for arg in arguments):
+        return None
+    token_sets = [arguments]
+    for argument in arguments:
+        try:
+            token_sets.append(shlex.split(argument))
+        except ValueError:
+            continue
+    for tokens in token_sets:
+        port = _serve_port_from_tokens(tokens)
+        if port is not None:
+            return port
+    return None
+
+
+def _resolve_healthz_url(
+    a3: dict[str, object],
+    *,
+    serve_plist_path: str | Path | None,
+) -> str:
+    configured_url = a3.get("healthz_url")
+    if configured_url:
+        return str(configured_url)
+    if serve_plist_path is not None:
+        serve_port = _serve_port_from_plist(serve_plist_path)
+        if serve_port is not None:
+            return f"http://127.0.0.1:{serve_port}/api/v1/healthz"
+    return DEFAULT_HEALTHZ_URL
+
+
 def _record_healthz_probe(
     state: dict[str, dict[str, object]],
     *,
     current: datetime,
     thresholds: dict[str, object],
     healthz_probe: Callable[[str, float], bool] | None,
+    serve_plist_path: str | Path | None,
 ) -> int:
     a3 = _threshold_section(thresholds, "a3")
-    url = str(a3.get("healthz_url") or DEFAULT_HEALTHZ_URL)
+    url = _resolve_healthz_url(a3, serve_plist_path=serve_plist_path)
     timeout = _float_threshold(a3, "healthz_timeout_seconds", DEFAULT_HEALTHZ_TIMEOUT_SECONDS)
     probe = healthz_probe or _probe_healthz
     last_error: str | None = None
@@ -895,6 +1204,7 @@ def _apply_alert_results(
 ) -> list[dict[str, object]]:
     sent: list[dict[str, object]] = []
     delivered: list[tuple[dict[str, object], AlertRuleResult]] = []
+    suppressed_events: list[dict[str, object]] = []
     for result in results:
         entry = state.get(
             result.rule_id,
@@ -908,6 +1218,22 @@ def _apply_alert_results(
             and evaluation_sequence <= last_evaluation_sequence
         ):
             continue
+        if result.firing and result.suppressed_by:
+            suppressed_events.append(
+                {
+                    "ts": current.isoformat(),
+                    "rule_id": result.rule_id,
+                    "severity": result.severity,
+                    "type": "suppressed",
+                    "detail": result.detail,
+                    "values": result.values,
+                    "channel": INTERNAL_CHANNEL,
+                    "carrier": result.suppressed_by,
+                    "suppressed": result.rule_id,
+                    "reason": result.suppression_reason,
+                    "heartbeat_fresh": "心跳新鲜" in str(result.suppression_reason),
+                }
+            )
         lifecycles = _normalize_lifecycles(entry)
         projected_severity = _normalize_severity(entry.get("severity"))
 
@@ -918,6 +1244,7 @@ def _apply_alert_results(
             )
             projected["last_evaluated_at"] = current.isoformat()
             projected["last_evaluation_sequence"] = evaluation_sequence
+            projected["evaluation_state"] = result.evaluation_state
             return projected
 
         def prepare_notification(
@@ -959,12 +1286,42 @@ def _apply_alert_results(
             _write_state(state_path, state)
             return prepared, nonce
 
+        if not result.firing and result.evaluation_state == "in_progress":
+            if not lifecycles:
+                projected_severity = _normalize_severity(result.severity)
+                lifecycles[projected_severity] = _ok_lifecycle(
+                    {}, result.detail, result.evaluation_state
+                )
+            for severity, lifecycle in tuple(lifecycles.items()):
+                lifecycles[severity] = {
+                    **lifecycle,
+                    "detail": result.detail,
+                    "evaluation_state": result.evaluation_state,
+                }
+            state[result.rule_id] = project(projected_severity)
+            continue
+
         if result.firing:
             effective_severity = _normalize_severity(result.severity)
+            announced_page = lifecycles.get(PAGE_SEVERITY)
+            if (
+                effective_severity == NOTICE_SEVERITY
+                and announced_page is not None
+                and announced_page.get("state") == "firing"
+                and _entry_announced(announced_page)
+            ):
+                lifecycles[PAGE_SEVERITY] = {
+                    **announced_page,
+                    "detail": result.detail,
+                    "evaluation_state": result.evaluation_state,
+                }
+                state[result.rule_id] = project(PAGE_SEVERITY)
+                continue
             debounce = _debounce_window(thresholds, result.rule_id, effective_severity)
             outgoing_announced = False
             outgoing_since: object = None
             pending_since: object = None
+            announced_outgoing: list[tuple[AlertSeverity, dict[str, object]]] = []
             for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
                 if severity == effective_severity:
                     continue
@@ -975,33 +1332,13 @@ def _apply_alert_results(
                 if announced:
                     outgoing_announced = True
                     outgoing_since = lifecycle.get("since")
-                    lifecycle, notification_nonce = prepare_notification(
-                        lifecycle,
-                        severity=severity,
-                        event_type="resolved",
-                        episode_since=lifecycle.get("since"),
-                        preferred_severity=effective_severity,
-                    )
-                    receipt = _invoke_sender(
-                        result=result,
-                        event_type="resolved",
-                        text=_format_resolved(result, str(lifecycle.get("since") or "")),
-                        severity=severity,
-                        sender=sender,
-                        episode_since=lifecycle.get("since"),
-                        notification_nonce=notification_nonce,
-                        transport_dedup=transport_dedup,
-                    )
-                    sent.append(receipt)
-                    delivered.append((receipt, result))
-                    if receipt["delivered"] is True:
-                        lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
-                    state[result.rule_id] = project(effective_severity)
-                    _write_state(state_path, state)
+                    announced_outgoing.append((severity, lifecycle))
                 elif pending_since is None:
                     pending_since = lifecycle.get("since")
                 if not announced:
-                    lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+                    lifecycles[severity] = _ok_lifecycle(
+                        lifecycle, result.detail, result.evaluation_state
+                    )
 
             lifecycle = lifecycles.get(
                 effective_severity,
@@ -1013,6 +1350,7 @@ def _apply_alert_results(
                     "announced": False,
                     "notification_sequence": 0,
                     "pending_notification": None,
+                    "evaluation_state": result.evaluation_state,
                 },
             )
             lifecycle_was_firing = lifecycle.get("state") == "firing"
@@ -1036,7 +1374,7 @@ def _apply_alert_results(
             since_dt = _parse_dt(since)
             confirmed = since_dt is None or current - since_dt >= debounce
             last_notified = _parse_dt(lifecycle.get("last_notified"))
-            should_notify = confirmed and (
+            should_notify = result.suppressed_by is None and confirmed and (
                 last_notified is None or current - last_notified >= COOLDOWN
             )
             lifecycle = {
@@ -1045,6 +1383,7 @@ def _apply_alert_results(
                 "since": since,
                 "detail": result.detail,
                 "announced": previously_announced,
+                "evaluation_state": result.evaluation_state,
             }
             if firing_basis is not None:
                 lifecycle["firing_basis"] = firing_basis
@@ -1075,6 +1414,11 @@ def _apply_alert_results(
                 sent.append(receipt)
                 delivered.append((receipt, result))
                 delivery_succeeded = receipt["delivered"] is True
+            if delivery_succeeded or previously_announced:
+                for severity, outgoing in announced_outgoing:
+                    lifecycles[severity] = _ok_lifecycle(
+                        outgoing, result.detail, result.evaluation_state
+                    )
             lifecycles[effective_severity] = {
                 **lifecycle,
                 "state": "firing",
@@ -1087,6 +1431,7 @@ def _apply_alert_results(
                 "pending_notification": (
                     None if delivery_succeeded else lifecycle.get("pending_notification")
                 ),
+                "evaluation_state": result.evaluation_state,
             }
             state[result.rule_id] = project(effective_severity)
             if should_notify:
@@ -1117,22 +1462,30 @@ def _apply_alert_results(
                     sent.append(receipt)
                     delivered.append((receipt, result))
                     if receipt["delivered"] is True:
-                        lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+                        lifecycles[severity] = _ok_lifecycle(
+                            lifecycle, result.detail, result.evaluation_state
+                        )
                     state[result.rule_id] = project(projected_severity)
                     _write_state(state_path, state)
                 else:
-                    lifecycles[severity] = _ok_lifecycle(lifecycle, result.detail)
+                    lifecycles[severity] = _ok_lifecycle(
+                        lifecycle, result.detail, result.evaluation_state
+                    )
             if projected_severity not in lifecycles:
                 projected_severity = _normalize_severity(result.severity)
-                lifecycles[projected_severity] = _ok_lifecycle({}, result.detail)
+                lifecycles[projected_severity] = _ok_lifecycle(
+                    {}, result.detail, result.evaluation_state
+                )
             elif lifecycles[projected_severity].get("state") == "ok":
                 lifecycles[projected_severity] = {
                     **lifecycles[projected_severity],
                     "detail": result.detail,
+                    "evaluation_state": result.evaluation_state,
                 }
             state[result.rule_id] = project(projected_severity)
     try:
         _record_notification_events(event_path, current=current, delivered=delivered)
+        _record_event_rows(event_path, current=current, new_rows=suppressed_events)
     except BaseException:
         pass
     return sent
@@ -1192,6 +1545,7 @@ def run_alert_state_machine(
     send: AlertSender | None = None,
     thresholds: dict[str, object] | None = None,
     healthz_probe: Callable[[str, float], bool] | None = None,
+    serve_plist_path: str | Path | None = None,
 ) -> dict[str, object]:
     current = now or datetime.now(SHANGHAI_TZ)
     if current.tzinfo is None:
@@ -1209,9 +1563,21 @@ def run_alert_state_machine(
             current=current,
             thresholds=active_thresholds,
             healthz_probe=healthz_probe,
+            serve_plist_path=serve_plist_path,
         )
         signals = replace(signals, healthz_consecutive_failures=healthz_consecutive_failures)
         results = evaluate_rules(signals, thresholds=active_thresholds)
+        results = _correlate_alert_results(
+            results,
+            heartbeat_fresh=(
+                signals.minutes_since_successful_pipeline
+                <= _int_threshold(
+                    _threshold_section(active_thresholds, "a2"),
+                    "no_success_minutes",
+                    120,
+                )
+            ),
+        )
         evaluation_sequence = _claim_evaluation_sequence(state)
         sent = _apply_alert_results(
             state,
@@ -1263,6 +1629,244 @@ def send_alert_message(
     return {"skipped": False, "returncode": completed.returncode}
 
 
+def _clear_notification_dedup(key: str) -> dict[str, object]:
+    try:
+        completed = subprocess.run(
+            ["im-notify", "--dedup-clear", key], capture_output=True, text=True, timeout=15.0
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        reason = f"im-notify --dedup-clear failed: {type(exc).__name__}: {exc}"
+        LOGGER.error(reason)
+        return {"cleared": False, "reason": reason}
+    if completed.returncode:
+        reason = f"im-notify --dedup-clear exited with status {completed.returncode}: {completed.stderr.strip()}"
+        LOGGER.error(reason)
+        return {"cleared": False, "reason": reason}
+    return {"cleared": True, "returncode": 0}
+
+
+def _price_description(signature: str) -> str:
+    try:
+        values = json.loads(signature)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return str(signature)
+    if not isinstance(values, list) or len(values) < 3:
+        return str(signature)
+    return f"input/cache/output USD per 1M={values[0]}/{values[1]}/{values[2]}"
+
+
+def run_pricing_notifications(
+    usage_report: Mapping[str, object],
+    *,
+    state_path: str | Path,
+    event_path: str | Path | None = None,
+    now: datetime | None = None,
+    send: Callable[..., object] | None = None,
+    clear: Callable[[str], object] | None = None,
+    message_prefix: str = "",
+) -> dict[str, object]:
+    """Deliver retryable D3 notices and append successful lifecycle events."""
+    current = now or datetime.now(SHANGHAI_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=SHANGHAI_TZ)
+    current = current.astimezone(SHANGHAI_TZ)
+    path = Path(state_path)
+    ledger_path = Path(event_path) if event_path is not None else path.with_name("alert-events.jsonl")
+    try:
+        raw_state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        raw_state = {}
+    state: dict[str, Any] = raw_state if isinstance(raw_state, dict) else {}
+    sender = send or send_alert_message
+    clearer = clear or _clear_notification_dedup
+
+    total_calls = 0
+    totals = usage_report.get("totals")
+    if isinstance(totals, Mapping):
+        total_calls = int(totals.get("calls") or 0)
+    desired: dict[str, dict[str, str]] = {}
+    unpriced = usage_report.get("unpriced", [])
+    if isinstance(unpriced, list):
+        for raw in unpriced:
+            if not isinstance(raw, dict):
+                continue
+            pair = f"{raw.get('provider')}/{raw.get('model')}"
+            calls = int(raw.get("calls") or 0)
+            event = f"unpriced:{pair}"
+            desired[event] = {
+                "dedup_text": event,
+                "text": (
+                    f"{message_prefix}【AI Radar】🟡 D3 出现未定价 LLM 调用\n"
+                    f"具体对象/数值：{pair} {calls}/{total_calls or '?'} 次；金额未知，不得按 ¥0 处理。\n"
+                    "处置方向：在 src/airadar/pricing.py 补齐并核实该 provider/model 的权威单价；"
+                    "补价前不要据已知金额做总成本结论。"
+                ),
+            }
+
+    current_prices: dict[str, str] = {}
+    pricing_rows: dict[str, dict[str, object]] = {}
+    pricing_table = usage_report.get("pricing_table", [])
+    if isinstance(pricing_table, list):
+        for raw in pricing_table:
+            if not isinstance(raw, dict):
+                continue
+            pair = f"{raw.get('provider')}/{raw.get('model')}"
+            pricing_rows[pair] = raw
+            if raw.get("matched_key") is not None:
+                current_prices[pair] = json.dumps(
+                    [
+                        raw.get("input_per_million_tokens_usd"),
+                        raw.get("cache_read_per_million_tokens_usd"),
+                        raw.get("output_per_million_tokens_usd"),
+                        raw.get("effective_from"),
+                        raw.get("effective_to"),
+                    ],
+                    separators=(",", ":"),
+                )
+            status = raw.get("freshness")
+            if status in {"stale", "due-review"}:
+                event = f"{status}:{pair}"
+                desired[event] = {
+                    "dedup_text": event,
+                    "text": (
+                        f"{message_prefix}【AI Radar】🟡 D3 {pair} 价格状态为 {status}\n"
+                        "影响：该模型的目录价估算可能已过期；这不是账单实付。\n"
+                        "处置方向：对照权威计费页复核 src/airadar/pricing.py 中的价格与 verified_at。"
+                    ),
+                }
+
+    raw_previous_prices = state.get("price_signatures", {})
+    previous_prices = (
+        {str(key): str(value) for key, value in raw_previous_prices.items()}
+        if isinstance(raw_previous_prices, dict)
+        else {}
+    )
+    next_prices = dict(previous_prices)
+    changed_events: dict[str, tuple[str, str]] = {}
+    for pair, signature in current_prices.items():
+        old = previous_prices.get(pair)
+        if old is None or old == signature:
+            next_prices[pair] = signature
+            continue
+        event = f"price-changed:{pair}"
+        changed_events[event] = (old, signature)
+        desired[event] = {
+            "dedup_text": event,
+            "text": (
+                f"{message_prefix}【AI Radar】🟡 D3 LLM 目录价发生变化\n"
+                f"具体对象：{pair}；旧值：{_price_description(old)}；"
+                f"新值：{_price_description(signature)}。\n"
+                "影响：历史 usage 未固定逐行价格；A6 已按同一现行费率重算两窗，"
+                "纯调价不会被当作量结构突变。\n"
+                "处置方向：在 src/airadar/pricing.py 核实权威来源、生效区间与 verified_at；"
+                "周报金额为目录价估算，并非账单实付。"
+            ),
+        }
+
+    raw_previous_active = state.get("active", {})
+    previous_active = raw_previous_active if isinstance(raw_previous_active, dict) else {}
+    retained_active: dict[str, object] = {}
+    sent: list[dict[str, object]] = []
+    ledger_rows: list[dict[str, object]] = []
+    for event, payload in desired.items():
+        previous_payload = previous_active.get(event)
+        rearm_after_clear_failure = bool(
+            isinstance(previous_payload, dict)
+            and previous_payload.get("rearm_after_clear_failure") is True
+        )
+        if event in previous_active and not rearm_after_clear_failure:
+            retained_active[event] = previous_active[event]
+            continue
+        key = f"ai-radar:d3:{event}"
+        dedup_text = str(payload["dedup_text"])
+        if rearm_after_clear_failure:
+            assert isinstance(previous_payload, dict)
+            dedup_text = str(
+                previous_payload.get("rearm_dedup_text")
+                or f"{dedup_text}:recurred:{current.isoformat()}"
+            )
+        result = sender(
+            payload["text"],
+            severity=NOTICE_SEVERITY,
+            dedup_key=key,
+            dedup_text=dedup_text,
+        )
+        delivered = _snapshot_delivery_succeeded(result)
+        receipt = {
+            "event": event,
+            "channel": NOTIFICATION_CHANNEL,
+            "text": payload["text"],
+            "send_result": result,
+            "delivered": delivered,
+        }
+        sent.append(receipt)
+        if not delivered:
+            if rearm_after_clear_failure:
+                retained_active[event] = {
+                    **payload,
+                    "rearm_after_clear_failure": True,
+                    "rearm_dedup_text": dedup_text,
+                }
+            continue
+        retained_active[event] = payload
+        if event in changed_events:
+            next_prices[event.removeprefix("price-changed:")] = changed_events[event][1]
+        ledger_rows.append(
+            {
+                "ts": current.isoformat(),
+                "rule_id": f"D3:{event}",
+                "severity": NOTICE_SEVERITY,
+                "type": "firing",
+                "detail": payload["text"],
+                "values": {"event": event},
+                "channel": NOTIFICATION_CHANNEL,
+                "episode_since": current.isoformat(),
+            }
+        )
+
+    cleared: list[dict[str, object]] = []
+    for event in sorted(set(previous_active) - set(desired)):
+        key = f"ai-radar:d3:{event}"
+        result = clearer(key)
+        cleared_ok = isinstance(result, Mapping) and result.get("cleared") is True
+        cleared.append({"event": event, "result": result, "cleared": cleared_ok})
+        if not cleared_ok:
+            previous_payload = previous_active[event]
+            prior = previous_payload if isinstance(previous_payload, dict) else {}
+            retained_active[event] = {
+                **prior,
+                "rearm_after_clear_failure": True,
+                "rearm_dedup_text": str(
+                    prior.get("rearm_dedup_text")
+                    or f"{event}:recurred:{current.isoformat()}"
+                ),
+            }
+            LOGGER.error("D3 dedup clear failed event=%s key=%s result=%r", event, key, result)
+            continue
+        ledger_rows.append(
+            {
+                "ts": current.isoformat(),
+                "rule_id": f"D3:{event}",
+                "severity": NOTICE_SEVERITY,
+                "type": "resolved",
+                "detail": "条件已解除并清除 transport dedup",
+                "values": {"event": event},
+                "channel": NOTIFICATION_CHANNEL,
+                "episode_since": None,
+            }
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    price_state: dict[str, object] = dict(next_prices)
+    next_state: dict[str, dict[str, object]] = {
+        "active": retained_active,
+        "price_signatures": price_state,
+    }
+    _write_state(path, next_state)
+    _record_event_rows(ledger_path, current=current, new_rows=ledger_rows)
+    return {"sent": sent, "cleared": cleared, "state_path": str(path)}
+
+
 def _recent_upstream_stats(db_path: str | Path | None, since: datetime) -> tuple[int, float, float]:
     with db.get_conn(db_path) as conn:
         rows = conn.execute("SELECT error, evaluated_at FROM item_evaluations ORDER BY evaluated_at").fetchall()
@@ -1282,12 +1886,121 @@ def _recent_upstream_stats(db_path: str | Path | None, since: datetime) -> tuple
     return total, upstream / total if total else 0.0, schema / total if total else 0.0
 
 
+def _wechat_interpretation_signal(
+    db_path: str | Path | None, current: datetime, no_success_hours: float
+) -> tuple[float | None, int, int, str | None]:
+    from ..interpret.runner import ERROR_RETRY_BASE_MINUTES, ERROR_RETRY_MAX
+
+    cutoff = current - timedelta(hours=no_success_hours)
+    with db.get_conn(db_path) as conn:
+        latest = conn.execute(
+            "SELECT MAX(processed_at) AS processed_at FROM wechat_interpretations WHERE error IS NULL"
+        ).fetchone()
+        rows = conn.execute(
+            """
+            SELECT i.title, i.fetched_at, wi.error, wi.error_retry_count, wi.processed_at
+            FROM items i
+            JOIN sources s ON s.id=i.source_id
+            LEFT JOIN wechat_interpretations wi ON wi.item_id=i.id
+            WHERE COALESCE(s.kind, 'feed')='wechat' AND s.enabled=1
+              AND (wi.item_id IS NULL OR (wi.error IS NOT NULL AND wi.error_retry_count < ?))
+            ORDER BY i.fetched_at, i.id
+            """,
+            (ERROR_RETRY_MAX,),
+        ).fetchall()
+        frozen = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM items i
+            JOIN sources s ON s.id=i.source_id
+            JOIN wechat_interpretations wi ON wi.item_id=i.id
+            WHERE COALESCE(s.kind, 'feed')='wechat' AND s.enabled=1
+              AND wi.error IS NOT NULL AND wi.error_retry_count >= ?
+            """,
+            (ERROR_RETRY_MAX,),
+        ).fetchone()
+    processed = _parse_dt(latest["processed_at"]) if latest else None
+    hours_since = max(0.0, (current - processed).total_seconds() / 3600) if processed else None
+    eligible: list[Any] = []
+    for row in rows:
+        fetched = _parse_dt(row["fetched_at"])
+        if fetched is None or fetched > cutoff:
+            continue
+        if row["error"] is not None:
+            retry_count = int(row["error_retry_count"] or 0)
+            processed_at = _parse_dt(row["processed_at"])
+            backoff_minutes = ERROR_RETRY_BASE_MINUTES * (1 << retry_count)
+            if processed_at is not None and current < processed_at + timedelta(minutes=backoff_minutes):
+                continue
+        eligible.append(row)
+    return (
+        hours_since,
+        len(eligible),
+        int(frozen["count"] or 0) if frozen else 0,
+        str(eligible[0]["title"] or "（无标题）") if eligible else None,
+    )
+
+
+def _pipeline_lock_owner_is_live(lock_dir: Path) -> bool:
+    try:
+        owner_lines = (lock_dir / "owner").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    owner = dict(line.split("=", 1) for line in owner_lines if "=" in line)
+    try:
+        pid = int(owner["pid"])
+        expected_start = owner["process_start"]
+    except (KeyError, ValueError):
+        return False
+    if pid <= 0 or not expected_start:
+        return False
+    try:
+        completed = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+        actual_start = " ".join(completed.stdout.split())
+        os.kill(pid, 0)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0 and actual_start == expected_start
+
+
+def _a6_measurement_in_progress(
+    activity: dict[str, dict[str, Any]],
+    *,
+    start: datetime,
+    end: datetime,
+    lock_dir: Path,
+) -> bool:
+    if not _pipeline_lock_owner_is_live(lock_dir):
+        return False
+    problem_days: list[str] = []
+    cursor = start.astimezone(SHANGHAI_TZ).date()
+    last_day = (end.astimezone(SHANGHAI_TZ) - timedelta(microseconds=1)).date()
+    while cursor <= last_day:
+        day = cursor.isoformat()
+        row = activity.get(day)
+        if row is None or not bool(row.get("complete")):
+            problem_days.append(day)
+        if row is not None and int(row.get("failures") or 0) > 0:
+            return False
+        cursor += timedelta(days=1)
+    return problem_days == [end.astimezone(SHANGHAI_TZ).date().isoformat()]
+
+
 def collect_alert_signals(
     *,
     db_path: str | Path | None = None,
     pipeline_log_dir: str | Path | None = None,
     access_log_paths: list[str | Path] | None = None,
+    usage_db_path: str | Path | None = None,
+    pricing_catalog: Any | None = None,
     now: datetime | None = None,
+    pipeline_lock_dir: str | Path | None = None,
 ) -> AlertSignals:
     current = now or datetime.now(SHANGHAI_TZ)
     if current.tzinfo is None:
@@ -1348,6 +2061,48 @@ def collect_alert_signals(
     latest_fetch = ingestion.get("latest_fetch", {})
     attempted = int(latest_fetch.get("attempted", 0)) if isinstance(latest_fetch, dict) else 0
     failed = int(latest_fetch.get("failed", 0)) if isinstance(latest_fetch, dict) else 0
+    a5 = _threshold_section(ALERT_THRESHOLDS, "a5")
+    no_success_hours = _float_threshold(a5, "no_success_hours", 4.0)
+    hours_since_interpret, pending_count, frozen_count, pending_title = _wechat_interpretation_signal(
+        db_path, current, no_success_hours
+    )
+    a6 = _threshold_section(ALERT_THRESHOLDS, "a6")
+    usage_rows = _load_usage_rows(
+        db_path=db_path,
+        usage_db_path=usage_db_path,
+        start=current.astimezone(UTC) - timedelta(days=15),
+        end=current.astimezone(UTC),
+    )
+    log_dir = Path(pipeline_log_dir) if pipeline_log_dir is not None else db.PROJECT_ROOT / "logs"
+    metering_start = current - timedelta(hours=24)
+    a6_activity = _pipeline_activity(log_dir, metering_start, current)
+    metering = _window_metering(a6_activity, metering_start, current)
+    lock_dir = (
+        Path(pipeline_lock_dir)
+        if pipeline_lock_dir is not None
+        else db.PROJECT_ROOT / ".pipeline.lock"
+    )
+    measurement_in_progress = (
+        not bool(metering["complete"])
+        and _a6_measurement_in_progress(
+            a6_activity,
+            start=metering_start,
+            end=current,
+            lock_dir=lock_dir,
+        )
+    )
+    a6_signal = evaluate_a6_cost(
+        usage_rows,
+        now=current,
+        catalog=pricing_catalog,
+        daily_floor_cny=_float_threshold(a6, "daily_floor_cny", 20.0),
+        spike_multiplier=_float_threshold(a6, "spike_multiplier", 3.0),
+        page_floor_cny=_float_threshold(a6, "page_floor_cny", 100.0),
+        page_multiplier=_float_threshold(a6, "page_multiplier", 6.0),
+        metering_complete=bool(metering["complete"]),
+        metering_failure_count=int(metering["failure_count"]),
+    )
+    top = a6_signal["top_driver"]
 
     return AlertSignals(
         upstream_sample_size=sample_size,
@@ -1363,6 +2118,28 @@ def collect_alert_signals(
         minutes_elapsed_today=_minutes_elapsed_today(current),
         stage_sample_count=stage_sample_count,
         server_pv=int(users.get("pv") or 0),
+        hours_since_successful_interpretation=hours_since_interpret,
+        wechat_pending_count=pending_count,
+        wechat_frozen_count=frozen_count,
+        oldest_wechat_pending_title=pending_title,
+        a5_enabled=os.environ.get("AI_RADAR_ENABLE_INTERPRET", "").strip().lower()
+        in {"1", "true", "yes"},
+        a6_evaluable=bool(a6_signal["evaluable"]),
+        a6_measurement_in_progress=measurement_in_progress,
+        a6_current_cost_cny=float(a6_signal["known_cost_cny"]),
+        a6_baseline_median_cny=a6_signal["baseline_median_cny"],
+        a6_threshold_cny=a6_signal["threshold_cny"],
+        a6_page_threshold_cny=a6_signal["page_threshold_cny"],
+        a6_baseline_days=int(a6_signal["baseline_days"]),
+        a6_excluded_coverage_days=int(a6_signal["excluded_coverage_days"]),
+        a6_top_driver=(
+            f"{top['provider']}/{top['model']} ¥{float(top['known_cost_cny']):.2f}"
+            if isinstance(top, dict) else None
+        ),
+        a6_unpriced_calls=int(a6_signal["unpriced_calls"]),
+        a6_pricing_freshness=str(a6_signal["pricing_freshness"]),
+        a6_metering_complete=bool(a6_signal["metering_complete"]),
+        a6_metering_failure_count=int(a6_signal["metering_failure_count"]),
     )
 
 

@@ -2,7 +2,7 @@
 # Uninstall ai-radar services. Idempotent and tolerant — silent if not installed.
 # Keeps source, plist files, logs, and data. Only unregisters from supervisors.
 # Usage: ./uninstall.sh              # all services
-#        ./uninstall.sh <service>    # serve | tunnel | pipeline | alert | performance-probe
+#        ./uninstall.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | cost-report
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,9 +75,22 @@ uninstall_pipeline() {
   fi
 }
 
+uninstall_cost_report() {
+  local current filtered
+  current="$(crontab -l 2>/dev/null || true)"
+  if printf '%s\n' "$current" | grep -q '# ai-radar-cost-report$'; then
+    filtered="$(printf '%s\n' "$current" | grep -v '^# Send the AI Radar LLM cost report' | grep -v '# ai-radar-cost-report$' || true)"
+    printf '%s\n' "$filtered" | crontab -
+    echo "✓ cost-report: removed from user crontab"
+  else
+    echo "  cost-report: nothing to remove (not in crontab)"
+  fi
+}
+
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
     serve|tunnel|alert|performance-probe) uninstall_launchd_service "$slug" ;;
     pipeline)          uninstall_pipeline ;;
+    cost-report)       uninstall_cost_report ;;
   esac
 done

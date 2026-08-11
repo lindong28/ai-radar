@@ -39,7 +39,6 @@ ALERT_THRESHOLDS: dict[str, object] = {
         "window_minutes": 15,
         "min_pv": 20,
         "server_error_rate": 0.05,
-        "healthz_url": "http://127.0.0.1:8000/api/v1/healthz",
         "healthz_timeout_seconds": 2.0,
         "healthz_consecutive_failures": 2,
     },
@@ -49,6 +48,13 @@ ALERT_THRESHOLDS: dict[str, object] = {
         # Fetch sources (esp. the X/nitter feeds) can flap for one round, while
         # a real items-floor breach must page immediately.
         "debounce_minutes_by_severity": {"page": 0, "notice": 30},
+    },
+    "a5": {"no_success_hours": 4},
+    "a6": {
+        "daily_floor_cny": 20.0,
+        "spike_multiplier": 3.0,
+        "page_floor_cny": 100.0,
+        "page_multiplier": 6.0,
     },
 }
 

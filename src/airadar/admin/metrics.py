@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import defaultdict
@@ -301,6 +302,7 @@ def collect_metrics(
     now: datetime | None = None,
     stage_since: datetime | None = None,
     access_since: datetime | None = None,
+    alert_state_path: str | Path | None = None,
 ) -> dict[str, object]:
     current = _normalize_now(now)
     normalized_stage_since = _normalize_now(stage_since) if stage_since is not None else None
@@ -359,6 +361,12 @@ def collect_metrics(
                 stages[stage]["p50_latency_ms"] = values.get("duration_ms")
                 stages[stage]["p95_latency_ms"] = values.get("duration_ms")
 
+    alert_path = (
+        Path(alert_state_path)
+        if alert_state_path is not None
+        else db.PROJECT_ROOT / "data" / "alert-state.json"
+    )
+    alert_summary = _load_alert_summary(alert_path)
     return {
         "generated_at": current.isoformat(),
         "timezone": "Asia/Shanghai",
@@ -377,7 +385,25 @@ def collect_metrics(
             "latest_run": latest_run,
             "recent_runs": runs[-10:],
         },
-        "alerts": {
-            "firing": [],
-        },
+        "alerts": alert_summary,
     }
+
+
+def _load_alert_summary(path: Path) -> dict[str, list[str]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"firing": [], "degraded": ["告警状态文件不可读"]}
+    if not isinstance(payload, dict):
+        return {"firing": [], "degraded": ["告警状态格式无效"]}
+    firing: list[str] = []
+    degraded: list[str] = []
+    for rule_id, raw in sorted(payload.items()):
+        if not isinstance(raw, dict) or not str(rule_id).startswith("A"):
+            continue
+        detail = str(raw.get("detail") or "无详情")
+        if raw.get("state") == "firing":
+            firing.append(f"{rule_id} {detail}")
+        elif raw.get("evaluation_state") in {"degraded", "in_progress"}:
+            degraded.append(f"{rule_id} {detail}")
+    return {"firing": firing, "degraded": degraded}

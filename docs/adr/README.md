@@ -21,3 +21,8 @@
 | [015](./015-interval-aware-supplement-pricing.md) | Supplement 定价按调用时间选择有效区间 | accepted | 2026-08-11 |
 | [016](./016-rollout-compatible-deprecated-cost-column.md) | 废弃成本列在滚动发布期接受但不消费旧数值 | accepted | 2026-08-11 |
 | [017](./017-preserve-paid-results-on-metering-failure.md) | 计量失败不得伪装成模型失败 | accepted | 2026-08-11 |
+| [018](./018-normalize-a6-to-current-tariff.md) | A6 只比较现行可报价 cohort 的量结构成本 | accepted | 2026-08-11 |
+| [019](./019-reference-interpret-unit-cost-to-comparable-window.md) | 单篇解读成本只与自身可比前窗对照 | accepted | 2026-08-11 |
+| [020](./020-normalize-cost-comparisons-to-cache-all-miss.md) | 成本比较统一归一化为 cache 全未命中 | accepted; supersedes ADR-018/019 cache gates | 2026-08-11 |
+| [021](./021-audit-alert-delivery-and-suppression-decisions.md) | 告警事件 ledger 同时审计投递与合并抑制决策 | accepted; supersedes ADR-009 scope | 2026-08-11 |
+| [022](./022-evaluate-a6-in-progress-cost-as-lower-bound.md) | A6 在途成本作为下界继续正向评估 | accepted; supersedes ADR-020 in-progress handling | 2026-08-11 |

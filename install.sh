@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install ai-radar services. Idempotent.
 # Usage: ./install.sh              # all services
-#        ./install.sh <service>    # serve | tunnel | pipeline | alert | performance-probe
+#        ./install.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | cost-report
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -240,6 +240,19 @@ install_pipeline() {
   echo "✓ pipeline: installed in user crontab (every 15 min)"
 }
 
+install_cost_report() {
+  if is_install_dry_run; then
+    echo "dry-run: cost-report: would install in user crontab (Monday 09:17)"
+    return 0
+  fi
+  local entry current filtered
+  entry="$(sed -e "s|/path/to/ai-radar|$REPO_ROOT|g" -e "s|/path/to/home|$HOME|g" "$REPO_ROOT/deploy/cron/ai-radar-cost-report")"
+  current="$(crontab -l 2>/dev/null || true)"
+  filtered="$(printf '%s\n' "$current" | grep -v '^# Send the AI Radar LLM cost report' | grep -v '# ai-radar-cost-report$' || true)"
+  printf '%s\n%s\n' "$filtered" "$entry" | crontab -
+  echo "✓ cost-report: installed in user crontab (Monday 09:17)"
+}
+
 INSTALLED_SERVICES=()
 SKIPPED_SERVICE_SUMMARY=()
 
@@ -252,6 +265,7 @@ for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
     serve|tunnel|alert|performance-probe) install_launchd_service "$slug" ;;
     pipeline)          install_pipeline ;;
+    cost-report)       install_cost_report ;;
   esac
   INSTALLED_SERVICES+=("$slug")
 done
@@ -275,5 +289,5 @@ fi
 cat <<EOF
 
 Verify with: ./status.sh
-Logs:        logs/serve-access.log, logs/alert-check.log, logs/performance-probe-launchd.{log,err.log}, /tmp/ai-radar-tunnel.{log,err}, logs/pipeline-*.log
+Logs:        logs/serve-access.log, logs/alert-check.log, logs/cost-report-cron.log, logs/performance-probe-launchd.{log,err.log}, /tmp/ai-radar-tunnel.{log,err}, logs/pipeline-*.log
 EOF

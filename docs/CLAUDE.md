@@ -29,7 +29,7 @@
 | 文件 | 说明 |
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
-| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access、用户旅程性能监控与边缘缓存 runbook |
+| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A6 与 D3 告警、周报、飞书 webhook、用户旅程性能监控 runbook |
 | [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、真名头像 backfill、迁移留尾记录 |
 | [ai-assistant-integration.md](operations/ai-assistant-integration.md) | 可选外部 summary-agent 集成：启用条件、`./run.sh interpret` 契约、默认关闭语义 |
 | [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
@@ -97,6 +97,12 @@
 | [014-ship-base-only-db-and-rebuild-fts.md](adr/014-ship-base-only-db-and-rebuild-fts.md) | DB sync 传输持久 base-only artifact，并在服务器候选槽重建与验证 FTS |
 | [015-interval-aware-supplement-pricing.md](adr/015-interval-aware-supplement-pricing.md) | Supplement tariff 按 usage 时间选有效区间，防止调价静默重算历史 |
 | [016-rollout-compatible-deprecated-cost-column.md](adr/016-rollout-compatible-deprecated-cost-column.md) | 废弃成本列在滚动发布期接受但不消费旧 numeric，拒绝写入显式失败 |
+| [017-preserve-paid-results-on-metering-failure.md](adr/017-preserve-paid-results-on-metering-failure.md) | 已付费模型结果在计量失败时仍须保留，计量错误单独显式暴露 |
+| [018-normalize-a6-to-current-tariff.md](adr/018-normalize-a6-to-current-tariff.md) | A6 用同一现行 tariff snapshot 重算当前窗与基线，只检测量结构突变 |
+| [019-reference-interpret-unit-cost-to-comparable-window.md](adr/019-reference-interpret-unit-cost-to-comparable-window.md) | 单篇解读成本用前一等长窗口作参考 |
+| [020-normalize-cost-comparisons-to-cache-all-miss.md](adr/020-normalize-cost-comparisons-to-cache-all-miss.md) | A6、周报与管理页的跨窗成本统一按 cache 未命中比较 |
+| [021-audit-alert-delivery-and-suppression-decisions.md](adr/021-audit-alert-delivery-and-suppression-decisions.md) | 告警 ledger 区分投递、D3 生命周期与 INTERNAL 抑制决策 |
+| [022-evaluate-a6-in-progress-cost-as-lower-bound.md](adr/022-evaluate-a6-in-progress-cost-as-lower-bound.md) | A6 在途成本下界可触发告警，但不能证明恢复 |
 
 ### docs/experiences/ [Agent]
 

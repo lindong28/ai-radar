@@ -9,14 +9,15 @@
 | serve | launchd, KeepAlive=true | 已加载 | `./install.sh serve` / `./uninstall.sh serve` / `./status.sh serve` | [deploy/launchd/ai-radar-serve.plist.example](../../deploy/launchd/ai-radar-serve.plist.example) |
 | tunnel | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
 | ai-radar pipeline (15min) | cron (`*/15 * * * *`) | 在 user crontab | `./install.sh pipeline` / `./uninstall.sh pipeline` / `./status.sh pipeline` | [deploy/cron/ai-radar-pipeline](../../deploy/cron/ai-radar-pipeline) · launchd 替代模板见 [ai-radar-pipeline.plist.example](../../deploy/launchd/ai-radar-pipeline.plist.example) |
-| alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1–A4 以 per-severity lifecycle 决定 firing / resolved，page 走 `im-notify --alert` 的 `ALERT` webhook，notice 走 `im-notify` 的 `NOTIFICATION` webhook；launchd 进程崩溃由 fleet watchdog 覆盖 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
+| alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1–A6 使用 per-severity lifecycle，D3 定价提醒独立去重 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
 | performance probe (5min) | launchd, `StartInterval=300`, `RunAtLoad=true` | per-file LaunchAgent；只在 pipeline idle 窗保存/评估样本 | `./install.sh performance-probe` / `./uninstall.sh performance-probe` / `./status.sh performance-probe` | [ai-radar-performance-probe.plist.example](../../deploy/launchd/ai-radar-performance-probe.plist.example) · [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
+| LLM cost report | cron (`17 9 * * 1`) | 周一 09:17 经 `run-or-alert --key ai-radar-cost-report` 发送上一上海自然周 | `./install.sh cost-report` / `./uninstall.sh cost-report` / `./status.sh cost-report` | [deploy/cron/ai-radar-cost-report](../../deploy/cron/ai-radar-cost-report) |
 | performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**：homepage 误标缺陷已修复，但仍须部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing 才按文档手动安装 | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 | DB sync → 腾讯服务器 (5h) | cron (`41 1,6,11,16,21 * * *`)，`run-or-alert --key ai-radar-db-sync` 包裹，失败经 im-notify 告警、成功自复位 | 已启用；这是公网副本持续新鲜的 Mac producer | 手动跑：`deploy/sync/sync-db-cron.sh`（完整 cron wrapper）或 `deploy/sync/sync-db-to-server.sh`（裸 producer） | [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) · [ADR-013](../adr/013-db-sync-cron-agent-socket-auth.md) · [ADR-014](../adr/014-ship-base-only-db-and-rebuild-fts.md) |
 
-`./install.sh` / `./uninstall.sh` / `./status.sh` 管理 serve、tunnel、pipeline、alert、performance-probe 这 5 个服务。probe 的专属 plist 经 `./run.sh performance-probe` 启动，保留 external watchdog；pipeline 继续使用既有 `*/15` user crontab，未迁移到 launchd。remediation（按上表 gate）与 DB sync 这两条 cron 不在 `install.sh`/`uninstall.sh`/`status.sh` 管理范围内：DB sync 手工按 [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) 模板增删，remediation 的 cron 行用 README「用户旅程性能监控」节的写入片段；两者都用 `crontab -l` 查状态。脚本契约见维护者机器上的 `~/.claude/references/service-operations-protocol.md` §3.3（agent 配置仓文件，不随本仓分发）。
+`./install.sh` / `./uninstall.sh` / `./status.sh` 管理 serve、tunnel、pipeline、alert、performance-probe、cost-report 这 6 个服务。probe 的专属 plist 经 `./run.sh performance-probe` 启动；pipeline 和 cost-report 使用各自带精确 marker 的 user crontab 条目。remediation 与 DB sync 两条 cron 仍不在通用生命周期脚本管理范围内。
 
-`./install.sh` 会逐服务检查脚本可判定的依赖。缺少 `pipeline` 的 LLM key 时，交互式终端会询问 `DEEPSEEK_API_KEY` 并写入项目 `.env`；`alert` 则要求 `FEISHU_GENERAL_ALERT_WEBHOOK` 和 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` **两者同时存在**，任缺一个都 fail-closed，不生成部分 launchd 配置。交互式终端会逐个询问缺失 webhook 并写入 `.env`；非交互环境跳过 alert 并在 summary 列出缺失 key。`alert` 运行时还需要部署机已从 `ai-agent-config` 安装 `~/.local/bin/im-notify`；tracked launchd 模板已把 `~/.local/bin` 加入该作业的 `PATH`。默认服务 `performance-probe` 与微信原文抓取都依赖 Playwright Chromium；部署前必须显式运行 `uv run playwright install chromium`，`install.sh` 不自动下载或校验该浏览器。`tunnel` 缺少 `deploy/cloudflared/config.yml` 时不会询问密钥，需先从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置后重跑 `./install.sh tunnel`。环境变量依赖读取顺序为当前进程环境、项目 `.env`、`~/.claude/.env`。
+`./install.sh` 会逐服务检查脚本可判定的依赖。`alert` 要求两个 webhook；`cost-report` 要求 notification webhook，并依赖部署机已有 `~/.local/bin/im-notify` 与 `run-or-alert`。cost-report 模板把 repo、命令和日志路径展开为绝对路径并显式设置 PATH；重复安装替换本条且保留无关 crontab，卸载只删除 `# ai-radar-cost-report` marker 条目。
 
 ## DB sync 职责、验证与故障证据
 
@@ -69,6 +70,9 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 - A2 的 prefilter/scoring/enrich 错误率 numerator/denominator 各自只取最近 15 分钟，最小样本门为 `4/4/2`；`no_success_minutes=120` 是不受样本门影响的独立 page 支路，stage P95 仍用自己的 2 小时口径。
 - A3 的 5xx numerator 与 PV denominator 同取最近 15 分钟，只有 `PV >= 20` 才评估 5xx rate；healthz 连续失败 2 次是独立 page 支路。
 - A4 只有 fetch 失败率超阈且 items 正常时是 notice（30 分钟 debounce）；items 低于按日内进度缩放的 floor 时是 page（0 debounce），两分支同时命中也是 page。
+- A5 在解读启用、4 小时无成功微信解读且存在已等待至少 4 小时、仍符合重试资格的 pending item 时 page；没有近期成功但 pending 因退避/冻结归零时进入 degraded，不发送虚假的「已恢复」。冻结数保留在规则 detail 与 `/admin` 状态中。
+- A6 用同一 evaluation-time tariff snapshot 和 cache 全未命中基准重算 rolling 24h 与 14 个 UTC 基线日，只检测调用量、token 量或模型组合变化；3×基线先 notice，6×高档才 page。少于 3 日或计量证据不完整时进入 degraded。纯调价由 D3 `price-changed` notification 承接。
+- A1/A2/A5 同时命中时按 pipeline 心跳合并：心跳新鲜由 A5 承载 provider/阶段关联信号，心跳过期由 A2 承载，真实 2026-08-08 心跳新鲜的单独 A5 不会被吞掉。被抑制的规则以 `channel=INTERNAL` 写入共享 ledger。
 - 每个 `rule_id` 以 `lifecycles.page` / `lifecycles.notice` 分别保存 debounce、`since`、`last_notified`、announced 与 cooldown。severity 转换先在原通道 resolved 已 announced episode，再在新通道 firing；pending 未送达 episode 静默关闭。各 severity 的计时器不互相节流。
 
 > 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）。微信摄取走 Mp2RSS（见 [wechat-ingestion.md](wechat-ingestion.md)）。如需回滚到 WeWe RSS：`deploy/wewe-rss/`（docker-compose + RUNBOOK）仍在，launchd plist 与脚本 wiring 从 git 历史恢复（移除 commit 见 git log）。
@@ -194,7 +198,7 @@ pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再
 ## 相关参考
 
 - [README.md §服务](../../README.md#服务) — 用户视角的脚本入口表
-- [docs/operations/monitoring-alerting.md](monitoring-alerting.md) — `/admin` dashboard、A1-A4 告警、飞书 webhook、Cloudflare Access 配置、边缘缓存与旅程延迟
+- [docs/operations/monitoring-alerting.md](monitoring-alerting.md) — `/admin` dashboard、A1–A6 与 D3 告警、周报、飞书 webhook 与旅程延迟
 - [docs/experiences/deployment.md](../experiences/deployment.md) — 历史踩坑（env 不继承、cron/launchd 共存、tunnel region、docker compose 守护）
 - [docs/operations/wechat-ingestion.md](wechat-ingestion.md) — 微信公众号摄取（Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、头像 backfill、迁移留尾记录）
 - [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 微信源添加流程（已停用，仅回滚参考）

@@ -42,6 +42,7 @@ def collect_admin_metrics(request: Request) -> dict[str, object]:
         db_path=getattr(request.app.state, "db_path", None),
         pipeline_log_dir=Path(pipeline_log_dir) if pipeline_log_dir is not None else None,
         access_log_paths=access_log_paths,
+        alert_state_path=getattr(request.app.state, "alert_state_path", None),
     )
 
 

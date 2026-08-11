@@ -1,0 +1,2 @@
+# Send the AI Radar LLM cost report every Monday at 09:17 Asia/Shanghai.
+17 9 * * 1 cd /path/to/ai-radar && PATH=/path/to/home/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /path/to/home/.local/bin/run-or-alert --key ai-radar-cost-report -- /path/to/ai-radar/run.sh admin cost-report --send >> /path/to/ai-radar/logs/cost-report-cron.log 2>&1 # ai-radar-cost-report

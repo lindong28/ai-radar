@@ -22,8 +22,8 @@
 | 用户量 | access log 过滤 bot/static/scanner 后的 PV/UV；`raw_unique_ips` 作为上界参考 | 看真实用户访问是否骤降，结合 5xx 率判断是否用户侧故障 |
 | 文章摄取 | 今日 items 增量、最新 fetch 插入/失败、最近 curation run | 看内容是否仍在进入系统；fetch 失败率高或今日增量低会触发 A4 |
 | Pipeline 阶段健康 | fetch/prefilter/scoring/enrich/curate 的处理量、错误率、P50/P95；prefilter P95 使用最近 2 小时滑动窗口，避免已恢复后旧慢样本保留到午夜 | 定位是哪一阶段异常；日志中的 `score` 已归一为 dashboard 的 `scoring` |
-| LLM 用量（`/admin/usage`） | 独立 `data/llm_usage.db` 中的 per-call 行按滚动 30 天查询时聚合，成本由 LiteLLM catalog + ARK supplement 派生；窗口总额按实价、nominal 挂牌价、unpriced 拆分，并展示来源单价、新鲜度、unpriced 清单和 cache 采集覆盖 | 判断当前窗口有多少可计算成本、多少挂牌价估算、是否存在未定价或 cache 未采集；分阶段、分 provider、环比和 daily 明细待周报与成本告警消费契约确定后再提供 |
-| 当前告警 | A1-A4 规则的当前状态、触发数值、处置方向 | 先看故障类别，再看具体对象和下一步动作 |
+| LLM 用量（`/admin/usage`） | 滚动 30 天成本三态、来源单价、cache 覆盖、分阶段/Provider/模型/日聚合与前一等长窗口比较 | 定位 Top 驱动；两窗 cache 覆盖不一致时环比明确不可用 |
+| 当前告警 | A1–A6 当前状态；D3 定价提醒不进入 page lifecycle | 先看故障类别，再看具体对象和下一步动作 |
 
 时间口径固定为 `Asia/Shanghai`。access log 当前写入 `logs/serve-access.log`，pipeline 日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
 
@@ -42,27 +42,36 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 |---|---|---|---|
 | A1 | 上游模型不可用 | DeepSeek/OpenAI/GLM/ARK 返回 endpoint/model/权限/余额类错误；`schema validation failed` 已排除 | 查 provider 控制台余额、模型权限、API key；必要时切换 provider 或充值 |
 | A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 的错误 numerator/denominator **各自只取最近 15 分钟**；样本数分别至少为 `4/4/2` 才让错误率支路参与 page。独立的 P95 与**超过 120 分钟没有成功 pipeline**支路不受该样本门影响。prefilter 等后台 LLM 阶段的 P95 仍用最近 2 小时口径，只在持续达到真挂起量级时 page。SKIP 日志表示 pipeline 已在运行，不单独视为故障 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
-| A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
+| A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测从已安装 serve plist 的 `ProgramArguments` 解析端口，连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
 | A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 查 RSS / X(fedi) / 微信 Mp2RSS 源可用性、`./run.sh fetch` 输出 |
+| A5 | 微信解读产出停滞 | 解读启用、4 小时无成功解读，且存在 fetched 至少 4 小时、仍符合重试资格的微信 pending 时 page；无近期成功且 pending 因退避/冻结归零时标为不可评估，不发「已恢复」 | 先查近 4 小时 pipeline/interpret 日志与 provider 成功/错误，再核对余额/配额；`ark-breaker.json` 只有 `opened_at` 仍在 2 小时 cooldown 内才是当前证据 |
+| A6 | LLM 近 24 小时成本突变 | 两侧按同一现行费率、cache 全未命中重算；超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。基线少于 3 日或近 24 小时真实缺数时标为不可评估；若唯一缺口是当前上海日且 `.pipeline.lock` 仍证明本轮在运行，则暂记 `in-progress`，把已记录金额作为下界继续允许首次 firing 与 notice→page，只在下界未越线时保留既有 episode、等待封口后再确认恢复 | 按消息中使用 `julianday()` 的严格 24 小时 SQL 定位 stage/provider/model；先看 Top 驱动与调用量，nominal 目录价不是账单实付 |
 
-告警状态存储在 `data/alert-state.json`。每个 `rule_id` 内的 `page` / `notice` 有各自的 lifecycle、debounce、`since`、`last_notified` 与 30 分钟 cooldown，不会被另一 severity 的计时器节流。A4 的 `page` debounce 为 0（items-floor 首轮即 page），`notice` debounce 为 30 分钟（fetch-only 持续超窗才通知）。severity 转换时，已成功 announced 的旧 episode 先在原通道 resolved，再在新通道 firing；仍在 debounce 且从未成功投递的旧 episode 静默关闭，不伪造 resolved。firing 仅在 transport 成功后才记为 announced 并进入 cooldown；未投递成功的 pending firing 或 resolved 都在下轮重试。投递语义是 at-least-once：发送前持久化的 notification nonce 保持重试 signature 稳定，由 `im-notify` 的持久 signature dedup 抑制同一意图的用户可见重复，不宣称 exactly-once。
+D3 每轮按 provider/model 检查 unpriced、stale、due-review 与 active tariff 变化，通过 `NOTIFICATION` webhook 发送，不带 `--alert`。未定价消息给出调用数/总调用数，stale/due-review 指名对象，price-changed 同时给旧值与新值。相同条件的调用计数变化不会重发；首次投递失败下轮重试，解除时 `im-notify --dedup-clear` 失败会保留 re-arm 义务，间歇未出现的模型仍保留旧价格签名。处置落点是 `src/airadar/pricing.py` 的 provider/model 条目、来源、生效区间与 `verified_at`。真实生产数据截至 P2 开发时尚未出现 stale、due-review 或 unpriced，这些分支目前只有 synthetic fixture 覆盖。
+
+周报入口为 `./run.sh admin cost-report [--window-days N] [--send|--dry-run]`。默认取上一上海自然周；指定 N 后取 rolling N 天。`cost-report` cron 在周一 09:17 经 `run-or-alert` 发送。日序列用 durable `items.fetched_at` 与成功 processing rows 核对逐 stage 暴露：fetch>0 要有 prefilter success；成功且判为 AI 的 prefilter candidate>0 时分别要有 score/enrich success；wechat fetch>0 要有 interpret success。任何 stage 的 error row 只证明尝试过，不算成功；所以即使同日已有别的 stage 或 usage 行，partial stall 仍会关闭环比。pipeline 日志只补轮次、fetch inserted，以及 retained 日内明确出现的计量写入失败；旧日志缺失本身不关闭已由 durable 数据确认的比较，但文案会保留漏记风险。异常日在正文顶部单列。nominal 同时给目录价估算金额与占比；总额与单篇解读前窗比较都按当前费率、cache 全未命中重算，绝对金额仍使用窗口内真实 cache 事实。单次已知成本只除以 priced+nominal 调用，不把 unpriced 当作 ¥0。unpriced 不进入金额，stale/due-review 要先复核，所有金额均不表示账单实付。
+
+告警状态存储在 `data/alert-state.json`。每个 `rule_id` 内的 `page` / `notice` 有各自的 lifecycle、debounce、`since`、`last_notified` 与 30 分钟 cooldown，不会被另一 severity 的计时器节流。A4 的 `page` debounce 为 0（items-floor 首轮即 page），`notice` debounce 为 30 分钟（fetch-only 持续超窗才通知）。severity 转换沿同一个 `since` episode 递进：notice→page 只发送新的 firing，不发送中间 resolved；只有条件真正清除或证据真实降级时才结束 episode。仍在 debounce 且从未成功投递的旧 severity 可静默关闭，不伪造 resolved。firing 仅在 transport 成功后才记为 announced 并进入 cooldown；未投递成功的 pending firing 或 resolved 都在下轮重试。投递语义是 at-least-once：发送前持久化的 notification nonce 保持重试 signature 稳定，由 `im-notify` 的持久 signature dedup 抑制同一意图的用户可见重复，不宣称 exactly-once。
 
 ### 已送达通知历史
 
-A1–A4 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。它是 notification-only ledger：只有 transport 返回成功的 firing / resolved 才每次追加一行，不记失败 attempt。字段为 `ts`、`rule_id`、`severity`、`type`、`detail`、`values`、`channel`。例如：
+A1–A6、D3 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。成功投递的 firing/resolved 写入对应 channel；A1/A2/A5 合并时，被 carrier 吸收的规则另写 `type=suppressed, channel=INTERNAL`，并记录 carrier、reason 与 heartbeat freshness。投递行另含 `episode_since` 与 `notification_nonce`。失败 attempt 不写入。查询推送次数必须排除 INTERNAL，查询事故数必须按 episode identity 去重。例如：
 
 ```bash
 tail -n 50 data/alert-events.jsonl | jq .
-jq -c 'select(.severity == "page" and .type == "firing")' data/alert-events.jsonl
+jq -c 'select(.channel != "INTERNAL" and .severity == "page" and .type == "firing")' data/alert-events.jsonl
+jq -c 'select(.type == "suppressed" and .channel == "INTERNAL")' data/alert-events.jsonl
 jq -c 'select(.rule_id | startswith("PERF:"))' data/alert-events.jsonl
 ```
 
-ledger 在每次成功写入时裁掉 14 天前的事件。A1–A4 与 PERF 可并发写入，因此用稳定的 `data/alert-events.lock` sidecar 做 `flock`；锁等待最多 1 秒。读取前有 64 MiB 成本熔断上限。损坏 JSON、非普通文件、锁超时、超限或写入失败都 fail-open：记错误日志并跳过本批 ledger，不覆盖原文件，不阻断通知投递或告警状态持久化。因此 ledger 是便于查询的非权威已送达历史，不是 attempt 或状态真源。
+ledger 在每次成功写入时裁掉 14 天前的事件；INTERNAL 抑制行同样计入裁剪与 64 MiB 上限。A1–A6、D3 与 PERF 可并发写入，因此用稳定的 `data/alert-events.lock` sidecar 做 `flock`；锁等待最多 1 秒。损坏 JSON、非普通文件、锁超时、超限或写入失败都 fail-open：记错误日志并跳过本批 ledger，不覆盖原文件，不阻断通知投递或告警状态持久化。因此 ledger 是便于查询的非权威投递与抑制历史，不是 attempt、状态或 exactly-once 真源。
 
 ### 已知限制 / 运维备注
 
 - A2 rate 分支的最小样本门会在持续低量 pipeline 下产生低分母盲区：例如 15 分钟只有 3 次 prefilter 且 3 次全失败，因 `3 < min_samples 4` 不会由 A2 rate 分支 page。这是已接受的低样本取舍；持续总故障会让 items 停止产出，由 A4 items-floor 即时 page，并另有 A2 `no_success_minutes` 心跳支路兜底。排障时不要把「A2 rate 未 firing」当成 pipeline 健康的充分证据。
 - A3 5xx 的 15 分钟窗依赖 access log timestamp 带 `%z` 时区偏移（生产当前输出 `+0800`）。如果修改 access-log format 时丢掉 offset，naive timestamp 会按 UTC 解释，在 `Asia/Shanghai` 生产中错移 8 小时，使窗口内行被静默排除、`server_pv=0`，从而关闭 A3 5xx 分支。任何日志格式变更都必须保留 `%z` 或同步增加显式时区处理与窗口测试。
+- `logs/alert-check.log` 当前没有 rotation，长期会增长；`status.sh alert` 也不检查其大小。P2 保留现有服务拓扑，后续运维单元需增加有界 rotation 与状态暴露，在此之前应人工监看文件大小。
+- 生产现有 152 篇微信解读已达到重试上限。A5 状态 detail 与 `/admin` 会显示 frozen 数，但本轮没有为历史冻结积压新增独立 page；是否批量重试或另建 backlog notice 需在具备安全 replay 策略后单独裁决。
 
 ## 用户旅程性能监控
 

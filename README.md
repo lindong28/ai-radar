@@ -217,7 +217,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 也支持 `heuristics` 作为无 LLM 的纯规则后备方案。
 
-DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent LLM usage，都会把 `completion.usage` 写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）中的 `llm_usage` 表，每次 LLM call 一行，记录阶段（prefilter / score / enrich / interpret）、provider、模型、input/output token、item_id 和输入字符规模。内部 `/admin/usage` 页面按查询时从 LiteLLM catalog 与项目内 ARK supplement 派生最近 30 天成本，并分开展示实价、挂牌价、未定价和 cache 拆分覆盖。人民币投影汇率可用 `AI_RADAR_USD_CNY` 设置；旧 `AI_RADAR_LLM_PRICING_JSON` 已退役，如仍设置会显式报错。
+DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent LLM usage，都会把 `completion.usage` 写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）中的 `llm_usage` 表，每次 LLM call 一行。内部 `/admin/usage` 页面按查询时派生最近 30 天成本，展示实价、nominal 挂牌价、未定价、cache 覆盖、按阶段/Provider/模型/日聚合与前一等长窗口比较；跨窗比较统一按当前费率和 cache 未命中重算，绝对金额仍使用各窗真实 cache 事实。`./run.sh admin cost-report --dry-run` 预览同口径周报，默认上一上海自然周；周报用 durable items 与逐阶段成功产出来核对自然日暴露：fetch 后无 prefilter 成功、AI 候选出现后无 score/enrich 成功、或微信入库后无 interpret 成功，都会关闭不能证明等暴露量的环比，错误行只表示尝试过、不算成功产出。日志只补充 retained window 内已知的计量写入失败，不要求保留满十四天。nominal 同时显示估算金额与占比；单篇解读只用 priced+nominal 调用计算均值并显示 cache 中性前窗参考。`--window-days N` 改用 rolling 窗口，`--send` 发送通知。人民币投影汇率可用 `AI_RADAR_USD_CNY` 设置。
 
 ## 测试
 
@@ -234,8 +234,9 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 | `serve` | launchd | FastAPI web server（fork 默认 :8000；本产线 Mac 实例绑 8010 仅作局域网预览，公网生产由腾讯服务器承载 `news.aiplanet.live`） |
 | `tunnel` | launchd | Cloudflare tunnel 到你的公网域名（本产线旧 `aiplanet.live` 入口已退役待域名下线；tunnel 仍承载同机其他站点） |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
-| `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A4 以 severity lifecycle 决定 firing / resolved，page 通过 `im-notify --alert` 发往 `ALERT`，notice 通过 `im-notify` 发往 `NOTIFICATION` |
+| `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A6 使用 severity lifecycle，D3 定价提醒独立去重 |
 | `performance-probe` | launchd, StartInterval=300 | 每 5 分钟经 `./run.sh performance-probe` 启动；只保存 pipeline idle 窗样本，22 条确认窗后超预算以 page 投递 |
+| `cost-report` | cron (`17 9 * * 1`) | 周一 09:17 经 `run-or-alert` 发送上一上海自然周 LLM 成本报表 |
 | `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
 | `DB sync → 腾讯服务器` | cron（5 小时级，最终频率待 G2 定稿） | Mac producer 同步 base-only 副本并等服务器重建/验证到 `committed`；公网副本新鲜度的生产入口，排期与细节见 [services.md](docs/operations/services.md#db-sync-职责验证与故障证据) |
 
@@ -247,7 +248,7 @@ DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）；不带参数作用于全部。脚本幂等——重复跑不报错。
 
 DB sync cron 不由上述三个通用生命周期脚本管理；用 `crontab -l` 核对排期，以 `deploy/sync/sync-db-cron.sh` 手动走完整 cron wrapper。详见 [服务清单的 DB sync runbook](docs/operations/services.md#db-sync-职责验证与故障证据)。
 
@@ -260,10 +261,11 @@ DB sync cron 不由上述三个通用生命周期脚本管理；用 `crontab -l`
 | `alert` | `~/.local/bin/im-notify` + `FEISHU_GENERAL_ALERT_WEBHOOK` + `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | 先从 `ai-agent-config` 安装 `im-notify`；两个 webhook 分别承接 page/notice，任缺一个都拒绝部分安装。交互式终端逐个询问并追加到 `./.env`，非交互环境自动跳过 |
 | `tunnel` | `deploy/cloudflared/config.yml` | 提示从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置，本次跳过 |
 | `performance-probe` | Playwright Chromium | 安装服务前先显式运行 `uv run playwright install chromium`；该浏览器同时供微信抓取使用，`install.sh` 不自动下载或校验 |
+| `cost-report` | `im-notify`、`run-or-alert`、`FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | 缺 webhook 时跳过；模板使用绝对路径和显式 PATH |
 
 脚本可判定的环境变量依赖按当前进程环境、项目 `./.env`、`~/.claude/.env` 查找。因此已有密钥放在 `~/.claude/.env` 的本机部署不会出现提示。任何自动跳过都会在命令末尾的 summary 中列出原因。
 
-完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin` 与 A1-A4 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除，不再作为发布快照的一部分维护。
+完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin`、A1–A6 与 D3 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除，不再作为发布快照的一部分维护。
 
 ## 部署
 

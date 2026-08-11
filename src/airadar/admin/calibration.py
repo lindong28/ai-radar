@@ -173,7 +173,6 @@ def _thresholds_from_baselines(
         "a3": {
             "window_minutes": 15,
             "server_error_rate": _round_rate(_clamp(_float_value(a3.get("server_error_rate")) * 3, 0.05, 0.5)),
-            "healthz_url": "http://127.0.0.1:8000/api/v1/healthz",
             "healthz_timeout_seconds": 2.0,
             "healthz_consecutive_failures": 2,
         },

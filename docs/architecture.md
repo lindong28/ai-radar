@@ -258,7 +258,7 @@ Server `apply_db_update.py` 是 consumer：claim 后保留 immutable base-only a
 ### Alert state → delivery → ledger → remediation
 
 ```text
-A1–A4 / PERF results
+A1–A6 / PERF results
         │
         ▼
 per-rule lifecycles.page|notice   ──真源──▶ severity-aware sender
@@ -301,7 +301,7 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 
 - **去重策略**：`items` 表通过 `(source_id, content_hash)` 唯一约束去重。`content_hash` 是内容文本的 SHA1 前 16 位。同 URL 不同内容视为更新
 - **多阶段评估**：`item_evaluations` 通过 `stage` 字段区分 prefilter / scoring / enrich，共用同一张表。每条记录保存完整的 input/output/numeric JSON
-- **LLM 用量与派生成本**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 以及 interpret 调用写一行，记录实际 provider/model、input/output token、item_id 和输入字符规模；写入和查询都走 `data/llm_usage.db`。`/admin/usage` 只发布收窄后的窗口总额三态、来源单价、未定价清单与 cache 采集覆盖，不提供按天、按模型或输入归因明细。首次初始化会把旧 `radar.db.llm_usage` 历史行复制到独立库，旧表保留但不再写入；两个库中的 `cost_usd` 都是 deprecated carrier，值必须为 `NULL`，真实成本只在查询时派生。
+- **LLM 用量与派生成本**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 以及 interpret 调用写一行。`admin/usage.py` 按 usage `created_at` 的有效 tariff 生成绝对总额、阶段、Provider、模型组与日序列；跨窗总额和分组比较另把两窗统一按当前费率、cache 全未命中重算，避免 provider cache 字段覆盖率随 stage mix 浮动而永久关闭比较。单次已知成本分母只含 priced+nominal 调用。`admin/cost_report.py` 消费同一聚合，用 durable `items.fetched_at` 判断每日是否有入库，pipeline 日志只补轮次、fetch inserted 与 `llm_usage_metering_failure` 证据；缺日志/计量时标 unknown，不把缺行当作零成本。A6 复用相同归一化，只比较评估时仍可报价的 known cohort；真实缺数时降级，只有 live pipeline 造成的当前日未封口例外把已记录金额作为下界继续正向求值，允许 firing/升级但不能据此恢复。两个库中的 `cost_usd` 都是 deprecated carrier，真实成本只在查询时派生。
 - **Ruleset 版本**：格式 `YYYY-MM-DD.rN`，用于跟踪 prompt 和规则的变更。同一条目可以有不同 ruleset 版本的评估记录
 - **信源层级**：T1（官方一手源，乘数 1.25）/ T1.5（高质量聚合，乘数 1.0）/ T2（社区源，乘数 0.75）
 - **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。

@@ -147,16 +147,17 @@ def test_p1_consumer_boundary_state_sweep_uses_real_sql_html_and_cli(
         {row["status"] for row in usage["pricing_table"]} == {"priced", "nominal", "unpriced"},
         f"pricing table lost state split: {usage['pricing_table']}",
     )
-    check(
-        {"stage_costs", "provider_costs", "cost_groups", "comparison", "daily"}.isdisjoint(usage),
-        "narrowed API still exposes P2 fields",
-    )
+    check(bool(usage["stage_costs"]), "P2 API lost stage aggregation")
+    check(bool(usage["provider_costs"]), "P2 API lost provider aggregation")
+    check(bool(usage["cost_groups"]), "P2 API lost provider/model aggregation")
+    check("available" in usage["comparison"], "P2 API lost comparison gate")
+    check(bool(usage["daily"]), "P2 API lost daily series")
     check("priced 实价成本" in page.text, "HTML group boundary lost priced label")
     check("nominal 挂牌价成本" in page.text, "HTML group boundary lost nominal label")
     check("deepseek-v4-pro-260426（1 次）" in page.text, "HTML lost unpriced identity")
     check("未采集" in page.text, "HTML lost unknown cache state")
     check("2/3" in page.text, "HTML lost cache coverage")
-    check("成本分组与前窗对比" not in page.text, "HTML still exposes deferred comparison")
+    check("成本分组与前窗对比" in page.text, "HTML lost P2 comparison consumer")
 
     monkeypatch.setattr(cost_audit, "ANCHOR_CALLS", 0)
     monkeypatch.setattr(cost_audit, "ANCHOR_USD", 0)

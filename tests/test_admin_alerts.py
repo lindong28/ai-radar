@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import plistlib
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -27,6 +29,7 @@ from airadar.admin.alerts import (
     reserve_alert_evaluation_sequence,
     run_alert_results_state_machine,
     run_alert_state_machine,
+    run_pricing_notifications,
     send_alert_message,
 )
 from airadar.admin.thresholds import ALERT_THRESHOLDS
@@ -75,7 +78,7 @@ def _state_without_evaluation_metadata(serialized: str) -> dict[str, object]:
 def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
     normal = evaluate_rules(_normal_signals())
 
-    assert [result.rule_id for result in normal] == ["A1", "A2", "A3", "A4"]
+    assert [result.rule_id for result in normal] == ["A1", "A2", "A3", "A4", "A5", "A6"]
     assert all(not result.firing for result in normal)
 
     upstream = _normal_signals()
@@ -97,6 +100,135 @@ def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
     ingestion.fetch_failed_ratio = 0.8
     ingestion.items_today = 10
     assert evaluate_rules(ingestion)[3].firing is True
+
+
+def test_a5_requires_old_eligible_pending_and_no_recent_success() -> None:
+    fresh = _normal_signals()
+    fresh.hours_since_successful_interpretation = 5
+    fresh.wechat_pending_count = 0
+    assert evaluate_rules(fresh)[4].firing is False
+
+    stalled = _normal_signals()
+    stalled.hours_since_successful_interpretation = 4
+    stalled.wechat_pending_count = 2
+    stalled.oldest_wechat_pending_title = "等待四小时的文章"
+    a5 = evaluate_rules(stalled)[4]
+    assert a5.firing is True
+    assert "等待文章 2 篇" in a5.detail
+    assert "ark-breaker.json" in a5.action
+    assert "402 表示余额不足" in a5.action
+    assert "AccountQuotaExceeded" in a5.action
+
+
+def test_a5_collector_covers_fresh_equal_recent_success_and_frozen_boundaries(tmp_path: Path) -> None:
+    db_path = tmp_path / "a5.db"
+    now = datetime.fromisoformat("2026-08-11T09:17:00+08:00")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sources(id TEXT PRIMARY KEY, kind TEXT, enabled INTEGER);
+            CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, title TEXT, fetched_at TEXT);
+            CREATE TABLE wechat_interpretations(
+              item_id TEXT PRIMARY KEY, error TEXT, error_retry_count INTEGER, processed_at TEXT
+            );
+            INSERT INTO sources VALUES ('wechat', 'wechat', 1);
+            """
+        )
+        conn.execute("INSERT INTO items VALUES ('fresh','wechat','fresh',?)", ((now - timedelta(hours=4) + timedelta(seconds=1)).isoformat(),))
+        conn.execute("INSERT INTO items VALUES ('equal','wechat','equal',?)", ((now - timedelta(hours=4)).isoformat(),))
+        conn.execute("INSERT INTO items VALUES ('frozen','wechat','frozen',?)", ((now - timedelta(hours=8)).isoformat(),))
+        conn.execute("INSERT INTO wechat_interpretations VALUES ('frozen','failed',8,?)", ((now - timedelta(hours=8)).isoformat(),))
+    hours, count, frozen, title = alerts_module._wechat_interpretation_signal(db_path, now, 4)
+    assert hours is None
+    assert frozen == 1
+    assert (count, title) == (1, "equal")
+    signals = _normal_signals()
+    signals.hours_since_successful_interpretation = hours
+    signals.wechat_pending_count = count
+    signals.oldest_wechat_pending_title = title
+    assert evaluate_rules(signals)[4].firing is True
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("INSERT INTO wechat_interpretations VALUES ('equal',NULL,0,?)", ((now - timedelta(hours=1)).isoformat(),))
+    hours, count, frozen, _ = alerts_module._wechat_interpretation_signal(db_path, now, 4)
+    recent = _normal_signals()
+    recent.hours_since_successful_interpretation = hours
+    recent.wechat_pending_count = count
+    assert count == 0
+    assert frozen == 1
+    assert evaluate_rules(recent)[4].firing is False
+
+
+def test_a6_is_unarmed_with_fewer_than_three_comparable_days_and_qualifies_amount() -> None:
+    signals = _normal_signals()
+    signals.a6_current_cost_cny = 99
+    signals.a6_baseline_days = 2
+    signals.a6_excluded_coverage_days = 12
+    signals.a6_unpriced_calls = 3
+    signals.a6_pricing_freshness = "stale"
+    a6 = evaluate_rules(signals)[5]
+    assert a6.firing is False
+    assert "当前不可评估" in a6.detail
+    assert "未定价调用" in a6.detail
+    assert "并非账单实付" in a6.detail
+
+
+def test_d3_notification_dedup_clear_and_identical_recurrence(tmp_path: Path) -> None:
+    state = tmp_path / "d3.json"
+    sent: list[tuple[str, str, str]] = []
+    cleared: list[str] = []
+
+    def sender(text: str, *, severity: str, dedup_key: str, dedup_text: str) -> dict[str, object]:
+        assert "--alert" not in text
+        assert dedup_text == "unpriced:x/y"
+        sent.append((text, severity, dedup_key))
+        return {"skipped": False}
+
+    def clear(key: str) -> dict[str, object]:
+        cleared.append(key)
+        return {"cleared": True}
+
+    base = {"unpriced": [], "pricing_freshness": [], "pricing_table": []}
+    firing = {**base, "unpriced": [{"provider": "x", "model": "y", "calls": 1}]}
+    run_pricing_notifications(firing, state_path=state, send=sender, clear=clear)
+    run_pricing_notifications(firing, state_path=state, send=sender, clear=clear)
+    run_pricing_notifications(base, state_path=state, send=sender, clear=clear)
+    run_pricing_notifications(firing, state_path=state, send=sender, clear=clear)
+
+    assert len(sent) == 2
+    assert sent[0][0] == sent[1][0]
+    assert {severity for _, severity, _ in sent} == {"notice"}
+    assert cleared == ["ai-radar:d3:unpriced:x/y"]
+
+
+def test_d3_price_changed_sends_only_on_each_new_tariff(tmp_path: Path) -> None:
+    state = tmp_path / "prices.json"
+    sent: list[str] = []
+
+    def sender(text: str, **kwargs: object) -> dict[str, object]:
+        sent.append(text)
+        return {"skipped": False}
+
+    def report(price: float) -> dict[str, object]:
+        return {
+            "unpriced": [],
+            "pricing_freshness": ["fresh"],
+            "pricing_table": [{
+                "provider": "deepseek", "model": "m", "matched_key": "deepseek/m",
+                "input_per_million_tokens_usd": price,
+                "cache_read_per_million_tokens_usd": price,
+                "output_per_million_tokens_usd": price,
+                "effective_from": None, "effective_to": None,
+            }],
+        }
+
+    run_pricing_notifications(report(1), state_path=state, send=sender)
+    run_pricing_notifications(report(1), state_path=state, send=sender)
+    run_pricing_notifications(report(2), state_path=state, send=sender)
+    run_pricing_notifications(report(2), state_path=state, send=sender)
+    run_pricing_notifications(report(3), state_path=state, send=sender)
+    assert len(sent) == 2
+    assert all("price" not in text.lower() or "目录价" in text for text in sent)
 
 
 def test_a2_heartbeat_tolerates_in_progress_runs_and_only_fires_on_real_stall() -> None:
@@ -222,8 +354,20 @@ def test_a4_daily_insert_floor_is_time_proportional() -> None:
     assert a4.values["daily_inserted_floor_elapsed"] == 63
 
 
-def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) -> None:
+def test_a3_active_healthz_probe_uses_installed_serve_port_and_recovers(tmp_path: Path) -> None:
     state_path = tmp_path / "alert-state.json"
+    serve_plist_path = tmp_path / "live.aiplanet.ai-radar.serve.plist"
+    serve_plist_path.write_bytes(
+        plistlib.dumps(
+            {
+                "ProgramArguments": [
+                    "/bin/bash",
+                    "-lc",
+                    "uv run python -m airadar.cli serve --host 0.0.0.0 --port 8010",
+                ]
+            }
+        )
+    )
     deliveries: list[tuple[str, str]] = []
     now = datetime.fromisoformat("2026-06-09T08:00:00+08:00")
     calls: list[tuple[str, float]] = []
@@ -232,6 +376,10 @@ def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) 
         calls.append((url, timeout))
         return False
 
+    def healthz_up(url: str, timeout: float) -> bool:
+        calls.append((url, timeout))
+        return True
+
     first = run_alert_state_machine(
         _normal_signals(),
         state_path=state_path,
@@ -239,6 +387,7 @@ def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) 
         now=now,
         send=_recording_sender(deliveries),
         healthz_probe=healthz_down,
+        serve_plist_path=serve_plist_path,
     )
     second = run_alert_state_machine(
         _normal_signals(),
@@ -247,6 +396,7 @@ def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) 
         now=now + timedelta(minutes=5),
         send=_recording_sender(deliveries),
         healthz_probe=healthz_down,
+        serve_plist_path=serve_plist_path,
     )
     recovered = run_alert_state_machine(
         _normal_signals(),
@@ -254,18 +404,21 @@ def test_a3_active_healthz_probe_persists_failures_and_recovers(tmp_path: Path) 
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=now + timedelta(minutes=10),
         send=_recording_sender(deliveries),
-        healthz_probe=_healthz_ok,
+        healthz_probe=healthz_up,
+        serve_plist_path=serve_plist_path,
     )
 
     assert calls == [
-        ("http://127.0.0.1:8000/api/v1/healthz", 2.0),
-        ("http://127.0.0.1:8000/api/v1/healthz", 2.0),
+        ("http://127.0.0.1:8010/api/v1/healthz", 2.0),
+        ("http://127.0.0.1:8010/api/v1/healthz", 2.0),
+        ("http://127.0.0.1:8010/api/v1/healthz", 2.0),
     ]
     assert first["results"][2]["firing"] is False
     assert second["results"][2]["firing"] is True
     assert recovered["results"][2]["firing"] is False
     assert "🔴 A3" in deliveries[0][0]
     assert "✅ A3" in deliveries[1][0]
+    assert "恢复证据：用户侧 5xx 率 0.0%，healthz 连续失败 0 次" in deliveries[1][0]
 
 
 @pytest.mark.parametrize("rule_id", ["A1", "A3"])
@@ -1330,7 +1483,7 @@ def test_cooldown_repage_allocates_new_notification_nonce(
     assert lifecycle["notification_sequence"] == 2
 
 
-def test_page_notice_page_round_trip_allocates_new_page_nonce(
+def test_page_incident_ignores_notice_deescalation_and_allocates_reminder_nonce(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1372,7 +1525,7 @@ def test_page_notice_page_round_trip_allocates_new_page_nonce(
         if ":page:firing:" in row["key"]
     ]
     visible = (transport_state / "visible.jsonl").read_text(encoding="utf-8").splitlines()
-    assert returned["sent_count"] == 2
+    assert returned["sent_count"] == 1
     assert len(page_firings) == 2
     assert page_firings[0] != page_firings[1]
     assert len(visible) == len(attempts)
@@ -1720,7 +1873,7 @@ def test_pending_notice_to_page_failed_send_retries_without_fake_resolve(tmp_pat
     assert all("✅" not in text for text, _severity in calls)
 
 
-def test_announced_notice_to_page_orders_resolve_before_firing(tmp_path: Path) -> None:
+def test_announced_notice_to_page_escalates_without_recovery_message(tmp_path: Path) -> None:
     state_path = tmp_path / "announced-notice-to-page.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     calls: list[tuple[str, str]] = []
@@ -1752,21 +1905,13 @@ def test_announced_notice_to_page_orders_resolve_before_firing(tmp_path: Path) -
     )
 
     assert _receipt_identities(announced) == [("A4", "notice", "firing")]
-    assert _receipt_identities(upgraded) == [
-        ("A4", "notice", "resolved"),
-        ("A4", "page", "firing"),
-    ]
-    assert [receipt["channel"] for receipt in upgraded["sent"]] == [
-        "NOTIFICATION",
-        "ALERT",
-    ]
-    assert [(severity, "✅" in text) for text, severity in calls[-2:]] == [
-        ("notice", True),
-        ("page", False),
-    ]
+    assert _receipt_identities(upgraded) == [("A4", "page", "firing")]
+    assert [receipt["channel"] for receipt in upgraded["sent"]] == ["ALERT"]
+    assert [severity for _text, severity in calls] == ["notice", "page"]
+    assert all("✅" not in text and "已恢复" not in text for text, _severity in calls)
 
 
-def test_page_to_first_notice_orders_resolve_then_bypasses_notice_debounce(tmp_path: Path) -> None:
+def test_announced_page_holds_through_notice_tier_until_true_recovery(tmp_path: Path) -> None:
     state_path = tmp_path / "page-to-notice.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     calls: list[tuple[str, str]] = []
@@ -1788,15 +1933,27 @@ def test_page_to_first_notice_orders_resolve_then_bypasses_notice_debounce(tmp_p
         send=_recording_sender(calls),
         thresholds=thresholds,
     )
+    held_severities = _firing_lifecycle_severities(state_path)
 
-    assert _receipt_identities(transitioned) == [
-        ("A4", "page", "resolved"),
-        ("A4", "notice", "firing"),
-    ]
-    assert [severity for _text, severity in calls] == ["page", "page", "notice"]
+    recovered = run_alert_results_state_machine(
+        [_severity_result("notice", firing=False)],
+        state_path=state_path,
+        event_path=Path(state_path).with_name("alert-events.jsonl"),
+        now=current + timedelta(minutes=2),
+        send=_recording_sender(calls),
+        thresholds=thresholds,
+    )
+
+    assert transitioned["sent"] == []
+    assert held_severities == {"page"}
+    assert _firing_lifecycle_severities(state_path) == set()
+    assert _receipt_identities(recovered) == [("A4", "page", "resolved")]
+    assert [severity for _text, severity in calls] == ["page", "page"]
+    assert "✅" not in calls[0][0]
+    assert "✅" in calls[1][0]
 
 
-def test_old_flat_announced_page_migrates_and_transitions_to_notice_in_order(
+def test_old_flat_announced_page_migrates_without_false_notice_recovery(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "old-flat-page-to-notice.json"
@@ -1825,80 +1982,64 @@ def test_old_flat_announced_page_migrates_and_transitions_to_notice_in_order(
         thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
     )
 
-    assert _receipt_identities(transitioned) == [
-        ("A4", "page", "resolved"),
-        ("A4", "notice", "firing"),
-    ]
-    assert [(severity, "✅" in text) for text, severity in calls] == [
-        ("page", True),
-        ("notice", False),
-    ]
-    assert _firing_lifecycle_severities(state_path) == {"notice"}
+    assert transitioned["sent"] == []
+    assert calls == []
+    assert _firing_lifecycle_severities(state_path) == {"page"}
 
 
-@pytest.mark.parametrize(("first_severity", "second_severity"), [("notice", "page"), ("page", "notice")])
-def test_round_trip_severity_uses_only_target_cooldown(
+def test_notice_escalation_and_deescalation_stay_one_page_incident_until_recovery(
     tmp_path: Path,
-    first_severity: str,
-    second_severity: str,
 ) -> None:
-    state_path = tmp_path / f"{first_severity}-{second_severity}-{first_severity}.json"
+    state_path = tmp_path / "notice-page-notice.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     calls: list[tuple[str, str]] = []
     thresholds = {"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 0}}}
 
     first = run_alert_results_state_machine(
-        [_severity_result(first_severity)],
+        [_severity_result("notice")],
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current,
         send=_recording_sender(calls),
         thresholds=thresholds,
     )
-    assert _firing_lifecycle_severities(state_path) == {first_severity}
+    assert _firing_lifecycle_severities(state_path) == {"notice"}
     second = run_alert_results_state_machine(
-        [_severity_result(second_severity)],
+        [_severity_result("page")],
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=1),
         send=_recording_sender(calls),
         thresholds=thresholds,
     )
-    assert _firing_lifecycle_severities(state_path) == {second_severity}
-    returned_early = run_alert_results_state_machine(
-        [_severity_result(first_severity)],
+    assert _firing_lifecycle_severities(state_path) == {"page"}
+    deescalated = run_alert_results_state_machine(
+        [_severity_result("notice")],
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         now=current + timedelta(minutes=2),
         send=_recording_sender(calls),
         thresholds=thresholds,
     )
-    assert _firing_lifecycle_severities(state_path) == {first_severity}
-    returned_after_cooldown = run_alert_results_state_machine(
-        [_severity_result(first_severity)],
+    assert _firing_lifecycle_severities(state_path) == {"page"}
+    recovered = run_alert_results_state_machine(
+        [_severity_result("notice", firing=False)],
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
-        now=current + timedelta(minutes=31),
+        now=current + timedelta(minutes=3),
         send=_recording_sender(calls),
         thresholds=thresholds,
     )
-    assert _firing_lifecycle_severities(state_path) == {first_severity}
-
-    assert _receipt_identities(first) == [("A4", first_severity, "firing")]
-    assert _receipt_identities(second) == [
-        ("A4", first_severity, "resolved"),
-        ("A4", second_severity, "firing"),
+    assert _firing_lifecycle_severities(state_path) == set()
+    assert _receipt_identities(first) == [("A4", "notice", "firing")]
+    assert _receipt_identities(second) == [("A4", "page", "firing")]
+    assert deescalated["sent"] == []
+    assert _receipt_identities(recovered) == [("A4", "page", "resolved")]
+    assert [(severity, "✅" in text) for text, severity in calls] == [
+        ("notice", False),
+        ("page", False),
+        ("page", True),
     ]
-    assert _receipt_identities(returned_early) == [("A4", second_severity, "resolved")]
-    assert _receipt_identities(returned_after_cooldown) == [("A4", first_severity, "firing")]
-    state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
-    assert set(state["lifecycles"]) == {"page", "notice"}
-    assert state["lifecycles"][first_severity]["last_notified"] == (
-        current + timedelta(minutes=31)
-    ).isoformat()
-    assert state["lifecycles"][second_severity]["last_notified"] == (
-        current + timedelta(minutes=1)
-    ).isoformat()
 
 
 def test_clear_resolves_only_announced_lifecycle(tmp_path: Path) -> None:
@@ -2100,6 +2241,7 @@ def test_load_save_normalizes_legacy_rule_entries_without_touching_healthz(tmp_p
         "announced": True,
         "notification_sequence": 0,
         "pending_notification": None,
+        "evaluation_state": "healthy",
     }
     assert state["healthz_probe"] == healthz
 
@@ -2142,7 +2284,6 @@ def test_failed_firing_after_severity_transition_retries_without_cooldown(tmp_pa
     outcomes = iter(
         [
             {"skipped": False},
-            {"skipped": False},
             {"skipped": True},
             {"skipped": False},
         ]
@@ -2176,14 +2317,12 @@ def test_failed_firing_after_severity_transition_retries_without_cooldown(tmp_pa
         send=sender,
     )
 
-    assert _receipt_identities(transitioned) == [
-        ("A4", "notice", "resolved"),
-        ("A4", "page", "firing"),
-    ]
-    assert transitioned["sent"][1]["send_result"] == {"skipped": True}
+    assert _receipt_identities(transitioned) == [("A4", "page", "firing")]
+    assert transitioned["sent"][0]["send_result"] == {"skipped": True}
     assert failed_state["lifecycles"]["page"]["announced"] is False
     assert failed_state["lifecycles"]["page"]["last_notified"] is None
     assert _receipt_identities(retried) == [("A4", "page", "firing")]
+    assert all("✅" not in text for text, _severity in calls)
 
 
 @pytest.mark.parametrize("rule_id", ["A1", "A3"])
@@ -2339,7 +2478,21 @@ def test_notification_ledger_records_exact_successful_firing_resolved_cycle(
         ("TEST", "notice", "firing", "NOTIFICATION"),
         ("TEST", "notice", "resolved", "NOTIFICATION"),
     ]
-    assert all(set(row) == {"ts", "rule_id", "severity", "type", "detail", "values", "channel"} for row in rows)
+    assert all(
+        set(row)
+        == {
+            "ts",
+            "rule_id",
+            "severity",
+            "type",
+            "detail",
+            "values",
+            "channel",
+            "episode_since",
+            "notification_nonce",
+        }
+        for row in rows
+    )
     assert rows[0]["detail"] == "TEST detail"
     assert rows[0]["values"] == {"identity": "TEST", "nested": [1, 2]}
     assert event_path.with_suffix(".lock").exists()
@@ -2424,7 +2577,7 @@ def test_notification_ledger_filters_sender_outcomes_by_success_receipt_multiset
     ("from_severity", "to_severity"),
     [("notice", "page"), ("page", "notice")],
 )
-def test_notification_ledger_preserves_both_successful_severity_transition_receipts(
+def test_notification_ledger_records_only_new_firing_on_severity_transition(
     tmp_path: Path,
     from_severity: str,
     to_severity: str,
@@ -2451,30 +2604,18 @@ def test_notification_ledger_preserves_both_successful_severity_transition_recei
     )
     batch = _read_ledger(event_path)[before:]
 
-    assert _receipt_identities(transitioned) == [
-        ("A4", from_severity, "resolved"),
-        ("A4", to_severity, "firing"),
-    ]
+    expected = [] if from_severity == "page" else [("A4", "page", "firing")]
+    assert _receipt_identities(transitioned) == expected
     assert [
         (row["rule_id"], row["severity"], row["type"], row["channel"])
         for row in batch
     ] == [
-        (
-            "A4",
-            from_severity,
-            "resolved",
-            "NOTIFICATION" if from_severity == "notice" else "ALERT",
-        ),
-        (
-            "A4",
-            to_severity,
-            "firing",
-            "NOTIFICATION" if to_severity == "notice" else "ALERT",
-        ),
+        (rule_id, severity, event_type, "ALERT")
+        for rule_id, severity, event_type in expected
     ]
 
 
-def test_notification_ledger_transition_writes_only_the_successful_invocation(
+def test_notification_ledger_transition_omits_failed_new_firing(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "state.json"
@@ -2487,21 +2628,16 @@ def test_notification_ledger_transition_writes_only_the_successful_invocation(
         now=started,
         send=lambda text, *, severity="page": {"skipped": False},
     )
-    outcomes = iter([{"skipped": False}, {"skipped": True}])
-
     transitioned = run_alert_results_state_machine(
         [_ledger_result("A4", severity="page")],
         state_path=state_path,
         event_path=event_path,
         now=started + timedelta(minutes=1),
-        send=lambda text, *, severity="page": next(outcomes),
+        send=lambda text, *, severity="page": {"skipped": True},
     )
 
-    assert len(transitioned["sent"]) == 2
-    assert [
-        (row["severity"], row["type"])
-        for row in _read_ledger(event_path)[1:]
-    ] == [("notice", "resolved")]
+    assert len(transitioned["sent"]) == 1
+    assert _read_ledger(event_path)[1:] == []
 
 
 def test_notification_ledger_retains_only_events_within_fourteen_days_on_write(
@@ -2773,14 +2909,6 @@ def test_notification_ledger_snapshots_mutated_shared_sender_result_at_call_time
     state_path = tmp_path / "state.json"
     event_path = tmp_path / "alert-events.jsonl"
     started = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
-    run_alert_results_state_machine(
-        [_ledger_result("A4", severity="notice")],
-        state_path=state_path,
-        event_path=event_path,
-        now=started,
-        send=lambda text, *, severity="page": {"skipped": False},
-    )
-    before = len(_read_ledger(event_path))
     shared_result: dict[str, object] = {}
     outcomes = iter(skipped_values)
 
@@ -2788,27 +2916,31 @@ def test_notification_ledger_snapshots_mutated_shared_sender_result_at_call_time
         shared_result["skipped"] = next(outcomes)
         return shared_result
 
-    transitioned = run_alert_results_state_machine(
-        [_ledger_result("A4", severity="page")],
+    delivered = run_alert_results_state_machine(
+        [
+            _ledger_result("ONE", severity="notice"),
+            _ledger_result("TWO", severity="page"),
+        ],
         state_path=state_path,
         event_path=event_path,
-        now=started + timedelta(minutes=1),
+        now=started,
         send=mutating_sender,
     )
-    batch = _read_ledger(event_path)[before:]
-    entry = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
+    batch = _read_ledger(event_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
     expected_delivered = [skipped is False for skipped in skipped_values]
 
-    assert [receipt["send_result"] is shared_result for receipt in transitioned["sent"]] == [
+    assert [receipt["send_result"] is shared_result for receipt in delivered["sent"]] == [
         True,
         True,
     ]
-    assert [receipt["delivered"] for receipt in transitioned["sent"]] == expected_delivered
-    assert entry["lifecycles"]["page"]["announced"] is expected_delivered[1]
+    assert [receipt["delivered"] for receipt in delivered["sent"]] == expected_delivered
+    assert state["ONE"]["lifecycles"]["notice"]["announced"] is expected_delivered[0]
+    assert state["TWO"]["lifecycles"]["page"]["announced"] is expected_delivered[1]
     expected_ledger = [
         identity
         for identity, delivered in zip(
-            [("A4", "notice", "resolved"), ("A4", "page", "firing")],
+            [("ONE", "notice", "firing"), ("TWO", "page", "firing")],
             expected_delivered,
         )
         if delivered

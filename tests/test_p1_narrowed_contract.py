@@ -50,7 +50,7 @@ def _usage_db(tmp_path: Path) -> Path:
     return path
 
 
-def test_narrowed_admin_contract_removes_deferred_consumer_fields(
+def test_p2_admin_contract_restores_consumer_defined_aggregate_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -68,14 +68,12 @@ def test_narrowed_admin_contract_removes_deferred_consumer_fields(
     assert response.status_code == 200
     assert page.status_code == 200
     usage = response.json()["data"]
-    assert {
-        "stage_costs",
-        "provider_costs",
-        "cost_groups",
-        "comparison",
-        "days_with_calls",
-        "daily",
-    }.isdisjoint(usage)
+    assert usage["stage_costs"]
+    assert usage["provider_costs"]
+    assert usage["cost_groups"]
+    assert "available" in usage["comparison"]
+    assert usage["daily"]
+    assert "days_with_calls" not in usage
     assert "generated_at" not in usage
     assert {"start_date", "end_date"}.isdisjoint(usage["window"])
     assert {
@@ -85,18 +83,22 @@ def test_narrowed_admin_contract_removes_deferred_consumer_fields(
         "cost_statuses",
         "priced_cost_cny",
         "nominal_cost_cny",
-        "priced_calls",
-        "nominal_calls",
-        "unpriced_calls",
     }.isdisjoint(usage["totals"])
+    assert usage["totals"]["known_calls"] == (
+        usage["totals"]["priced_calls"] + usage["totals"]["nominal_calls"]
+    )
+    assert usage["totals"]["calls"] == (
+        usage["totals"]["known_calls"] + usage["totals"]["unpriced_calls"]
+    )
     assert usage["totals"]["calls"] == 1
     assert usage["totals"]["cache_split_coverage"] == {
         "calls_with_split": 0,
         "calls_total": 1,
         "ratio": 0.0,
     }
-    for removed_heading in ("成本分组与前窗对比", "按天 / 模型", "归因解释"):
-        assert removed_heading not in page.text
+    assert "成本分组与前窗对比" in page.text
+    assert "按 Provider / 模型" in page.text
+    assert "归因解释" not in page.text
     assert "最近 30 天总览" in page.text
     assert "来源单价" in page.text
 

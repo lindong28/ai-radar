@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from airadar.admin.usage import collect_usage
+from airadar.admin.usage import cache_coverage_comparable, collect_usage
 from airadar.llm_usage import migrate_usage_db
 from airadar.pricing import get_pricing
 
@@ -97,8 +97,25 @@ def test_collect_usage_exposes_narrowed_derived_cost_contract(tmp_path: Path) ->
     assert unknown_tariff["match_kind"] is None
     assert result["totals"]["calls"] == 3
     assert result["pricing_source"] == {"state": "fresh", "source": "litellm-live"}
-    assert {"stage_costs", "provider_costs", "cost_groups", "comparison", "daily"}.isdisjoint(
-        result
+    assert {row["stage"] for row in result["stage_costs"]} == {"interpret", "score", "enrich"}
+    assert {row["provider"] for row in result["provider_costs"]} == {"deepseek", "ark", "unknown"}
+    assert len(result["cost_groups"]) == 3
+    assert result["daily"][0]["date"] == "2026-08-10"
+    assert result["comparison"]["available"] is True
+
+
+def test_cache_coverage_comparison_is_exact_and_zero_is_a_real_coverage_state() -> None:
+    assert cache_coverage_comparable(
+        {"calls_with_split": 0, "calls_total": 10},
+        {"calls_with_split": 0, "calls_total": 4},
+    )
+    assert cache_coverage_comparable(
+        {"calls_with_split": 1, "calls_total": 2},
+        {"calls_with_split": 2, "calls_total": 4},
+    )
+    assert not cache_coverage_comparable(
+        {"calls_with_split": 1, "calls_total": 2},
+        {"calls_with_split": 1, "calls_total": 3},
     )
 
 

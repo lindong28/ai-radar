@@ -249,8 +249,9 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     assert "litellm-live" in page.text
     assert "deepseek/deepseek-v4-flash" in page.text
     assert "exact" in page.text
-    assert "成本分组与前窗对比" not in page.text
-    assert "按天 / 模型" not in page.text
+    assert "成本分组与前窗对比" in page.text
+    assert "按 Provider / 模型" in page.text
+    assert "按天" in page.text
     assert "归因解释" not in page.text
     assert api.status_code == 200
     data = api.json()["data"]
@@ -258,9 +259,11 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     assert data["totals"]["known_cost_cny"] > 0
     assert data["exchange_rate_usd_cny"] == 7.2
     assert data["unpriced"] == [{"provider": "unknown", "model": "missing-model", "calls": 1}]
-    assert {"stage_costs", "provider_costs", "cost_groups", "comparison", "daily"}.isdisjoint(
-        data
-    )
+    assert data["stage_costs"]
+    assert data["provider_costs"]
+    assert data["cost_groups"]
+    assert "available" in data["comparison"]
+    assert data["daily"]
 
 
 def test_admin_usage_page_flags_unreviewed_fuzzy_matches(

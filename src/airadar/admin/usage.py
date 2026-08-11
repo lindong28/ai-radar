@@ -145,8 +145,9 @@ def _finalize_cost(target: dict[str, Any], rate: float) -> None:
     target["cache_hit_rate"] = (
         round(covered_cached / covered_input, 6) if covered_input else None
     )
-    for status in ("priced", "nominal", "unpriced"):
-        target.pop(f"{status}_calls", None)
+    target["known_calls"] = _int(target.get("priced_calls")) + _int(
+        target.get("nominal_calls")
+    )
 
 
 def _pricing_table(
@@ -232,18 +233,183 @@ def _pricing_table(
     return rows, sorted(freshness_states)
 
 
+def cache_coverage_comparable(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Compare cache-split coverage exactly without floating-point tolerance."""
+    left_calls = _int(left.get("calls_total"))
+    right_calls = _int(right.get("calls_total"))
+    left_split = _int(left.get("calls_with_split"))
+    right_split = _int(right.get("calls_with_split"))
+    if not left_calls or not right_calls:
+        return left_calls == right_calls and left_split == right_split
+    return left_split * right_calls == right_split * left_calls
+
+
+def _rows_in_window(
+    rows: Sequence[Any], start: datetime, end: datetime
+) -> list[Any]:
+    return [
+        row
+        for row in rows
+        if (created := _parse_dt(row["created_at"])) is not None
+        and start <= created < end
+    ]
+
+
+def _aggregate_rows(
+    rows: Sequence[Any],
+    catalog: PricingCatalog,
+    rate: float,
+    *,
+    priced_at: datetime | None = None,
+    cache_all_miss: bool = False,
+) -> dict[str, Any]:
+    totals = _empty_totals()
+    buckets: dict[str, dict[object, dict[str, Any]]] = {
+        "stage": {},
+        "provider": {},
+        "group": {},
+        "daily": {},
+    }
+    unpriced_counts: dict[tuple[str, str], int] = {}
+    observed_pairs: dict[tuple[str, str], datetime] = {}
+    for raw in rows:
+        row = dict(raw)
+        provider = str(row["provider"] or "unknown")
+        model = str(row["model"] or "unknown")
+        stage = str(row["stage"] or "unknown")
+        created_at = _parse_dt(raw["created_at"])
+        if priced_at is not None:
+            row["created_at"] = priced_at.isoformat()
+        if cache_all_miss:
+            row["cached_input_tokens"] = 0
+        derived = derive_cost_usd(row, catalog=catalog)
+        _add_usage(totals, row=row, derived=derived)
+        keys: tuple[tuple[str, object], ...] = (
+            ("stage", stage),
+            ("provider", provider),
+            ("group", (provider, model)),
+        )
+        if created_at is not None:
+            keys += (("daily", created_at.date().isoformat()),)
+        for bucket_name, key in keys:
+            target = buckets[bucket_name].setdefault(key, _empty_totals())
+            _add_usage(target, row=row, derived=derived)
+        pair = (provider, model)
+        if derived.status == "unpriced":
+            unpriced_counts[pair] = unpriced_counts.get(pair, 0) + 1
+        price_observed_at = priced_at or created_at
+        if price_observed_at is not None and (
+            pair not in observed_pairs or price_observed_at > observed_pairs[pair]
+        ):
+            observed_pairs[pair] = price_observed_at
+
+    _finalize_cost(totals, rate)
+    for bucket in buckets.values():
+        for target in bucket.values():
+            _finalize_cost(target, rate)
+            calls = _int(target["known_calls"])
+            target["known_cost_per_call_cny"] = (
+                round(_float(target["known_cost_cny"]) / calls, 6) if calls else None
+            )
+    pricing_table, pricing_freshness = _pricing_table(observed_pairs, catalog)
+    return {
+        "totals": totals,
+        "buckets": buckets,
+        "unpriced": [
+            {"provider": provider, "model": model, "calls": calls}
+            for (provider, model), calls in sorted(unpriced_counts.items())
+        ],
+        "pricing_table": pricing_table,
+        "pricing_freshness": pricing_freshness,
+    }
+
+
+def _bucket_rows(bucket: dict[object, dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key, values in bucket.items():
+        if kind == "group":
+            assert isinstance(key, tuple) and len(key) == 2
+            provider, model = key
+            row = {"provider": provider, "model": model, **values}
+        else:
+            row = {kind: key, **values}
+        rows.append(row)
+    return sorted(
+        rows,
+        key=lambda row: (-_float(row["known_cost_cny"]), str(row)),
+    )
+
+
+def _bucket_rows_with_comparison(
+    displayed_current: dict[object, dict[str, Any]],
+    neutral_current: dict[object, dict[str, Any]],
+    previous: dict[object, dict[str, Any]],
+    kind: str,
+) -> list[dict[str, Any]]:
+    rows = _bucket_rows(displayed_current, kind)
+    for row in rows:
+        key: object = (
+            (row["provider"], row["model"])
+            if kind == "group"
+            else row[kind]
+        )
+        previous_values = previous.get(key)
+        current_values = neutral_current.get(key)
+        current_calls = _int(current_values["known_calls"]) if current_values else 0
+        previous_calls = _int(previous_values["known_calls"]) if previous_values else 0
+        previous_cost = _float(previous_values["known_cost_cny"]) if previous_values else 0.0
+        previous_per_call = (
+            _float(previous_values["known_cost_per_call_cny"])
+            if previous_values and previous_values["known_cost_per_call_cny"] is not None
+            else None
+        )
+        comparable = bool(previous_values and current_values and current_calls and previous_calls)
+        if not previous_calls:
+            reason = "no_previous_calls"
+        elif not current_calls:
+            reason = "no_current_known_calls"
+        else:
+            reason = None
+        current_per_call = current_values["known_cost_per_call_cny"] if current_values else None
+        current_cost = _float(current_values["known_cost_cny"]) if current_values else 0.0
+        row["comparison"] = {
+            "available": comparable,
+            "reason": reason,
+            "cache_basis": "all-miss",
+            "current_known_calls": current_calls,
+            "previous_known_calls": _int(previous_values["known_calls"]) if previous_values else 0,
+            "current_known_cost_cny": current_cost,
+            "current_known_cost_per_call_cny": current_per_call,
+            "previous_known_cost_cny": previous_cost,
+            "previous_known_cost_per_call_cny": previous_per_call,
+            "known_cost_change_ratio": (
+                round((current_cost - previous_cost) / previous_cost, 6)
+                if comparable and previous_cost
+                else None
+            ),
+            "known_cost_per_call_change_ratio": (
+                round((_float(current_per_call) - previous_per_call) / previous_per_call, 6)
+                if comparable and current_per_call is not None and previous_per_call
+                else None
+            ),
+        }
+    return rows
+
+
 def collect_usage(
     *,
     db_path: str | Path | None = None,
     usage_db_path: str | Path | None = None,
     days: int = 30,
     now: datetime | None = None,
+    priced_at: datetime | None = None,
     pricing_catalog: PricingCatalog | None = None,
     rows_snapshot: Sequence[Any] | None = None,
 ) -> dict[str, object]:
     start, end = _window(days, now)
     rate = usd_cny_rate()
     catalog = pricing_catalog or get_pricing()
+    previous_start = start - (end - start)
     if rows_snapshot is None:
         active_usage_db_path = migrate_usage_db(
             usage_db_path=usage_db_path,
@@ -270,39 +436,48 @@ def collect_usage(
                 WHERE u.created_at >= ? AND u.created_at < ?
                 ORDER BY u.created_at DESC, u.id DESC
                 """,
-                (_utc_iso(start), _utc_iso(end)),
+                (_utc_iso(previous_start), _utc_iso(end)),
             ).fetchall()
         finally:
             conn.close()
     else:
-        rows = [
-            row
-            for row in rows_snapshot
-            if (created := _parse_dt(row["created_at"])) is not None
-            and start <= created < end
-        ]
+        rows = list(rows_snapshot)
 
-    totals = _empty_totals()
-    unpriced_counts: dict[tuple[str, str], int] = {}
-    observed_pairs: dict[tuple[str, str], datetime] = {}
-    for row in rows:
-        provider = str(row["provider"] or "unknown")
-        model = str(row["model"] or "unknown")
-        derived = derive_cost_usd(row, catalog=catalog)
-        _add_usage(totals, row=row, derived=derived)
-        if derived.status == "unpriced":
-            pair = (provider, model)
-            unpriced_counts[pair] = unpriced_counts.get(pair, 0) + 1
-        created_at = _parse_dt(row["created_at"])
-        pair = (provider, model)
-        if created_at is not None and (
-            pair not in observed_pairs or created_at > observed_pairs[pair]
-        ):
-            observed_pairs[pair] = created_at
-
-    _finalize_cost(totals, rate)
-    pricing_table, pricing_freshness = _pricing_table(observed_pairs, catalog)
+    comparison_time = priced_at or end
+    if comparison_time.tzinfo is None:
+        comparison_time = comparison_time.replace(tzinfo=SHANGHAI_TZ)
+    display_price_time = priced_at
+    if display_price_time is not None and display_price_time.tzinfo is None:
+        display_price_time = display_price_time.replace(tzinfo=SHANGHAI_TZ)
+    current_rows = _rows_in_window(rows, start, end)
+    previous_rows = _rows_in_window(rows, previous_start, start)
+    current = _aggregate_rows(
+        current_rows, catalog, rate, priced_at=display_price_time
+    )
+    neutral_current = _aggregate_rows(
+        current_rows,
+        catalog,
+        rate,
+        priced_at=comparison_time,
+        cache_all_miss=True,
+    )
+    previous = _aggregate_rows(
+        previous_rows,
+        catalog,
+        rate,
+        priced_at=comparison_time,
+        cache_all_miss=True,
+    )
+    totals = current["totals"]
+    pricing_table = current["pricing_table"]
+    pricing_freshness = current["pricing_freshness"]
     known_cost = _float(totals["priced_cost_usd"]) + _float(totals["nominal_cost_usd"])
+    comparable = bool(
+        neutral_current["totals"]["known_calls"]
+        and previous["totals"]["known_calls"]
+    )
+    previous_cost = _float(previous["totals"]["known_cost_cny"])
+    current_cost = _float(neutral_current["totals"]["known_cost_cny"])
     return {
         "timezone": "Asia/Shanghai",
         "window": {
@@ -317,11 +492,45 @@ def collect_usage(
             if known_cost
             else None
         ),
-        "unpriced": [
-            {"provider": provider, "model": model, "calls": calls}
-            for (provider, model), calls in sorted(unpriced_counts.items())
-        ],
+        "unpriced": current["unpriced"],
         "pricing_freshness": pricing_freshness,
         "pricing_source": {"state": catalog.freshness, "source": catalog.source},
         "pricing_table": pricing_table,
+        "stage_costs": _bucket_rows_with_comparison(
+            current["buckets"]["stage"],
+            neutral_current["buckets"]["stage"],
+            previous["buckets"]["stage"],
+            "stage",
+        ),
+        "provider_costs": _bucket_rows_with_comparison(
+            current["buckets"]["provider"],
+            neutral_current["buckets"]["provider"],
+            previous["buckets"]["provider"],
+            "provider",
+        ),
+        "cost_groups": _bucket_rows_with_comparison(
+            current["buckets"]["group"],
+            neutral_current["buckets"]["group"],
+            previous["buckets"]["group"],
+            "group",
+        ),
+        "daily": sorted(
+            _bucket_rows(current["buckets"]["daily"], "date"),
+            key=lambda row: str(row["date"]),
+        ),
+        "comparison": {
+            "available": comparable,
+            "reason": None if comparable else "missing_known_calls",
+            "cache_basis": "all-miss",
+            "previous_start": previous_start.isoformat(),
+            "previous_end": start.isoformat(),
+            "previous_known_cost_cny": previous_cost,
+            "known_cost_change_ratio": (
+                round((current_cost - previous_cost) / previous_cost, 6)
+                if comparable and previous_cost
+                else None
+            ),
+            "current_cache_split_coverage": totals["cache_split_coverage"],
+            "previous_cache_split_coverage": previous["totals"]["cache_split_coverage"],
+        },
     }

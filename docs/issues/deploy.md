@@ -37,3 +37,17 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 - Type: config currency · Priority: low · Discovered: 2026-08-10, sync-docs 终审取证
 
 `~/.claude/.env` 的 `AI_RADAR_SITE_DOMAIN=aiplanet.live`（旧域名，公网已 502）。它只影响 Mac 本机 serve 的 CORS/UA（8010 局域网预览），不影响腾讯生产（服务器有自己的 server.env），但按文档跑 `tunnel_ok` 检查会对 502 域名 curl。宜择机改为 news.aiplanet.live 或清空。另：本机 serve 进程（Aug 4 启动）早于 Aug 9 模板改动，HTML 路由现 500（`site_config` undefined），需 kickstart 重启。
+
+## ISSUE-009 · Feishu webhook 明文写进 LaunchAgent plist，任何服务检视都会泄露它
+
+**状态**：open · **优先级**：high · **发现**：2026-08-11，plan `20260810-llm-cost-observability` P2 的 I2 preflight
+
+`deploy/lib/services.sh:574-580` 在生成 alert plist 时把 `FEISHU_GENERAL_ALERT_WEBHOOK` 与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` 的**明文值**写入 plist 的 environment 条目。后果是凭据以明文常驻磁盘，且**任何对该服务配置的常规检视都会完整回显它**——`launchctl print gui/$UID/live.aiplanet.ai-radar.alert`、`plutil -p` 那个 plist、乃至 `cat`。
+
+实测范围（2026-08-11 核，只查存在性、未回显值）：这两个值出现在 **12 个本地 Codex transcript 文件**中，最早 `2026-06-16`、最晚 `2026-08-10`，另加 1 个 shell snapshot。也就是说这不是一次性事故，而是持续约两个月的复发模式——每次有人为排障读一次服务配置就再落一份。今天这次由 P2 的 preflight 触发；`~/.codex/sessions/2026/08/11/` 当时尚无文件，故**无法从磁盘确认或排除今天这一份**（"0 命中"与"没文件"读数相同）。
+
+**为什么不能只加一条「不要回显」的纪律**：那是把设计缺陷转成对每个读者注意力的持续要求，而读服务配置本身是排障的正常动作。判据是「一次合理的排障操作会不会泄露凭据」，现在的答案是会。
+
+**修复方向**（需要一次独立的 deploy 改动，不属成本观测 plan）：让 plist 不承载值——引用文件路径，或让 alert 服务在运行时从 `.env` 读取。改完后旧 plist 需重装以清除已落盘的明文。
+
+**用户侧动作**（不由 agent 代做：对第三方账号的对外、不可逆操作）：轮换这两个 webhook。建议在上述机制修好之后再轮换，否则新值会以同样方式再次散落。

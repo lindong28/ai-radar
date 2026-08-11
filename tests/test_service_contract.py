@@ -1497,3 +1497,73 @@ def test_service_scripts_accept_alert_slug_and_document_usage() -> None:
     assert "serve | tunnel | pipeline | alert | performance-probe" in install_text
     assert "serve | tunnel | pipeline | alert | performance-probe" in uninstall_text
     assert "logs/alert-check.log" in install_text
+
+
+def test_cost_report_cron_install_reinstall_and_uninstall_preserve_unrelated_entries(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "deploy/lib").mkdir(parents=True)
+    (repo / "deploy/cron").mkdir(parents=True)
+    for name in ("install.sh", "uninstall.sh", "status.sh"):
+        shutil.copy(REPO_ROOT / name, repo / name)
+    shutil.copy(REPO_ROOT / "deploy/lib/services.sh", repo / "deploy/lib/services.sh")
+    shutil.copy(
+        REPO_ROOT / "deploy/cron/ai-radar-cost-report",
+        repo / "deploy/cron/ai-radar-cost-report",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_crontab = fake_bin / "crontab"
+    fake_crontab.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-l" ]]; then
+  [[ -f "$FAKE_CRONTAB_STATE" ]] || exit 1
+  cat "$FAKE_CRONTAB_STATE"
+else
+  cat > "$FAKE_CRONTAB_STATE"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_crontab.chmod(0o755)
+    state = tmp_path / "crontab"
+    state.write_text("25 * * * * performance-probe-owner\n41 1 * * * sync-db-cron.sh\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "FAKE_CRONTAB_STATE": str(state),
+            "FEISHU_GENERAL_NOTIFICATION_WEBHOOK": "https://example.invalid/notification",
+        }
+    )
+
+    for _ in range(2):
+        result = subprocess.run(
+            ["bash", "./install.sh", "cost-report"], cwd=repo, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    installed = state.read_text(encoding="utf-8")
+    assert installed.count("# ai-radar-cost-report") == 1
+    assert "17 9 * * 1" in installed
+    assert "run-or-alert --key ai-radar-cost-report --" in installed
+    assert "/path/to/" not in installed
+    assert "performance-probe-owner" in installed
+    assert "sync-db-cron.sh" in installed
+    status = subprocess.run(
+        ["bash", "./status.sh", "cost-report"], cwd=repo, env=env,
+        text=True, capture_output=True, check=False,
+    )
+    assert "in crontab" in status.stdout
+    removed = subprocess.run(
+        ["bash", "./uninstall.sh", "cost-report"], cwd=repo, env=env,
+        text=True, capture_output=True, check=False,
+    )
+    assert removed.returncode == 0
+    remaining = state.read_text(encoding="utf-8")
+    assert "ai-radar-cost-report" not in remaining
+    assert "performance-probe-owner" in remaining
+    assert "sync-db-cron.sh" in remaining

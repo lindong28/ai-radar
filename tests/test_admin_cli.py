@@ -4,6 +4,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 from airadar import cli
 from airadar.admin.alerts import AlertSignals
 from airadar.admin.cost_audit import CostAuditReport
@@ -25,13 +27,14 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
     )
     state_path = tmp_path / "alert-state.json"
 
-    monkeypatch.setattr(cli, "collect_alert_signals", lambda: signals)
+    monkeypatch.setattr(cli, "collect_alert_signals", lambda **kwargs: signals)
 
-    def fake_state_machine(collected: AlertSignals, *, state_path: str) -> dict[str, object]:
+    def fake_state_machine(collected: AlertSignals, **kwargs: object) -> dict[str, object]:
         assert collected is signals
-        assert state_path == str(state_path_arg)
+        assert kwargs["state_path"] == str(state_path_arg)
+        assert kwargs["serve_plist_path"] == cli.DEFAULT_SERVE_LAUNCH_AGENT_PATH
         return {
-            "ruleset": ["A1", "A2", "A3", "A4"],
+            "ruleset": ["A1", "A2", "A3", "A4", "A5", "A6"],
             "sent_count": 0,
             "sent": [
                 {
@@ -50,22 +53,36 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
                 {"rule_id": "A2", "firing": False, "title": "阶段错误率/耗时异常", "detail": "ok"},
                 {"rule_id": "A3", "firing": False, "title": "网站用户侧异常", "detail": "ok"},
                 {"rule_id": "A4", "firing": False, "title": "文章摄取骤降", "detail": "ok"},
+                {
+                    "rule_id": "A6",
+                    "firing": False,
+                    "evaluation_state": "in_progress",
+                    "title": "LLM 近 24 小时成本突变",
+                    "detail": "pipeline 运行中，暂缓评估",
+                },
             ],
         }
 
     state_path_arg = state_path
     monkeypatch.setattr(cli, "run_alert_state_machine", fake_state_machine)
+    monkeypatch.setattr(cli, "build_cost_report", lambda **kwargs: {})
+    monkeypatch.setattr(
+        cli,
+        "run_pricing_notifications",
+        lambda *args, **kwargs: {"sent": [], "cleared": []},
+    )
 
     args = cli.build_parser().parse_args(["admin", "alert-check", "--state-path", str(state_path)])
 
     assert cli._admin(args) == 0
     output = capsys.readouterr().out
-    assert "alert-check ruleset={A1,A2,A3,A4}" in output
+    assert "alert-check ruleset={A1,A2,A3,A4,A5,A6}" in output
     assert "sent=0" in output
     assert "send A1 firing sent status_code=200" in output
     assert "send A2 firing skipped reason=FEISHU_GENERAL_ALERT_WEBHOOK is not set" in output
     assert "A1 ok 上游模型不可用" in output
     assert "A4 ok 文章摄取骤降" in output
+    assert "A6 in-progress LLM 近 24 小时成本突变" in output
 
 
 def test_admin_db_checkpoint_command_prints_passive_result(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001
@@ -106,6 +123,14 @@ def test_admin_cost_audit_prints_reconciliation_and_returns_report_status(monkey
     assert cli._admin(args) == 0
     output = capsys.readouterr().out
     assert output == "LLM cost reconciliation: CONSISTENT\n"
+
+
+def test_cost_report_cli_rejects_zero_window_and_mutually_exclusive_modes() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["admin", "cost-report", "--window-days", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["admin", "cost-report", "--send", "--dry-run"])
 
 
 def test_performance_probe_cli_wires_runtime_paths_and_prints_samples(

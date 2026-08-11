@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read-only service status panel. Never modifies state.
 # Usage: ./status.sh              # all services
-#        ./status.sh <service>    # serve | tunnel | pipeline | alert | performance-probe
+#        ./status.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | cost-report
 
 set -uo pipefail  # no -e: status must report failures, not abort on them
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -93,9 +93,24 @@ status_pipeline() {
   echo
 }
 
+status_cost_report() {
+  local count
+  count="$(crontab -l 2>/dev/null | grep -c '# ai-radar-cost-report$' || true)"
+  printf "%-17s | " "cost-report"
+  if [[ "$count" -eq 1 ]]; then
+    printf "in crontab ✓ Monday 09:17 | log logs/cost-report-cron.log"
+  elif [[ "$count" -eq 0 ]]; then
+    printf "not installed"
+  else
+    printf "duplicate entries ⚠ count=%s" "$count"
+  fi
+  echo
+}
+
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
     serve|tunnel|alert|performance-probe) status_launchd_service "$slug" ;;
     pipeline)          status_pipeline ;;
+    cost-report)       status_cost_report ;;
   esac
 done

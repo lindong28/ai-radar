@@ -197,7 +197,7 @@ def test_resolution_oracle_detects_missing_production_match_for_an_exact_catalog
     assert (state, matched) == ("missing-exact", "deepseek/deepseek-v4-pro")
 
 
-def test_narrowed_usage_ignores_prior_window_and_omits_deferred_fields(tmp_path: Path) -> None:
+def test_p2_usage_keeps_current_pricing_table_and_uses_prior_window_for_comparison(tmp_path: Path) -> None:
     usage_db = tmp_path / "usage.db"
     migrate_usage_db(usage_db_path=usage_db, main_db_path=tmp_path / "missing.db")
     with sqlite3.connect(usage_db) as conn:
@@ -237,9 +237,11 @@ def test_narrowed_usage_ignores_prior_window_and_omits_deferred_fields(tmp_path:
     assert {(row["provider"], row["model"]) for row in result["pricing_table"]} == {
         ("deepseek", "current-only"),
     }
-    assert {"comparison", "stage_costs", "provider_costs", "cost_groups", "daily"}.isdisjoint(
-        result
-    )
+    assert result["comparison"]["previous_known_cost_cny"] > 0
+    assert result["comparison"]["available"] is True
+    assert {row["stage"] for row in result["stage_costs"]} == {"interpret"}
+    assert result["cost_groups"][0]["model"] == "current-only"
+    assert result["daily"][0]["date"] == "2026-08-09"
 
 
 def test_default_cost_audit_output_is_human_scoped_and_unpriced_cost_is_unknown(

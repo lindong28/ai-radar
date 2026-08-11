@@ -12,8 +12,15 @@ from pathlib import Path
 from time import monotonic
 
 from . import db, runtime_env
-from .admin.alerts import collect_alert_signals, run_alert_state_machine
+from .admin.alerts import (
+    DEFAULT_SERVE_LAUNCH_AGENT_PATH,
+    collect_alert_signals,
+    run_alert_state_machine,
+    run_pricing_notifications,
+    send_alert_message,
+)
 from .admin.cost_audit import run_cost_audit
+from .admin.cost_report import build_cost_report, deliver_cost_report, format_cost_report
 from .admin.metrics import SHANGHAI_TZ
 from .curator.precompute import (
     DEFAULT_KEEP_DAYS,
@@ -47,6 +54,7 @@ from .performance.remediation import (
     remediate_confirmed_incident,
 )
 from .prefilter.runner import run_prefilter
+from .pricing import get_pricing
 from .scorer.runner import run_scoring
 
 _load_runtime_env = runtime_env.load_runtime_env
@@ -84,6 +92,13 @@ def _non_negative_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be a non-negative integer") from exc
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = _non_negative_int(value)
+    if parsed == 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
 
 
@@ -483,8 +498,42 @@ def _admin(args: argparse.Namespace) -> int:
     if args.admin_command == "curate":
         return _curate(args)
     if args.admin_command == "alert-check":
-        signals = collect_alert_signals()
-        alert_result = run_alert_state_machine(signals, state_path=args.state_path)
+        now = datetime.fromisoformat(args.now) if args.now else None
+        catalog = get_pricing(cache_path=args.pricing_cache_path) if args.pricing_cache_path else None
+        signals = collect_alert_signals(
+            db_path=args.db_path,
+            usage_db_path=args.usage_db_path,
+            now=now,
+            pricing_catalog=catalog,
+        )
+        test_sender = (
+            (lambda text, *, severity="page": send_alert_message(
+                f"{args.message_prefix}{text}", severity=severity
+            ))
+            if args.message_prefix else None
+        )
+        alert_result = run_alert_state_machine(
+            signals,
+            state_path=args.state_path,
+            event_path=args.event_path,
+            now=now,
+            send=test_sender,
+            serve_plist_path=DEFAULT_SERVE_LAUNCH_AGENT_PATH,
+        )
+        d3_report = build_cost_report(
+            db_path=args.db_path,
+            usage_db_path=args.usage_db_path,
+            window_days=1,
+            now=now,
+            pricing_catalog=catalog,
+        )
+        d3_result = run_pricing_notifications(
+            d3_report,
+            state_path=args.notification_state_path,
+            event_path=args.event_path,
+            now=now,
+            message_prefix=args.message_prefix,
+        )
         # One timestamp per run so the log is forensically usable (when did a
         # rule fire, how long it lasted, correlation with deploys).
         stamp = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S%z")
@@ -508,22 +557,59 @@ def _admin(args: argparse.Namespace) -> int:
         for raw in results:
             if not isinstance(raw, dict):
                 continue
-            status = "firing" if raw.get("firing") else "ok"
+            status = (
+                "firing"
+                if raw.get("firing")
+                else (
+                    "degraded"
+                    if raw.get("evaluation_state") == "degraded"
+                    else (
+                        "in-progress"
+                        if raw.get("evaluation_state") == "in_progress"
+                        else "ok"
+                    )
+                )
+            )
             emit(f"{raw.get('rule_id')} {status} {raw.get('title')} - {raw.get('detail')}")
+        d3_sent = d3_result.get("sent", [])
+        d3_cleared = d3_result.get("cleared", [])
+        emit(
+            f"D3 notices={len(d3_sent) if isinstance(d3_sent, list) else 0} "
+            f"dedup_clears={len(d3_cleared) if isinstance(d3_cleared, list) else 0}"
+        )
+        return 0
+    if args.admin_command == "cost-report":
+        report = build_cost_report(
+            db_path=args.db_path,
+            usage_db_path=args.usage_db_path,
+            window_days=args.window_days,
+            pipeline_log_dir=db.PROJECT_ROOT / "logs",
+        )
+        text = format_cost_report(report)
+        if args.send:
+            receipt = deliver_cost_report(text)
+            print(text)
+            print(
+                f"cost-report delivery={'sent' if receipt.get('sent') else 'failed'} "
+                f"returncode={receipt.get('returncode', 'n/a')}"
+            )
+            return 0 if receipt.get("sent") else 1
+        print(text)
+        print("cost-report dry-run: not sent")
         return 0
     if args.admin_command == "cost-audit":
-        report = run_cost_audit(
+        audit_report = run_cost_audit(
             db_path=args.db_path,
             usage_db_path=args.usage_db_path,
             days=args.days,
         )
         if args.format == "json":
-            print(json.dumps(report.json_payload, ensure_ascii=False, sort_keys=True))
-            return 0 if report.passed else 1
-        lines = report.kv_lines if args.format == "kv" else report.human_lines
+            print(json.dumps(audit_report.json_payload, ensure_ascii=False, sort_keys=True))
+            return 0 if audit_report.passed else 1
+        lines = audit_report.kv_lines if args.format == "kv" else audit_report.human_lines
         for line in lines:
             print(line)
-        return 0 if report.passed else 1
+        return 0 if audit_report.passed else 1
     return _not_implemented("admin")
 
 
@@ -649,6 +735,20 @@ def build_parser() -> argparse.ArgumentParser:
     admin_subparsers.add_parser("rerun-eval")
     alert_check = admin_subparsers.add_parser("alert-check")
     alert_check.add_argument("--state-path", default=str(db.PROJECT_ROOT / "data" / "alert-state.json"))
+    alert_check.add_argument("--event-path", default=str(db.PROJECT_ROOT / "data" / "alert-events.jsonl"))
+    alert_check.add_argument("--notification-state-path", default=str(db.PROJECT_ROOT / "data" / "pricing-notification-state.json"))
+    alert_check.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
+    alert_check.add_argument("--usage-db-path")
+    alert_check.add_argument("--pricing-cache-path")
+    alert_check.add_argument("--message-prefix", default="")
+    alert_check.add_argument("--now", help="Inject an ISO timestamp for deterministic smoke tests")
+    cost_report = admin_subparsers.add_parser("cost-report")
+    cost_report.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
+    cost_report.add_argument("--usage-db-path")
+    cost_report.add_argument("--window-days", type=_positive_int)
+    cost_report_mode = cost_report.add_mutually_exclusive_group()
+    cost_report_mode.add_argument("--send", action="store_true")
+    cost_report_mode.add_argument("--dry-run", action="store_true")
     cost_audit = admin_subparsers.add_parser(
         "cost-audit",
         help="Reconcile cost calculations against the loaded pricing catalog",

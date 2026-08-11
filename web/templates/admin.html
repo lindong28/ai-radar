@@ -192,7 +192,15 @@
             <li class="status-warn">{{ alert }}</li>
             {% endfor %}
           </ul>
-          {% else %}
+          {% endif %}
+          {% if metrics.alerts.degraded %}
+          <ul class="admin-list">
+            {% for alert in metrics.alerts.degraded %}
+            <li class="status-warn">不可评估：{{ alert }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if not metrics.alerts.firing and not metrics.alerts.degraded %}
           <p class="status-ok">当前无 firing 告警</p>
           {% endif %}
         </article>

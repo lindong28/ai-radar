@@ -131,6 +131,27 @@
         {% endif %}
       </section>
 
+      <section class="admin-panel" aria-label="LLM 成本驱动与前窗对比">
+        <h2>成本分组与前窗对比</h2>
+        {% if usage.comparison.available %}
+        <p class="admin-meta">前一等长窗口 ¥{{ "%.2f"|format(usage.comparison.previous_known_cost_cny) }}；{% if usage.comparison.known_cost_change_ratio is not none %}当前 {{ "%+.1f"|format(usage.comparison.known_cost_change_ratio * 100) }}%{% else %}前窗为零，百分比不可用{% endif %}。两窗均按当前费率和 cache 未命中重算。</p>
+        {% else %}
+        <p><strong>前窗对比不可用：</strong>前窗或本窗没有可定价调用。</p>
+        {% endif %}
+        <h3>按阶段</h3>
+        <table class="admin-table"><thead><tr><th>阶段</th><th>调用</th><th>已知成本 CNY</th><th>单次已知成本</th></tr></thead><tbody>
+          {% for row in usage.stage_costs %}<tr><td>{{ row.stage }}</td><td>{{ row.known_calls }}/{{ row.calls }} 次可定价</td><td>¥{{ "%.2f"|format(row.known_cost_cny) }}</td><td>{% if row.known_cost_per_call_cny is not none %}¥{{ "%.4f"|format(row.known_cost_per_call_cny) }} / 可定价调用{% else %}无数据{% endif %}</td></tr>{% endfor %}
+        </tbody></table>
+        <h3>按 Provider / 模型</h3>
+        <table class="admin-table"><thead><tr><th>Provider / 模型</th><th>调用</th><th>输入 / 输出 tokens</th><th>已知成本 CNY</th></tr></thead><tbody>
+          {% for row in usage.cost_groups %}<tr><td>{{ row.provider }}/{{ row.model }}</td><td>{{ row.calls }}</td><td>{{ num(row.input_tokens) }} / {{ num(row.output_tokens) }}</td><td>¥{{ "%.2f"|format(row.known_cost_cny) }}</td></tr>{% endfor %}
+        </tbody></table>
+        <h3>按天</h3>
+        <table class="admin-table"><thead><tr><th>日期（Asia/Shanghai）</th><th>调用</th><th>已知成本 CNY</th></tr></thead><tbody>
+          {% for row in usage.daily %}<tr><td>{{ row.date }}</td><td>{{ row.calls }}</td><td>¥{{ "%.2f"|format(row.known_cost_cny) }}</td></tr>{% endfor %}
+        </tbody></table>
+      </section>
+
       <section class="admin-panel" aria-label="LLM 来源单价">
         <h2>来源单价</h2>
         <p class="admin-meta">仅供参考，不构成路由对比结论。</p>
