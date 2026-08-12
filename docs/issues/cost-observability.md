@@ -1,6 +1,6 @@
 # Issues — LLM 成本观测
 
-来源：plan `20260810-llm-cost-observability` P1 的执行与 review gate。P1 已交付「查询时派生成本 + cost-audit 对账 + 最小 admin 视图」，下列各条是**已知未闭合项**，不随 P1 交付而消失。
+来源：plan `20260810-llm-cost-observability` 四个阶段的执行与 review。查询时派生成本、告警/周报消费面、cache split、paid-result 保护和 recorded-row scope 已交付；下列各条是**已知未闭合项**，不随 plan 完成而消失。金额加总只表示 `llm_usage` 记录行的下界，cohort 统计只描述已记录调用；这项解释契约见 ADR-023，attempt 缺口仍由 ISSUE-021 跟踪。
 
 ## ISSUE-004 · ARK 挂牌价来源非权威，而它占已知成本的 87.6%
 
@@ -55,21 +55,51 @@ expected 2404/3491/7119  vs  actual 2056/3148/6385
 
 migration 016 的整表重写在 `data/radar.db` 留下约 932 MB 空闲页（库总计 3.2 GB）。`VACUUM` 可回收，但本身又是一次整库重写，会再次触发 ISSUE-006 那条路径——两件事应一起安排，不要单独做。
 
-## ISSUE-019 · P3 ballot repeat-set 的 N=4 分布带窄于实测运行内噪声
+## ISSUE-011 · A1/A3 在低样本或无流量时缺少可证明的恢复证据
 
-**状态**：resolved · **优先级**：high
+**状态**：open · **优先级**：high
 
-P3 为把慢变 prompt 前缀移到文章前而执行 before/after 成对评测。第一次 reordered after 在第 4 篇被 schema validator 以 `summary JSON missing non-empty criteria_reason` 拒绝；没有补跑。唯一一次 D5 有界重设计在文章尾部完整重申 schema 的七个字段（`recommendation`、`criteria_reason`、`save_decision`、`save_reason`、`tags`、`keywords`、`projects`）后，新的 10 primary + 2 repeat 全部通过 schema、provider/revision、sampling、system/keywords hash 与逐块 hash；primary N=10 三档分布也全部在冻结带内。
+A1 样本少于 5、A3 最近 15 分钟 PV 少于 20 时，阈值分支不具备阳性健康观测；当前状态机仍可能把 `firing=false` 按健康路径消费。plan 只修了新增的 A5/A6 evaluation state，没有把 A1/A3 一并扩修。后续应让低样本/无流量进入显式不可评估状态，并用 firing → 证据不足 → 新健康证据的状态转换证明不会发出假恢复。
 
-原冻结判据还把 production-derived interval 用于 ballot repeat set N=4，得到 `必读=2`、允许 `[0,1]`。User adjudication 指出：两篇各两次的 repeat set 中，全部 before/after 差异来自 `cec6aabadcc4ed2a`；before primary=`必读`、before repeat=`值得一看`，而 after primary/repeat 均=`必读`。before 侧在模板完全不变时已经跨相邻档翻转，说明运行内噪声底宽于该 N=4 band；repeat 本应量化这种 variance，冻结判据却没有使用它。
+## ISSUE-012 · installed `im-notify` 的 dedup-clear 失败可能被误报为成功
 
-**Resolution（2026-08-12，user adjudication）**：N=4 band 作为 criterion defect set aside，primary N=10 成为 operative distribution gate。这个修改发生在看到 reading 之后，确实削弱预注册纪律；因此由用户裁决，implementer/supervisor 不自行豁免。原始 `automatic-assertions.json` 保留 frozen failure，不覆盖历史。D5 template 为 after-redesign SHA-256 `c29f794c66836ffcd45cbca780a665a963a70e746d426c5dfc2c475ded578dd3`，12 份保存的 rendered prompt 已逐一 hash 相等；两组成对 human ballot 的三问均已通过，故 redesign 保留。后续 fresh official L2 在第 1 调用遇到历史 vocabulary gap 后，implementer 一度误用 V38 回滚；独立 provenance 证明该值由 2026-06-07 的旧模板批次 commit `4a74a58353d8091af81d74c09bb6fc946226699d` 预先引入，用户裁决它不是 redesign regression。该回滚确实发生过，但已因错误归因而逆转，不能继续记为本 issue 或 P3 的失败终态。
+**状态**：open · **优先级**：high
 
-**P3 terminal evidence（2026-08-12）**：后续按冻结 before 输出中的 novel-keyword 差集预选 `1b0e38e487e98573`，真实保存使隔离 KB keyword count/hash `11,528 / 07c11a... → 11,533 / 5d714f...`，再对不同 item/hash/text 的 `398c50cf6c6ffab7` 完成 raw official `deepseek-v4-pro` 调用。第二次 raw/landed usage 为 input/output/cached=`76,599/2,014/74,880`，hit=`97.755845%`，官方 tariff 派生 `¥0.019953972/篇`；append-only 零-provider finalization 已把 `cached_input_tokens=74,880` 与 source 落到隔离 usage DB，原 failed checkpoint 未改写。由此 V40/V42/V44 全过，成本降低目标已达成；此前 rollback 与失败终态记录只保留为已逆转的审计历史。
+本仓 D3 在 `im-notify --dedup-clear` 返回失败时会保留 re-arm 义务并在后续轮次重试，但 plan review 发现 installed `im-notify` 可能把真实 clear 错误返回为 `cleared=true`，使本仓无法区分成功与失败。实现归 ai-agent-config 的 im-notify owner；当前没有一轮新的失败注入证明 installed artifact 已闭合该路径，因此本条保持 open。
+
+## ISSUE-013 · `alert-check.log` 无 rotation，status 不暴露文件大小
+
+**状态**：open · **优先级**：medium
+
+P2 review 时 `logs/alert-check.log` 已为 6,358,058 bytes、约 11,503 次运行；5 分钟 cadence 会让它持续增长。当前 `status.sh alert` 只给日志路径，不检查大小或可写性。运维 runbook 已把这一限制写明；闭合仍需增加有界 rotation、超限/不可写状态暴露和真实轮转验证。
+
+## ISSUE-014 · cost-report install/status 不验证 cron command 的可执行依赖
+
+**状态**：open · **优先级**：medium
+
+`./install.sh cost-report` 只检查 notification webhook，`./status.sh cost-report` 只核对 marker 数量，不直接验证 `~/.local/bin/run-or-alert`、`im-notify` 与仓库 `run.sh` 可执行。plan 在当前机器用真实 cron-equivalent command exit 0 证明了这台机器可运行，但新主机仍可能安装成功后才在首个周报周期失败。闭合需把这些依赖纳入 lifecycle preflight，并保留缺依赖的失败路径测试。
+
+## ISSUE-015 · 重试耗尽的微信解读缺少独立处置 lifecycle
+
+**状态**：open · **优先级**：medium
+
+P2 收口时生产观察到 152 篇 `error_retry_count >= 8`；该数是 2026-08-11 的快照，未在本次文档同步中刷新。A5 detail 与 `/admin` 会显示 frozen 数，并阻止它们制造假恢复，但没有定义安全 replay、批量解除或独立通知。后续应先设计可回滚 replay，再决定是否需要独立 notice 或批处理入口。
+
+## ISSUE-017 · performance probe 默认 origin 仍假定 serve 在 8000
+
+**状态**：open · **优先级**：high
+
+`src/airadar/cli.py` 的 `performance-probe --origin-url` 与 `src/airadar/performance/runner.py` 的默认值仍是 `http://127.0.0.1:8000`，而本机已安装 serve 使用 8010。A3 已改为从已安装 serve plist 解析端口，但 performance probe 尚未复用该 readback；当前 probe 未安装、旧 cron 保持 paused，因此没有把这个缺口写成正在产生错误样本。恢复 performance plan 前应先消除硬编码默认并验证实际 origin。
+
+## ISSUE-018 · D3 resolved ledger 缺少可配对的 `episode_since`
+
+**状态**：open · **优先级**：medium
+
+D3 pricing notification 的 resolved ledger 行仍把 `episode_since` 写成 `None`，仅凭 ledger 无法稳定把 firing 与 resolved 配为同一 episode。闭合需让 D3 firing/resolved 共享持久 episode identity，并补跨进程配对回归；在此之前，按 episode 查询 D3 历史不能宣称完整去重。
 
 ## ISSUE-020 · 生产 tag validator 与既有用户索引词汇不一致（已移交 owning repo）
 
-**状态**：moved · **优先级**：high
+**状态**：open · **优先级**：high
 
 2026-08-12 的 fresh V40/V42/V44 序列通过 raw `deepseek-v4-pro` 路由与两篇不同输入的全部 preflight。官方第 1 调用返回结构完整结果，但 production validator 拒绝 tag `toC-Agent变现`：`modules_ok=true`、`keyword_format_ok=true`、`tags_ok=false`。独立 provenance 进一步确认 data commit `4a74a58353d8091af81d74c09bb6fc946226699d` 在 2026-06-07、旧 article-first 模板时期已把该值作为关键词写入 committed summary/index；这不是 P3 reorder 新增的输出行为。`summarizer/core.py::load_known_tags` 只从受控 `agents/summary-agent/docs/tags.md` 读取允许值，而该 catalog 不含此值，模型却能从历史知识面将关键词提升为 tag。
 
@@ -96,3 +126,9 @@ ai-assistant 在 `agents/summary-agent/src/summarizer/core.py:78-87` 先取得 p
 并发 migration race 修复后，`src/airadar/llm_usage.py:291-301` 的 `migrate_usage_db()` 每次都执行 `BEGIN IMMEDIATE`。这对首次 migration 是必要的，但 steady-state schema 已经 current 时也会拿 writer lock。三个本质上读 usage 的入口都会先调用它：admin usage view（`src/airadar/admin/usage.py:414-417`）、cost report（`src/airadar/admin/cost_report.py:35-40`）和 cost audit（`src/airadar/admin/cost_audit.py:243-247`）。若另一 writer 持锁超过 `src/airadar/db.py:37` 配置的 5 秒 busy timeout，这些读面会以 `database is locked` 失败；旧 steady-state no-op check 不需要争用该 writer lock。
 
 Reviewer 在约 44,000 行的当前规模下将它判为正常运行包络之外的 MEDIUM，而不是本轮必须修复的回归。**修复方向**：增加 schema-current steady-state fast path，仅当 migration marker 和所需 schema invariants 均已确认 current 时跳过 write lock；任何缺失或不确定都进入现有 `BEGIN IMMEDIATE` 路径，并在锁内重新检查，不能为降低 contention 恢复首次 migration 的 check/ALTER 竞态。
+
+## ISSUE-023 · A6 的“至少 3 个基线日”门当前不可达
+
+**状态**：open · **优先级**：medium · **发现**：2026-08-12 full docs-sync 原始范围终审
+
+`src/airadar/admin/cost_report.py` 当前无条件创建前 14 个 UTC 日桶，并把无记录日作为 ¥0 加入 `eligible`，所以 `baseline_days` 恒为 14；`len(eligible) >= 3` 与告警文案中的“少于 3 个基线日”分支不会表达“至少 3 个有记录日”。新部署或长时间无记录后，A6 可能拿大量零日形成中位数并进入评估，而不是因观测历史不足而 degraded。现行 runbook 已按实际实现说明这一点；实现修复需明确“基线日”是日历桶还是有足够 recorded-row 证据的可比日，并为不足与足够历史分别建立可失败测试。任何阈值金额仍只解释为 ADR-023 定义的 recorded-row floor，不升级为总支出。

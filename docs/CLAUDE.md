@@ -68,11 +68,13 @@
 |---|---|
 | [README.md](issues/README.md) | Domain 索引 |
 | [ux-issues.md](issues/ux-issues.md) | 端到端测试发现的产品 UX 问题（contract 在实际产品中被 broken） |
-| [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时）；append-only queue |
+| [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时）；现存历史关闭项的归档债见 docs-quality.md |
 | [deploy.md](issues/deploy.md) | 部署与 DB 同步链路的运维问题（sync/apply/cron/verifier，含影响其验收的测试基线） |
 | [docs-quality.md](issues/docs-quality.md) | 文档自身的质量债（README 定位/重复/可观察性等审查遗留） |
+| [cost-observability.md](issues/cost-observability.md) | LLM 成本计量、定价、报告与告警消费面的未闭合项；金额口径只覆盖 `llm_usage` 记录行 |
 | [general.md](issues/general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
 | [harness-issues.md](issues/harness-issues.md) | Agent harness、wrapper、hook 或 skill 行为问题 |
+| [archive/closed.md](issues/archive/closed.md) | 已 resolved / wontfix 的历史 issue 归档 |
 
 ### docs/adr/ [Developer]
 
@@ -103,6 +105,7 @@
 | [020-normalize-cost-comparisons-to-cache-all-miss.md](adr/020-normalize-cost-comparisons-to-cache-all-miss.md) | A6、周报与管理页的跨窗成本统一按 cache 未命中比较 |
 | [021-audit-alert-delivery-and-suppression-decisions.md](adr/021-audit-alert-delivery-and-suppression-decisions.md) | 告警 ledger 区分投递、D3 生命周期与 INTERNAL 抑制决策 |
 | [022-evaluate-a6-in-progress-cost-as-lower-bound.md](adr/022-evaluate-a6-in-progress-cost-as-lower-bound.md) | A6 在途成本下界可触发告警，但不能证明恢复 |
+| [023-define-recorded-row-measurement-scope.md](adr/023-define-recorded-row-measurement-scope.md) | 从 `llm_usage` 记录行派生的加总量是下界，cohort 统计只描述已记录调用 |
 
 ### docs/experiences/ [Agent]
 
@@ -124,6 +127,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260810-llm-cost-observability/](plans/20260810-llm-cost-observability/) | 查询时派生成本、告警/周报消费面、cache split 与计量失败 paid-result 保护；金额加总只表示记录行下界 |
 | [20260809-fts-rebuild-sync/](plans/20260809-fts-rebuild-sync/) | DB 跨洋同步改造：持久 base-only replica + 服务器候选槽重建 FTS，稳态 16.39MB<20MB、零停机 3500/3500 |
 | [20260720-db-slimming/](plans/20260720-db-slimming/) | radar.db 瘦身：清可再生 `summary_json` 缓存 + VACUUM + 常驻保留（Option A），生产 2.28GB→1.495GB |
 | [20260607-wechat-read-original-link/](plans/20260607-wechat-read-original-link/) | `/wechat` 详情页与列表卡片新增显式「访问原文」链接跳转公众号原文 |

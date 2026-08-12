@@ -15,12 +15,14 @@ src/airadar/
 ├── cli.py              # CLI 入口，argparse 子命令分发
 ├── db.py               # 数据库连接、迁移执行
 ├── llm_usage.py        # LLM token 用量独立库记录
+├── pricing.py          # LLM tariff catalog、有效区间、解析与查询时成本派生
+├── pricing_fallback.json # LiteLLM catalog 不可用时的受管 fallback snapshot
 ├── ruleset.py          # Ruleset 版本管理（日期.rev 格式）
 ├── site_config.py      # 站点级环境配置
 ├── stage_common.py     # Pipeline stage 共享原语（时间、ProviderItem、evaluation 写入）
 ├── topics.py           # 受控标签词表 + 确定性标签规则
 ├── wechat_text.py      # 微信标题文本归一化
-├── migrations/         # SQL 迁移脚本（001-015），幂等执行
+├── migrations/         # 编号递增的幂等 SQL 迁移；016/017 负责 deprecated cost carrier 清理
 │
 ├── sources/            # 信源管理
 │   ├── loader.py       #   解析 data/sources.toml -> SourceConfig
@@ -106,13 +108,16 @@ src/airadar/
 │       ├── media.py    #   GET /img — 受限微信 CDN 同源图片代理
 │       └── health.py   #   GET /api/v1/healthz — 健康检查
 │
-└── admin/              # 运维聚合：metrics、alerts、LLM usage
+└── admin/              # 运维聚合
+    ├── usage.py        #   记录行用量、查询时成本、measurement_scope 与分组/跨窗聚合
+    ├── cost_report.py  #   周报、暴露量核对与 recorded-cohort 比较
+    ├── cost_audit.py   #   raw catalog、派生成本、anchor 与 residue 对账
+    └── alerts.py       #   A1–A6、D3、投递与 lifecycle
 
 web/static/             # 前端静态文件（根目录 web/，非 src 内）
 ├── index.html          #   精选首页旧静态文件（deprecated，保留作回滚）
 ├── all.html            #   全量时间线旧静态文件（deprecated，保留作回滚）
 ├── daily.html          #   日报页
-├── about.html          #   关于页
 ├── item.html           #   单条详情页
 ├── app.js              #   前端 JS
 ├── style.css           #   样式
@@ -121,6 +126,7 @@ web/static/             # 前端静态文件（根目录 web/，非 src 内）
 web/templates/          # Jinja2 SSR 页面模板
 ├── index.html          #   精选首页 SSR + preload
 ├── all.html            #   全量时间线 SSR + preload
+├── about.html          #   关于页 Jinja2 模板
 ├── wechat.html         #   微信文章解读列表 SSR + preload
 └── wechat_detail.html  #   微信文章解读详情页（sanitized markdown HTML）
 ```
@@ -274,7 +280,7 @@ performance remediation ──只读 lifecycles.page firing
 
 `admin/alerts.py` 以每个 `rule_id` 下的 `lifecycles` map 作为状态真源；`page` 与 `notice` 分别保存 `state`、`since`、`last_notified`、`detail` 和 `announced`。无 `lifecycles` 的旧 flat entry 在读取时被规范化到其记录的 severity（缺失则保守视为 page），之后统一写新形状。顶层 `state/since/last_notified/detail/severity/announced` 仅是供旧 reader 使用的兼容投影；当异常 state 同时含 firing page 和 notice 时，投影优先 page，避免隐藏高严重度。
 
-状态机只在 firing transport 成功后更新 announced / `last_notified`；未投递成功的 pending firing 或 resolved 都在下轮重试。severity 转换时先关闭另一 firing lifecycle，已 announced 的旧 episode 先沿原 severity resolved，再尝试新 severity firing；pending 且从未成功公告的旧 firing episode 静默关闭。每个 severity 保留自己的 debounce / cooldown 计时器。投递契约是 at-least-once：发送和状态持久化之间不能原子提交，重试使用发送前持久化的 notification nonce，并把 rule/severity/event/nonce/episode identity 传给 `im-notify` 的 signature ledger 抑制同一意图的重复可见消息；不宣称 exactly-once。成功 sender invocation 同时以 `{ts,rule_id,severity,type,detail,values,channel}` 写入 notification-only JSONL ledger；它不是状态真源，写入失败 fail-open，不阻断 delivery 或 state 持久化。
+状态机只在 firing transport 成功后更新 announced / `last_notified`；未投递成功的 pending firing 或 resolved 都在下轮重试。notice→page 只发送新的 page firing，不发送中间 resolved，并在新 firing 送达后内部关闭旧 notice lifecycle；page 条件降到 notice 档时继续保持同一个 page incident，直到真正恢复。pending 且从未成功公告的旧 firing episode 静默关闭。每个 severity 保留自己的 debounce / cooldown 计时器。投递契约是 at-least-once：发送和状态持久化之间不能原子提交，重试使用发送前持久化的 notification nonce，并把 rule/severity/event/nonce/episode identity 传给 `im-notify` 的 signature ledger 抑制同一意图的重复可见消息；不宣称 exactly-once。成功 sender invocation 与内部合并抑制决策共同写入 `data/alert-events.jsonl`：投递事件含 `{ts,rule_id,severity,type,detail,values,channel}`，`channel=INTERNAL,type=suppressed` 的事件另含 carrier、reason 与 heartbeat freshness。ledger 不是状态真源，写入失败 fail-open，不阻断 delivery 或状态持久化；统计实际推送必须排除 `channel=INTERNAL`。
 
 confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 对新 state 直接以 `lifecycles.page` firing 为权威 incident，不依赖可能 stale 的顶层投影；仅对无 `lifecycles` 的旧 entry 回退为 flat page。remediation 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
 
@@ -301,7 +307,21 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 
 - **去重策略**：`items` 表通过 `(source_id, content_hash)` 唯一约束去重。`content_hash` 是内容文本的 SHA1 前 16 位。同 URL 不同内容视为更新
 - **多阶段评估**：`item_evaluations` 通过 `stage` 字段区分 prefilter / scoring / enrich，共用同一张表。每条记录保存完整的 input/output/numeric JSON
-- **LLM 用量与派生成本**：`llm_usage` 是已写入的计量行集合，不是 attempt ledger。调用次数、token 合计与同一计价口径的金额合计只从该表记录行派生，因此是全部付费调用对应总量的下界；任何未写入该表的付费调用均不在内（已知例子包括失败链路或未接入计量的调用点，非完整清单）。均值、占比和环比只描述已记录 cohort，相对全部付费调用真值的偏差方向未知。`admin/usage.py` 通过 `measurement_scope` 把两类解释带到 API 响应本身，并按 usage `created_at` 的有效 tariff 生成已记录调用的绝对总额、阶段、Provider、模型组与日序列；跨窗总额和分组比较另把两窗统一按当前费率、cache 全未命中重算，避免 provider cache 字段覆盖率随 stage mix 浮动而永久关闭比较。单次已知成本分母只含 priced+nominal 的已记录调用。`admin/cost_report.py` 消费同一聚合，用 durable `items.fetched_at` 判断每日是否有入库，pipeline 日志只补轮次、fetch inserted 与已记录的 `llm_usage_metering_failure` 证据，不能证明 attempt-level 计量完整；已观测的缺日志/计量标 unknown，不把缺行当作零成本。A6 复用相同归一化，只比较评估时仍可报价的已记录 known cohort；已观测的缺数时降级，只有 live pipeline 造成的当前日未封口例外把已记录金额作为下界继续正向求值，允许 firing/升级。记录行金额回落时只 resolve 这个已记录 cohort，不宣称整体计量健康。两个库中的 `cost_usd` 都是 deprecated carrier，表内已记录调用的派生成本只在查询时计算。
+- **LLM 用量与派生成本**：`llm_usage` 是已写入的计量行集合，不是 attempt ledger。调用次数、token 合计与同一计价口径的金额合计只从该表记录行派生，因此是全部付费调用对应总量的下界；任何未写入该表的付费调用均不在内（已知例子包括失败链路或未接入计量的调用点，非完整清单）。均值、占比和环比只描述已记录 cohort，相对全部付费调用真值的偏差方向未知。`admin/usage.py` 通过 `measurement_scope` 把两类解释带到 API 响应本身，并按 usage `created_at` 的有效 tariff 生成记录行金额、阶段、Provider、模型组与日序列；跨窗金额和分组比较另把两窗统一按当前费率、cache 全未命中重算，避免 provider cache 字段覆盖率随 stage mix 浮动而永久关闭比较。单次已知成本分母只含 priced+nominal 的已记录调用。`admin/cost_report.py` 消费同一聚合，用 durable `items.fetched_at` 判断每日是否有入库，pipeline 日志只补轮次、fetch inserted 与已记录的 `llm_usage_metering_failure` 证据，不能证明 attempt-level 计量完整；已观测的缺日志/计量标 unknown，不把缺行当作零成本。A6 复用相同归一化，只比较评估时仍可报价的已记录 known cohort；已观测的缺数时降级，只有 live pipeline 造成的当前日未封口例外把已记录金额作为下界继续正向求值，允许 firing/升级。记录行金额回落时只 resolve 这个已记录 cohort，不宣称整体计量健康。两个库中的 `cost_usd` 都是 deprecated carrier，表内已记录调用的派生成本只在查询时计算。
+
+  ```text
+  provider / interpret result
+            │ best-effort usage landing
+            ▼
+      data/llm_usage.db ──▶ pricing.py（调用时间有效 tariff）
+                                   │
+                                   ▼
+                           admin/usage.py
+                         ┌─────────┼──────────┐
+                         ▼         ▼          ▼
+                    admin API   cost-report  A6 / cost-audit
+                    + HTML      + weekly     + D3 diagnostics
+  ```
 - **Ruleset 版本**：格式 `YYYY-MM-DD.rN`，用于跟踪 prompt 和规则的变更。同一条目可以有不同 ruleset 版本的评估记录
 - **信源层级**：T1（官方一手源，乘数 1.25）/ T1.5（高质量聚合，乘数 1.0）/ T2（社区源，乘数 0.75）
 - **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。
@@ -325,7 +345,7 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 
 ## Web Layer
 
-FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS：`/` 和 `/all` 使用 Jinja2 SSR 预载首屏数据，后续交互继续通过 API 获取数据；`/daily`、`/about` 和 `/item.html` 仍由静态文件提供。
+FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS：`/`、`/all` 与 `/about` 使用 Jinja2 模板（前两者 SSR 预载首屏数据，后续交互继续通过 API 获取数据）；`/daily` 与 `/item.html` 仍由静态文件提供，`/about.html` 308 重定向到 `/about`。
 
 **响应式分层**（断点 640/960px）：`>960px` 为侧栏 + 内容区；`≤960px` 侧栏整体隐藏、由常驻 HTML 的 `.m-tabbar`（`web/templates/_mobile_tabbar.html`）与 `.app-mobile-bar`（`_mobile_topbar.html`）接管导航。**内容区不做 DOM 双份**——同一套卡片 DOM 由 media query 重塑几何（见 [ADR-012](adr/012-single-dom-mobile-layer.md)），只有桌面无对应物的 chrome 才是独立节点。
 
@@ -360,7 +380,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/wechat` | `web/templates/wechat.html` | 微信文章解读列表，Jinja2 SSR，内联 `/api/v1/wechat` 形状的 preload JSON |
 | `/wechat/{slug}` | `web/templates/wechat_detail.html` | 微信文章解读详情页，`summary_md` 经 markdown-it-py 渲染后用 nh3 sanitize |
 | `/daily` | `web/static/daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
-| `/about` | `web/static/about.html` | 关于页 |
+| `/about` | `web/templates/about.html` | 关于页 Jinja2 模板；`/about.html` 308 重定向到此路由 |
 | `/admin` | `web/templates/admin.html` | 内部运维 dashboard；需 Cloudflare Access 或显式本地 bypass |
 | `/admin/usage` | `web/templates/admin_usage.html` | 内部 LLM 成本最小视图：窗口总额三态、来源单价、未定价清单与 cache 采集覆盖；需 Cloudflare Access 或显式本地 bypass，不挂公开导航 |
 | `/item.html` | `web/static/item.html` | 单条详情页（StaticFiles 隐式提供） |

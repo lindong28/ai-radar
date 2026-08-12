@@ -21,10 +21,9 @@
 
 **services.md / 服务清单侧**
 - 服务器侧生产栈（install-server.sh 的 serve/db-apply/alert、双槽 serve@8000/8001）不在任何服务清单；make-live 路径（git push tencent → post-receive → deploy_code.py）无文档。
-- performance-probe 行按已部署 LaunchAgent 描述，实机 `status.sh` 显示 not installed、旧 cron 处 PAUSED。
 
 ## [open] 2026-08-10：architecture.md 模块树多处过时（本 plan 范围外，独立审查发现）
 
 - Type: content currency · Priority: low · Discovered: 2026-08-10, sync-docs 重审 wave
 
-模块树漏 `runtime_env.py`、`web/routes/daily_metrics.py`；`performance/` 仅列 3/9 模块且无省略标记；`web/templates` 仅列 4/16（漏掉路由表自己引用的 hot/changelog/more/admin/admin_usage/bookmarks/wechat_404 与 partials）；`web/static` 漏 `wechat-icon.svg`。另：services.md 把生命周期脚本契约 defer 给不随仓分发的 `~/.claude/references/service-operations-protocol.md`（已在文中如实标注不可达，长期宜把 [User] 需要的部分落回仓内）；general.md 大量 [resolved] 条目未按协议 §4.8 移入 archive/closed.md。
+模块树漏 `runtime_env.py`、`web/routes/daily_metrics.py`；`performance/` 仅列 3/9 模块且无省略标记；`web/templates` 仅列 4/16（漏掉路由表自己引用的 hot/changelog/more/admin/admin_usage/bookmarks/wechat_404 与 partials）；`web/static` 漏 `wechat-icon.svg`。另：general.md 与 ux-contract-issues.md 仍有 [resolved] 条目未按协议 §4.8 移入 archive/closed.md。

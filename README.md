@@ -12,7 +12,7 @@ AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS、X 和微信�
 git clone https://github.com/your-org/ai-radar.git
 cd ai-radar
 uv sync
-uv run playwright install chromium  # 微信抓取 + 默认安装的 performance-probe 均必需
+uv run playwright install chromium  # 微信抓取必需；启用 performance-probe 时也复用它
 ```
 
 ### 2. 配置环境变量
@@ -70,25 +70,21 @@ cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调
 
 调度方式详情、launchd 备选模板见 §服务 + [docs/operations/services.md](docs/operations/services.md)。
 
-如需手动写入 cron，不要直接 `crontab deploy/cron/ai-radar-pipeline`，因为仓库内文件保留 `/path/to/ai-radar` 占位符。使用当前仓库路径展开后再写入：
-
-```bash
-sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
-```
+不要把 `deploy/cron/ai-radar-pipeline` 或其展开结果直接送入 `crontab -`：这会替换该用户的整份 crontab，并删除 DB sync、cost-report 等无关排期。安装和更新 pipeline 排期统一使用 `./install.sh pipeline`。
 
 ### 用户旅程性能监控与候选修复
 
 `performance-probe` 每次用浏览器从同机 origin 与同机 public（由 `AI_RADAR_PUBLIC_URL` 环境变量配置；未配置时跳过 public 视角、仅测 origin）两个视角测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定四条旅程。探针只在单条旅程测量前后都确认 pipeline 空闲时保存该样本；pipeline 正在运行或负载状态不确定时跳过该次旅程尝试，不让 non-idle 输入进入 PERF 窗口。每个旅程/视角保留 20+3 确认窗，首个 confirmed firing 需要 22 条有效 idle 样本，超预算后以 `page` 投递。所有结果均为 **same-host provisional**，不代表区域 SLO。确认退化后，`performance-remediate` 会在隔离 worktree 中启动一个 fail-closed Codex worker，最多生成一个仅供人工审阅的本地候选 commit；它不会 push、deploy、调用 launchctl 或写生产数据库。
 
-先核对两个 CLI，并只手工运行 probe 来确认浏览器、站点和告警配置可用：
+先核对两个 CLI，并只手工运行 probe 来确认浏览器与两个站点视角可用；这不会证明告警 sender、webhook 或实际投递通道可用，告警配置的无发送 preflight 见 [监控与告警 runbook](docs/operations/monitoring-alerting.md#im-notify-飞书双通道)：
 
 ```bash
 ./run.sh performance-probe --help
 ./run.sh performance-remediate --help
-./run.sh performance-probe
+./run.sh performance-probe --origin-url http://127.0.0.1:8010 --public-url https://news.aiplanet.live
 ```
 
-`performance-probe` 由 `install.sh` 管理：专属 per-file LaunchAgent 以 `StartInterval=300` 每 5 分钟经 `./run.sh performance-probe` 启动，因此外部超时 watchdog 始终位于启动路径；pipeline 自身仍保留既有 `*/15` user crontab。安装、查询和卸载 probe：
+`performance-probe` 由 `install.sh` 管理：安装后，专属 per-file LaunchAgent 以 `StartInterval=300` 每 5 分钟经 `./run.sh performance-probe` 启动，因此外部超时 watchdog 始终位于启动路径；pipeline 自身仍保留既有 `*/15` user crontab。当前部署未安装 probe，旧 hourly cron 保持 PAUSED；安装、查询和卸载 probe：
 
 ```bash
 ./install.sh performance-probe
@@ -96,16 +92,7 @@ sed "s|/path/to/ai-radar|$PWD|g" deploy/cron/ai-radar-pipeline | crontab -
 ./uninstall.sh performance-probe
 ```
 
-U4 发现的 homepage `hard_failure=true` 假阳性已修复：浏览器以首 12 条 SSR/prepaint ID 作为完整渲染列表的前缀校验，不再因后续正常卡片存在而误报。但 `performance-remediate` 仍不由 `install.sh` 管理并受运维 gate 约束：部署后先用手工 probe 确认 homepage 样本 `hard_failure=false`，并确认 `logs/performance/alert-state.json` 中 homepage `PERF:*` 已不处于 firing；两项都满足后，才先手工运行一次 remediation，再按需安装它自己的 cron：
-
-```bash
-./run.sh performance-remediate
-
-repo=$PWD
-{ crontab -l 2>/dev/null | sed '/# ai-radar-performance-remediate$/d'
-  printf '25 * * * * cd "%s" && PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" ./run.sh performance-remediate >> logs/performance-remediate-cron.log 2>&1 # ai-radar-performance-remediate\n' "$repo"
-} | crontab -
-```
+homepage `hard_failure=true` 的已知假阳性已修复。但 `performance-remediate` 仍不由 `install.sh` 管理并受运维 gate 约束：部署后按 [监控 runbook 的可执行 gate](docs/operations/monitoring-alerting.md#安装-5-分钟-launchd-调度) 确认 homepage 最新 idle 样本没有 hard failure、homepage `PERF:*` page lifecycle 不在 firing；同一 fail-fast 流程会先手工运行 remediation，成功后才安装它自己的 cron。
 
 规则、预算、证据保留和处置边界见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md#用户旅程性能监控)。
 
@@ -217,7 +204,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 也支持 `heuristics` 作为无 LLM 的纯规则后备方案。
 
-LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）的 `llm_usage` 表。调用次数、token 合计与同一计价口径的金额合计只统计该表记录行，因此是全部付费调用对应总量的下界；任何未写入该表的付费调用都不在内（已知例子包括失败链路或未接入计量的调用点，非完整清单）。均值、占比和环比只描述已记录 cohort，相对全部付费调用真值的偏差方向未知。内部 `/api/v1/admin/usage` 通过 `measurement_scope` 在响应本身区分这两类解释，`/admin/usage` 页面按查询时派生最近 30 天成本，展示已记录调用的实价、nominal 挂牌价、未定价、cache 覆盖、按阶段/Provider/模型/日聚合与前一等长窗口比较；跨窗比较统一按当前费率和 cache 未命中重算，绝对金额仍使用各窗真实 cache 事实。`./run.sh admin cost-report --dry-run` 预览同口径周报，默认上一上海自然周；周报用 durable items 与逐阶段成功产出来核对自然日暴露：fetch 后无 prefilter 成功、AI 候选出现后无 score/enrich 成功、或微信入库后无 interpret 成功，都会关闭不能证明等暴露量的环比，错误行只表示尝试过、不算成功产出。日志只补充 retained window 内已知的计量写入失败，不要求保留满十四天，也不能证明没有未写入 `llm_usage` 的调用。nominal 同时显示估算金额与占比；单篇解读只用 priced+nominal 已记录调用计算均值并显示 cache 中性前窗参考。`--window-days N` 改用 rolling 窗口，`--send` 发送通知。人民币投影汇率可用 `AI_RADAR_USD_CNY` 设置。`./run.sh admin cost-audit [--format=kv|json]` 对账 raw catalog、查询时派生成本和管理聚合；其 `CONSISTENT` 只表示 tariff arithmetic 一致，不表示计量完整或 tariff 权威，三种输出都携带上述 `measurement_scope`。
+LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）的 `llm_usage` 表。页面、周报和告警中的金额是按已加载 tariff 在查询时派生的记录行估算，不是 provider 账单或实际付款；调用数、token 合计与同一计价口径的金额合计是全部相关付费调用对应总量的下界，均值、占比和环比只描述 recorded cohort，不能推断相对全部调用真值的偏差方向。`/admin/usage`、`./run.sh admin cost-report --dry-run` 与 `./run.sh admin cost-audit [--format=kv|json]` 都携带或展示这项 scope。完整运行口径与命令见 [监控与告警 runbook 的 LLM 成本段](docs/operations/monitoring-alerting.md#llm-成本报表与对账)，规范 owner 见 [ADR-023](docs/adr/023-define-recorded-row-measurement-scope.md)；ARK tariff/订阅权威性与付费 attempt 漏行分别由 [ISSUE-004](docs/issues/cost-observability.md#issue-004--ark-挂牌价来源非权威而它占已知成本的-876) 和 [ISSUE-021](docs/issues/cost-observability.md#issue-021--interpret-usage-只记录下游成功样本漏掉已计费的失败响应) 保持开放。
 
 ## 测试
 
@@ -231,24 +218,24 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 
 | 服务 | Supervisor | 作用 |
 |---|---|---|
-| `serve` | launchd | FastAPI web server（fork 默认 :8000；本产线 Mac 实例绑 8010 仅作局域网预览，公网生产由腾讯服务器承载 `news.aiplanet.live`） |
+| `serve` | launchd | FastAPI web server（fork 默认 :8000；本产线 Mac 实例绑 8010 仅作局域网预览，公网生产由腾讯服务器上的现存进程承载 `news.aiplanet.live`；repo-owned 双槽 unit 当前未安装，服务所有权清单仍待补齐） |
 | `tunnel` | launchd | Cloudflare tunnel 到你的公网域名（本产线旧 `aiplanet.live` 入口已退役待域名下线；tunnel 仍承载同机其他站点） |
 | `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
 | `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A6 使用 severity lifecycle，D3 定价提醒独立去重 |
-| `performance-probe` | launchd, StartInterval=300 | 每 5 分钟经 `./run.sh performance-probe` 启动；只保存 pipeline idle 窗样本，22 条确认窗后超预算以 page 投递 |
+| `performance-probe` | launchd, StartInterval=300 | 当前未安装、旧 hourly cron 保持 PAUSED；恢复前先处理 [ISSUE-017](docs/issues/cost-observability.md#issue-017--performance-probe-默认-origin-仍假定-serve-在-8000)，安装后才每 5 分钟运行 |
 | `cost-report` | cron (`17 9 * * 1`) | 周一 09:17 经 `run-or-alert` 发送上一上海自然周 LLM 成本报表 |
 | `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
-| `DB sync → 腾讯服务器` | cron（5 小时级，最终频率待 G2 定稿） | Mac producer 同步 base-only 副本并等服务器重建/验证到 `committed`；公网副本新鲜度的生产入口，排期与细节见 [services.md](docs/operations/services.md#db-sync-职责验证与故障证据) |
+| `DB sync → 腾讯服务器` | cron（当前 5 小时级，最终频率待验证） | Mac producer 同步 base-only 副本并等服务器重建/验证到 `committed`；公网副本新鲜度的生产入口，排期与细节见 [services.md](docs/operations/services.md#db-sync-职责验证与故障证据) |
 
 ### 部署 / 移除 / 查状态
 
 ```bash
-./install.sh   [service]   # 部署 + 启动；不带 service 则全部
+./install.sh   <service>   # 部署 + 启动指定服务；当前不要用无参数全量安装
 ./status.sh    [service]   # 只读面板；不修改任何状态
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是可选位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）；不带参数作用于全部。脚本幂等——重复跑不报错。
+服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）。脚本本身仍支持不带参数作用于全部，但当前 `performance-probe` 因 [ISSUE-017](docs/issues/cost-observability.md#issue-017--performance-probe-默认-origin-仍假定-serve-在-8000) 保持停用，所以不要使用无参数全量安装；显式逐个安装需要的服务。单服务安装幂等——重复跑不报错。
 
 DB sync cron 不由上述三个通用生命周期脚本管理；用 `crontab -l` 核对排期，以 `deploy/sync/sync-db-cron.sh` 手动走完整 cron wrapper。详见 [服务清单的 DB sync runbook](docs/operations/services.md#db-sync-职责验证与故障证据)。
 
@@ -261,7 +248,7 @@ DB sync cron 不由上述三个通用生命周期脚本管理；用 `crontab -l`
 | `alert` | `~/.local/bin/im-notify` + `FEISHU_GENERAL_ALERT_WEBHOOK` + `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | 先从 `ai-agent-config` 安装 `im-notify`；两个 webhook 分别承接 page/notice，任缺一个都拒绝部分安装。交互式终端逐个询问并追加到 `./.env`，非交互环境自动跳过 |
 | `tunnel` | `deploy/cloudflared/config.yml` | 提示从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置，本次跳过 |
 | `performance-probe` | Playwright Chromium | 安装服务前先显式运行 `uv run playwright install chromium`；该浏览器同时供微信抓取使用，`install.sh` 不自动下载或校验 |
-| `cost-report` | `im-notify`、`run-or-alert`、`FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | 缺 webhook 时跳过；模板使用绝对路径和显式 PATH |
+| `cost-report` | `im-notify`、`run-or-alert`、`FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | installer 只检查 webhook；当前不验证两个可执行文件，安装前按 [runbook](docs/operations/monitoring-alerting.md#llm-成本报表与对账) 的 preflight 核对（ISSUE-014） |
 
 脚本可判定的环境变量依赖按当前进程环境、项目 `./.env`、`~/.claude/.env` 查找。因此已有密钥放在 `~/.claude/.env` 的本机部署不会出现提示。任何自动跳过都会在命令末尾的 summary 中列出原因。
 
@@ -280,7 +267,7 @@ cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 
 ### 运维监控
 
-公网 `/admin` 需要 Cloudflare Access application + policy；飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 同时配置 `FEISHU_GENERAL_ALERT_WEBHOOK`（page → `ALERT`）与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`（notice → `NOTIFICATION`）。告警状态机按 severity 分别负责 debounce、cooldown 与恢复通知。具体步骤及无真实发送的配置 preflight 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
+目标拓扑中的公网 `/admin` 需要 Cloudflare Access application + policy；当前生产 hostname 直达 origin，伪造非空 Access header 可绕过存在性检查，因此尚未具备这条认证边界，开放修复见 [deploy issue](docs/issues/deploy.md#open-2026-08-12当前生产-admin-入口绕过-cloudflare-access)。飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 同时配置 `FEISHU_GENERAL_ALERT_WEBHOOK`（page → `ALERT`）与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`（notice → `NOTIFICATION`）。告警状态机按 severity 分别负责 debounce、cooldown 与恢复通知。具体步骤及无真实发送的配置 preflight 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
 
 ### Cloudflare 边缘缓存（可选）
 

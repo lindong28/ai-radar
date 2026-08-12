@@ -20,6 +20,32 @@
 
 后果：全仓 `uv run pytest` 无法作为绿灯基线；任何单元想以"全仓绿"作 gate 前需先修这三组或显式排除。
 
+## ISSUE-010 · mutable shipping DB 不能直接作为跨树 Playwright 比较基线
+
+**状态**：open · **优先级**：medium · **发现**：2026-08-11，plan `20260810-llm-cost-observability` P2 最终验证
+
+`data/radar.db.shipping` 会被 DB sync 重写；不同时间分别取得的 baseline/current 失败数同时混入代码差异和快照差异，不能据此归因回归。plan 将同一份 shipping snapshot 固定后在 `8b686df` 与 P2 树运行同一命令，结果分别为 `39 failed / 75 passed / 8 errors` 与 `38 failed / 76 passed / 8 errors`，baseline 通过而 P2 失败的 nodeid 集合为空；这只证明该固定快照下没有新增浏览器回归，不把两边的既有失败标绿。
+
+后续任何 shipping-snapshot 跨树比较都必须先固定同一文件，并记录两棵树、同一命令和 nodeid 集合差；只比较不同时刻的 failure count 不构成证据。
+
+## ISSUE-002 · performance-probe 调度仍处于暂停状态
+
+**状态**：open · **优先级**：low · **发现**：2026-08-10 plan preflight；2026-08-12 文档同步复核
+
+`./status.sh performance-probe` 当前返回 `not installed`；旧 hourly crontab 条目仍带 `[PAUSED 2026-07-24 pending plans/20260724-perf-idle-only-and-grounding]` 注释。该暂停不是成本观测 plan 所为，也未由它恢复。恢复前应由 performance plan owner 处理崩溃样本与 ISSUE-017 的 origin 默认值，再安装 per-file LaunchAgent；不能仅删除 PAUSED 注释让旧 cron 与新 lifecycle 并存。
+
+## [open] 2026-08-12：DB sync 与 performance-remediate 缺少统一生命周期接口
+
+- Type: service lifecycle · Priority: medium · Discovered: 20260810 LLM cost plan 的 full docs-sync P5 review
+
+repo-owned 的 DB sync cron 与 performance-remediate cron 都列在 README/services 清单，但不受 `./install.sh`、`./uninstall.sh`、`./status.sh` 管理：前者只给完整 wrapper/裸 producer，后者仍让操作者手工编辑 crontab。两者都应在保留现有 fail-closed gate 的前提下增加规范 lifecycle，并让 status 展示调度和最近 terminal state。`status.sh` 当前还会抑制 `crontab -l` 的错误，并把“无法读取”折叠成 `not installed`，因此这类输出不能单独证明排期不存在。pulled code 如何进入运行态的跨服务 make-live 文档缺口已登记在 `docs/issues/docs-quality.md`，本条不重复展开。
+
+## [open] 2026-08-12：当前生产 admin 入口绕过 Cloudflare Access
+
+- Type: security boundary · Priority: high · Discovered: 20260810 LLM cost plan 的 full docs-sync 终审
+
+`news.aiplanet.live` 当前 DNS 直解腾讯服务器、响应没有 Cloudflare headers。应用层只检查 `Cf-Access-Jwt-Assertion` 是否非空；2026-08-12 从公网实测 `/admin` 无 header 为 403、伪造 `Cf-Access-Jwt-Assertion: x` 为 200。因此 Cloudflare Access 不是当前请求路径上的真实边界，未登录者可自行构造该 header 越过存在性检查。闭合需把生产 hostname 重新置于可信认证代理之后，或在 origin 做可验证的 JWT/origin-token 校验；完成前不得把 admin 称为已认证入口。
+
 ## [open] 2026-08-10：sync-db-cron.sh receipt-staleness fallback 文案与分类
 
 - Type: cli-output · Priority: medium（review 判级） · Discovered: 2026-08-10, U4a 对抗审
@@ -36,7 +62,7 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 
 - Type: config currency · Priority: low · Discovered: 2026-08-10, sync-docs 终审取证
 
-`~/.claude/.env` 的 `AI_RADAR_SITE_DOMAIN=aiplanet.live`（旧域名，公网已 502）。它只影响 Mac 本机 serve 的 CORS/UA（8010 局域网预览），不影响腾讯生产（服务器有自己的 server.env），但按文档跑 `tunnel_ok` 检查会对 502 域名 curl。宜择机改为 news.aiplanet.live 或清空。另：本机 serve 进程（Aug 4 启动）早于 Aug 9 模板改动，HTML 路由现 500（`site_config` undefined），需 kickstart 重启。
+`~/.claude/.env` 的 `AI_RADAR_SITE_DOMAIN=aiplanet.live`（旧域名，公网已 502）。它只影响 Mac 本机 serve 的 CORS/UA（8010 局域网预览），不影响腾讯生产（服务器有自己的 server.env），但按文档跑 `tunnel_ok` 检查会对 502 域名 curl。宜择机改为 news.aiplanet.live 或清空。
 
 ## ISSUE-009 · Feishu webhook 明文写进 LaunchAgent plist，任何服务检视都会泄露它
 

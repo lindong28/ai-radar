@@ -146,7 +146,7 @@ owner CLI ──▶ admin 子命令 ──▶ sqlite + sources.toml
 | output_json | TEXT | LLM 原始输出（结构化） |
 | numeric_json | TEXT | 解析后的标准化数值（prefilter: `{is_ai_related: bool, confidence: float}`；scoring: `{relevance, density, recency, authority, engineering}`） |
 | latency_ms | INTEGER | |
-| cost_usd | REAL nullable | 已退役的兼容列，必须为 NULL；item_evaluations 不持有 token 用量，成本只从 llm_usage 查询时派生 |
+| cost_usd | REAL | 估算 token cost |
 | evaluated_at | TEXT | |
 | error | TEXT | 失败原因 |
 

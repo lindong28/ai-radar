@@ -10,14 +10,14 @@
 | tunnel | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
 | ai-radar pipeline (15min) | cron (`*/15 * * * *`) | 在 user crontab | `./install.sh pipeline` / `./uninstall.sh pipeline` / `./status.sh pipeline` | [deploy/cron/ai-radar-pipeline](../../deploy/cron/ai-radar-pipeline) · launchd 替代模板见 [ai-radar-pipeline.plist.example](../../deploy/launchd/ai-radar-pipeline.plist.example) |
 | alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1–A6 使用 per-severity lifecycle，D3 定价提醒独立去重 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
-| performance probe (5min) | launchd, `StartInterval=300`, `RunAtLoad=true` | per-file LaunchAgent；只在 pipeline idle 窗保存/评估样本 | `./install.sh performance-probe` / `./uninstall.sh performance-probe` / `./status.sh performance-probe` | [ai-radar-performance-probe.plist.example](../../deploy/launchd/ai-radar-performance-probe.plist.example) · [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
-| LLM cost report | cron (`17 9 * * 1`) | 周一 09:17 经 `run-or-alert --key ai-radar-cost-report` 发送上一上海自然周 | `./install.sh cost-report` / `./uninstall.sh cost-report` / `./status.sh cost-report` | [deploy/cron/ai-radar-cost-report](../../deploy/cron/ai-radar-cost-report) |
-| performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**：homepage 误标缺陷已修复，但仍须部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing 才按文档手动安装 | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
+| performance probe (5min) | launchd, `StartInterval=300`, `RunAtLoad=true` | 当前未安装；旧 hourly cron 自 2026-07-24 起保持 PAUSED，等待 performance plan 收口 | `./install.sh performance-probe` / `./uninstall.sh performance-probe` / `./status.sh performance-probe` | [ai-radar-performance-probe.plist.example](../../deploy/launchd/ai-radar-performance-probe.plist.example) · [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
+| LLM cost report | cron (`17 9 * * 1`) | 已在 user crontab；周一 09:17 经 `run-or-alert --key ai-radar-cost-report` 发送上一上海自然周 | `./install.sh cost-report` / `./uninstall.sh cost-report` / `./status.sh cost-report` | [deploy/cron/ai-radar-cost-report](../../deploy/cron/ai-radar-cost-report) |
+| performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**；启用 gate 与安装步骤见 runbook | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 | DB sync → 腾讯服务器 (5h) | cron (`41 1,6,11,16,21 * * *`)，`run-or-alert --key ai-radar-db-sync` 包裹，失败经 im-notify 告警、成功自复位 | 已启用；这是公网副本持续新鲜的 Mac producer | 手动跑：`deploy/sync/sync-db-cron.sh`（完整 cron wrapper）或 `deploy/sync/sync-db-to-server.sh`（裸 producer） | [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) · [ADR-013](../adr/013-db-sync-cron-agent-socket-auth.md) · [ADR-014](../adr/014-ship-base-only-db-and-rebuild-fts.md) |
 
 `./install.sh` / `./uninstall.sh` / `./status.sh` 管理 serve、tunnel、pipeline、alert、performance-probe、cost-report 这 6 个服务。probe 的专属 plist 经 `./run.sh performance-probe` 启动；pipeline 和 cost-report 使用各自带精确 marker 的 user crontab 条目。remediation 与 DB sync 两条 cron 仍不在通用生命周期脚本管理范围内。
 
-`./install.sh` 会逐服务检查脚本可判定的依赖。`alert` 要求两个 webhook；`cost-report` 要求 notification webhook，并依赖部署机已有 `~/.local/bin/im-notify` 与 `run-or-alert`。cost-report 模板把 repo、命令和日志路径展开为绝对路径并显式设置 PATH；重复安装替换本条且保留无关 crontab，卸载只删除 `# ai-radar-cost-report` marker 条目。
+`./install.sh` 会逐服务检查脚本可判定的依赖。`alert` 要求两个 webhook；`cost-report` installer 只检查 notification webhook，尚不验证部署机的 `~/.local/bin/im-notify`、`run-or-alert` 与仓库 `run.sh` 可执行性（ISSUE-014）。cost-report 模板把 repo、命令和日志路径展开为绝对路径并显式设置 PATH；重复安装替换本条且保留无关 crontab，卸载只删除 `# ai-radar-cost-report` marker 条目。安装前置与 dry-run 见 [monitoring-alerting.md §LLM 成本报表与对账](monitoring-alerting.md#llm-成本报表与对账)。
 
 ## DB sync 职责、验证与故障证据
 
@@ -30,7 +30,7 @@
 | Server `ai-radar-db-apply.service` | oneshot consumer：claim base-only artifact，在 inactive candidate 上重建 FTS，做 SQLite/HTTP/route gates，切换、回滚或 quarantine，并只在 consumer gates 全过后推进 basis/receipt | 不 pull Mac 数据，不产生新 snapshot，不承担 freshness 排期 |
 | Server `ai-radar-db-apply.timer` | 安装但生产当前 disabled/inactive；若将来显式启用，只能 reconcile 已存在的 incoming/journal | 不是 producer，不能让公网数据自行变新 |
 
-当前 5 小时 Mac cron 是持续新鲜的唯一生产入口；单轮生产实测约 32–35 分钟。该排期已启用，但上游 P3 仍需用三轮连续自动成功证据完成验证，并由 G2 对照传输量、端到端耗时、陈旧度与资源成本确认最终频率；“cron 存在”本身不等于这些 gate 已完成。
+当前 5 小时 Mac cron 是持续新鲜的唯一生产入口；单轮生产实测约 32–35 分钟。该排期已启用，但仍缺三轮连续自动成功证据，最终频率也尚未根据传输量、端到端耗时、陈旧度与资源成本完成确认；“cron 存在”本身不等于这些验证已完成。
 
 ### 只读验证入口
 
@@ -63,17 +63,11 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 | `rollback_failed` | consumer gate 失败后回切未收敛；journal 保留 `rollback-to-previous-serving` 恢复动作 | 先查 canonical health、active include、两槽 unit 与 journal；保留旧槽，按证据修复后才重新触发 apply reconcile |
 | producer terminal poll timeout | 本轮是否已接受未知；apply 可能仍在运行，也可能停在非 terminal 状态 | 立即读 journal、receipt、`systemctl status ai-radar-db-apply.service` 与两份 apply log；不要直接再启动第二轮 producer |
 
-`VERIFIER_VERSION` 当前为 `fts-apply-v4`。它是 retry authority 的一部分，不是展示版本：凡 base verification、candidate rebuild、manifest/row equality、raw MATCH、candidate/public HTTP probes 或直接契约输入发生语义变化，都必须随代码显式 bump。已绑定 artifact/manifest 的 `rebuilding` / `prepared` retry checkpoint 因版本不同进入 `retry_blocked_verifier_changed`；尚未绑定 manifest 的 `claiming` 则 fail closed 并 quarantine。两者都不能由新 verifier 静默继承一次 retry 权限。
+`VERIFIER_VERSION` 当前为 `fts-apply-v4`，且属于 retry authority。若 journal 报 `retry_blocked_verifier_changed`，不要靠重启绕过；保全旧/新 verifier identity 与 last failure，交由代码 owner 按 [architecture.md 的 retry authority 契约](../architecture.md#mac-primary--tencent-serving-replica)裁决。
 
 ### Alert 判定与 lifecycle
 
-- A2 的 prefilter/scoring/enrich 错误率 numerator/denominator 各自只取最近 15 分钟，最小样本门为 `4/4/2`；`no_success_minutes=120` 是不受样本门影响的独立 page 支路，stage P95 仍用自己的 2 小时口径。
-- A3 的 5xx numerator 与 PV denominator 同取最近 15 分钟，只有 `PV >= 20` 才评估 5xx rate；healthz 连续失败 2 次是独立 page 支路。
-- A4 只有 fetch 失败率超阈且 items 正常时是 notice（30 分钟 debounce）；items 低于按日内进度缩放的 floor 时是 page（0 debounce），两分支同时命中也是 page。
-- A5 在解读启用、4 小时无成功微信解读且存在已等待至少 4 小时、仍符合重试资格的 pending item 时 page；没有近期成功但 pending 因退避/冻结归零时进入 degraded，不发送虚假的「已恢复」。冻结数保留在规则 detail 与 `/admin` 状态中。
-- A6 用同一 evaluation-time tariff snapshot 和 cache 全未命中基准重算 rolling 24h 与 14 个 UTC 基线日，只检测调用量、token 量或模型组合变化；3×基线先 notice，6×高档才 page。少于 3 日或计量证据不完整时进入 degraded。纯调价由 D3 `price-changed` notification 承接。
-- A1/A2/A5 同时命中时按 pipeline 心跳合并：心跳新鲜由 A5 承载 provider/阶段关联信号，心跳过期由 A2 承载，真实 2026-08-08 心跳新鲜的单独 A5 不会被吞掉。被抑制的规则以 `channel=INTERNAL` 写入共享 ledger。
-- 每个 `rule_id` 以 `lifecycles.page` / `lifecycles.notice` 分别保存 debounce、`since`、`last_notified`、announced 与 cooldown。severity 转换先在原通道 resolved 已 announced episode，再在新通道 firing；pending 未送达 episode 静默关闭。各 severity 的计时器不互相节流。
+`alert` 服务负责 A1–A6，D3 定价提醒复用同一轮调度但不进入 page lifecycle。阈值、合并、degraded/in-progress 语义、severity 转换、投递与 ledger 的单一运行权威是 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则)；本服务清单只维护拓扑与生命周期入口，避免复制状态机细节后漂移。
 
 > 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）。微信摄取走 Mp2RSS（见 [wechat-ingestion.md](wechat-ingestion.md)）。如需回滚到 WeWe RSS：`deploy/wewe-rss/`（docker-compose + RUNBOOK）仍在，launchd plist 与脚本 wiring 从 git 历史恢复（移除 commit 见 git log）。
 
@@ -89,13 +83,13 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 | alert 发送器 | `~/.local/bin/im-notify` + page 的 `FEISHU_GENERAL_ALERT_WEBHOOK` + notice 的 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`；两个 webhook 任缺一个都拒绝 alert 安装 | `test -x "$HOME/.local/bin/im-notify"` 后运行下文无发送 preflight；已安装时检查 plist 同时有两个 key |
 | Playwright Chromium | 微信原文抓取与默认 `performance-probe` | 部署前显式运行 `uv run playwright install chromium`；`install.sh` 不自动下载或校验 |
 | Cloudflare tunnel | `deploy/cloudflared/config.yml` | `test -f deploy/cloudflared/config.yml` |
-| Cloudflare Cache Rule | zone `aiplanet.live` 上的 `AI Radar short public pagination TTL`（见下节） | 同一 public 分页 URL 第二次请求 `CF-Cache-Status: HIT` |
+| Cloudflare Cache Rule | zone `aiplanet.live` 上的 `AI Radar short public pagination TTL`（见下节） | 当前生产旁路不适用；将来重新经 Cloudflare 代理后，同一 public 分页 URL 第二次请求应为 `CF-Cache-Status: HIT` |
 
 ## Cloudflare Cache Rule（public 分页边缘缓存）
 
 `aiplanet.live` zone 上有一条 **repo 外**的 Cloudflare 边缘缓存配置（Cache Rule）。**当前生产不在其路径上**：`news.aiplanet.live` DNS 直解腾讯服务器 IP、不经 Cloudflare 代理（响应无 `cf-ray`/`CF-Cache-Status`），故边缘缓存与其 HIT 验证暂不适用；origin 侧缓存头契约仍在生效并已实测正确。本节保留规则事实与验证步骤，供公网主机将来重新经 Cloudflare 代理时启用。它不是 launchd / cron 服务，`install.sh` / `status.sh` 不管理，改动只在 Cloudflare dashboard 上做。
 
-规则名 **`AI Radar short public pagination TTL`**（当前 **Active**），位置 Cloudflare dashboard → zone `aiplanet.live` → **Caching** → **Cache Rules**。公网主机名现为 `news.aiplanet.live` 且暂不经 Cloudflare（见上）；将来重新代理时先在 dashboard 核对规则表达式是否覆盖该主机名。
+规则名 **`AI Radar short public pagination TTL`**（2026-07-19 留证时为 **Active**；本次未刷新 dashboard 状态），位置 Cloudflare dashboard → zone `aiplanet.live` → **Caching** → **Cache Rules**。公网主机名现为 `news.aiplanet.live` 且暂不经 Cloudflare（见上）；将来重新代理时先在 dashboard 核对规则仍启用且表达式覆盖该主机名。
 
 | 项 | 值 |
 |---|---|
@@ -130,46 +124,46 @@ curl -sS --compressed -D - -o /dev/null 'https://news.aiplanet.live/wechat?q=Ope
 
 ## Cloudflare tunnel shared ingress
 
-The `ai-radar` tunnel is now a shared production dependency for two public sites:
+The `ai-radar` tunnel configuration still contains one retired AI Radar ingress and one active shared-site ingress:
 
 | Hostname | Local service | Owner repo | Notes |
 |---|---|---|---|
-| `aiplanet.live` | `http://127.0.0.1:8000` | `~/research/ai-radar` | **已退役入口**：Mac serve 已改绑 8010（本地 plist 明文禁止回绑 8000，仅限局域网/tailscale 预览），该 ingress 现回 502；域名下线待上游 P5。AI Radar 公网生产 = 腾讯服务器双槽承载的 `news.aiplanet.live` |
+| `aiplanet.live` | `http://127.0.0.1:8000` | `~/research/ai-radar` | **已退役入口**：Mac serve 已改绑 8010（本地 plist 明文禁止回绑 8000，仅限局域网/tailscale 预览），该 ingress 现回 502；域名下线待上游 P5。AI Radar 公网生产 = 腾讯服务器现存进程承载的 `news.aiplanet.live`；repo-owned 双槽 unit 当前未安装，服务清单缺口见 [docs-quality issue](../issues/docs-quality.md) |
 | `sjtu.aiplanet.live` | `http://localhost:8100` | `~/research/sjtu-aaa` | SJTU 3A alumni site. `/admin` 门禁由 Cloudflare Access 承担（2026-08 起；**不得**在 tunnel 配置加回历史上的 `http_status:403` 规则——见 `~/research/sjtu-aaa/docs/operations/services.md` 的禁止说明，以该仓为权威）。 |
 
 Before editing, reinstalling, or removing this tunnel, inspect `~/research/sjtu-aaa/docs/operations/services.md` and preserve the SJTU ingress rules. A catch-all or rewritten tunnel config that only keeps `aiplanet.live` will silently take the SJTU site offline even if AI Radar still looks healthy. After any tunnel change, verify both:
 
 ```bash
-curl -sf https://news.aiplanet.live/api/v1/healthz   # AI Radar 公网生产（腾讯服务器，不经此 tunnel）
-curl -sf https://sjtu.aiplanet.live/api/v1/healthz    # SJTU 站仍经本 tunnel，改动前后必须验证
-# 旧 https://aiplanet.live 现回 502（Mac serve 已移 8010），是预期状态、非故障
-curl -s -o /dev/null -w '%{http_code}\n' https://sjtu.aiplanet.live/admin
+(
+  set -e
+  curl -sf https://news.aiplanet.live/api/v1/healthz   # AI Radar 公网生产（腾讯服务器，不经此 tunnel）
+  curl -sf https://sjtu.aiplanet.live/api/v1/healthz  # SJTU 站仍经本 tunnel，改动前后必须验证
+  test "$(curl -s -o /dev/null -w '%{http_code}' https://aiplanet.live)" = 502
+  case "$(curl -s -o /dev/null -w '%{http_code}' https://sjtu.aiplanet.live/admin)" in 302|403) ;; *) exit 1 ;; esac
+)
 ```
 
 ## 验证（新机器 bring-up / 大改动后跑一遍）
 
 ```bash
-./status.sh                                        # 5 行总览
+./status.sh                                        # 受管服务总览
 curl -sf http://127.0.0.1:8010/api/v1/healthz && echo serve_ok   # 本产线 Mac serve 现绑 8010（generic fork 按自己的端口）
 curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok   # 仅适用于经本 tunnel 发布的 fork；本产线该检查已不适用（本机 env 的 SITE_DOMAIN 仍指向已退役的 aiplanet.live，公网核查用 https://news.aiplanet.live）
-test -x "$HOME/.local/bin/im-notify"
-bash -lc 'source deploy/lib/services.sh; if missing="$(alert_webhook_missing_keys)"; then echo "missing: $missing"; exit 1; else echo "both webhook keys configured"; fi'
-plutil -p deploy/launchd/ai-radar-alert.plist | rg -o 'FEISHU_GENERAL_(ALERT|NOTIFICATION)_WEBHOOK' | sort -u
+./status.sh alert
 uv run pytest tests/test_admin_alerts.py -q -k 'send_alert_message_calls_im_notify_alert_without_dedup or send_alert_message_routes_notice_without_alert_flag'
-./run.sh performance-probe                         # 同机 provisional 四旅程采样 + PERF:* 状态机
-./run.sh fetch | tail -5                           # pipeline + Mp2RSS feed 联通性
+./run.sh performance-probe --origin-url http://127.0.0.1:8010 --public-url https://news.aiplanet.live
+./run.sh fetch                                      # pipeline + Mp2RSS feed 联通性；保留真实退出码
 ```
 
-上述 alert 验证只检查可执行文件、两个配置 key 和 mock 投递路由，不显示 webhook URL，也不发送真实消息。`./run.sh admin alert-check` 不是无害 smoke：当前状态如果触发 firing / resolved，它会按 page/notice 实际调用 `im-notify`。
+alert 的双通道配置与无发送 preflight 以 [monitoring-alerting.md §im-notify 飞书双通道](monitoring-alerting.md#im-notify-飞书双通道) 为准；上述 pytest 只验证 mock 投递路由，不发送真实消息。`./run.sh admin alert-check` 不是无害 smoke：当前状态如果触发 firing / resolved，它会按 page/notice 实际调用 `im-notify`。
 
-当前不要把 `performance-remediate` 当 bring-up smoke 执行：homepage hard-failure 误标缺陷虽已修复，旧样本仍可能已形成假 firing。只有部署该修复、手工 probe 显示 homepage `hard_failure=false`，且 homepage `PERF:*` 状态已非 firing 后，才按 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) 的 gate 手工验证并安装 remediation cron。
+当前不要把 `performance-remediate` 当 bring-up smoke 执行；启用 gate 与安装步骤以 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) 为准。
 
 `./status.sh` 输出每个服务一行：是否 loaded / pid / crontab 状态（pipeline）/ 日志位置。`alert` 与 `performance-probe` 都是周期任务，正常完成单次运行后可能显示 `loaded ✓ (no pid)`。
 
 ## 安装 / 卸载 / 切换
 
 ```bash
-./install.sh              # 全部 5 个服务
 ./install.sh alert        # 单个
 
 ./uninstall.sh            # 全部
@@ -178,19 +172,22 @@ uv run pytest tests/test_admin_alerts.py -q -k 'send_alert_message_calls_im_noti
 ./status.sh               # 只读面板
 ```
 
-强制重启某个 launchd 服务：
+当前不要运行无参数 `./install.sh`：它会同时安装仍应保持停用、且默认 origin 仍错误的 `performance-probe`（[ISSUE-017](../issues/cost-observability.md#issue-017--performance-probe-默认-origin-仍假定-serve-在-8000)）。显式逐个安装需要的服务。
+
+重新生成配置并重载某个受管 launchd 服务，统一重跑其安装入口：
 
 ```bash
-launchctl kickstart -k "gui/$UID/<launchd-label-for-serve|tunnel|alert>"
+./install.sh serve
+./install.sh tunnel
+./install.sh alert
 ```
 
-告警消息由 `alert` 自己的 per-severity firing / resolved / 30 分钟 cooldown 决定；page 调用 `im-notify --alert`，notice 调用不带 `--alert` 的 `im-notify`。两者都会把 rule/severity/event/notification nonce 组成的稳定 identity 通过 `--dedup-key` / `--dedup-text` 交给 `im-notify`。`im-notify` 非零退出或不可执行时，`alert-check` 会把失败写入错误日志并继续完成本轮；未投递的 pending firing / resolved 会在下轮重试，由该稳定 signature 抑制同一意图的重复可见消息。
+告警的 severity、重试、去重与 ledger 语义以 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则) 为单一运行权威。
 
 ⚠ 改了 alert 的任一 webhook 后，单独 `kickstart -k` 不会刷新 launchd 烘焙的 `<EnvironmentVariables>`。重跑 alert 安装会重新生成 plist，并对已加载 job 执行 bootout/bootstrap：
 
 ```bash
 ./install.sh alert
-# 或手动：launchctl bootout "gui/$UID/<launchd-label-for-alert>" && launchctl bootstrap gui/$UID "$PWD/deploy/launchd/ai-radar-alert.plist"
 ```
 
 pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再手动 `launchctl bootstrap` launchd plist（暂未做成脚本——cron 是当前生产选择）。
