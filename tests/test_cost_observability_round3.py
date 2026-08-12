@@ -293,10 +293,18 @@ def test_default_cost_audit_output_is_human_scoped_and_unpriced_cost_is_unknown(
     output = capsys.readouterr().out
 
     assert exit_info.value.code == 0
-    assert output.startswith("LLM cost reconciliation: CONSISTENT\n")
-    assert "Scope: calculation consistency against the loaded catalog; tariff authority is not verified." in output
+    assert output.startswith(
+        "LLM cost reconciliation: CONSISTENT (tariff arithmetic only; "
+        "measurement completeness not assessed)\n"
+    )
+    assert (
+        "Scope: tariff arithmetic consistency against the loaded catalog only; "
+        "measurement completeness and tariff authority are not assessed."
+        in output
+    )
+    assert "Measurement scope: call counts, token totals, and same-basis cost sums are lower bounds" in output
     assert "Window:" in output
-    assert "Unpriced: 1 group, 1 call; cost unknown" in output
+    assert "Unpriced: 1 group, 1 recorded row; cost unknown" in output
     assert "expected_usd=0.00000000" not in output
     assert "resolution=PASS" not in output
 

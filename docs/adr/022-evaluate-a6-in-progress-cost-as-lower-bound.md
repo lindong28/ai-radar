@@ -7,7 +7,7 @@
 
 ## 决策
 
-pipeline 仍在运行且当前日尚未封口时，A6 继续把已经记录的 cache 中性目录价成本与既有 notice/page 阈值比较。缺失的调用只能使金额少算，因此当前金额是真实完整窗口成本的下界：下界已越 notice 或 page 阈值时，允许首次 firing 和同一 episode 内的 notice→page 升级。下界未越阈值时，它不能证明事件已恢复；已有 firing episode 保持原状态，直到一次封口后的完整评估确认恢复。
+pipeline 仍在运行且当前日尚未封口时，A6 继续把已经记录的 cache 中性目录价成本与既有 notice/page 阈值比较。未写入 `llm_usage` 的付费调用不在金额中，因此当前金额只能作为付费调用总额的下界：下界已越 notice 或 page 阈值时，允许首次 firing 和同一 episode 内的 notice→page 升级。下界未越阈值时，它不能证明事件已恢复；已有 firing episode 保持原状态，直到封口后的评估确认记录行金额低于阈值。resolve 只关闭这个已记录 cohort 的告警生命周期，不表示 attempt-level 计量健康。
 
 该例外只适用于 `_a6_measurement_in_progress` 能证明的在途状态：问题日恰为当前上海日、没有已知 metering failure，且 lock owner 的 PID 与 process start identity 仍 live。旧日缺口、stale owner 或明确计量失败仍是不可评估，走 degraded lifecycle。
 

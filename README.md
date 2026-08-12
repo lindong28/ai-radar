@@ -123,7 +123,7 @@ repo=$PWD
 | 更新日志 | `/changelog` | 渲染仓库根 `CHANGELOG.md` |
 | 更多 | `/more` | **仅 ≤960px 有入口**（底部 tab 栏第 4 项）：微信文章解读 / 收藏 / 关于 / 更新日志 |
 | 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
-| LLM 用量 | `/admin/usage` | 内部页面，展示最近 30 天窗口成本三态、来源单价、未定价清单和 cache 采集覆盖；公网需 Cloudflare Access |
+| LLM 已记录用量 | `/admin/usage` | 内部页面，展示最近 30 天 `llm_usage` 记录行的成本三态、来源单价、未定价清单和 cache 采集覆盖；公网需 Cloudflare Access |
 
 **响应式**：断点 640 / 960 / 1200px。`>960px` 为侧栏 + 内容区的桌面布局，内容区填满可用宽度；日期分组头与卡片共用同一套网格轨道（日期右对齐落在时间列内，与下方时间戳共一条右边界），一条连续竖线贯穿同一日期分组的全部条目。
 
@@ -217,7 +217,7 @@ AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
 
 也支持 `heuristics` 作为无 LLM 的纯规则后备方案。
 
-DeepSeek / ARK 的 `chat_json` 调用，以及 interpret 透传的 summary-agent LLM usage，都会把 `completion.usage` 写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）中的 `llm_usage` 表，每次 LLM call 一行。内部 `/admin/usage` 页面按查询时派生最近 30 天成本，展示实价、nominal 挂牌价、未定价、cache 覆盖、按阶段/Provider/模型/日聚合与前一等长窗口比较；跨窗比较统一按当前费率和 cache 未命中重算，绝对金额仍使用各窗真实 cache 事实。`./run.sh admin cost-report --dry-run` 预览同口径周报，默认上一上海自然周；周报用 durable items 与逐阶段成功产出来核对自然日暴露：fetch 后无 prefilter 成功、AI 候选出现后无 score/enrich 成功、或微信入库后无 interpret 成功，都会关闭不能证明等暴露量的环比，错误行只表示尝试过、不算成功产出。日志只补充 retained window 内已知的计量写入失败，不要求保留满十四天。nominal 同时显示估算金额与占比；单篇解读只用 priced+nominal 调用计算均值并显示 cache 中性前窗参考。`--window-days N` 改用 rolling 窗口，`--send` 发送通知。人民币投影汇率可用 `AI_RADAR_USD_CNY` 设置。
+LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）的 `llm_usage` 表。调用次数、token 合计与同一计价口径的金额合计只统计该表记录行，因此是全部付费调用对应总量的下界；任何未写入该表的付费调用都不在内（已知例子包括失败链路或未接入计量的调用点，非完整清单）。均值、占比和环比只描述已记录 cohort，相对全部付费调用真值的偏差方向未知。内部 `/api/v1/admin/usage` 通过 `measurement_scope` 在响应本身区分这两类解释，`/admin/usage` 页面按查询时派生最近 30 天成本，展示已记录调用的实价、nominal 挂牌价、未定价、cache 覆盖、按阶段/Provider/模型/日聚合与前一等长窗口比较；跨窗比较统一按当前费率和 cache 未命中重算，绝对金额仍使用各窗真实 cache 事实。`./run.sh admin cost-report --dry-run` 预览同口径周报，默认上一上海自然周；周报用 durable items 与逐阶段成功产出来核对自然日暴露：fetch 后无 prefilter 成功、AI 候选出现后无 score/enrich 成功、或微信入库后无 interpret 成功，都会关闭不能证明等暴露量的环比，错误行只表示尝试过、不算成功产出。日志只补充 retained window 内已知的计量写入失败，不要求保留满十四天，也不能证明没有未写入 `llm_usage` 的调用。nominal 同时显示估算金额与占比；单篇解读只用 priced+nominal 已记录调用计算均值并显示 cache 中性前窗参考。`--window-days N` 改用 rolling 窗口，`--send` 发送通知。人民币投影汇率可用 `AI_RADAR_USD_CNY` 设置。`./run.sh admin cost-audit [--format=kv|json]` 对账 raw catalog、查询时派生成本和管理聚合；其 `CONSISTENT` 只表示 tariff arithmetic 一致，不表示计量完整或 tariff 权威，三种输出都携带上述 `measurement_scope`。
 
 ## 测试
 

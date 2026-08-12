@@ -566,7 +566,11 @@ def _admin(args: argparse.Namespace) -> int:
                     else (
                         "in-progress"
                         if raw.get("evaluation_state") == "in_progress"
-                        else "ok"
+                        else (
+                            "recorded-scope"
+                            if raw.get("evaluation_state") == "scope_limited"
+                            else "ok"
+                        )
                     )
                 )
             )

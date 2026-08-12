@@ -173,12 +173,22 @@ def test_a5_and_a6_degraded_resolve_do_not_claim_recovery() -> None:
     assert "已恢复" not in text
     assert a5.detail in text
 
-    healthy = AlertRuleResult("A6", "成本突变", False, "近 24 小时低于阈值", "无需动作")
-    assert "已恢复" in _format_resolved(healthy, None)
-    assert "近 24 小时低于阈值" in _format_resolved(healthy, None)
+    scoped = AlertRuleResult(
+        "A6",
+        "成本突变",
+        False,
+        "近 24 小时已记录行金额低于阈值",
+        "无需动作",
+        evaluation_state="scope_limited",
+    )
+    resolved = _format_resolved(scoped, None)
+    assert "记录行金额已回落" in resolved
+    assert "近 24 小时已记录行金额低于阈值" in resolved
+    assert "已恢复" not in resolved
+    assert "恢复证据" not in resolved
 
 
-def test_a6_notice_and_page_tiers_and_exact_24h_sql() -> None:
+def test_a6_notice_and_page_tiers_and_consistent_driver_disposition() -> None:
     notice = next(
         rule
         for rule in evaluate_rules(
@@ -209,7 +219,9 @@ def test_a6_notice_and_page_tiers_and_exact_24h_sql() -> None:
     )
     assert notice.firing and notice.severity == "notice"
     assert page.firing and page.severity == "page"
-    assert "julianday(created_at) > julianday('now','-24 hours')" in page.action
+    assert "A6 cache 中性已知成本聚合" in page.action
+    assert "未定价调用另见 /admin/usage" in page.action
+    assert "sqlite3" not in page.action
     assert "cache 中性" in page.detail
     assert page.impact and page.urgency
 
@@ -271,6 +283,9 @@ def test_a6_notice_to_page_is_one_incident_and_only_recovers_after_condition_cle
         ("resolved", "page")
     ]
     assert "✅ A6" in calls[-1][0]
+    assert "记录行金额已回落" in calls[-1][0]
+    assert "已恢复" not in calls[-1][0]
+    assert "恢复证据" not in calls[-1][0]
 
 
 def test_a6_firing_episode_survives_in_flight_measurement_gap(
@@ -348,6 +363,9 @@ def test_a6_firing_episode_survives_in_flight_measurement_gap(
     assert "未封口下界" in messages[1][0]
     assert "暂缓评估" not in messages[1][0]
     assert "✅ A6" in messages[-1][0]
+    assert "记录行金额已回落" in messages[-1][0]
+    assert "已恢复" not in messages[-1][0]
+    assert "恢复证据" not in messages[-1][0]
 
 
 def test_a6_in_flight_lower_bound_can_first_page(tmp_path: Path) -> None:

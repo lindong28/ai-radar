@@ -17,6 +17,25 @@ from ..pricing import (
 )
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+MEASUREMENT_SCOPE = {
+    "basis": "llm_usage_rows",
+    "paid_calls_without_row": "excluded",
+    "additive_quantities": {
+        "scope": "recorded_rows_only",
+        "kinds": ["call_counts", "token_totals", "same_basis_cost_sums"],
+        "interpretation": "lower_bound_not_total",
+    },
+    "cohort_statistics": {
+        "scope": "recorded_rows_only",
+        "kinds": ["averages", "shares", "period_over_period_changes"],
+        "interpretation": "direction_unknown_vs_all_paid_calls",
+    },
+    "description": (
+        "调用次数、token 合计与同一计价口径的金额合计是全部付费调用对应总量的下界。"
+        "均值、占比和环比只描述 llm_usage 记录行 cohort；"
+        "相对全部付费调用真值的偏差方向未知。"
+    ),
+}
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -480,6 +499,7 @@ def collect_usage(
     current_cost = _float(neutral_current["totals"]["known_cost_cny"])
     return {
         "timezone": "Asia/Shanghai",
+        "measurement_scope": dict(MEASUREMENT_SCOPE),
         "window": {
             "start": start.isoformat(),
             "end": end.isoformat(),

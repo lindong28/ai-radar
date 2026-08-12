@@ -54,11 +54,18 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
                 {"rule_id": "A3", "firing": False, "title": "网站用户侧异常", "detail": "ok"},
                 {"rule_id": "A4", "firing": False, "title": "文章摄取骤降", "detail": "ok"},
                 {
-                    "rule_id": "A6",
+                    "rule_id": "A5",
                     "firing": False,
                     "evaluation_state": "in_progress",
-                    "title": "LLM 近 24 小时成本突变",
+                    "title": "微信解读停滞",
                     "detail": "pipeline 运行中，暂缓评估",
+                },
+                {
+                    "rule_id": "A6",
+                    "firing": False,
+                    "evaluation_state": "scope_limited",
+                    "title": "已记录 LLM 调用近 24 小时成本突变",
+                    "detail": "记录行金额低于阈值；未写入 llm_usage 的付费调用不在内",
                 },
             ],
         }
@@ -82,7 +89,9 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
     assert "send A2 firing skipped reason=FEISHU_GENERAL_ALERT_WEBHOOK is not set" in output
     assert "A1 ok 上游模型不可用" in output
     assert "A4 ok 文章摄取骤降" in output
-    assert "A6 in-progress LLM 近 24 小时成本突变" in output
+    assert "A5 in-progress 微信解读停滞" in output
+    assert "A6 recorded-scope 已记录 LLM 调用近 24 小时成本突变" in output
+    assert "A6 ok" not in output
 
 
 def test_admin_db_checkpoint_command_prints_passive_result(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001

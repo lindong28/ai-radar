@@ -93,4 +93,57 @@ def test_cost_audit_reconciles_raw_derived_and_admin_usage(tmp_path: Path) -> No
         "difference: +2.197268 CNY (+4.400000% vs official CNY actual)" in line
         for line in report.human_lines
     )
+    assert report.human_lines[0] == (
+        "LLM cost reconciliation: CONSISTENT (tariff arithmetic only; "
+        "measurement completeness not assessed)"
+    )
+    assert any(
+        "Measurement scope: call counts, token totals, and same-basis cost sums "
+        "are lower bounds from recorded llm_usage rows; averages, shares, and "
+        "period changes describe that recorded cohort only, with unknown direction "
+        "versus all paid calls."
+        == line
+        for line in report.human_lines
+    )
+    assert (
+        "measurement-scope basis=llm_usage_rows paid_calls_without_row=excluded"
+        in report.kv_lines
+    )
+    assert (
+        "measurement-scope-additive scope=recorded_rows_only "
+        "kinds=call_counts,token_totals,same_basis_cost_sums "
+        "interpretation=lower_bound_not_total"
+        in report.kv_lines
+    )
+    assert (
+        "measurement-scope-statistics scope=recorded_rows_only "
+        "kinds=averages,shares,period_over_period_changes "
+        "interpretation=direction_unknown_vs_all_paid_calls"
+        in report.kv_lines
+    )
+    assert report.json_payload["measurement_scope"] == {
+        "basis": "llm_usage_rows",
+        "paid_calls_without_row": "excluded",
+        "additive_quantities": {
+            "scope": "recorded_rows_only",
+            "kinds": ["call_counts", "token_totals", "same_basis_cost_sums"],
+            "interpretation": "lower_bound_not_total",
+        },
+        "cohort_statistics": {
+            "scope": "recorded_rows_only",
+            "kinds": ["averages", "shares", "period_over_period_changes"],
+            "interpretation": "direction_unknown_vs_all_paid_calls",
+        },
+        "description": (
+            "调用次数、token 合计与同一计价口径的金额合计是全部付费调用对应总量的下界。"
+            "均值、占比和环比只描述 llm_usage 记录行 cohort；"
+            "相对全部付费调用真值的偏差方向未知。"
+        ),
+    }
+    assert report.json_payload["consistency_scope"] == "tariff_arithmetic_only"
+    assert report.json_payload["measurement_completeness"] == "not_assessed"
+    assert report.json_payload["tariff_arithmetic_consistent"] is True
+    assert "consistent" not in report.json_payload
     assert report.lines[-1].startswith("cost-audit PASS")
+    assert "consistency=tariff_arithmetic_only" in report.lines[-1]
+    assert "measurement_completeness=not_assessed" in report.lines[-1]

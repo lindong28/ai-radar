@@ -235,7 +235,20 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     api = client.get("/api/v1/admin/usage", headers={"Cf-Access-Jwt-Assertion": "test"})
 
     assert page.status_code == 200
-    assert "LLM 用量" in page.text
+    assert "LLM 已记录用量" in page.text
+    assert "已记录 LLM calls" in page.text
+    assert "缓存拆分覆盖分母是已记录 calls" in page.text
+    assert (
+        "调用次数、token 合计与同一计价口径的金额合计是全部付费调用对应总量的下界。"
+        "均值、占比和环比只描述 llm_usage 记录行 cohort；"
+        "相对全部付费调用真值的偏差方向未知。"
+        in page.text
+    )
+    assert "未写行调用不在内" in page.text
+    assert "例如失败链路或未接入计量的调用点" in page.text
+    assert "provider completion 前失败" not in page.text
+    assert "usage 缺失记 0 token" not in page.text
+    assert "已记录调用" in page.text
     assert "deepseek-v4-flash" in page.text
     assert "deepseek-v4-pro-260425" in page.text
     assert "人民币" in page.text
@@ -243,7 +256,6 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     assert "定价来源" in page.text
     assert "来源 / 时间边界" in page.text
     assert "仅供参考，不构成路由对比结论" in page.text
-    assert "缓存拆分覆盖分母是 calls" in page.text
     assert "Cache 命中率分母是已采集子集的 input tokens" in page.text
     assert "catalog 来源状态" in page.text
     assert "litellm-live" in page.text
@@ -255,6 +267,25 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     assert "归因解释" not in page.text
     assert api.status_code == 200
     data = api.json()["data"]
+    assert data["measurement_scope"] == {
+        "basis": "llm_usage_rows",
+        "paid_calls_without_row": "excluded",
+        "additive_quantities": {
+            "scope": "recorded_rows_only",
+            "kinds": ["call_counts", "token_totals", "same_basis_cost_sums"],
+            "interpretation": "lower_bound_not_total",
+        },
+        "cohort_statistics": {
+            "scope": "recorded_rows_only",
+            "kinds": ["averages", "shares", "period_over_period_changes"],
+            "interpretation": "direction_unknown_vs_all_paid_calls",
+        },
+        "description": (
+            "调用次数、token 合计与同一计价口径的金额合计是全部付费调用对应总量的下界。"
+            "均值、占比和环比只描述 llm_usage 记录行 cohort；"
+            "相对全部付费调用真值的偏差方向未知。"
+        ),
+    }
     assert data["totals"]["known_cost_usd"] > 0
     assert data["totals"]["known_cost_cny"] > 0
     assert data["exchange_rate_usd_cny"] == 7.2

@@ -54,7 +54,7 @@ DEFAULT_SERVE_LAUNCH_AGENT_PATH = (
 # multiple projects) lets the reader tell which project an alert came from.
 ALERT_SOURCE = "AI Radar"
 AlertSeverity = Literal["page", "notice"]
-EvaluationState = Literal["healthy", "degraded", "in_progress"]
+EvaluationState = Literal["healthy", "degraded", "in_progress", "scope_limited"]
 FiringBasis = Literal["observed"]
 PAGE_SEVERITY: Literal["page"] = "page"
 NOTICE_SEVERITY: Literal["notice"] = "notice"
@@ -303,7 +303,7 @@ def evaluate_rules(
     )
     a6_notes: list[str] = []
     if signals.a6_unpriced_calls:
-        a6_notes.append(f"另有 {signals.a6_unpriced_calls} 次未定价调用未计入金额")
+        a6_notes.append(f"另有 {signals.a6_unpriced_calls} 次已记录但未定价调用未计入金额")
     if signals.a6_pricing_freshness in {"stale", "due-review"}:
         a6_notes.append(f"价格状态 {signals.a6_pricing_freshness}，金额需复核")
     if signals.a6_metering_failure_count:
@@ -435,7 +435,7 @@ def evaluate_rules(
         ),
         AlertRuleResult(
             rule_id="A6",
-            title="LLM 近 24 小时成本突变",
+            title="已记录 LLM 调用近 24 小时成本突变",
             firing=a6_firing,
             detail=(
                 f"近 24 小时 cache 中性目录价估算 ¥{signals.a6_current_cost_cny:.2f}；"
@@ -457,13 +457,14 @@ def evaluate_rules(
                 )
                 + (f"；Top 驱动 {signals.a6_top_driver}" if signals.a6_top_driver else "")
                 + (f"；{'；'.join(a6_notes)}" if a6_notes else "")
-                + "。两侧均按当前费率和 cache 未命中重算；金额含 nominal 目录价估算，并非账单实付"
+                + "。两侧均按当前费率和 cache 未命中重算；金额含 nominal 目录价估算，并非账单实付；"
+                "金额/次数只统计 llm_usage 记录行，不是付费调用总额。\n"
+                "  未写入 llm_usage 的付费调用均不在内，因此该数只能作为下界"
+                "（例如失败链路或未接入计量的调用点）。"
             ),
             action=(
-                "sqlite3 data/llm_usage.db \"SELECT stage,provider,model,COUNT(*),SUM(input_tokens),"
-                "SUM(output_tokens) FROM llm_usage WHERE julianday(created_at) > julianday('now','-24 hours') "
-                "AND julianday(created_at) <= julianday('now') "
-                "GROUP BY 1,2,3 ORDER BY 5+6 DESC;\""
+                "按本消息 Top 驱动（A6 cache 中性已知成本聚合）核查对应调用；"
+                "未定价调用另见 /admin/usage"
             ),
             values={
                 "current_cost_cny": signals.a6_current_cost_cny,
@@ -473,19 +474,19 @@ def evaluate_rules(
                 "baseline_days": signals.a6_baseline_days,
                 "daily_floor_cny": a6_floor,
                 "spike_multiplier": a6_multiplier,
-                "cohort": "评估时仍可定价的实价与目录价调用，cache 统一按未命中",
+                "cohort": "已记录且评估时可定价的实价与目录价调用，cache 统一按未命中",
             },
             severity=a6_severity,
-            impact="近 24 小时 LLM 用量结构对应的目录价估算显著高于近期基线",
+            impact="近 24 小时已记录 LLM 调用的目录价估算显著高于近期已记录基线",
             urgency=(
                 "是——超过高档阈值，立即核查"
                 if a6_severity == PAGE_SEVERITY and a6_firing
-                else "否——先核查 Top 驱动与调用量，确认后再调整资源"
+                else "否——先核查 Top 驱动与已记录调用量，确认后再调整资源"
             ),
             evaluation_state=(
                 "in_progress"
                 if signals.a6_measurement_in_progress
-                else ("degraded" if a6_degraded else "healthy")
+                else ("degraded" if a6_degraded else "scope_limited")
             ),
         ),
     ]
@@ -515,6 +516,11 @@ def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
         return (
             f"【{ALERT_SOURCE}】🟡 {result.rule_id} {result.title} 转为不可评估{suffix}\n"
             f"当前证据：{result.detail}\n处置方向：{result.action}"
+        )
+    if result.evaluation_state == "scope_limited":
+        return (
+            f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title}：记录行金额已回落{suffix}\n"
+            f"记录行证据：{result.detail}"
         )
     return (
         f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}\n"
@@ -625,7 +631,8 @@ def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
         "pending_notification": pending_notification,
         "evaluation_state": (
             entry.get("evaluation_state")
-            if entry.get("evaluation_state") in {"degraded", "in_progress"}
+            if entry.get("evaluation_state")
+            in {"degraded", "in_progress", "scope_limited"}
             else "healthy"
         ),
     }
@@ -1696,8 +1703,9 @@ def run_pricing_notifications(
             desired[event] = {
                 "dedup_text": event,
                 "text": (
-                    f"{message_prefix}【AI Radar】🟡 D3 出现未定价 LLM 调用\n"
-                    f"具体对象/数值：{pair} {calls}/{total_calls or '?'} 次；金额未知，不得按 ¥0 处理。\n"
+                    f"{message_prefix}【AI Radar】🟡 D3 出现已记录未定价 LLM 调用\n"
+                    f"具体对象/数值：{pair} {calls}/{total_calls or '?'} 次已记录调用；"
+                    "金额未知，不得按 ¥0 处理。\n"
                     "处置方向：在 src/airadar/pricing.py 补齐并核实该 provider/model 的权威单价；"
                     "补价前不要据已知金额做总成本结论。"
                 ),

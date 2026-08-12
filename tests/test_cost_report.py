@@ -262,15 +262,76 @@ def test_weekly_formatter_carries_qualification_and_all_branch_samples(tmp_path:
     )
     text = format_cost_report(report)
     assert "并非账单实付" in text
+    assert "已记录用量：1 次调用" in text
+    assert "/1 次已记录调用" in text
+    assert "/次已记录且可定价调用" in text
     assert "Top 驱动" in text
-    assert "单篇解读" in text
+    assert "单篇解读（已记录 cohort）" in text
     assert "环比" in text
     samples = compact_branch_samples(report)
     assert set(samples) == {"nominal", "unpriced", "stale", "cache coverage=0"}
-    assert "nominal 目录价估算约 ¥0.63（87.6%）" in samples["nominal"]
+    assert "已记录 cohort 中 nominal 目录价估算约 ¥0.63（87.6%）" in samples["nominal"]
     assert "无数据" in samples["cache coverage=0"]
     assert "unknown-model" in samples["unpriced"]
     assert "stale" in samples["stale"]
+
+
+def test_weekly_formatter_scopes_metering_observation_to_recorded_calls(
+    tmp_path: Path,
+) -> None:
+    now = datetime.fromisoformat("2026-08-11T09:17:00+08:00")
+    report = build_cost_report(
+        window_days=1,
+        now=now,
+        pricing_catalog=_catalog(tmp_path),
+        rows_snapshot=[_row(now - timedelta(hours=1))],
+    )
+
+    cases = (
+        (
+            {
+                "complete": True,
+                "failure_count": 0,
+                "expected_days": 1,
+                "observed_days": 1,
+                "incomplete_days": 0,
+            },
+            "计量口径：调用次数、token 合计与同口径金额合计是记录行下界；日志未见写入失败。\n"
+            "  均值、占比与环比只描述已记录 cohort，较全部付费调用真值的偏差方向未知；"
+            "未写行调用不在内（例如失败链路或未接入计量的调用点）。",
+        ),
+        (
+            {
+                "complete": False,
+                "failure_count": 0,
+                "expected_days": 1,
+                "observed_days": 0,
+                "incomplete_days": 0,
+            },
+            "计量口径：调用次数、token 合计与同口径金额合计是记录行下界；日志覆盖不完整。\n"
+            "  均值、占比与环比只描述已记录 cohort，较全部付费调用真值的偏差方向未知；"
+            "未写行调用不在内（例如失败链路或未接入计量的调用点）。",
+        ),
+        (
+            {
+                "complete": False,
+                "failure_count": 2,
+                "expected_days": 1,
+                "observed_days": 1,
+                "incomplete_days": 0,
+            },
+            "计量口径：调用次数、token 合计与同口径金额合计是记录行下界；至少 2 次写入失败。\n"
+            "  均值、占比与环比只描述已记录 cohort，较全部付费调用真值的偏差方向未知；"
+            "未写行调用不在内（例如失败链路或未接入计量的调用点）。",
+        ),
+    )
+    for metering, expected in cases:
+        report["metering"] = metering
+        text = format_cost_report(report)
+        assert expected in text
+        assert "计量完整性：" not in text
+        assert "provider completion 前失败" not in text
+        assert "usage 缺失仍以 0 token 记录" not in text
 
 
 def test_weekly_report_fills_shanghai_days_and_suppresses_comparison_for_processing_gap(
@@ -338,7 +399,11 @@ def test_weekly_report_fills_shanghai_days_and_suppresses_comparison_for_process
     assert report["comparison"]["reason"] == "processing_exposure_gap"
     assert report["comparison"]["processing_gap_days"] == ["2026-08-08"]
     text = format_cost_report(report)
-    assert "2026-08-08 ¥0.00（pipeline 1 轮，fetch 新增 269，LLM 0 次：处理停滞）" in text
+    assert (
+        "2026-08-08 ¥0.00（pipeline 1 轮，fetch 新增 269，"
+        "已记录 LLM 0 次：处理停滞）"
+        in text
+    )
     assert "环比：不可用——本窗含处理停滞日 2026-08-08" in text
 
 
@@ -584,7 +649,7 @@ def test_weekly_report_qualifies_nominal_amount_and_references_interpret_per_cal
 
     assert "nominal 目录价估算约 ¥0.72（50.0%），并非账单实付" in text
     assert (
-        "单篇解读：cache 中性目录价估算 ¥1.4400/次；"
+        "单篇解读（已记录 cohort）：cache 中性目录价估算 ¥1.4400/次已记录且可定价调用；"
         "前一等长窗口 ¥0.7200（+100.0%；两窗均按 cache 未命中重算）"
     ) in text
 
@@ -607,5 +672,5 @@ def test_interpret_reference_uses_cache_neutral_comparison_across_coverage_misma
     interpret = next(row for row in report["stage_costs"] if row["stage"] == "interpret")
     assert interpret["comparison"]["available"] is True
     assert interpret["comparison"]["cache_basis"] == "all-miss"
-    assert "单篇解读：cache 中性目录价估算" in format_cost_report(report)
+    assert "单篇解读（已记录 cohort）：cache 中性目录价估算" in format_cost_report(report)
     assert "两窗均按 cache 未命中重算" in format_cost_report(report)

@@ -64,6 +64,25 @@ def test_collect_usage_exposes_narrowed_derived_cost_contract(tmp_path: Path) ->
     )
 
     assert result["exchange_rate_usd_cny"] == 7.2
+    assert result["measurement_scope"] == {
+        "basis": "llm_usage_rows",
+        "paid_calls_without_row": "excluded",
+        "additive_quantities": {
+            "scope": "recorded_rows_only",
+            "kinds": ["call_counts", "token_totals", "same_basis_cost_sums"],
+            "interpretation": "lower_bound_not_total",
+        },
+        "cohort_statistics": {
+            "scope": "recorded_rows_only",
+            "kinds": ["averages", "shares", "period_over_period_changes"],
+            "interpretation": "direction_unknown_vs_all_paid_calls",
+        },
+        "description": (
+            "调用次数、token 合计与同一计价口径的金额合计是全部付费调用对应总量的下界。"
+            "均值、占比和环比只描述 llm_usage 记录行 cohort；"
+            "相对全部付费调用真值的偏差方向未知。"
+        ),
+    }
     assert result["totals"]["known_cost_usd"] > 0
     assert result["totals"]["known_cost_cny"] == round(result["totals"]["known_cost_usd"] * 7.2, 6)
     assert result["nominal_share"] > 0

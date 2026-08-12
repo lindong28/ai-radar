@@ -343,8 +343,22 @@ def run_cost_audit(
         (str(row["provider"]), str(row["model"])): int(str(row["calls"]))
         for row in cast(list[dict[str, object]], admin_usage["unpriced"])
     }
+    measurement_scope = cast(dict[str, object], admin_usage["measurement_scope"])
 
-    kv_lines: list[str] = []
+    additive_scope = cast(dict[str, object], measurement_scope["additive_quantities"])
+    statistics_scope = cast(dict[str, object], measurement_scope["cohort_statistics"])
+    kv_lines = [
+        f"measurement-scope basis={measurement_scope['basis']} "
+        f"paid_calls_without_row={measurement_scope['paid_calls_without_row']}",
+        "measurement-scope-additive "
+        f"scope={additive_scope['scope']} "
+        f"kinds={','.join(cast(list[str], additive_scope['kinds']))} "
+        f"interpretation={additive_scope['interpretation']}",
+        "measurement-scope-statistics "
+        f"scope={statistics_scope['scope']} "
+        f"kinds={','.join(cast(list[str], statistics_scope['kinds']))} "
+        f"interpretation={statistics_scope['interpretation']}",
+    ]
     group_failures: list[str] = []
     all_groups = sorted(set(expected_statuses) | set(derived_statuses))
     for stage, provider, model in all_groups:
@@ -474,31 +488,48 @@ def run_cost_audit(
             f"legacy_main_usage={_count_token(legacy_usage_residue)} "
             f"item_evaluations={_count_token(evaluation_residue)} "
             f"{'CLEAN' if cleanup_ready else 'CLEANUP_REQUIRED'}",
-            f"cost-audit {'PASS' if passed else 'FAIL'} groups={len(all_groups)} rows={len(rows)} "
+            f"cost-audit {'PASS' if passed else 'FAIL'} consistency=tariff_arithmetic_only "
+            f"measurement_completeness=not_assessed groups={len(all_groups)} recorded_rows={len(rows)} "
             f"unpriced_groups={len(expected_unpriced)}",
         ]
     )
 
     nominal_share = admin_usage.get("nominal_share")
     human_lines = [
-        f"LLM cost reconciliation: {'CONSISTENT' if passed else 'INCONSISTENT'}",
-        "Scope: calculation consistency against the loaded catalog; tariff authority is not verified.",
+        (
+            f"LLM cost reconciliation: {'CONSISTENT' if passed else 'INCONSISTENT'} "
+            "(tariff arithmetic only; measurement completeness not assessed)"
+        ),
+        (
+            "Scope: tariff arithmetic consistency against the loaded catalog only; "
+            "measurement completeness and tariff authority are not assessed."
+        ),
+        (
+            "Measurement scope: call counts, token totals, and same-basis cost sums "
+            "are lower bounds from recorded llm_usage rows; averages, shares, and "
+            "period changes describe that recorded cohort only, with unknown direction "
+            "versus all paid calls."
+        ),
         f"Window: {start.isoformat()} to {end.isoformat()} ({days} rolling days)",
-        f"Known cost: ${admin_total:.4f} / ¥{admin_total * rate:.2f} (1 USD = {rate:g} CNY)",
-        f"Rows and groups: {len(rows)} calls across {len(all_groups)} groups",
+        (
+            f"Known recorded-row cost sum: ${admin_total:.4f} / "
+            f"¥{admin_total * rate:.2f} (1 USD = {rate:g} CNY)"
+        ),
+        f"Rows and groups: {len(rows)} recorded llm_usage rows across {len(all_groups)} groups",
     ]
     if nominal_share is not None:
         human_lines.append(
-            f"Tariff quality: {float(str(nominal_share)) * 100:.1f}% of known cost is nominal; actual billed cost may differ."
+            f"Tariff quality: {float(str(nominal_share)) * 100:.1f}% of recorded-cohort "
+            "known cost is nominal; its direction versus the all-paid-call share is unknown."
         )
     if expected_unpriced:
         calls = sum(expected_unpriced.values())
         human_lines.append(
             f"Unpriced: {len(expected_unpriced)} group{'s' if len(expected_unpriced) != 1 else ''}, "
-            f"{calls} call{'s' if calls != 1 else ''}; cost unknown"
+            f"{calls} recorded row{'s' if calls != 1 else ''}; cost unknown"
         )
         for (provider, model), count in sorted(expected_unpriced.items()):
-            human_lines.append(f"  - {provider}/{model}: {count} call(s)")
+            human_lines.append(f"  - {provider}/{model}: {count} recorded row(s)")
     else:
         human_lines.append("Unpriced: none observed; the real-data unpriced path was not exercised.")
     if resolution_unverified:
@@ -533,7 +564,7 @@ def run_cost_audit(
     )
     if anchor_payload is not None:
         human_lines.append(
-            f"Anchor: {anchor_payload['calls_actual']}/{anchor_payload['calls_expected']} calls, "
+            f"Anchor: {anchor_payload['calls_actual']}/{anchor_payload['calls_expected']} recorded rows, "
             f"${anchor_payload['derived_usd_actual']} and ¥{anchor_payload['official_cny_actual']} "
             f"within the accepted ±{anchor_payload['tolerance_pct']:g}% band: "
             f"{'PASS' if anchor_pass else 'FAIL'}"
@@ -556,8 +587,14 @@ def run_cost_audit(
         human_lines.append("Action: none for calculation consistency; nominal tariff provenance remains a separate open item.")
 
     payload: dict[str, object] = {
-        "consistent": passed,
-        "scope": "calculation consistency against loaded catalog; tariff authority not verified",
+        "tariff_arithmetic_consistent": passed,
+        "consistency_scope": "tariff_arithmetic_only",
+        "measurement_completeness": "not_assessed",
+        "scope": (
+            "tariff arithmetic consistency against loaded catalog only; "
+            "measurement completeness and tariff authority not assessed"
+        ),
+        "measurement_scope": measurement_scope,
         "window": {"start": start.isoformat(), "end": end.isoformat(), "days": days},
         "rows": len(rows),
         "groups": len(all_groups),

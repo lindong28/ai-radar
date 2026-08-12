@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AI Radar · LLM 用量</title>
+    <title>AI Radar · LLM 已记录用量</title>
     <link rel="stylesheet" href="/style.css?v=20260515-ux5">
     <style>
       body {
@@ -98,16 +98,16 @@
     <main class="admin-shell">
       <header class="admin-header">
         <div>
-          <h1>LLM 用量</h1>
+          <h1>LLM 已记录用量</h1>
           <p class="admin-meta">时间窗口：{{ usage.window.start }} 至 {{ usage.window.end }} · {{ usage.timezone }}</p>
         </div>
         <a href="/admin">返回运维监控</a>
       </header>
 
-      <section class="admin-panel" aria-label="LLM 用量总览">
+      <section class="admin-panel" aria-label="LLM 已记录用量总览">
         <h2>最近 {{ usage.window.days }} 天总览</h2>
         <div class="metric-row">
-          <div class="metric"><span class="metric-label">LLM calls</span><span class="metric-value">{{ num(usage.totals.calls) }}</span></div>
+          <div class="metric"><span class="metric-label">已记录 LLM calls</span><span class="metric-value">{{ num(usage.totals.calls) }}</span></div>
           <div class="metric"><span class="metric-label">Input tokens</span><span class="metric-value">{{ num(usage.totals.input_tokens) }}</span></div>
           <div class="metric"><span class="metric-label">Output tokens</span><span class="metric-value">{{ num(usage.totals.output_tokens) }}</span></div>
           <div class="metric"><span class="metric-label">输入字符规模</span><span class="metric-value">{{ num(usage.totals.input_chars) }}</span></div>
@@ -121,13 +121,14 @@
           <div class="metric"><span class="metric-label">缓存拆分覆盖</span><span class="metric-value">{{ usage.totals.cache_split_coverage.calls_with_split }}/{{ usage.totals.cache_split_coverage.calls_total }}</span></div>
           <div class="metric"><span class="metric-label">已采集子集 Cache 命中率</span><span class="metric-value">{% if usage.totals.cache_hit_rate is not none %}{{ "%.1f"|format(usage.totals.cache_hit_rate * 100) }}%{% else %}无数据{% endif %}</span></div>
         </div>
+        <p class="admin-meta">{{ usage.measurement_scope.description }} 未写行调用不在内（例如失败链路或未接入计量的调用点）。</p>
         <p class="admin-meta">成本按查询时定价表派生，不读取历史存储成本。人民币按 1 USD = {{ usage.exchange_rate_usd_cny }} CNY 换算；nominal 表示 ARK 挂牌价，不代表套餐实付。</p>
-        <p class="admin-meta">缓存拆分覆盖分母是 calls；Cache 命中率分母是已采集子集的 input tokens。</p>
+        <p class="admin-meta">缓存拆分覆盖分母是已记录 calls；Cache 命中率分母是已采集子集的 input tokens。</p>
         {% if "stale" in usage.pricing_freshness %}<p><strong>注意：当前成本含按过期价估算的条目。</strong></p>{% endif %}
         {% if "due-review" in usage.pricing_freshness %}<p><strong>注意：当前成本含到期待复核的 supplement 价格。</strong></p>{% endif %}
         {% if usage.pricing_source.state == "stale" %}<p><strong>LiteLLM 定价源刷新失败；本页保留显示已标注来源状态的价格。</strong></p>{% endif %}
         {% if usage.unpriced %}
-        <p><strong>未定价：</strong>{% for row in usage.unpriced %}{{ row.provider }}/{{ row.model }}（{{ row.calls }} 次）{% if not loop.last %}、{% endif %}{% endfor %}</p>
+        <p><strong>未定价：</strong>{% for row in usage.unpriced %}{{ row.provider }}/{{ row.model }}（{{ row.calls }} 次已记录调用）{% if not loop.last %}、{% endif %}{% endfor %}</p>
         {% endif %}
       </section>
 
@@ -136,18 +137,18 @@
         {% if usage.comparison.available %}
         <p class="admin-meta">前一等长窗口 ¥{{ "%.2f"|format(usage.comparison.previous_known_cost_cny) }}；{% if usage.comparison.known_cost_change_ratio is not none %}当前 {{ "%+.1f"|format(usage.comparison.known_cost_change_ratio * 100) }}%{% else %}前窗为零，百分比不可用{% endif %}。两窗均按当前费率和 cache 未命中重算。</p>
         {% else %}
-        <p><strong>前窗对比不可用：</strong>前窗或本窗没有可定价调用。</p>
+        <p><strong>前窗对比不可用：</strong>前窗或本窗没有已记录且可定价调用。</p>
         {% endif %}
         <h3>按阶段</h3>
-        <table class="admin-table"><thead><tr><th>阶段</th><th>调用</th><th>已知成本 CNY</th><th>单次已知成本</th></tr></thead><tbody>
-          {% for row in usage.stage_costs %}<tr><td>{{ row.stage }}</td><td>{{ row.known_calls }}/{{ row.calls }} 次可定价</td><td>¥{{ "%.2f"|format(row.known_cost_cny) }}</td><td>{% if row.known_cost_per_call_cny is not none %}¥{{ "%.4f"|format(row.known_cost_per_call_cny) }} / 可定价调用{% else %}无数据{% endif %}</td></tr>{% endfor %}
+        <table class="admin-table"><thead><tr><th>阶段</th><th>已记录调用</th><th>已知成本 CNY</th><th>单次已知成本</th></tr></thead><tbody>
+          {% for row in usage.stage_costs %}<tr><td>{{ row.stage }}</td><td>{{ row.known_calls }}/{{ row.calls }} 次已记录调用可定价</td><td>¥{{ "%.2f"|format(row.known_cost_cny) }}</td><td>{% if row.known_cost_per_call_cny is not none %}¥{{ "%.4f"|format(row.known_cost_per_call_cny) }} / 已记录且可定价调用{% else %}无数据{% endif %}</td></tr>{% endfor %}
         </tbody></table>
         <h3>按 Provider / 模型</h3>
-        <table class="admin-table"><thead><tr><th>Provider / 模型</th><th>调用</th><th>输入 / 输出 tokens</th><th>已知成本 CNY</th></tr></thead><tbody>
+        <table class="admin-table"><thead><tr><th>Provider / 模型</th><th>已记录调用</th><th>输入 / 输出 tokens</th><th>已知成本 CNY</th></tr></thead><tbody>
           {% for row in usage.cost_groups %}<tr><td>{{ row.provider }}/{{ row.model }}</td><td>{{ row.calls }}</td><td>{{ num(row.input_tokens) }} / {{ num(row.output_tokens) }}</td><td>¥{{ "%.2f"|format(row.known_cost_cny) }}</td></tr>{% endfor %}
         </tbody></table>
         <h3>按天</h3>
-        <table class="admin-table"><thead><tr><th>日期（Asia/Shanghai）</th><th>调用</th><th>已知成本 CNY</th></tr></thead><tbody>
+        <table class="admin-table"><thead><tr><th>日期（Asia/Shanghai）</th><th>已记录调用</th><th>已知成本 CNY</th></tr></thead><tbody>
           {% for row in usage.daily %}<tr><td>{{ row.date }}</td><td>{{ row.calls }}</td><td>¥{{ "%.2f"|format(row.known_cost_cny) }}</td></tr>{% endfor %}
         </tbody></table>
       </section>

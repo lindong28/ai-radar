@@ -102,6 +102,32 @@ def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
     assert evaluate_rules(ingestion)[3].firing is True
 
 
+def test_a6_operator_text_scopes_cost_and_counts_to_recorded_calls() -> None:
+    signals = _normal_signals()
+    signals.a6_evaluable = True
+    signals.a6_baseline_median_cny = 20.0
+    signals.a6_threshold_cny = 60.0
+    signals.a6_page_threshold_cny = 120.0
+    signals.a6_baseline_days = 14
+    a6 = evaluate_rules(signals)[-1]
+
+    assert a6.title == "已记录 LLM 调用近 24 小时成本突变"
+    assert (
+        "金额/次数只统计 llm_usage 记录行，不是付费调用总额。\n"
+        "  未写入 llm_usage 的付费调用均不在内，因此该数只能作为下界"
+        "（例如失败链路或未接入计量的调用点）。"
+        in a6.detail
+    )
+    assert "provider completion 前失败" not in a6.detail
+    assert "usage 缺失仍以 0 token 记录" not in a6.detail
+    assert a6.evaluation_state == "scope_limited"
+    assert "sqlite3" not in a6.action
+    assert "A6 cache 中性已知成本聚合" in a6.action
+    assert "未定价调用另见 /admin/usage" in a6.action
+    assert a6.values["cohort"] == "已记录且评估时可定价的实价与目录价调用，cache 统一按未命中"
+    assert a6.impact == "近 24 小时已记录 LLM 调用的目录价估算显著高于近期已记录基线"
+
+
 def test_a5_requires_old_eligible_pending_and_no_recent_success() -> None:
     fresh = _normal_signals()
     fresh.hours_since_successful_interpretation = 5
@@ -197,6 +223,8 @@ def test_d3_notification_dedup_clear_and_identical_recurrence(tmp_path: Path) ->
 
     assert len(sent) == 2
     assert sent[0][0] == sent[1][0]
+    assert "已记录未定价 LLM 调用" in sent[0][0]
+    assert "次已记录调用" in sent[0][0]
     assert {severity for _, severity, _ in sent} == {"notice"}
     assert cleared == ["ai-radar:d3:unpriced:x/y"]
 

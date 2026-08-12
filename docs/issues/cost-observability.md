@@ -85,7 +85,9 @@ ai-assistant 在 `agents/summary-agent/src/summarizer/core.py:78-87` 先取得 p
 
 后果有两层。第一，provider 已经计费、但输出未通过解析或校验的 item 会被再次调用并再次付费，而第一次调用在 `llm_usage` 中完全不可见。第二，本 plan 的成本、单篇均值、cache 覆盖率与命中率只在“成功走过解析/校验/保存”的调用上计算；这不是中性的缺口，而是 survivorship bias。P3 的 `97.755845%` cache hit 与 `¥0.019953972/篇` 证明的是那次通过全链路的受控第二调用，不能外推为包含失败与重试在内的每次 interpret attempt 的期望成本；weekly interpret 单篇数也具有同一条件限制。
 
-**修复方向**：provider 一返回 usage 就立即发出不可被下游解析、校验或 KB save 撤回的 metering event；即使最终内容失败，该事件也必须落下 provider/model/item/tokens/cache 与失败后的关联身份。修复需同时证明一次失败响应只计量一次、后续 retry 是另一条可关联事件，并把 attempt 成本与 successful-item 成本分开呈现。
+2026-08-12 的后续 sweep 又确认两个独立漏行入口。其一，provider 返回的 usage 为 `None` 时，`ai-assistant/shared/llm/client.py::_metadata()` 不写 `usage` 键；interpret 侧随后静默跳过 usage landing，既无 `llm_usage` 行也无 `llm_usage_metering_failure`。其二，`src/airadar/eval/judge.py::DeepSeekV4ProCompareAudit.audit_compare()` 调 `chat_json()` 时没有传 `stage`，因此成功的付费 audit completion 也不进入计量。这两个入口说明排除类全集无法作为稳定消费契约；当前所有消费面改为正向声明“只统计 `llm_usage` 记录行，未写行的付费调用不在内”。
+
+**修复方向**：请求派发时先创建不可撤回的 attempt 记录；provider usage 返回后再把 provider/model/tokens/cache/outcome 关联到该 attempt，后续 parse/validation/save 不得撤回它。usage 不返回、调用中断或调用点未接入时也必须保留可观察的 unknown/failed attempt，而不是无行。修复需同时证明一次失败响应只计量一次、后续 retry 是另一条可关联事件，并把 attempted cost、recorded usage cost 与 successful-item cost 分开呈现。
 
 ## ISSUE-022 · Steady-state usage 读路径无条件争用 SQLite writer lock
 

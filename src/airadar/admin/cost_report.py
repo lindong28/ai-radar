@@ -492,7 +492,7 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
     window = report["window"]
     nominal_share = report.get("nominal_share")
     qualification = (
-        "其中 nominal 目录价估算约 "
+        "已记录 cohort 中 nominal 目录价估算约 "
         f"¥{float(totals.get('nominal_cost_usd') or 0) * float(report['exchange_rate_usd_cny']):.2f}"
         f"（{float(nominal_share):.1%}），并非账单实付"
         if nominal_share is not None
@@ -508,7 +508,7 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
         f"窗口：{window['start']} → {window['end']}（{window.get('kind', 'rolling')}）",
         f"结论：已知成本约 ¥{float(totals['known_cost_cny']):.2f}；{qualification}。",
         (
-            f"用量：{totals['calls']} 次，输入 {totals['input_tokens']} tokens，"
+            f"已记录用量：{totals['calls']} 次调用，输入 {totals['input_tokens']} tokens，"
             f"输出 {totals['output_tokens']} tokens；cache 测量覆盖 {_coverage_text(totals['cache_split_coverage'])}，"
             f"命中率 {cache_hit_text}。"
         ),
@@ -517,16 +517,33 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
     if isinstance(metering, dict):
         failures = int(metering.get("failure_count") or 0)
         if failures:
-            lines.append(f"计量完整性：至少 {failures} 次写入失败，已知成本可能低估。")
+            lines.append(
+                "计量口径：调用次数、token 合计与同口径金额合计是记录行下界；"
+                f"至少 {failures} 次写入失败。"
+            )
         elif not bool(metering.get("complete")):
-            lines.append("计量完整性：pipeline 日志覆盖不完整，无法证明已知成本没有漏记。")
+            lines.append(
+                "计量口径：调用次数、token 合计与同口径金额合计是记录行下界；"
+                "日志覆盖不完整。"
+            )
         else:
-            lines.append("计量完整性：窗口内 pipeline 日志完整，未见计量写入失败。")
+            lines.append(
+                "计量口径：调用次数、token 合计与同口径金额合计是记录行下界；"
+                "日志未见写入失败。"
+            )
+        lines.append(
+            "  均值、占比与环比只描述已记录 cohort，较全部付费调用真值的偏差方向未知；"
+            "未写行调用不在内（例如失败链路或未接入计量的调用点）。"
+        )
     comparison = report["comparison"]
     if comparison["available"]:
         delta = comparison["known_cost_change_ratio"]
         delta_text = "前窗为零，无法计算百分比" if delta is None else f"较前一等长窗口 {float(delta):+.1%}"
-        qualifiers = ["两窗均按当前费率、cache 未命中重算", "处理暴露由持久数据确认"]
+        qualifiers = [
+            "两窗均按当前费率、cache 未命中重算",
+            "处理暴露由持久数据确认",
+            "只描述已记录 cohort，较全部付费调用真值偏差方向未知",
+        ]
         expected_log_days = int(comparison.get("metering_log_expected_days") or 0)
         observed_log_days = int(comparison.get("metering_log_observed_days") or 0)
         if observed_log_days < expected_log_days:
@@ -557,12 +574,12 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
             + "，避免把停滞与积压回补误报成成本变化。"
         )
     else:
-        lines.append("环比：不可用——前窗或本窗没有可定价调用。")
+        lines.append("环比：不可用——前窗或本窗没有已记录且可定价调用。")
     stages = report.get("stage_costs", [])
     if stages:
         lines.append(
             "阶段：" + "；".join(
-                f"{row['stage']} ¥{float(row['known_cost_cny']):.2f}/{row['calls']} 次"
+                f"{row['stage']} ¥{float(row['known_cost_cny']):.2f}/{row['calls']} 次已记录调用"
                 for row in stages
             )
         )
@@ -570,10 +587,11 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
     lines.append(
         "Top 驱动：" + (
             "；".join(
-                f"{row['provider']}/{row['model']} ¥{float(row['known_cost_cny']):.2f}/{row['calls']} 次"
+                f"{row['provider']}/{row['model']} ¥{float(row['known_cost_cny']):.2f}/"
+                f"{row['calls']} 次已记录调用"
                 for row in groups
             )
-            if groups else "无调用"
+            if groups else "无已记录调用"
         )
     )
     interpret = next((row for row in stages if row["stage"] == "interpret"), None)
@@ -581,7 +599,8 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
         interpret_comparison = interpret.get("comparison", {})
         interpret_text = (
             "cache 中性目录价估算 "
-            f"¥{float(interpret_comparison['current_known_cost_per_call_cny']):.4f}/次"
+            f"¥{float(interpret_comparison['current_known_cost_per_call_cny']):.4f}/"
+            "次已记录且可定价调用"
         )
         if interpret_comparison.get("available"):
             previous = interpret_comparison.get("previous_known_cost_per_call_cny")
@@ -592,13 +611,13 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
                 "两窗均按 cache 未命中重算）"
             )
         else:
-            interpret_text += "；前窗参考不可用（前窗无 interpret 调用）"
+            interpret_text += "；前窗参考不可用（前窗无已记录且可定价 interpret 调用）"
         interpret_text += (
-            f"（本窗 {interpret['known_calls']}/{interpret['calls']} 次有价格的成功调用）"
+            f"（本窗 {interpret['known_calls']}/{interpret['calls']} 次已记录调用有价格）"
         )
     else:
-        interpret_text = "无成功调用或无可定价金额"
-    lines.append("单篇解读：" + interpret_text)
+        interpret_text = "无已记录且可定价调用"
+    lines.append("单篇解读（已记录 cohort）：" + interpret_text)
     abnormal = [row for row in report.get("daily", []) if row.get("activity_state") != "active"]
     actionable = [
         row for row in abnormal
@@ -610,13 +629,16 @@ def format_cost_report(report: dict[str, Any], *, sample_label: str | None = Non
     lines.append(
         "日序列：" + (
             "；".join(_format_daily_row(row) for row in daily)
-            if daily else "无调用"
+            if daily else "无已记录调用"
         )
     )
     unpriced = report.get("unpriced", [])
     lines.append(
         "未定价：" + (
-            "；".join(f"{row['provider']}/{row['model']} {row['calls']} 次" for row in unpriced)
+            "；".join(
+                f"{row['provider']}/{row['model']} {row['calls']} 次已记录调用"
+                for row in unpriced
+            )
             if unpriced else "无"
         )
     )
@@ -637,19 +659,19 @@ def _format_daily_row(row: dict[str, Any]) -> str:
         if int(row.get("calls") or 0):
             return (
                 f"{base}（pipeline {row['pipeline_runs']} 轮，fetch 新增 {row['fetch_inserted']}，"
-                f"LLM {row['calls']} 次：{stalled or '部分 stage'} 成功产出停滞）"
+                f"已记录 LLM {row['calls']} 次：{stalled or '部分 stage'} 成功产出停滞）"
             )
         return (
             f"{base}（pipeline {row['pipeline_runs']} 轮，fetch 新增 {row['fetch_inserted']}，"
-            "LLM 0 次：处理停滞）"
+            "已记录 LLM 0 次：处理停滞）"
         )
     if state == "measurement_unknown":
-        return f"{base}（入库 {row['fetched_items']} 篇、LLM 0 次：计量/日志不完整，状态未知）"
+        return f"{base}（入库 {row['fetched_items']} 篇、已记录 LLM 0 次：计量/日志不完整，状态未知）"
     if state == "metering_incomplete":
         return f"{base}（至少 {row['metering_failure_count']} 次计量写入失败，金额可能低估）"
     if state == "no_llm_activity":
         return (
-            f"{base}（pipeline {row['pipeline_runs']} 轮，fetch 新增 0，LLM 0 次）"
+            f"{base}（pipeline {row['pipeline_runs']} 轮，fetch 新增 0，已记录 LLM 0 次）"
         )
     if state == "no_pipeline_evidence" and not int(row.get("calls") or 0):
         return f"{base}（无 pipeline 记录，完整性未确认）"
@@ -664,11 +686,11 @@ def _format_abnormal_summary(row: dict[str, Any]) -> str:
             return (
                 f"{row['date']} {stalled or '部分 stage'} 成功产出停滞"
                 f"（pipeline {row['pipeline_runs']} 轮，fetch 新增 {row['fetch_inserted']}，"
-                f"LLM {row['calls']} 次）"
+                f"已记录 LLM {row['calls']} 次）"
             )
         return (
             f"{row['date']} 处理停滞（pipeline {row['pipeline_runs']} 轮，"
-            f"fetch 新增 {row['fetch_inserted']}，LLM 0 次）"
+            f"fetch 新增 {row['fetch_inserted']}，已记录 LLM 0 次）"
         )
     if state == "measurement_unknown":
         return f"{row['date']} 状态未知（入库 {row['fetched_items']} 篇，计量/日志不完整）"
@@ -798,7 +820,7 @@ def compact_branch_samples(report: dict[str, Any]) -> dict[str, str]:
         elif label == "stale":
             prefixes = ("【", "结论：", "价格口径：", "下一步：")
         else:
-            prefixes = ("【", "用量：", "环比：", "价格口径：")
+            prefixes = ("【", "已记录用量：", "环比：", "价格口径：")
         samples[label] = "\n".join(
             line for prefix in prefixes for line in full_lines if line.startswith(prefix)
         )

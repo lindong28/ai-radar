@@ -301,7 +301,7 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 
 - **去重策略**：`items` 表通过 `(source_id, content_hash)` 唯一约束去重。`content_hash` 是内容文本的 SHA1 前 16 位。同 URL 不同内容视为更新
 - **多阶段评估**：`item_evaluations` 通过 `stage` 字段区分 prefilter / scoring / enrich，共用同一张表。每条记录保存完整的 input/output/numeric JSON
-- **LLM 用量与派生成本**：`llm_usage` 每次 DeepSeek/ARK `chat_json` 以及 interpret 调用写一行。`admin/usage.py` 按 usage `created_at` 的有效 tariff 生成绝对总额、阶段、Provider、模型组与日序列；跨窗总额和分组比较另把两窗统一按当前费率、cache 全未命中重算，避免 provider cache 字段覆盖率随 stage mix 浮动而永久关闭比较。单次已知成本分母只含 priced+nominal 调用。`admin/cost_report.py` 消费同一聚合，用 durable `items.fetched_at` 判断每日是否有入库，pipeline 日志只补轮次、fetch inserted 与 `llm_usage_metering_failure` 证据；缺日志/计量时标 unknown，不把缺行当作零成本。A6 复用相同归一化，只比较评估时仍可报价的 known cohort；真实缺数时降级，只有 live pipeline 造成的当前日未封口例外把已记录金额作为下界继续正向求值，允许 firing/升级但不能据此恢复。两个库中的 `cost_usd` 都是 deprecated carrier，真实成本只在查询时派生。
+- **LLM 用量与派生成本**：`llm_usage` 是已写入的计量行集合，不是 attempt ledger。调用次数、token 合计与同一计价口径的金额合计只从该表记录行派生，因此是全部付费调用对应总量的下界；任何未写入该表的付费调用均不在内（已知例子包括失败链路或未接入计量的调用点，非完整清单）。均值、占比和环比只描述已记录 cohort，相对全部付费调用真值的偏差方向未知。`admin/usage.py` 通过 `measurement_scope` 把两类解释带到 API 响应本身，并按 usage `created_at` 的有效 tariff 生成已记录调用的绝对总额、阶段、Provider、模型组与日序列；跨窗总额和分组比较另把两窗统一按当前费率、cache 全未命中重算，避免 provider cache 字段覆盖率随 stage mix 浮动而永久关闭比较。单次已知成本分母只含 priced+nominal 的已记录调用。`admin/cost_report.py` 消费同一聚合，用 durable `items.fetched_at` 判断每日是否有入库，pipeline 日志只补轮次、fetch inserted 与已记录的 `llm_usage_metering_failure` 证据，不能证明 attempt-level 计量完整；已观测的缺日志/计量标 unknown，不把缺行当作零成本。A6 复用相同归一化，只比较评估时仍可报价的已记录 known cohort；已观测的缺数时降级，只有 live pipeline 造成的当前日未封口例外把已记录金额作为下界继续正向求值，允许 firing/升级。记录行金额回落时只 resolve 这个已记录 cohort，不宣称整体计量健康。两个库中的 `cost_usd` 都是 deprecated carrier，表内已记录调用的派生成本只在查询时计算。
 - **Ruleset 版本**：格式 `YYYY-MM-DD.rN`，用于跟踪 prompt 和规则的变更。同一条目可以有不同 ruleset 版本的评估记录
 - **信源层级**：T1（官方一手源，乘数 1.25）/ T1.5（高质量聚合，乘数 1.0）/ T2（社区源，乘数 0.75）
 - **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。
@@ -344,7 +344,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/api/v1/sources` | GET | 信源列表 |
 | `/api/v1/healthz` | GET | 健康检查（条目数、运行数、ruleset 版本） |
 | `/api/v1/admin/metrics` | GET | 内部运维指标；与 `/admin` 同一访问门控 |
-| `/api/v1/admin/usage` | GET | 内部 LLM 用量 rollup；与 `/admin` 同一访问门控 |
+| `/api/v1/admin/usage` | GET | 内部 LLM 已记录用量 rollup；`measurement_scope` 分开限定加总量与派生统计口径；与 `/admin` 同一访问门控 |
 
 `/api/v1/curated?run_id=X` 的历史 run digest 有 **TTL 语义**：常驻保留会把超过 `keep_days`（默认 7 天）且非最新 run 的 `curated_items.summary_json` 预计算缓存清空，此后该 run 的 digest 改由 `_compute_items` live 现算，内容反映**当前** enrichment 而非 curation 时的快照。最新 run 的 summary 永不清、字节一致；HTML 用户页只服务最新 run，不受影响。瘦身机制见 [operations/db-slimming.md](operations/db-slimming.md)。
 

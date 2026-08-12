@@ -156,7 +156,10 @@ def test_p1_consumer_boundary_state_sweep_uses_real_sql_html_and_cli(
     check(bool(usage["daily"]), "P2 API lost daily series")
     check("priced 实价成本" in page.text, "HTML group boundary lost priced label")
     check("nominal 挂牌价成本" in page.text, "HTML group boundary lost nominal label")
-    check("deepseek-v4-pro-260426（1 次）" in page.text, "HTML lost unpriced identity")
+    check(
+        "deepseek-v4-pro-260426（1 次已记录调用）" in page.text,
+        "HTML lost scoped unpriced identity",
+    )
     check("未采集" in page.text, "HTML lost unknown cache state")
     check("2/3" in page.text, "HTML lost cache coverage")
     check("成本分组与前窗对比" in page.text, "HTML lost P2 comparison consumer")
