@@ -17,3 +17,5 @@
 | [011](./011-perf-idle-only-probing.md) | PERF 改为 idle-only 探测并用 per-file launchd 调度 | accepted; supersedes ADR-008 PERF F1/F4 only | 2026-07-26 |
 | [012](./012-single-dom-mobile-layer.md) | 移动层用单套 DOM + media query 重塑，不复制参考站双 DOM | accepted | 2026-08-03 |
 | [013](./013-db-sync-cron-agent-socket-auth.md) | DB sync 自动化用 launchd ssh-agent socket 发现做 cron SSH 认证 | accepted | 2026-08-09 |
+| [039](./039-route-news-through-edgeone-dns-only-cname.md) | 通过 DNS-only CNAME 将 news 入口接入 EdgeOne | accepted | 2026-08-13 |
+| [042](./042-isolate-production-deploy-commit-from-local-main.md) | 从本地 main 的未发布提交中隔离生产部署 commit | accepted | 2026-08-16 |

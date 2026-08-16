@@ -7,6 +7,14 @@
 
 ---
 
+## 2026-08-14 [expansion] ux-contract 未覆盖 `/wechat` 冷连接首屏性能
+
+- Discovered: 用户从 MacBook 打开 `https://news.aiplanet.live/wechat` 时经历数秒白屏，并明确要求同条件体感不弱于 AIHOT；EdgeOne 接入与 render-blocking CSS 优化据此实施。
+- Description: 现行契约约束 `/wechat` 的 SSR 内容、搜索、分页与详情行为，但没有约束真正冷连接下 HTML 首包与首次内容绘制。缺少这一层时，功能测试与热连接读数都可能通过，用户仍会在首次访问时看到明显白屏。
+- Recommendation: 在微信文章解读页的 L1 承诺中补充「真正冷连接下首屏等待不得显著慢于 AIHOT 对照」；配套 L2 固定为用户 MacBook 可见浏览器中交替测试 `/wechat` 与 AIHOT 首页，每方至少 5 次新浏览器 profile / 新连接，分别比较 median TTFB 与 FCP，二者均须不超过 AIHOT 的 110%。搜索、分页和详情只做功能与非回归验证，不为没有 AIHOT 对应面的路径制造替代性能指标。
+
+---
+
 ## 2026-06-07 [expansion] ux-contract §微信文章解读页 未覆盖新增的搜索功能
 
 - Resolution (2026-06-15): 已在 ux-contract.md `/wechat` 页面描述与 WX-4 写入 WeChat 专属搜索字段、LIKE/繁简/2 字行为、URL/分页/详情/404 上下文和空态，修正"v1 无搜索"旧描述。

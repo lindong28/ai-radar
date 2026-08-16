@@ -809,6 +809,31 @@ def test_wechat_page_default_limit_matches_fast_initial_payload(
     assert captured["limit"] == 50
 
 
+def test_wechat_page_inlines_the_canonical_stylesheet(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    stylesheet = project_root / "web" / "static" / "style.css"
+    template_include = project_root / "web" / "templates" / "_wechat_inline_style.css"
+    css = stylesheet.read_text(encoding="utf-8")
+    style_end = re.compile(r"</style\s*>", re.IGNORECASE)
+
+    assert template_include.is_symlink()
+    assert template_include.resolve(strict=True) == stylesheet.resolve(strict=True)
+    assert not any(delimiter in css for delimiter in ("{{", "{%", "{#"))
+    assert all(style_end.search(value) for value in ("</style>", "</STYLE>", "</style >"))
+    assert style_end.search(css) is None
+
+    client = TestClient(create_app(_seed_wechat_db(tmp_path)))
+    response = client.get("/wechat")
+
+    assert response.status_code == 200
+    inline_start = response.text.index('<style data-inline-stylesheet="wechat">\n')
+    inline_start += len('<style data-inline-stylesheet="wechat">\n')
+    inline_end = response.text.index("    </style>", inline_start)
+    assert response.text[inline_start:inline_end] == css
+    assert 'rel="stylesheet"' not in response.text
+    assert "/style.css" not in response.text
+
+
 def test_wechat_sidebar_link_and_curated_alias_exist_on_public_pages(tmp_path: Path) -> None:
     db_path = _seed_wechat_db(tmp_path)
     client = TestClient(create_app(db_path))

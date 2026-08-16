@@ -91,6 +91,8 @@
 | [010-db-slimming-clear-regenerable-cache.md](adr/010-db-slimming-clear-regenerable-cache.md) | radar.db 瘦身选清可再生 summary 缓存（Option A）+ 常驻保留 + 历史 digest TTL |
 | [011-perf-idle-only-probing.md](adr/011-perf-idle-only-probing.md) | PERF 改为 idle-only 探测并用 per-file launchd 调度（仅 supersede ADR-008 的 PERF F1/F4） |
 | [012-single-dom-mobile-layer.md](adr/012-single-dom-mobile-layer.md) | 移动层用单套 DOM + media query 重塑，不复制参考站的双 DOM |
+| [039-route-news-through-edgeone-dns-only-cname.md](adr/039-route-news-through-edgeone-dns-only-cname.md) | `news.aiplanet.live` 通过 DNS-only CNAME 接入 EdgeOne，并以内联 CSS 缩短 `/wechat` 冷首屏链路 |
+| [042-isolate-production-deploy-commit-from-local-main.md](adr/042-isolate-production-deploy-commit-from-local-main.md) | 从本地 `main` 的未发布提交中隔离生产 deployment commit，并用普通 revert 与后续 merge 收口 |
 
 ### docs/experiences/ [Agent]
 
