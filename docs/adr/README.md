@@ -47,3 +47,7 @@
 | [043](./043-waive-manual-wechat-probe-cooldown-once.md) | 对一次获授权微信后台 probe 豁免本地 1440 分钟冷却 | accepted; one-shot exception to ADR-025 only | 2026-08-16 |
 | [044](./044-persist-wechat-platform-error-ret.md) | schema v9 持久化后台 exact ret，区分平台拒绝与可证明频控 | accepted; clarifies ADR-025 failure and cooldown semantics | 2026-08-16 |
 | [045](./045-require-integer-platform-ret-and-evidence-backed-cooldown.md) | schema v10 只接受整数平台错误码，特殊冷却仅由已记录频控证据触发 | accepted; clarifies ADR-025 and ADR-044 | 2026-08-16 |
+| [046](./046-resolve-x-user-id-in-a-separate-fetch-round.md) | X user ID 解析与 timeline 读取分轮执行 | accepted | 2026-08-13 |
+| [047](./047-use-controlled-original-web-lists-for-aihot-source-alignment.md) | AIHOT 来源对齐使用受控的原始 Web/API 列表 | accepted | 2026-08-13 |
+| [048](./048-require-semantic-live-validation-receipts.md) | 用语义完整的收据验收来源读取能力 | accepted | 2026-08-13 |
+| [049](./049-keep-human-audit-summaries-and-remove-duplicate-authorities.md) | 保留人读审计摘要并移除重复权威 | accepted | 2026-08-13 |

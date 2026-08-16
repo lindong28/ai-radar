@@ -296,17 +296,9 @@ def _display_source_name(raw_item: dict[str, object], source_kind: str, source_n
         return str(raw_item.get("author") or source_name or raw_item.get("source_id") or "")
     if source_kind == "x":
         return source_name or str(raw_item.get("source_id") or "")
-    suffixes = {
-        "openai_blog": "官网动态（RSS）",
-        "anthropic_news": "Newsroom（RSS）",
-        "anthropic_blog": "Blog（RSS）",
-        "claude_code_releases": "GitHub Releases（RSS）",
-        "huggingface_blog": "Blog（RSS）",
-        "simonw": "Weblog（RSS）",
-        "ithome": "RSS",
-    }
-    source_id = str(raw_item.get("source_id") or "")
-    return f"{source_name}：{suffixes[source_id]}" if source_id in suffixes else f"{source_name}（RSS）"
+    if source_kind == "web":
+        return source_name or str(raw_item.get("source_id") or "")
+    return source_name or str(raw_item.get("source_id") or "")
 
 
 def _display_source_icon_url(raw_item: dict[str, object], source_kind: str) -> str:
@@ -382,7 +374,11 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
                 "source_author": _author_handle(raw_item.get("author")) if source_kind != "wechat" else "",
                 "is_x": source_kind == "x",
                 "title": title,
-                "url": str(raw_item.get("url") or "#").split("#", 1)[0],
+                "url": (
+                    str(raw_item.get("url") or "#")
+                    if raw_item.get("source_id") == "deepseek_api_updates"
+                    else str(raw_item.get("url") or "#").split("#", 1)[0]
+                ),
                 "summary": summary,
                 "tags": [str(tag).lstrip("#") for tag in tags[:4]],
                 "media_assets": media_assets,
@@ -535,6 +531,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.include_router(curated.router, prefix=api_prefix)
     app.include_router(items.router, prefix=api_prefix)
     app.include_router(sources.router, prefix=api_prefix)
+    app.include_router(sources.v2_router, prefix="/api/v2")
     app.include_router(admin.router, prefix=api_prefix)
     app.include_router(wechat_routes.router, prefix=api_prefix)
     # Image proxy lives at the root (frontend references /img?url=), not under

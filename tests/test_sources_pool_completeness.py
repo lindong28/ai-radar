@@ -1,44 +1,94 @@
-"""Phase 1 done gate: every enabled source in real sources.toml must have
-homepage_url + icon_url filled (DD-PARITY-13). Expected to FAIL before owner
-gate (sources.toml has no values) and PASS after gate.
-
-Once Phase 1 owner gate completes, this test enforces no future enabled source
-slips through without the two new fields.
-"""
-
 from __future__ import annotations
 
-import pytest
+import json
+from collections import Counter
+from pathlib import Path
+from urllib.parse import urlparse
 
-from airadar.db import PROJECT_ROOT
-from airadar.sources.loader import SourceConfig, load_sources
+from airadar.sources.loader import load_sources
 
-POOL_PATH = PROJECT_ROOT / "apps" / "ai-radar" / "data" / "sources.toml"
-
-
-@pytest.fixture(scope="module")
-def enabled_sources() -> list[SourceConfig]:
-    if not POOL_PATH.exists():
-        pytest.skip(f"sources.toml not found at {POOL_PATH}")
-    return [s for s in load_sources(POOL_PATH) if s.enabled]
+ROOT = Path(__file__).resolve().parents[1]
+CONTRACT_PATH = ROOT / "tests/fixtures/aihot_sources.json"
+CONFIG_PATH = ROOT / "data/sources.toml"
 
 
-def test_all_enabled_sources_have_homepage_url(enabled_sources: list[SourceConfig]) -> None:
-    missing = [s.slug for s in enabled_sources if not s.homepage_url]
-    assert not missing, f"enabled sources missing homepage_url: {missing}"
+def _contract() -> list[dict[str, object]]:
+    return json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))["sources"]
 
 
-def test_all_enabled_sources_have_icon_url(enabled_sources: list[SourceConfig]) -> None:
-    missing = [s.slug for s in enabled_sources if not s.icon_url]
-    assert not missing, f"enabled sources missing icon_url: {missing}"
+def _project(source: object) -> dict[str, object]:
+    return {
+        "slug": source.slug,
+        "name": source.name,
+        "kind": source.kind,
+        "tier": source.tier,
+        "enabled": source.enabled,
+        "fetch_url": source.url,
+        "homepage_url": source.homepage_url,
+        "icon_url": source.icon_url,
+        "meta": source.meta,
+    }
 
 
-def test_at_least_one_x_kind_source_for_v10_verifiability(enabled_sources: list[SourceConfig]) -> None:
-    """spec V10 needs >= 3 X-kind cards. owner may opt out at gate; in that case
-    sources pool will simply have no kind=x source and this test is skipped to
-    let owner sign V10 N/A explicitly. End-to-end items >= 3 is verified by
-    Playwright after fetcher runs against the X source."""
-    x_sources = [s for s in enabled_sources if s.kind == "x"]
-    if not x_sources:
-        pytest.skip("no kind=x sources in pool — owner has opted out of V10 (record in journal as decision)")
-    assert x_sources, "X kind enabled but pool yielded zero — check kind field"
+def _expected(row: dict[str, object], resolved_mp2rss: str | None = None) -> dict[str, object]:
+    fetch_url = row["fetch_url"]
+    if row["slug"] == "wx_mp2rss" and resolved_mp2rss:
+        fetch_url = resolved_mp2rss
+    return {key: row[key] for key in ("slug", "name", "kind", "tier", "enabled", "homepage_url", "icon_url", "meta")} | {"fetch_url": fetch_url}
+
+
+def test_contract_has_exact_complete_identity_classes() -> None:
+    rows = _contract()
+    main = [row for row in rows if row["ai_radar_main_timeline_member"]]
+    assert len(rows) == 162
+    assert len(main) == 161
+    assert Counter(row["kind"] for row in main) == {"x": 109, "feed": 34, "web": 18}
+    assert [row["slug"] for row in rows if not row["ai_radar_main_timeline_member"]] == ["wx_mp2rss"]
+    assert len({row["slug"] for row in rows}) == len(rows)
+    assert len({row["derived_aihot_identity"] for row in rows}) == len(rows)
+    assert len({str(row["meta"]["username"]).casefold() for row in rows if row["kind"] == "x"}) == 109
+    for row in rows:
+        assert urlparse(str(row["homepage_url"])).scheme in {"http", "https"}
+        assert isinstance(row["aihot_aliases"], list)
+        assert row["name"].casefold() not in {alias.casefold() for alias in row["aihot_aliases"]}
+
+
+def test_config_matches_contract_without_optional_mp2rss(monkeypatch) -> None:
+    monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
+    actual = load_sources(CONFIG_PATH)
+    expected = [row for row in _contract() if row["ai_radar_main_timeline_member"]]
+    assert {_project(row)["slug"]: _project(row) for row in actual} == {str(row["slug"]): _expected(row) for row in expected}
+
+
+def test_config_matches_contract_with_optional_mp2rss(monkeypatch) -> None:
+    resolved = "https://paid.example.test/private-mp2rss.xml"
+    monkeypatch.setenv("MP2RSS_FEED_URL", resolved)
+    actual = load_sources(CONFIG_PATH)
+    expected = _contract()
+    assert {_project(row)["slug"]: _project(row) for row in actual} == {str(row["slug"]): _expected(row, resolved) for row in expected}
+
+
+def test_main_fetch_urls_are_original_and_not_paid_or_comparison_hosts() -> None:
+    forbidden = {"aihot.virxact.com", "mp2rss.com", "mp2rss.cn"}
+    for row in _contract():
+        if not row["ai_radar_main_timeline_member"]:
+            continue
+        host = urlparse(str(row["fetch_url"])).hostname
+        assert host not in forbidden
+        assert "${MP2RSS" not in str(row["fetch_url"])
+
+
+def test_removed_extras_absent_and_post_baseline_x_present() -> None:
+    slugs = {str(row["slug"]) for row in _contract()}
+    assert not slugs & {"lilianweng", "sebastianraschka", "latent_space", "importai", "hn_ai", "lobsters_ai", "the_batch", "last_week_ai", "simonw_mastodon"}
+    usernames = {str(row["meta"].get("username", "")).casefold() for row in _contract()}
+    assert {
+        "openclaw",
+        "spacexai",
+        "workbuddy_ai",
+        "petermccrory",
+        "deepseek_ai",
+        "zhang_benita",
+        "siliconflowai",
+    } <= usernames
+    assert "deepseek_api_updates" in slugs

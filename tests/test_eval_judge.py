@@ -4,6 +4,9 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
+import airadar.eval.judge as judge_module
 from airadar.db import migrate
 from airadar.eval.judge import (
     TEMPLATE_RE,
@@ -15,6 +18,8 @@ from airadar.eval.judge import (
     load_aihot_items_from_path,
     load_airadar_items,
     load_airadar_items_by_aihot_urls,
+    load_iteration_counter,
+    load_known_limit_list,
     match_items,
     parse_aihot_markdown,
     parse_judge_response,
@@ -43,6 +48,33 @@ class FakeAudit:
     def audit_compare(self, payload):  # noqa: ANN001
         assert payload["deterministic_checks"]["matched_pair_count"]["pass"] is True
         return {"verdict": "PASS", "reasons": ["ok"], "required_fixes": []}
+
+
+def _isolate_eval_plan_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.md"
+    sources_path = tmp_path / "aihot-sources.json"
+    counter_path = tmp_path / "iteration-counter.json"
+    state_path.write_text("# Test state\n", encoding="utf-8")
+    sources_path.write_text(
+        json.dumps([{"slug": "openai_blog", "name": "OpenAI Blog"}]) + "\n",
+        encoding="utf-8",
+    )
+    counter_path.write_text('{"step3_6":0,"step4_6":0}\n', encoding="utf-8")
+    monkeypatch.setattr(judge_module, "STATE_FILE", state_path)
+    monkeypatch.setattr(judge_module, "AIHOT_SOURCES", sources_path)
+    monkeypatch.setattr(
+        judge_module,
+        "load_known_limit_list",
+        lambda: load_known_limit_list(state_path),
+    )
+    monkeypatch.setattr(
+        judge_module,
+        "load_iteration_counter",
+        lambda: load_iteration_counter(counter_path),
+    )
 
 
 def _aihot_markdown() -> str:
@@ -377,7 +409,11 @@ def test_template_phrase_detection() -> None:
     assert TEMPLATE_RE.search("属于OpenAI产品，来自官网；包含安全信号")
 
 
-def test_run_eval_writes_report_and_compare_html(tmp_path: Path) -> None:
+def test_run_eval_writes_report_and_compare_html(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_eval_plan_inputs(monkeypatch, tmp_path)
     conn = _seed_db(tmp_path)
     markdown_path = tmp_path / "aihot.md"
     markdown_path.write_text(_aihot_markdown(), encoding="utf-8")
@@ -402,7 +438,11 @@ def test_run_eval_writes_report_and_compare_html(tmp_path: Path) -> None:
     assert artifacts.sample_count == 1
 
 
-def test_run_eval_all_db_url_match_scope_writes_expanded_pairs(tmp_path: Path) -> None:
+def test_run_eval_all_db_url_match_scope_writes_expanded_pairs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_eval_plan_inputs(monkeypatch, tmp_path)
     conn = _seed_db(tmp_path)
     _insert_enriched_item(
         conn,

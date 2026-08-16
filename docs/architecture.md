@@ -31,6 +31,9 @@ src/airadar/
 ├── fetcher/            # 内容抓取
 │   ├── runner.py       #   fetch_all 主流程
 │   ├── rss.py          #   RSS/Atom 解析（feedparser）
+│   ├── feed_rules.py   #   原始 Feed 的显式范围与 URL 规则
+│   ├── web.py          #   官方 Web/API 列表的登记、范围与确定性解析
+│   ├── x_api.py        #   X 用户时间线：冷启动窗口 + since_id/cursor，运行上限见 README 信源池
 │   ├── wechat.py       #   微信公众号原文抓取（Playwright + BeautifulSoup）
 │   ├── content.py      #   HTML -> 纯文本（trafilatura）
 │   ├── http_client.py  #   HTTP 请求 + 条件请求（ETag/Last-Modified）
@@ -103,7 +106,7 @@ src/airadar/
 │       ├── curated_archive.py # 跨 run 去重归档、按日归档与真实计数
 │       ├── curated_digest.py # 指定 run 的单轮 digest
 │       ├── items.py    #   GET /api/v1/items/{id} — 单条详情
-│       ├── sources.py  #   GET /api/v1/sources — 信源列表
+│       ├── sources.py  #   GET /api/v1/sources（兼容投影）+ /api/v2/sources（完整公开 inventory）
 │       ├── wechat.py   #   GET /api/v1/wechat — 微信文章解读列表 + markdown sanitize helper
 │       ├── media.py    #   GET /img — 受限微信 CDN 同源图片代理
 │       └── health.py   #   GET /api/v1/healthz — 健康检查
@@ -217,7 +220,11 @@ data/sources.toml
    └───────────┘                            └──────────────────────────┘
 ```
 
-`kind="wechat"` 源的 URL 指向托管 Mp2RSS 合集 feed。fetch 阶段通过 RSS 发现新文章链接，再只对尚未入库的 `mp.weixin.qq.com/s/...` 原文用 Playwright 抓全文；抓取失败时降级保留 RSS 裸条目，后续 Web 层仍只公开中文摘要与原文回链。`interpret` 阶段只读取启用的 wechat 源 item，调用 ai-assistant `summarize-article` 逻辑生成结构化总结；`save_decision=1` 的条目展示在 `/wechat` 并回写 ai-assistant KB，`save_decision=0` 只在本库留处理记录。
+`kind="feed"` 由 `rss.py` 解析 RSS/Atom；只有经来源证据批准的范围收窄进入 `feed_rules.py`。`kind="web"` 只用于没有合适原始 Feed 的官方列表或 API，由 `fetcher/web.py` 的代码登记表约束 fetch host、最终 host、item URL 范围、解析器和最小结果数；零结果、越界链接、错误最终 host 或结构漂移会让该来源本轮显式失败，不会切换到 AIHOT、Mp2RSS、第三方镜像或通用任意链接抓取。
+
+`kind="x"` 且 `meta.adapter="x_api"` 的源由 `fetcher/x_api.py` 走 X 官方 API；X RSS 源推荐显式使用 `meta.adapter="rss"`，无 adapter 的 v1 历史配置仍走 RSS。尚无 `x_user_id` 时只做 username identity lookup 并持久化首次时间边界，下一轮才读 user timeline；因此每源每轮仍至多一个远端请求。空页提交 `x_since_time`，拿到帖子后以 `x_since_id` 为 high-water mark；若响应有下一页，只把 cursor 与本批 high-water mark 写入 source runtime metadata，下一轮继续该 cursor，直到排空才推进 committed checkpoint。timeline 每次最多 5 条并排除 replies/retweets；runtime state 在写入、reload 与读取处共享同一验证器，配置文件不能伪造内部 cursor，runner 通过 identity + runtime snapshot + SQL CAS 拒绝陈旧覆盖。冷启动窗口不追接入前历史，因此不代表历史召回对齐。详细取舍见 ADR-046。
+
+`kind="wechat"` 源的 URL 指向托管 Mp2RSS 合集 feed。fetch 阶段通过 RSS 发现新文章链接，再只对尚未入库的 `mp.weixin.qq.com/s/...` 原文用 Playwright 抓全文；抓取失败时降级保留 RSS 裸条目，后续 Web 层仍只公开中文摘要与原文回链。`interpret` 阶段只读取启用的 wechat 源 item，调用 ai-assistant `summarize-article` 逻辑生成结构化总结；`save_decision=1` 的条目展示在 `/wechat` 并回写 ai-assistant KB，`save_decision=0` 只在本库留处理记录。X API 接入不读取或替换 `wx_mp2rss`。
 
 每个阶段只处理尚未完成对应评估的新条目。`pipeline.sh` 按顺序调度全部阶段，`interpret` 位于最后且 preflight 缺 ai-assistant 依赖时跳过，不阻断前置抓取/精选。
 
@@ -351,7 +358,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 ### API 端点
 
-所有 API 以 `/api/v1` 为前缀，返回统一信封 `{success, data, error}`。
+除完整公开信源 inventory 使用 `/api/v2/sources` 外，现有 API 以 `/api/v1` 为前缀；两者都返回统一信封 `{success, data, error}`。
 
 | 端点 | 方法 | 用途 |
 |---|---|---|
@@ -361,7 +368,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/api/v1/hot` | GET | 近 N 小时热点榜（默认 48h）。`heat = round(加权分×10 + 关联讨论数×5)`；响应级 `generated_at`，逐条含 `published_at`/`fetched_at`/`event_time`/`source_kind`/`author`/`related_discussions`。`event_time` 取可解析且不晚于 `generated_at` 的 `published_at`，否则回退 `fetched_at`（页面相对时间只用它）。先取最近 600 条归档再算热度——48h 现实量约 4 倍富余，超出即截断属可接受近似 |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url |
-| `/api/v1/sources` | GET | 信源列表 |
+| `/api/v1/sources` | GET | 兼容信源投影，仅公开既有 `feed` / `x` / `wechat` kind；不会把新增 `web` kind 静默加入已发布 v1 集合 |
+| `/api/v2/sources` | GET | 完整的已启用公开信源 inventory，包含 `web` kind、配置状态、公开入口与作用域明确的读取验证状态；不公开付费 Mp2RSS URL 或 X cursor |
 | `/api/v1/healthz` | GET | 健康检查（条目数、运行数、ruleset 版本） |
 | `/api/v1/admin/metrics` | GET | 内部运维指标；与 `/admin` 同一访问门控 |
 | `/api/v1/admin/usage` | GET | 内部 LLM 已记录用量 rollup；`measurement_scope` 分开限定加总量与派生统计口径；与 `/admin` 同一访问门控 |
@@ -479,7 +487,9 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 
 | 任务 | 关键文件 |
 |---|---|
-| 添加新信源 | `data/sources.toml`；生产 wechat 源仍通过 Mp2RSS 合集 feed 配置；后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
+| 添加新信源 | 更新 `tests/fixtures/aihot_sources.json` 机器契约并生成 `data/sources.toml`；生产 wechat 源仍通过 Mp2RSS 合集 feed 配置；后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
+| 维护 AIHOT 对齐信源 | `tests/fixtures/aihot_sources.json` + README「信源维护与验证」四个命令；稳定 identity/aliases、retirement ledger、解析器/规则、公开投影和收据必须同步，不能只改 TOML |
+| 添加原始 Web/API 信源 | `src/airadar/fetcher/web.py` 登记确定性 fetch/item 边界与 parser + 正反 fixture + 真实 `audit_non_x_retrieval.py` 收据 |
 | 调整微信发现候选 | `wechat_discovery/`、`data/wechat-discovery.toml`、[ADR-024](adr/024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md) 至 [ADR-032](adr/032-reject-duplicate-urls-before-wechat-shadow-comparison.md)、[ADR-040](adr/040-verify-provisional-searchbiz-mapping-with-article-url-biz.md)、[ADR-041](adr/041-version-wechat-discovery-invariant-hardening.md)、[摄取 runbook](operations/wechat-ingestion.md) |
 | 调整微信读书只读 canary | `scripts/wechat_weread_canary/`、[ADR-033](adr/033-version-weread-canary-shelf-request-evidence.md) 至 [ADR-038](adr/038-observe-weread-dynamic-header-presence-without-replay.md)、[摄取 runbook](operations/wechat-ingestion.md) |
 | 修改 LLM prompt | `prefilter/prompts.py`, `scorer/prompts.py`, `enrich/prompts.py` |

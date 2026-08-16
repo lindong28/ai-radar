@@ -345,17 +345,8 @@ function sourceAvatarUrl(item) {
 function sourceDisplayName(item) {
   if (item.source_kind === "x") return item.source_name || item.source_id;
   if (item.source_kind === "wechat") return item.author || item.source_name || item.source_id;
-  const name = item.source_name || item.source_id;
-  const suffixes = {
-    openai_blog: "官网动态（RSS）",
-    anthropic_news: "Newsroom（RSS）",
-    anthropic_blog: "Blog（RSS）",
-    claude_code_releases: "GitHub Releases（RSS）",
-    huggingface_blog: "Blog（RSS）",
-    simonw: "Weblog（RSS）",
-    ithome: "RSS",
-  };
-  return suffixes[item.source_id] ? `${name}：${suffixes[item.source_id]}` : `${name}（RSS）`;
+  if (item.source_kind === "web") return item.source_name || item.source_id;
+  return item.source_name || item.source_id;
 }
 
 function authorHandle(value) {
@@ -382,6 +373,7 @@ function sourceLine(item, selected = false, compactMobile = false) {
 
 function itemHref(item) {
   const url = String(item.url || "");
+  if (item.source_id === "deepseek_api_updates") return url;
   return url.split("#", 1)[0] || url;
 }
 
@@ -1827,19 +1819,20 @@ export async function initAbout() {
       ? sources.filter((source) => `${source.id} ${source.name} ${source.tier} ${source.kind}`.toLowerCase().includes(q))
       : sources;
     if (!filtered.length) {
-      table.innerHTML = `<tr><td colspan="5">没有匹配信源</td></tr>`;
+      table.innerHTML = `<tr><td colspan="6">没有匹配信源</td></tr>`;
       return;
     }
     table.innerHTML = filtered.map((source) => `<tr>
       <td><code>${esc(source.id)}</code></td>
-      <td><a href="${esc(source.homepage_url || source.url)}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a></td>
-      <td>${esc(source.tier)}</td>
-      <td>${source.enabled ? "启用" : '<span title="自 2026-05-12 起停止抓取">停用</span>'}</td>
-      <td>${esc(source.kind || "feed")}</td>
+      <td><a href="${esc(source.public_landing_url || source.retrieval_entrypoint_url)}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a>${source.kind === "wechat" ? '<span class="source-scope-note">仅用于微信文章解读，不属于主时间线</span>' : ""}</td>
+      <td>${esc(source.tier_label)}（${esc(source.tier)}）</td>
+      <td>已启用</td>
+      <td>${esc(source.retrieval_validation.label)}</td>
+      <td>${esc(source.kind_label)}</td>
     </tr>`).join("");
   }
 
-  const data = await api("/api/v1/sources");
+  const data = await api("/api/v2/sources");
   sources = data.sources;
   debounceInput(search, render);
   render();

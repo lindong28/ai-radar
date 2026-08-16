@@ -148,7 +148,7 @@ def test_cors_adds_configured_site_domain(tmp_path: Path, monkeypatch) -> None: 
     assert configured.headers["access-control-allow-origin"] != "*"
 
 
-def test_item_detail_suppresses_wechat_full_text(tmp_path: Path) -> None:
+def test_main_item_detail_excludes_wechat_items(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"
     migrate(db_path)
     conn = sqlite3.connect(db_path)
@@ -175,11 +175,7 @@ def test_item_detail_suppresses_wechat_full_text(tmp_path: Path) -> None:
 
     client = TestClient(create_app(db_path))
 
-    payload = client.get("/api/v1/items/wechat-item").json()["data"]["item"]
-
-    assert payload["source_kind"] == "wechat"
-    assert payload["content_preview"] is None
-    assert "content_text" not in payload
+    assert client.get("/api/v1/items/wechat-item").status_code == 404
 
 
 def test_static_pages_are_served(tmp_path: Path) -> None:

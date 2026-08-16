@@ -58,16 +58,17 @@
         </section>
         <section class="about-section">
           <h2>来源（信源池）</h2>
-          <p class="source-note">停用源仅停止继续抓取，历史精选条目仍可能展示。停用日期：2026-05-12（AI Hot baseline 对齐时移除）。</p>
+          <p class="source-note">这里列出当前启用的来源。配置状态表示是否纳入抓取；运行时读取状态只反映抓取进程记录的当前状态，非 X 来源目前没有对应记录，也不等同于 live receipt 验收结果。</p>
           <div class="sources-table-wrap">
             <table class="sources-table">
               <thead>
                 <tr>
                   <th>slug</th>
                   <th>名称</th>
-                  <th>tier</th>
-                  <th>状态</th>
-                  <th>kind</th>
+                  <th>重要级别</th>
+                  <th>配置状态</th>
+                  <th>运行时读取状态</th>
+                  <th>来源类型</th>
                 </tr>
               </thead>
               <tbody id="sources-table"></tbody>

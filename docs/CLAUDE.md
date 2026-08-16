@@ -126,6 +126,10 @@
 | [043-waive-manual-wechat-probe-cooldown-once.md](adr/043-waive-manual-wechat-probe-cooldown-once.md) | 对一次获授权微信后台 probe 豁免本地 1440 分钟冷却 |
 | [044-persist-wechat-platform-error-ret.md](adr/044-persist-wechat-platform-error-ret.md) | schema v9 持久化后台 exact ret，区分平台拒绝与可证明频控 |
 | [045-require-integer-platform-ret-and-evidence-backed-cooldown.md](adr/045-require-integer-platform-ret-and-evidence-backed-cooldown.md) | schema v10 只接受整数后台错误码，特殊冷却仅由已记录频控证据触发 |
+| [046-resolve-x-user-id-in-a-separate-fetch-round.md](adr/046-resolve-x-user-id-in-a-separate-fetch-round.md) | X user ID 解析与 timeline 读取分轮执行 |
+| [047-use-controlled-original-web-lists-for-aihot-source-alignment.md](adr/047-use-controlled-original-web-lists-for-aihot-source-alignment.md) | AIHOT 来源对齐使用受控的原始 Web/API 列表 |
+| [048-require-semantic-live-validation-receipts.md](adr/048-require-semantic-live-validation-receipts.md) | 用语义完整的收据验收来源读取能力 |
+| [049-keep-human-audit-summaries-and-remove-duplicate-authorities.md](adr/049-keep-human-audit-summaries-and-remove-duplicate-authorities.md) | 保留人读审计摘要并移除重复权威 |
 
 ### docs/experiences/ [Agent]
 
@@ -147,6 +151,7 @@
 
 | 目录 | 说明 |
 |---|---|
+| [20260812-aihot-original-source-alignment/](plans/20260812-aihot-original-source-alignment/) | AIHOT 原始来源对齐：161 个主时间线来源、可选 WeChat 隔离、语义收据与浏览器升级验收 |
 | [20260810-llm-cost-observability/](plans/20260810-llm-cost-observability/) | 查询时派生成本、告警/周报消费面、cache split 与计量失败 paid-result 保护；金额加总只表示记录行下界 |
 | [20260809-fts-rebuild-sync/](plans/20260809-fts-rebuild-sync/) | DB 跨洋同步改造：持久 base-only replica + 服务器候选槽重建 FTS，稳态 16.39MB<20MB、零停机 3500/3500 |
 | [20260720-db-slimming/](plans/20260720-db-slimming/) | radar.db 瘦身：清可再生 `summary_json` 缓存 + VACUUM + 常驻保留（Option A），生产 2.28GB→1.495GB |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,13 +9,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
+
 from .. import db
+from ..runtime_env import read_value
 from ..sources.loader import SourceConfig, load_sources
 from ..sources.sync import load_enabled_sources_from_db, sync_to_db
+from ..sources.x_state import validate_x_runtime_meta, without_x_runtime_meta, x_runtime_meta
 from .dedup import FetchedItem, _normalized_url, upsert_item
 from .http_client import FeedResponse, fetch_feed
 from .rss import parse_feed
+from .web import fetch_web_source
 from .wechat import normalize_wechat_avatar_url, scrape_article
+from .x_api import fetch_x_timeline
 
 logger = logging.getLogger(__name__)
 WECHAT_AVATAR_NEGATIVE_CACHE_TTL = timedelta(days=2)
@@ -29,6 +36,8 @@ class SourceFetchSummary:
     fetched: int = 0
     inserted: int = 0
     error: str | None = None
+    http_status_class: str | None = None
+    http_status_code: int | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +71,8 @@ class _WechatBodyPlan:
 class _SourceMetaUpdate:
     source_id: str
     meta_json: str
+    expected_runtime: dict[str, Any] | None = None
+    source_identity: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +82,10 @@ class _SourceFeedResult:
     items: list[FetchedItem] = field(default_factory=list)
     meta_update: _SourceMetaUpdate | None = None
     error: str | None = None
+    http_status_class: str | None = None
+    http_status_code: int | None = None
+    x_failure_reason: str | None = None
+    x_failure_recovery: str | None = None
 
 
 class _SourceFeedMetaCapture:
@@ -98,36 +113,175 @@ def fetch_source(conn: sqlite3.Connection, source: SourceConfig) -> SourceFetchS
 def _fetch_source_feed(source: SourceConfig) -> _SourceFeedResult:
     capture = _SourceFeedMetaCapture()
     try:
+        if source.kind == "x" and source.meta.get("adapter") == "x_api":
+            page = fetch_x_timeline(source)
+            return _SourceFeedResult(
+                source=source,
+                response=FeedResponse(status_code=200, body=b""),
+                items=page.items,
+                meta_update=_SourceMetaUpdate(
+                    source_id=source.slug,
+                    meta_json=json.dumps(page.meta, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    expected_runtime=x_runtime_meta(source.meta),
+                    source_identity=(
+                        str(source.meta.get("adapter") or ""),
+                        str(source.meta.get("username") or "").casefold(),
+                    ),
+                ),
+            )
+        if source.kind == "web":
+            response, items = fetch_web_source(source, cast(sqlite3.Connection, capture))
+            return _SourceFeedResult(
+                source=source,
+                response=response,
+                items=items,
+                meta_update=capture.meta_update,
+            )
         response = fetch_feed(source, cast(sqlite3.Connection, capture))
         if response.not_modified:
             return _SourceFeedResult(source=source, response=response, meta_update=capture.meta_update)
         items = parse_feed(source, response.body)
         return _SourceFeedResult(source=source, response=response, items=items, meta_update=capture.meta_update)
     except Exception as exc:
-        return _SourceFeedResult(source=source, error=f"{type(exc).__name__}: {exc}")
+        status_class = None
+        status_code = None
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            status_class = f"{status_code // 100}xx"
+        x_failure_reason = None
+        x_failure_recovery = None
+        if source.kind == "x" and source.meta.get("adapter") == "x_api":
+            if status_code == 401:
+                x_failure_reason = "authentication_rejected"
+                x_failure_recovery = "replace_or_confirm_token_then_rerun_fetch"
+            elif isinstance(exc, RuntimeError) and str(exc) == "X_BEARER_TOKEN is not configured":
+                x_failure_reason = "x_bearer_token_not_configured"
+                x_failure_recovery = "configure_X_BEARER_TOKEN_then_rerun_fetch"
+            else:
+                x_failure_reason = "http_or_runtime_failure"
+                x_failure_recovery = "inspect_X_fetch_error_then_rerun_fetch"
+        return _SourceFeedResult(
+            source=source,
+            error=f"{type(exc).__name__}: {exc}",
+            http_status_class=status_class,
+            http_status_code=status_code,
+            x_failure_reason=x_failure_reason,
+            x_failure_recovery=x_failure_recovery,
+        )
+
+
+def _persist_x_failure(conn: sqlite3.Connection, result: _SourceFeedResult) -> None:
+    if result.x_failure_reason is None or result.x_failure_recovery is None:
+        return
+    source = result.source
+    row = conn.execute("SELECT meta_json FROM sources WHERE id=?", (source.slug,)).fetchone()
+    if row is None:
+        raise ValueError(f"source disappeared while fetching: {source.slug}")
+    current_meta_json = row[0] or "{}"
+    current_meta = json.loads(current_meta_json)
+    if not isinstance(current_meta, dict):
+        raise ValueError(f"invalid source metadata while fetching: {source.slug}")
+    current_runtime = validate_x_runtime_meta(current_meta, context=source.slug)
+    current_identity = (
+        str(current_meta.get("adapter") or ""),
+        str(current_meta.get("username") or "").casefold(),
+    )
+    source_identity = (
+        str(source.meta.get("adapter") or ""),
+        str(source.meta.get("username") or "").casefold(),
+    )
+    if current_runtime != x_runtime_meta(source.meta) or current_identity != source_identity:
+        raise ValueError(f"X source state changed while fetching: {source.slug}")
+    next_runtime = dict(current_runtime)
+    next_runtime["x_reference_status"] = "blocked"
+    next_runtime["x_reference_attempted_at"] = _utc_now()
+    next_runtime["x_reference_reason"] = result.x_failure_reason
+    next_runtime["x_reference_recovery"] = result.x_failure_recovery
+    next_runtime.pop("x_reference_validated_at", None)
+    validate_x_runtime_meta(next_runtime, context=source.slug)
+    next_meta = {**without_x_runtime_meta(current_meta), **next_runtime}
+    next_meta_json = json.dumps(next_meta, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    cursor = conn.execute(
+        "UPDATE sources SET meta_json=? WHERE id=? AND meta_json=?",
+        (next_meta_json, source.slug, current_meta_json),
+    )
+    if cursor.rowcount != 1:
+        raise ValueError(f"X source state changed while fetching: {source.slug}")
+    conn.commit()
 
 
 def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResult) -> SourceFetchSummary:
     source = result.source
     if result.error is not None:
-        return SourceFetchSummary(source_id=source.slug, error=result.error)
+        try:
+            _persist_x_failure(conn, result)
+        except Exception as exc:
+            conn.rollback()
+            return SourceFetchSummary(
+                source_id=source.slug,
+                error=f"{result.error}; X state persistence failed: {type(exc).__name__}: {exc}",
+                http_status_class=result.http_status_class,
+                http_status_code=result.http_status_code,
+            )
+        return SourceFetchSummary(source_id=source.slug, error=result.error, http_status_class=result.http_status_class, http_status_code=result.http_status_code)
     response = result.response
     if response is None:
         return SourceFetchSummary(source_id=source.slug, error="RuntimeError: missing feed response")
 
     try:
         if result.meta_update is not None:
-            conn.execute(
-                "UPDATE sources SET meta_json=? WHERE id=?",
-                (result.meta_update.meta_json, result.meta_update.source_id),
-            )
+            update = result.meta_update
+            meta_json = update.meta_json
+            if update.expected_runtime is not None:
+                row = conn.execute(
+                    "SELECT meta_json FROM sources WHERE id=?",
+                    (update.source_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"source disappeared while fetching: {update.source_id}")
+                current_meta_json = row[0] or "{}"
+                current_meta = json.loads(current_meta_json)
+                if not isinstance(current_meta, dict):
+                    raise ValueError(f"invalid source metadata while fetching: {update.source_id}")
+                current_runtime = validate_x_runtime_meta(current_meta, context=update.source_id)
+                current_identity = (
+                    str(current_meta.get("adapter") or ""),
+                    str(current_meta.get("username") or "").casefold(),
+                )
+                if current_runtime != update.expected_runtime or current_identity != update.source_identity:
+                    raise ValueError(f"X source state changed while fetching: {update.source_id}")
+                fetched_meta = json.loads(update.meta_json)
+                next_runtime = validate_x_runtime_meta(fetched_meta, context=update.source_id)
+                merged_meta = {**without_x_runtime_meta(current_meta), **next_runtime}
+                meta_json = json.dumps(
+                    merged_meta,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            if update.expected_runtime is None:
+                conn.execute(
+                    "UPDATE sources SET meta_json=? WHERE id=?",
+                    (meta_json, update.source_id),
+                )
+            else:
+                cursor = conn.execute(
+                    "UPDATE sources SET meta_json=? WHERE id=? AND meta_json=?",
+                    (meta_json, update.source_id, current_meta_json),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(f"X source state changed while fetching: {update.source_id}")
         if response.not_modified:
             if source.kind == "wechat":
                 _backfill_wechat_avatar_cache(conn, source.slug)
                 conn.commit()
             elif result.meta_update is not None:
                 conn.commit()
-            return SourceFetchSummary(source_id=source.slug)
+            return SourceFetchSummary(
+                source_id=source.slug,
+                http_status_class=f"{response.status_code // 100}xx",
+                http_status_code=response.status_code,
+            )
         items = result.items
         if source.kind == "wechat":
             items = _enrich_wechat_bodies(conn, items)
@@ -135,7 +289,13 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
         for item in items:
             inserted += 1 if upsert_item(conn, item) else 0
         conn.commit()
-        return SourceFetchSummary(source_id=source.slug, fetched=len(items), inserted=inserted)
+        return SourceFetchSummary(
+            source_id=source.slug,
+            fetched=len(items),
+            inserted=inserted,
+            http_status_class=f"{response.status_code // 100}xx",
+            http_status_code=response.status_code,
+        )
     except Exception as exc:
         conn.rollback()
         return SourceFetchSummary(source_id=source.slug, error=f"{type(exc).__name__}: {exc}")
@@ -436,7 +596,32 @@ def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSum
     try:
         reload_sources(conn, path)
         sources = load_enabled_sources_from_db(conn)
-        summaries = _fetch_and_apply_sources(conn, sources)
+        unavailable: list[SourceFetchSummary] = []
+        if not read_value("X_BEARER_TOKEN").strip():
+            unavailable = [
+                _apply_source_feed_result(
+                    conn,
+                    _SourceFeedResult(
+                        source=source,
+                    error="RuntimeError: X_BEARER_TOKEN is not configured",
+                        x_failure_reason="x_bearer_token_not_configured",
+                        x_failure_recovery="configure_X_BEARER_TOKEN_then_rerun_fetch",
+                    ),
+                )
+                for source in sources
+                if source.kind == "x" and source.meta.get("adapter") == "x_api"
+            ]
+            if unavailable:
+                logger.warning(
+                    "%d enabled X API sources cannot run because X_BEARER_TOKEN is not configured",
+                    len(unavailable),
+                )
+            sources = [
+                source
+                for source in sources
+                if not (source.kind == "x" and source.meta.get("adapter") == "x_api")
+            ]
+        summaries = unavailable + _fetch_and_apply_sources(conn, sources)
         return FetchSummary(summaries)
     finally:
         conn.close()

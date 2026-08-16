@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 from airadar.db import migrate
 from airadar.enrich.schema import EnrichOutput
 from airadar.presentation import summary as presentation_summary
-from airadar.presentation.media import proxy_image_url
 from airadar.web.app import (
     SHANGHAI_TZ,
     WECHAT_FALLBACK_ICON,
@@ -460,7 +459,7 @@ def test_item_summary_suppresses_wechat_preview_and_full_text(tmp_path: Path) ->
     assert "content_text" not in bare
 
 
-def test_timeline_api_includes_wechat_author_avatar_cache(tmp_path: Path) -> None:
+def test_timeline_api_excludes_wechat_items(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"
     migrate(db_path)
     conn = sqlite3.connect(db_path)
@@ -483,18 +482,13 @@ def test_timeline_api_includes_wechat_author_avatar_cache(tmp_path: Path) -> Non
     conn.close()
     client = TestClient(create_app(db_path))
 
-    item = client.get("/api/v1/timeline", params={"limit": 1}).json()["data"]["items"][0]
+    data = client.get("/api/v1/timeline", params={"limit": 1}).json()["data"]
 
-    assert item["source_kind"] == "wechat"
-    assert item["source_name"] == "微信公众号（Mp2RSS 合集）"
-    assert item["author"] == "歸藏的AI工具箱"
-    # WeChat CDN blocks browser hotlinking, so the cached avatar is routed
-    # through the same-origin /img proxy.
-    assert item["author_avatar_url"] == proxy_image_url("https://mmbiz.qpic.cn/guizang.png")
-    assert item["author_avatar_url"].startswith("/img?url=")
+    assert data["items"] == []
+    assert data["total"] == 0
 
 
-def test_precomputed_curated_api_hydrates_wechat_author_avatar_cache(tmp_path: Path) -> None:
+def test_precomputed_curated_api_excludes_wechat_items(tmp_path: Path) -> None:
     db_path = _seed_db(tmp_path)
     conn = sqlite3.connect(db_path)
     _insert_source_with_kind(conn, "wx_mp2rss", "微信公众号（Mp2RSS 合集）", "wechat")
@@ -532,10 +526,8 @@ def test_precomputed_curated_api_hydrates_wechat_author_avatar_cache(tmp_path: P
     client = TestClient(create_app(db_path))
 
     items = client.get("/api/v1/curated").json()["data"]["items"]
-    wechat = next(item for item in items if item["id"] == "item-wechat")
 
-    assert wechat["author_avatar_url"] == proxy_image_url("https://mmbiz.qpic.cn/kazike.png")
-    assert wechat["author_avatar_url"].startswith("/img?url=")
+    assert all(item["id"] != "item-wechat" for item in items)
 
 
 def test_prepaint_uses_wechat_author_name_and_avatar_without_rss_suffix() -> None:
@@ -579,7 +571,7 @@ def test_prepaint_uses_wechat_author_name_and_avatar_without_rss_suffix() -> Non
     assert wechat["source_icon_url"] == "https://mmbiz.qpic.cn/guizang.png"
     assert wechat["source_initial"] == "歸"
     assert "RSS" not in wechat["source_name"]
-    assert feed["source_name"] == "OpenAI Blog：官网动态（RSS）"
+    assert feed["source_name"] == "OpenAI Blog"
     assert feed["source_icon_url"] == "https://example.com/openai.png"
     assert feed["source_author"] == "@Ada"
     assert feed["weekday_label"] == "星期一"
@@ -608,6 +600,29 @@ def test_prepaint_uses_generic_wechat_icon_when_author_avatar_missing() -> None:
 
     assert item["source_name"] == "数字生命卡兹克"
     assert item["source_icon_url"] == WECHAT_FALLBACK_ICON
+
+
+def test_prepaint_preserves_deepseek_update_date_fragment() -> None:
+    item_url = (
+        "https://api-docs.deepseek.com/zh-cn/updates"
+        "#%E6%97%B6%E9%97%B4-2026-08-13"
+    )
+    [item] = _prepaint_items(
+        [
+            {
+                "id": "deepseek-update",
+                "source_id": "deepseek_api_updates",
+                "source_name": "DeepSeek API updates",
+                "source_kind": "web",
+                "url": item_url,
+                "title": "DeepSeek-V4-Pro 更新",
+                "published_at": "2026-08-13T00:00:00Z",
+            }
+        ],
+        timeline_page=True,
+    )
+
+    assert item["url"] == item_url
 
 
 def test_wechat_prepaint_uses_shanghai_day_geometry() -> None:
@@ -1151,18 +1166,16 @@ def test_timeline_search_prioritizes_source_matches_and_rotates_sources(tmp_path
 
     assert [item["id"] for item in search["items"]] == [
         "item-x-1",
-        "item-wx-1",
         "item-x-2",
         "item-x-3",
         "item-content-newer",
     ]
-    assert "wx_shared" in {item["source_id"] for item in search["items"][:3]}
+    assert "wx_shared" not in {item["source_id"] for item in search["items"]}
     assert [item["id"] for item in no_query["items"]] == [
         "item-content-newer",
         "item-x-1",
         "item-x-2",
         "item-x-3",
-        "item-wx-1",
     ]
 
 
@@ -1301,7 +1314,7 @@ def test_simplified_query_marks_traditional_source_as_source_match_for_ranking(t
 
     timeline = client.get("/api/v1/timeline", params={"q": "归藏", "limit": 2}).json()["data"]
 
-    assert [item["id"] for item in timeline["items"]] == ["item-guizang", "item-content-newer"]
+    assert [item["id"] for item in timeline["items"]] == ["item-content-newer"]
 
 
 def test_short_search_uses_like_for_curated_compute_fallback(tmp_path: Path) -> None:
@@ -1631,7 +1644,6 @@ def test_curated_search_prioritizes_source_matches_and_rotates_sources_for_preco
 
     assert [item["id"] for item in search["items"]] == [
         "item-x-1",
-        "item-wx-1",
         "item-x-2",
         "item-x-3",
         "item-content-newer",
@@ -1641,7 +1653,6 @@ def test_curated_search_prioritizes_source_matches_and_rotates_sources_for_preco
         "item-x-1",
         "item-x-2",
         "item-x-3",
-        "item-wx-1",
     ]
 
 

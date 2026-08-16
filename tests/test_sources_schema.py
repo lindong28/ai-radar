@@ -46,12 +46,122 @@ def test_kind_x_is_accepted(tmp_path: Path) -> None:
             'kind = "x"',
             'homepage_url = "https://x.com/example"',
             'icon_url = "https://abs.twimg.com/favicons/twitter.ico"',
+            "[source.meta]",
+            'adapter = "rss"',
         ],
     )
     source = load_sources(path)[0]
     assert source.kind == "x"
     assert source.homepage_url == "https://x.com/example"
     assert source.icon_url == "https://abs.twimg.com/favicons/twitter.ico"
+    assert source.meta == {"adapter": "rss"}
+
+
+def test_kind_x_without_adapter_remains_legacy_rss(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "twitter_user"',
+            'name = "X User"',
+            'url = "https://rsshub.app/twitter/user/example"',
+            'tier = "T1.5"',
+            'kind = "x"',
+        ],
+    )
+
+    source = load_sources(path)[0]
+
+    assert source.kind == "x"
+    assert source.meta == {}
+
+
+def test_versionless_canonical_x_api_url_without_adapter_keeps_v1_compatibility(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "twitter_user"',
+            'name = "X User"',
+            'url = "https://api.x.com/2/users/by/username/OpenAI/tweets"',
+            'tier = "T1.5"',
+            'kind = "x"',
+        ],
+    )
+
+    assert load_sources(path)[0].meta == {}
+
+
+def test_explicit_schema_v1_keeps_canonical_x_api_url_legacy_compatibility(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "schema_version = 1",
+            "[[source]]",
+            'slug = "twitter_user"',
+            'name = "X User"',
+            'url = "https://api.x.com/2/users/by/username/OpenAI/tweets"',
+            'tier = "T1.5"',
+            'kind = "x"',
+        ],
+    )
+
+    assert load_sources(path)[0].meta == {}
+
+
+def test_schema_v2_rejects_canonical_x_api_url_without_adapter(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "schema_version = 2",
+            "[[source]]",
+            'slug = "twitter_user"',
+            'name = "X User"',
+            'fetch_url = "https://api.x.com/2/users/by/username/OpenAI/tweets"',
+            'tier = "T1.5"',
+            'kind = "x"',
+        ],
+    )
+
+    with pytest.raises(ValueError, match="adapter='x_api' is required"):
+        load_sources(path)
+
+
+def test_schema_v2_rejects_legacy_url_field(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "schema_version = 2",
+            "[[source]]",
+            'slug = "feed_example"',
+            'name = "Example"',
+            'url = "https://example.com/feed.xml"',
+            'tier = "T2"',
+        ],
+    )
+
+    with pytest.raises(ValueError, match="fetch_url"):
+        load_sources(path)
+
+
+def test_kind_x_with_unknown_legacy_adapter_remains_rss(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "[[source]]",
+            'slug = "twitter_user"',
+            'name = "X User"',
+            'url = "https://rsshub.app/twitter/user/example"',
+            'tier = "T1.5"',
+            'kind = "x"',
+            "[source.meta]",
+            'adapter = "rsshub"',
+        ],
+    )
+
+    source = load_sources(path)[0]
+
+    assert source.meta == {"adapter": "rsshub"}
 
 
 def test_kind_wechat_is_accepted(tmp_path: Path) -> None:
@@ -85,6 +195,24 @@ def test_invalid_kind_rejected(tmp_path: Path) -> None:
         ],
     )
     with pytest.raises(ValueError, match="invalid kind"):
+        load_sources(path)
+
+
+def test_boolean_schema_version_is_rejected(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        [
+            "schema_version = true",
+            "[[source]]",
+            'slug = "twitter_user"',
+            'name = "X User"',
+            'url = "https://example.com/feed.xml"',
+            'tier = "T1.5"',
+            'kind = "x"',
+        ],
+    )
+
+    with pytest.raises(ValueError, match="schema_version"):
         load_sources(path)
 
 

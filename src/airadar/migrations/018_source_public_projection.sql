@@ -1,0 +1,4 @@
+ALTER TABLE sources ADD COLUMN public_url_override TEXT;
+ALTER TABLE sources ADD COLUMN optional INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sources ADD COLUMN required_env TEXT;
+ALTER TABLE sources ADD COLUMN wechat_only INTEGER NOT NULL DEFAULT 0;

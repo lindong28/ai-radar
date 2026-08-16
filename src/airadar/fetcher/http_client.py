@@ -30,6 +30,8 @@ class FeedResponse:
     status_code: int
     body: bytes
     not_modified: bool = False
+    final_url: str | None = None
+    headers: dict[str, str] | None = None
 
 
 def _is_loopback_url(url: str) -> bool:
@@ -37,9 +39,15 @@ def _is_loopback_url(url: str) -> bool:
     return host in {"localhost", "127.0.0.1", "::1"}
 
 
-def fetch_feed(source: SourceConfig, conn: sqlite3.Connection, timeout: float = 30.0) -> FeedResponse:
+def fetch_document(
+    source: SourceConfig,
+    conn: sqlite3.Connection,
+    *,
+    accept: str,
+    timeout: float = 30.0,
+) -> FeedResponse:
     headers = {
-        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+        "Accept": accept,
         "User-Agent": str(USER_AGENT),
     }
     etag = source.meta.get("etag")
@@ -57,7 +65,13 @@ def fetch_feed(source: SourceConfig, conn: sqlite3.Connection, timeout: float = 
         trust_env=not _is_loopback_url(source.url),
     )
     if response.status_code == 304:
-        return FeedResponse(status_code=304, body=b"", not_modified=True)
+        return FeedResponse(
+            status_code=304,
+            body=b"",
+            not_modified=True,
+            final_url=str(getattr(response, "url", source.url)),
+            headers=dict(response.headers),
+        )
     response.raise_for_status()
 
     meta = dict(source.meta)
@@ -70,4 +84,18 @@ def fetch_feed(source: SourceConfig, conn: sqlite3.Connection, timeout: float = 
             "UPDATE sources SET meta_json=? WHERE id=?",
             (json.dumps(meta, ensure_ascii=False, sort_keys=True, separators=(",", ":")), source.slug),
         )
-    return FeedResponse(status_code=response.status_code, body=response.content)
+    return FeedResponse(
+        status_code=response.status_code,
+        body=response.content,
+        final_url=str(getattr(response, "url", source.url)),
+        headers=dict(response.headers),
+    )
+
+
+def fetch_feed(source: SourceConfig, conn: sqlite3.Connection, timeout: float = 30.0) -> FeedResponse:
+    return fetch_document(
+        source,
+        conn,
+        accept="application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+        timeout=timeout,
+    )

@@ -115,8 +115,8 @@ def test_equal_count_interpretation_relation_mislink_fails_before_timing(
         conn.execute(
             """
             UPDATE wechat_interpretations
-            SET item_id='item-02000'
-            WHERE item_id='item-01799'
+            SET item_id='item-01799'
+            WHERE item_id='item-17990'
             """
         )
         conn.commit()

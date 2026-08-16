@@ -119,8 +119,9 @@ def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
         "  SELECT MAX(le.id) FROM item_evaluations le "
         "  WHERE le.item_id = i2.id AND le.stage = 'enrich' AND le.error IS NULL"
         ") "
-        "WHERE "
+        "WHERE s2.enabled=1 AND COALESCE(s2.kind, 'feed') != 'wechat' AND ("
         + " OR ".join(f"{expr} LIKE ? ESCAPE '\\'" for _pattern in like_patterns for expr in field_exprs)
+        + ")"
     )
     params = [pattern for pattern in like_patterns for _ in range(4)]
     return subquery, params

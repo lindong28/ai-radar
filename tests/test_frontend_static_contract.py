@@ -176,7 +176,8 @@ def test_about_page_declares_contact_disabled_source_notice_and_scoring_legend()
     html = _read("about.html")
 
     assert "来源（信源池）" in html
-    assert "停用源仅停止继续抓取" in html
+    assert "这里列出当前启用的来源" in html
+    assert "运行时读取状态" in html
     assert "site.repo_url" in html
     assert "site.maintainer" in html
     assert "site.x_url" in html

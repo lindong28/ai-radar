@@ -1,0 +1,2708 @@
+{
+  "schema_version": 2,
+  "sources": [
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "feed:ai_normal_technology",
+      "enabled": true,
+      "fetch_url": "https://www.normaltech.ai/feed",
+      "homepage_url": "https://www.normaltech.ai/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.normaltech.ai&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "AI as Normal Technology",
+      "slug": "ai_normal_technology",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "Apple Machine Learning Research（RSS）"
+      ],
+      "derived_aihot_identity": "feed:apple_ml",
+      "enabled": true,
+      "fetch_url": "https://machinelearning.apple.com/rss.xml",
+      "homepage_url": "https://machinelearning.apple.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=machinelearning.apple.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Apple Machine Learning Research",
+      "slug": "apple_ml",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Ars Technica：AI（RSS）"
+      ],
+      "derived_aihot_identity": "feed:ars_ai",
+      "enabled": true,
+      "fetch_url": "https://feeds.arstechnica.com/arstechnica/technology-lab",
+      "homepage_url": "https://arstechnica.com/ai/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=arstechnica.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Ars Technica: AI",
+      "slug": "ars_ai",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "Artificial Intelligence News（RSS）"
+      ],
+      "derived_aihot_identity": "feed:ai_news",
+      "enabled": true,
+      "fetch_url": "https://www.artificialintelligence-news.com/feed/",
+      "homepage_url": "https://www.artificialintelligence-news.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.artificialintelligence-news.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Artificial Intelligence News",
+      "slug": "ai_news",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "ByteByteGo（RSS）"
+      ],
+      "derived_aihot_identity": "feed:bytebytego",
+      "enabled": true,
+      "fetch_url": "https://blog.bytebytego.com/feed",
+      "homepage_url": "https://blog.bytebytego.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=blog.bytebytego.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "ByteByteGo",
+      "slug": "bytebytego",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "CMU：Machine Learning Blog"
+      ],
+      "derived_aihot_identity": "feed:cmu_ml",
+      "enabled": true,
+      "fetch_url": "https://blog.ml.cmu.edu/feed/",
+      "homepage_url": "https://blog.ml.cmu.edu/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=blog.ml.cmu.edu&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "CMU Machine Learning Blog",
+      "slug": "cmu_ml",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Claude Code：GitHub Releases（RSS）"
+      ],
+      "derived_aihot_identity": "feed:claude_code_releases",
+      "enabled": true,
+      "fetch_url": "https://github.com/anthropics/claude-code/releases.atom",
+      "homepage_url": "https://github.com/anthropics/claude-code/releases",
+      "icon_url": "https://www.google.com/s2/favicons?domain=github.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Claude Code GitHub Releases",
+      "slug": "claude_code_releases",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Claude：YouTube（RSS）"
+      ],
+      "derived_aihot_identity": "feed:claude_youtube",
+      "enabled": true,
+      "fetch_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCV03SRZXJEz-hchIAogeJOg",
+      "homepage_url": "https://www.youtube.com/@claudeai",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.youtube.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Claude YouTube",
+      "slug": "claude_youtube",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Databricks：Blog（RSS）"
+      ],
+      "derived_aihot_identity": "feed:databricks",
+      "enabled": true,
+      "fetch_url": "https://www.databricks.com/feed",
+      "homepage_url": "https://www.databricks.com/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.databricks.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Databricks Blog",
+      "slug": "databricks",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Dwarkesh Patel：Podcast & Blog（RSS）"
+      ],
+      "derived_aihot_identity": "feed:dwarkesh",
+      "enabled": true,
+      "fetch_url": "https://www.dwarkesh.com/feed",
+      "homepage_url": "https://www.dwarkesh.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.dwarkesh.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Dwarkesh Patel",
+      "slug": "dwarkesh",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "Gary Marcus：The Road to AI We Can Trust（RSS）"
+      ],
+      "derived_aihot_identity": "feed:gary_marcus",
+      "enabled": true,
+      "fetch_url": "https://garymarcus.substack.com/feed",
+      "homepage_url": "https://garymarcus.substack.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=garymarcus.substack.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Gary Marcus",
+      "slug": "gary_marcus",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "feed:github_blog",
+      "enabled": true,
+      "fetch_url": "https://github.blog/feed/",
+      "homepage_url": "https://github.blog/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=github.blog&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "GitHub Blog",
+      "slug": "github_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Google Blog：AI（RSS）"
+      ],
+      "derived_aihot_identity": "feed:google_ai",
+      "enabled": true,
+      "fetch_url": "https://blog.google/innovation-and-ai/technology/ai/rss/",
+      "homepage_url": "https://blog.google/innovation-and-ai/technology/ai/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=blog.google&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Google Blog: AI",
+      "slug": "google_ai",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Google Cloud：Databases（RSS）"
+      ],
+      "derived_aihot_identity": "feed:google_cloud_databases",
+      "enabled": true,
+      "fetch_url": "https://cloudblog.withgoogle.com/rss/",
+      "homepage_url": "https://cloud.google.com/blog/products/databases",
+      "icon_url": "https://www.google.com/s2/favicons?domain=cloud.google.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Google Cloud: Databases",
+      "slug": "google_cloud_databases",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Google DeepMind：Blog（RSS）"
+      ],
+      "derived_aihot_identity": "feed:google_deepmind",
+      "enabled": true,
+      "fetch_url": "https://deepmind.google/blog/rss.xml",
+      "homepage_url": "https://deepmind.google/blog/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=deepmind.google&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Google DeepMind Blog",
+      "slug": "google_deepmind",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Google Developers Blog（RSS）"
+      ],
+      "derived_aihot_identity": "feed:google_developers",
+      "enabled": true,
+      "fetch_url": "https://developers.googleblog.com/feeds/posts/default",
+      "homepage_url": "https://developers.googleblog.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=developers.googleblog.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Google Developers Blog",
+      "slug": "google_developers",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Hacker News 热门（buzzing.cc 中文翻译）"
+      ],
+      "derived_aihot_identity": "feed:buzzing_hn",
+      "enabled": true,
+      "fetch_url": "https://www.buzzing.cc/feed.xml",
+      "homepage_url": "https://www.buzzing.cc/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.buzzing.cc&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Hacker News popular via buzzing.cc",
+      "slug": "buzzing_hn",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "Hugging Face：Blog（RSS）"
+      ],
+      "derived_aihot_identity": "feed:huggingface_blog",
+      "enabled": true,
+      "fetch_url": "https://huggingface.co/blog/feed.xml",
+      "homepage_url": "https://huggingface.co/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=huggingface.co&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Hugging Face Blog",
+      "slug": "huggingface_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "IT之家（RSS）"
+      ],
+      "derived_aihot_identity": "feed:ithome",
+      "enabled": true,
+      "fetch_url": "https://www.ithome.com/rss/",
+      "homepage_url": "https://www.ithome.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.ithome.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "IT Home",
+      "slug": "ithome",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "Linear：Now（RSS）"
+      ],
+      "derived_aihot_identity": "feed:linear_now",
+      "enabled": true,
+      "fetch_url": "https://linear.app/rss/now.xml",
+      "homepage_url": "https://linear.app/now",
+      "icon_url": "https://www.google.com/s2/favicons?domain=linear.app&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Linear Now",
+      "slug": "linear_now",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "MarkTechPost（RSS）"
+      ],
+      "derived_aihot_identity": "feed:marktechpost",
+      "enabled": true,
+      "fetch_url": "https://www.marktechpost.com/feed/",
+      "homepage_url": "https://www.marktechpost.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.marktechpost.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "MarkTechPost",
+      "slug": "marktechpost",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "Meta Engineering Blog（RSS）"
+      ],
+      "derived_aihot_identity": "feed:meta_engineering",
+      "enabled": true,
+      "fetch_url": "https://engineering.fb.com/feed/",
+      "homepage_url": "https://engineering.fb.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=engineering.fb.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Meta Engineering",
+      "slug": "meta_engineering",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "NVIDIA Blog（RSS）"
+      ],
+      "derived_aihot_identity": "feed:nvidia",
+      "enabled": true,
+      "fetch_url": "https://blogs.nvidia.com/feed/",
+      "homepage_url": "https://blogs.nvidia.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=blogs.nvidia.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "NVIDIA Blog",
+      "slug": "nvidia",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Nathan Lambert：Interconnects（RSS）"
+      ],
+      "derived_aihot_identity": "feed:interconnects",
+      "enabled": true,
+      "fetch_url": "https://www.interconnects.ai/feed",
+      "homepage_url": "https://www.interconnects.ai/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.interconnects.ai&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Nathan Lambert: Interconnects",
+      "slug": "interconnects",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "OpenAI：官网动态（RSS · 排除企业/客户案例）"
+      ],
+      "derived_aihot_identity": "feed:openai_blog",
+      "enabled": true,
+      "fetch_url": "https://openai.com/news/rss.xml",
+      "homepage_url": "https://openai.com/news/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=openai.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "OpenAI official updates",
+      "slug": "openai_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "OpenRouter：Announcements（RSS）"
+      ],
+      "derived_aihot_identity": "feed:openrouter_announcements",
+      "enabled": true,
+      "fetch_url": "https://openrouter.ai/blog/feed.xml",
+      "homepage_url": "https://openrouter.ai/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=openrouter.ai&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "OpenRouter Announcements",
+      "slug": "openrouter_announcements",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Sakana AI：Blog（网页）"
+      ],
+      "derived_aihot_identity": "feed:sakana_blog",
+      "enabled": true,
+      "fetch_url": "https://sakana.ai/feed.xml",
+      "homepage_url": "https://sakana.ai/blog/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=sakana.ai&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Sakana AI Blog",
+      "slug": "sakana_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Simon Willison 博客"
+      ],
+      "derived_aihot_identity": "feed:simonw",
+      "enabled": true,
+      "fetch_url": "https://simonwillison.net/atom/everything/",
+      "homepage_url": "https://simonwillison.net/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=simonwillison.net&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Simon Willison Blog",
+      "slug": "simonw",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "TechCrunch：AI（RSS）"
+      ],
+      "derived_aihot_identity": "feed:techcrunch_ai",
+      "enabled": true,
+      "fetch_url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+      "homepage_url": "https://techcrunch.com/category/artificial-intelligence/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=techcrunch.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "TechCrunch AI",
+      "slug": "techcrunch_ai",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "The Decoder：AI News（RSS）"
+      ],
+      "derived_aihot_identity": "feed:the_decoder",
+      "enabled": true,
+      "fetch_url": "https://the-decoder.com/feed/",
+      "homepage_url": "https://the-decoder.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=the-decoder.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "The Decoder",
+      "slug": "the_decoder",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "The Verge：AI（RSS）"
+      ],
+      "derived_aihot_identity": "feed:the_verge_ai",
+      "enabled": true,
+      "fetch_url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+      "homepage_url": "https://www.theverge.com/ai-artificial-intelligence",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.theverge.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "The Verge AI",
+      "slug": "the_verge_ai",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "Tomer Tunguz 博客（VC 分析）"
+      ],
+      "derived_aihot_identity": "feed:tomer_tunguz",
+      "enabled": true,
+      "fetch_url": "https://tomtunguz.com/index.xml",
+      "homepage_url": "https://tomtunguz.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=tomtunguz.com&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Tomer Tunguz",
+      "slug": "tomer_tunguz",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "a16z：News（RSS）"
+      ],
+      "derived_aihot_identity": "feed:a16z_news",
+      "enabled": true,
+      "fetch_url": "https://www.a16z.news/feed",
+      "homepage_url": "https://www.a16z.news/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.a16z.news&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "a16z News",
+      "slug": "a16z_news",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "elsewhere：文章（RSS）"
+      ],
+      "derived_aihot_identity": "feed:elsewhere",
+      "enabled": true,
+      "fetch_url": "https://elsewhere.news/feed.xml",
+      "homepage_url": "https://elsewhere.news/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=elsewhere.news&sz=64",
+      "kind": "feed",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "elsewhere articles",
+      "slug": "elsewhere",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "Anthropic：Newsroom（网页）"
+      ],
+      "derived_aihot_identity": "web:anthropic_news",
+      "enabled": true,
+      "fetch_url": "https://www.anthropic.com/news",
+      "homepage_url": "https://www.anthropic.com/news",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.anthropic.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Anthropic Newsroom",
+      "slug": "anthropic_news",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Anthropic：Research（发表成果 · 网页）"
+      ],
+      "derived_aihot_identity": "web:anthropic_research",
+      "enabled": true,
+      "fetch_url": "https://www.anthropic.com/research",
+      "homepage_url": "https://www.anthropic.com/research",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.anthropic.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Anthropic Research",
+      "slug": "anthropic_research",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Claude Platform：开发者版本说明（RSS）"
+      ],
+      "derived_aihot_identity": "web:claude_platform_releases",
+      "enabled": true,
+      "fetch_url": "https://platform.claude.com/docs/en/release-notes/overview",
+      "homepage_url": "https://platform.claude.com/docs/en/release-notes/overview",
+      "icon_url": "https://www.google.com/s2/favicons?domain=platform.claude.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Claude Platform release notes",
+      "slug": "claude_platform_releases",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Claude：Blog（网页）"
+      ],
+      "derived_aihot_identity": "web:claude_blog",
+      "enabled": true,
+      "fetch_url": "https://claude.com/blog",
+      "homepage_url": "https://claude.com/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=claude.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Claude Blog",
+      "slug": "claude_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "web:cursor_blog",
+      "enabled": true,
+      "fetch_url": "https://cursor.com/blog",
+      "homepage_url": "https://cursor.com/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=cursor.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Cursor Blog",
+      "slug": "cursor_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Every：最新文章（网页）"
+      ],
+      "derived_aihot_identity": "web:every_latest",
+      "enabled": true,
+      "fetch_url": "https://every.to/",
+      "homepage_url": "https://every.to/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=every.to&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Every latest articles",
+      "slug": "every_latest",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "Google Research：Blog（网页）"
+      ],
+      "derived_aihot_identity": "web:google_research",
+      "enabled": true,
+      "fetch_url": "https://research.google/blog/",
+      "homepage_url": "https://research.google/blog/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=research.google&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Google Research Blog",
+      "slug": "google_research",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "HuggingFace Daily Papers（社区热门论文）"
+      ],
+      "derived_aihot_identity": "web:hf_daily_papers",
+      "enabled": true,
+      "fetch_url": "https://huggingface.co/papers",
+      "homepage_url": "https://huggingface.co/papers",
+      "icon_url": "https://www.google.com/s2/favicons?domain=huggingface.co&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Hugging Face Daily Papers",
+      "slug": "hf_daily_papers",
+      "tier": "T2"
+    },
+    {
+      "aihot_aliases": [
+        "LMSYS：Blog（Chatbot Arena 团队）"
+      ],
+      "derived_aihot_identity": "web:lmsys_blog",
+      "enabled": true,
+      "fetch_url": "https://www.lmsys.org/blog/",
+      "homepage_url": "https://www.lmsys.org/blog/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.lmsys.org&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "LMSYS Blog",
+      "slug": "lmsys_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "LangChain：Blog（RSS）"
+      ],
+      "derived_aihot_identity": "web:langchain_blog",
+      "enabled": true,
+      "fetch_url": "https://www.langchain.com/blog",
+      "homepage_url": "https://www.langchain.com/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=www.langchain.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "LangChain Blog",
+      "slug": "langchain_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Microsoft AI：官方博客（网页）"
+      ],
+      "derived_aihot_identity": "web:microsoft_ai",
+      "enabled": true,
+      "fetch_url": "https://microsoft.ai/news/",
+      "homepage_url": "https://microsoft.ai/blog/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=microsoft.ai&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Microsoft AI News",
+      "slug": "microsoft_ai",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Mistral AI：News（网页）"
+      ],
+      "derived_aihot_identity": "web:mistral_news",
+      "enabled": true,
+      "fetch_url": "https://mistral.ai/news",
+      "homepage_url": "https://mistral.ai/news",
+      "icon_url": "https://www.google.com/s2/favicons?domain=mistral.ai&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Mistral AI News",
+      "slug": "mistral_news",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "web:runway_news",
+      "enabled": true,
+      "fetch_url": "https://runwayml.com/news/",
+      "homepage_url": "https://runway.com/news",
+      "icon_url": "https://www.google.com/s2/favicons?domain=runway.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Runway News",
+      "slug": "runway_news",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Sierra：Blog（RSS）"
+      ],
+      "derived_aihot_identity": "web:sierra_blog",
+      "enabled": true,
+      "fetch_url": "https://sierra.ai/blog",
+      "homepage_url": "https://sierra.ai/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=sierra.ai&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Sierra Blog",
+      "slug": "sierra_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "Suno：Blog（网页）"
+      ],
+      "derived_aihot_identity": "web:suno_blog",
+      "enabled": true,
+      "fetch_url": "https://suno.com/blog",
+      "homepage_url": "https://suno.com/blog",
+      "icon_url": "https://www.google.com/s2/favicons?domain=suno.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "Suno Blog",
+      "slug": "suno_blog",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "xAI：News（网页）"
+      ],
+      "derived_aihot_identity": "web:xai_news",
+      "enabled": true,
+      "fetch_url": "https://x.ai/news",
+      "homepage_url": "https://x.ai/news",
+      "icon_url": "https://www.google.com/s2/favicons?domain=x.ai&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "xAI News",
+      "slug": "xai_news",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "蚂蚁 inclusionAI：HuggingFace 新模型"
+      ],
+      "derived_aihot_identity": "web:inclusionai_models",
+      "enabled": true,
+      "fetch_url": "https://huggingface.co/api/models?author=inclusionAI&sort=lastModified&direction=-1&limit=50",
+      "homepage_url": "https://huggingface.co/inclusionAI",
+      "icon_url": "https://www.google.com/s2/favicons?domain=huggingface.co&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "inclusionAI Hugging Face models",
+      "slug": "inclusionai_models",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [
+        "DeepSeek：API 更新日志"
+      ],
+      "derived_aihot_identity": "web:deepseek_api_updates",
+      "enabled": true,
+      "fetch_url": "https://api-docs.deepseek.com/zh-cn/updates",
+      "homepage_url": "https://api-docs.deepseek.com/zh-cn/updates",
+      "icon_url": "https://www.google.com/s2/favicons?domain=api-docs.deepseek.com&sz=64",
+      "kind": "web",
+      "ai_radar_main_timeline_member": true,
+      "meta": {},
+      "name": "DeepSeek API updates",
+      "slug": "deepseek_api_updates",
+      "tier": "T1"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:aisafetymemes",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/AISafetyMemes",
+      "homepage_url": "https://x.com/AISafetyMemes",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "AISafetyMemes"
+      },
+      "name": "X：AI Safety Memes",
+      "slug": "x_aisafetymemes",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:aiatmeta",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/AIatMeta",
+      "homepage_url": "https://x.com/AIatMeta",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "AIatMeta"
+      },
+      "name": "X：AI at Meta",
+      "slug": "x_aiatmeta",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:_akhaliq",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/_akhaliq",
+      "homepage_url": "https://x.com/_akhaliq",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "_akhaliq"
+      },
+      "name": "X：AK",
+      "slug": "x__akhaliq",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:aidangomez",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/aidangomez",
+      "homepage_url": "https://x.com/aidangomez",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "aidangomez"
+      },
+      "name": "X：Aidan Gomez（Cohere CEO）",
+      "slug": "x_aidangomez",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:alexandr_wang",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/alexandr_wang",
+      "homepage_url": "https://x.com/alexandr_wang",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "alexandr_wang"
+      },
+      "name": "X：Alexandr Wang（Scale AI 创始人/Meta 首席 AI 官）",
+      "slug": "x_alexandr_wang",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:ammaar",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ammaar",
+      "homepage_url": "https://x.com/ammaar",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ammaar"
+      },
+      "name": "X：Ammaar Reshi",
+      "slug": "x_ammaar",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:milichab",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/milichab",
+      "homepage_url": "https://x.com/milichab",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "milichab"
+      },
+      "name": "X：Andrew Milich",
+      "slug": "x_milichab",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:andrewyng",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/AndrewYNg",
+      "homepage_url": "https://x.com/AndrewYNg",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "AndrewYNg"
+      },
+      "name": "X：Andrew Ng（DeepLearning.AI 创始人）",
+      "slug": "x_andrewyng",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:anthropicai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/AnthropicAI",
+      "homepage_url": "https://x.com/AnthropicAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "AnthropicAI"
+      },
+      "name": "X：Anthropic",
+      "slug": "x_anthropicai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:aravsrinivas",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/AravSrinivas",
+      "homepage_url": "https://x.com/AravSrinivas",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "AravSrinivas"
+      },
+      "name": "X：Aravind Srinivas（Perplexity CEO）",
+      "slug": "x_aravsrinivas",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:artificialanlys",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ArtificialAnlys",
+      "homepage_url": "https://x.com/ArtificialAnlys",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ArtificialAnlys"
+      },
+      "name": "X：Artificial Analysis",
+      "slug": "x_artificialanlys",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:barret_china",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/barret_china",
+      "homepage_url": "https://x.com/barret_china",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "barret_china"
+      },
+      "name": "X：Barret 李靖",
+      "slug": "x_barret_china",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:bcherny",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/bcherny",
+      "homepage_url": "https://x.com/bcherny",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "bcherny"
+      },
+      "name": "X：Boris Cherny",
+      "slug": "x_bcherny",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:charlieholtz",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/charlieholtz",
+      "homepage_url": "https://x.com/charlieholtz",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "charlieholtz"
+      },
+      "name": "X：Charlie Holtz",
+      "slug": "x_charlieholtz",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:claudeai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/claudeai",
+      "homepage_url": "https://x.com/claudeai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "claudeai"
+      },
+      "name": "X：Claude",
+      "slug": "x_claudeai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:claudedevs",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ClaudeDevs",
+      "homepage_url": "https://x.com/ClaudeDevs",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ClaudeDevs"
+      },
+      "name": "X：Claude Devs",
+      "slug": "x_claudedevs",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:clementdelangue",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ClementDelangue",
+      "homepage_url": "https://x.com/ClementDelangue",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ClementDelangue"
+      },
+      "name": "X：Clément Delangue（Hugging Face CEO）",
+      "slug": "x_clementdelangue",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:cohere",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/cohere",
+      "homepage_url": "https://x.com/cohere",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "cohere"
+      },
+      "name": "X：Cohere",
+      "slug": "x_cohere",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:deedydas",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/deedydas",
+      "homepage_url": "https://x.com/deedydas",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "deedydas"
+      },
+      "name": "X：Deedy Das",
+      "slug": "x_deedydas",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:demishassabis",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/demishassabis",
+      "homepage_url": "https://x.com/demishassabis",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "demishassabis"
+      },
+      "name": "X：Demis Hassabis",
+      "slug": "x_demishassabis",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:dexhorthy",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/dexhorthy",
+      "homepage_url": "https://x.com/dexhorthy",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "dexhorthy"
+      },
+      "name": "X：Dex Horthy（HumanLayer）",
+      "slug": "x_dexhorthy",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:elonmusk",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/elonmusk",
+      "homepage_url": "https://x.com/elonmusk",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "elonmusk"
+      },
+      "name": "X：Elon Musk",
+      "slug": "x_elonmusk",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:omarsar0",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/omarsar0",
+      "homepage_url": "https://x.com/omarsar0",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "omarsar0"
+      },
+      "name": "X：Elvis Saravia",
+      "slug": "x_omarsar0",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:emostaque",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/EMostaque",
+      "homepage_url": "https://x.com/EMostaque",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "EMostaque"
+      },
+      "name": "X：Emad Mostaque",
+      "slug": "x_emostaque",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:epochairesearch",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/EpochAIResearch",
+      "homepage_url": "https://x.com/EpochAIResearch",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "EpochAIResearch"
+      },
+      "name": "X：Epoch AI",
+      "slug": "x_epochairesearch",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:ericmitchellai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ericmitchellai",
+      "homepage_url": "https://x.com/ericmitchellai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ericmitchellai"
+      },
+      "name": "X：Eric Mitchell",
+      "slug": "x_ericmitchellai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:ericzakariasson",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ericzakariasson",
+      "homepage_url": "https://x.com/ericzakariasson",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ericzakariasson"
+      },
+      "name": "X：Eric Zakariasson",
+      "slug": "x_ericzakariasson",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:emollick",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/emollick",
+      "homepage_url": "https://x.com/emollick",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "emollick"
+      },
+      "name": "X：Ethan Mollick",
+      "slug": "x_emollick",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:drfeifei",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/drfeifei",
+      "homepage_url": "https://x.com/drfeifei",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "drfeifei"
+      },
+      "name": "X：Fei-Fei Li",
+      "slug": "x_drfeifei",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:fchollet",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/fchollet",
+      "homepage_url": "https://x.com/fchollet",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "fchollet"
+      },
+      "name": "X：Francois Chollet",
+      "slug": "x_fchollet",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:lifesinger",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/lifesinger",
+      "homepage_url": "https://x.com/lifesinger",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "lifesinger"
+      },
+      "name": "X：Frank Wang 玉伯",
+      "slug": "x_lifesinger",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:gabriel1",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/gabriel1",
+      "homepage_url": "https://x.com/gabriel1",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "gabriel1"
+      },
+      "name": "X：Gabriel",
+      "slug": "x_gabriel1",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:geminiapp",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/GeminiApp",
+      "homepage_url": "https://x.com/GeminiApp",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "GeminiApp"
+      },
+      "name": "X：Gemini",
+      "slug": "x_geminiapp",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:googleai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/GoogleAI",
+      "homepage_url": "https://x.com/GoogleAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "GoogleAI"
+      },
+      "name": "X：Google AI",
+      "slug": "x_googleai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:googleaidevs",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/googleaidevs",
+      "homepage_url": "https://x.com/googleaidevs",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "googleaidevs"
+      },
+      "name": "X：Google AI for Developers",
+      "slug": "x_googleaidevs",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:googledeepmind",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/GoogleDeepMind",
+      "homepage_url": "https://x.com/GoogleDeepMind",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "GoogleDeepMind"
+      },
+      "name": "X：Google DeepMind",
+      "slug": "x_googledeepmind",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:gdb",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/gdb",
+      "homepage_url": "https://x.com/gdb",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "gdb"
+      },
+      "name": "X：Greg Brockman",
+      "slug": "x_gdb",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:jxnlco",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/jxnlco",
+      "homepage_url": "https://x.com/jxnlco",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "jxnlco"
+      },
+      "name": "X：Jason Liu",
+      "slug": "x_jxnlco",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:jeffdean",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/JeffDean",
+      "homepage_url": "https://x.com/JeffDean",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "JeffDean"
+      },
+      "name": "X：Jeff Dean",
+      "slug": "x_jeffdean",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:jensenhuang",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/JensenHuang",
+      "homepage_url": "https://x.com/JensenHuang",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "JensenHuang"
+      },
+      "name": "X：Jensen Huang",
+      "slug": "x_jensenhuang",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:joshwoodward",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/joshwoodward",
+      "homepage_url": "https://x.com/joshwoodward",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "joshwoodward"
+      },
+      "name": "X：Josh Woodward",
+      "slug": "x_joshwoodward",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:karinanguyen",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/karinanguyen",
+      "homepage_url": "https://x.com/karinanguyen",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "karinanguyen"
+      },
+      "name": "X：Karina Nguyen",
+      "slug": "x_karinanguyen",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:kimmonismus",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/kimmonismus",
+      "homepage_url": "https://x.com/kimmonismus",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "kimmonismus"
+      },
+      "name": "X：Kim",
+      "slug": "x_kimmonismus",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:kimi_moonshot",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Kimi_Moonshot",
+      "homepage_url": "https://x.com/Kimi_Moonshot",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Kimi_Moonshot"
+      },
+      "name": "X：Kimi.ai",
+      "slug": "x_kimi_moonshot",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:krea_ai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/krea_ai",
+      "homepage_url": "https://x.com/krea_ai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "krea_ai"
+      },
+      "name": "X：Krea AI",
+      "slug": "x_krea_ai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:leerob",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/leerob",
+      "homepage_url": "https://x.com/leerob",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "leerob"
+      },
+      "name": "X：Lee Robinson",
+      "slug": "x_leerob",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:officiallogank",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/OfficialLoganK",
+      "homepage_url": "https://x.com/OfficialLoganK",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "OfficialLoganK"
+      },
+      "name": "X：Logan Kilpatrick",
+      "slug": "x_officiallogank",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:lumalabsai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/LumaLabsAI",
+      "homepage_url": "https://x.com/LumaLabsAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "LumaLabsAI"
+      },
+      "name": "X：Luma AI",
+      "slug": "x_lumalabsai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:finkd",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/finkd",
+      "homepage_url": "https://x.com/finkd",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "finkd"
+      },
+      "name": "X：Mark Zuckerberg",
+      "slug": "x_finkd",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:mntruell",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/mntruell",
+      "homepage_url": "https://x.com/mntruell",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "mntruell"
+      },
+      "name": "X：Michael Truell",
+      "slug": "x_mntruell",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:msftresearch",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/MSFTResearch",
+      "homepage_url": "https://x.com/MSFTResearch",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "MSFTResearch"
+      },
+      "name": "X：Microsoft Research",
+      "slug": "x_msftresearch",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:minimax_ai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/MiniMax_AI",
+      "homepage_url": "https://x.com/MiniMax_AI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "MiniMax_AI"
+      },
+      "name": "X：MiniMax",
+      "slug": "x_minimax_ai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:mistralai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/MistralAI",
+      "homepage_url": "https://x.com/MistralAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "MistralAI"
+      },
+      "name": "X：Mistral AI",
+      "slug": "x_mistralai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:mustafasuleyman",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/mustafasuleyman",
+      "homepage_url": "https://x.com/mustafasuleyman",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "mustafasuleyman"
+      },
+      "name": "X：Mustafa Suleyman（Microsoft AI CEO）",
+      "slug": "x_mustafasuleyman",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:natolambert",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/natolambert",
+      "homepage_url": "https://x.com/natolambert",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "natolambert"
+      },
+      "name": "X：Nathan Lambert",
+      "slug": "x_natolambert",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:noahzweben",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/noahzweben",
+      "homepage_url": "https://x.com/noahzweben",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "noahzweben"
+      },
+      "name": "X：Noah Zweben",
+      "slug": "x_noahzweben",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:polynoamial",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/polynoamial",
+      "homepage_url": "https://x.com/polynoamial",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "polynoamial"
+      },
+      "name": "X：Noam Brown",
+      "slug": "x_polynoamial",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:odysseyml",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/odysseyml",
+      "homepage_url": "https://x.com/odysseyml",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "odysseyml"
+      },
+      "name": "X：Odyssey",
+      "slug": "x_odysseyml",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:openai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/OpenAI",
+      "homepage_url": "https://x.com/OpenAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "OpenAI"
+      },
+      "name": "X：OpenAI",
+      "slug": "x_openai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:openaidevs",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/OpenAIDevs",
+      "homepage_url": "https://x.com/OpenAIDevs",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "OpenAIDevs"
+      },
+      "name": "X：OpenAI Developers",
+      "slug": "x_openaidevs",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:openrouter",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/OpenRouter",
+      "homepage_url": "https://x.com/OpenRouter",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "OpenRouter"
+      },
+      "name": "X：OpenRouter",
+      "slug": "x_openrouter",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:perplexity_ai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/perplexity_ai",
+      "homepage_url": "https://x.com/perplexity_ai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "perplexity_ai"
+      },
+      "name": "X：Perplexity",
+      "slug": "x_perplexity_ai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:steipete",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/steipete",
+      "homepage_url": "https://x.com/steipete",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "steipete"
+      },
+      "name": "X：Peter Steinberger",
+      "slug": "x_steipete",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:pixverse_",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/PixVerse_",
+      "homepage_url": "https://x.com/PixVerse_",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "PixVerse_"
+      },
+      "name": "X：PixVerse",
+      "slug": "x_pixverse",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:replit",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Replit",
+      "homepage_url": "https://x.com/Replit",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Replit"
+      },
+      "name": "X：Replit",
+      "slug": "x_replit",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:rohanpaul_ai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/rohanpaul_ai",
+      "homepage_url": "https://x.com/rohanpaul_ai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "rohanpaul_ai"
+      },
+      "name": "X：Rohan Paul",
+      "slug": "x_rohanpaul_ai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:runwayml",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/runwayml",
+      "homepage_url": "https://x.com/runwayml",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "runwayml"
+      },
+      "name": "X：Runway",
+      "slug": "x_runwayml",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:sama",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/sama",
+      "homepage_url": "https://x.com/sama",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "sama"
+      },
+      "name": "X：Sam Altman",
+      "slug": "x_sama",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:semianalysis_",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/SemiAnalysis_",
+      "homepage_url": "https://x.com/SemiAnalysis_",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "SemiAnalysis_"
+      },
+      "name": "X：SemiAnalysis",
+      "slug": "x_semianalysis",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:sundarpichai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/sundarpichai",
+      "homepage_url": "https://x.com/sundarpichai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "sundarpichai"
+      },
+      "name": "X：Sundar Pichai",
+      "slug": "x_sundarpichai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:suno",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/suno",
+      "homepage_url": "https://x.com/suno",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "suno"
+      },
+      "name": "X：Suno",
+      "slug": "x_suno",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:testingcatalog",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/testingcatalog",
+      "homepage_url": "https://x.com/testingcatalog",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "testingcatalog"
+      },
+      "name": "X：Testing Catalog",
+      "slug": "x_testingcatalog",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:trq212",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/trq212",
+      "homepage_url": "https://x.com/trq212",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "trq212"
+      },
+      "name": "X：Thariq",
+      "slug": "x_trq212",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:thom_wolf",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Thom_Wolf",
+      "homepage_url": "https://x.com/Thom_Wolf",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Thom_Wolf"
+      },
+      "name": "X：Thomas Wolf（Hugging Face 联创/CSO）",
+      "slug": "x_thom_wolf",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:tianyi",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/tianyi",
+      "homepage_url": "https://x.com/tianyi",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "tianyi"
+      },
+      "name": "X：Tianyi Cui",
+      "slug": "x_tianyi",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:thsottiaux",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/thsottiaux",
+      "homepage_url": "https://x.com/thsottiaux",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "thsottiaux"
+      },
+      "name": "X：Tibo",
+      "slug": "x_thsottiaux",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:viggleai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ViggleAI",
+      "homepage_url": "https://x.com/ViggleAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ViggleAI"
+      },
+      "name": "X：Viggle AI",
+      "slug": "x_viggleai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:thexpin",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/thexpin",
+      "homepage_url": "https://x.com/thexpin",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "thexpin"
+      },
+      "name": "X：X.PIN",
+      "slug": "x_thexpin",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:yuchenj_uw",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Yuchenj_UW",
+      "homepage_url": "https://x.com/Yuchenj_UW",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Yuchenj_UW"
+      },
+      "name": "X：Yuchen Jin",
+      "slug": "x_yuchenj_uw",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:zho_zho_zho",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/ZHO_ZHO_ZHO",
+      "homepage_url": "https://x.com/ZHO_ZHO_ZHO",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "ZHO_ZHO_ZHO"
+      },
+      "name": "X：ZHO",
+      "slug": "x_zho_zho_zho",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:cb_doge",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/cb_doge",
+      "homepage_url": "https://x.com/cb_doge",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "cb_doge"
+      },
+      "name": "X：cb_doge",
+      "slug": "x_cb_doge",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:fofrai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/fofrAI",
+      "homepage_url": "https://x.com/fofrAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "fofrAI"
+      },
+      "name": "X：fofr",
+      "slug": "x_fofrai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:karminski3",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/karminski3",
+      "homepage_url": "https://x.com/karminski3",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "karminski3"
+      },
+      "name": "X：karminski",
+      "slug": "x_karminski3",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:opencode",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/opencode",
+      "homepage_url": "https://x.com/opencode",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "opencode"
+      },
+      "name": "X：opencode",
+      "slug": "x_opencode",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:swyx",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/swyx",
+      "homepage_url": "https://x.com/swyx",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "swyx"
+      },
+      "name": "X：swyx",
+      "slug": "x_swyx",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:huaweicloud1",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/HuaweiCloud1",
+      "homepage_url": "https://x.com/HuaweiCloud1",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "HuaweiCloud1"
+      },
+      "name": "X：华为云",
+      "slug": "x_huaweicloud1",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:kling_ai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Kling_ai",
+      "homepage_url": "https://x.com/Kling_ai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Kling_ai"
+      },
+      "name": "X：可灵 Kling AI",
+      "slug": "x_kling_ai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:jietang",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/jietang",
+      "homepage_url": "https://x.com/jietang",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "jietang"
+      },
+      "name": "X：唐杰",
+      "slug": "x_jietang",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:frxiaobei",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/frxiaobei",
+      "homepage_url": "https://x.com/frxiaobei",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "frxiaobei"
+      },
+      "name": "X：小北",
+      "slug": "x_frxiaobei",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:zai_org",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Zai_org",
+      "homepage_url": "https://x.com/Zai_org",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Zai_org"
+      },
+      "name": "X：智谱 Z.ai",
+      "slug": "x_zai_org",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:lijigang",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/lijigang",
+      "homepage_url": "https://x.com/lijigang",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "lijigang"
+      },
+      "name": "X：李继刚",
+      "slug": "x_lijigang",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:hongming731",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/hongming731",
+      "homepage_url": "https://x.com/hongming731",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "hongming731"
+      },
+      "name": "X：洪明",
+      "slug": "x_hongming731",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:baidu_inc",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Baidu_Inc",
+      "homepage_url": "https://x.com/Baidu_Inc",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Baidu_Inc"
+      },
+      "name": "X：百度 Baidu",
+      "slug": "x_baidu_inc",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:tencenthunyuan",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/TencentHunyuan",
+      "homepage_url": "https://x.com/TencentHunyuan",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "TencentHunyuan"
+      },
+      "name": "X：腾讯混元",
+      "slug": "x_tencenthunyuan",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:antlingagi",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/AntLingAGI",
+      "homepage_url": "https://x.com/AntLingAGI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "AntLingAGI"
+      },
+      "name": "X：蚂蚁百灵",
+      "slug": "x_antlingagi",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:chunxiangai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/chunxiangai",
+      "homepage_url": "https://x.com/chunxiangai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "chunxiangai"
+      },
+      "name": "X：赵纯想",
+      "slug": "x_chunxiangai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:alibaba_qwen",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/Alibaba_Qwen",
+      "homepage_url": "https://x.com/Alibaba_Qwen",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "Alibaba_Qwen"
+      },
+      "name": "X：通义千问 / Qwen",
+      "slug": "x_alibaba_qwen",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:foxshuo",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/foxshuo",
+      "homepage_url": "https://x.com/foxshuo",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "foxshuo"
+      },
+      "name": "X：阑夕",
+      "slug": "x_foxshuo",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:ayi_ainotes",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/AYi_AInotes",
+      "homepage_url": "https://x.com/AYi_AInotes",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "AYi_AInotes"
+      },
+      "name": "X：阿易 AI Notes",
+      "slug": "x_ayi_ainotes",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:alibaba_cloud",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/alibaba_cloud",
+      "homepage_url": "https://x.com/alibaba_cloud",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "alibaba_cloud"
+      },
+      "name": "X：阿里云 / Alibaba Cloud",
+      "slug": "x_alibaba_cloud",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:openbmb",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/OpenBMB",
+      "homepage_url": "https://x.com/OpenBMB",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "OpenBMB"
+      },
+      "name": "X：面壁智能 OpenBMB",
+      "slug": "x_openbmb",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:dongxi_nlp",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/dongxi_nlp",
+      "homepage_url": "https://x.com/dongxi_nlp",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "dongxi_nlp"
+      },
+      "name": "X：马东锡 NLP",
+      "slug": "x_dongxi_nlp",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:openclaw",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/openclaw",
+      "homepage_url": "https://x.com/openclaw",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "openclaw"
+      },
+      "name": "X：OpenClaw",
+      "slug": "x_openclaw",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:spacexai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/SpaceXAI",
+      "homepage_url": "https://x.com/SpaceXAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "SpaceXAI"
+      },
+      "name": "X：SpaceXAI",
+      "slug": "x_spacexai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:workbuddy_ai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/WorkBuddy_AI",
+      "homepage_url": "https://x.com/WorkBuddy_AI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "WorkBuddy_AI"
+      },
+      "name": "X：Tencent WorkBuddy",
+      "slug": "x_workbuddy_ai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [],
+      "derived_aihot_identity": "x:petermccrory",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/PeterMcCrory",
+      "homepage_url": "https://x.com/PeterMcCrory",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "PeterMcCrory"
+      },
+      "name": "X：Peter McCrory（Anthropic 首席经济学家）",
+      "slug": "x_petermccrory",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "X：DeepSeek (@deepseek_ai)"
+      ],
+      "derived_aihot_identity": "x:deepseek_ai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/deepseek_ai",
+      "homepage_url": "https://x.com/deepseek_ai",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "deepseek_ai"
+      },
+      "name": "X：DeepSeek",
+      "slug": "x_deepseek_ai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "X：張小珺 Xiaojùn (@zhang_benita)"
+      ],
+      "derived_aihot_identity": "x:zhang_benita",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/zhang_benita",
+      "homepage_url": "https://x.com/zhang_benita",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "zhang_benita"
+      },
+      "name": "X：張小珺 Xiaojùn",
+      "slug": "x_zhang_benita",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "X：硅基流动 SiliconFlow (@SiliconFlowAI)"
+      ],
+      "derived_aihot_identity": "x:siliconflowai",
+      "enabled": true,
+      "fetch_url": "https://api.x.com/2/users/by/username/SiliconFlowAI",
+      "homepage_url": "https://x.com/SiliconFlowAI",
+      "icon_url": "https://abs.twimg.com/favicons/twitter.ico",
+      "kind": "x",
+      "ai_radar_main_timeline_member": true,
+      "meta": {
+        "adapter": "x_api",
+        "username": "SiliconFlowAI"
+      },
+      "name": "X：硅基流动 SiliconFlow",
+      "slug": "x_siliconflowai",
+      "tier": "T1.5"
+    },
+    {
+      "aihot_aliases": [
+        "WeChat Mp2RSS"
+      ],
+      "derived_aihot_identity": "extra:wx_mp2rss",
+      "enabled": true,
+      "fetch_url": "${MP2RSS_FEED_URL}",
+      "homepage_url": "https://mp.weixin.qq.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64",
+      "kind": "wechat",
+      "ai_radar_main_timeline_member": false,
+      "meta": {},
+      "name": "微信公众号（Mp2RSS 合集）",
+      "slug": "wx_mp2rss",
+      "tier": "T2",
+      "optional": true,
+      "required_env": "MP2RSS_FEED_URL",
+      "wechat_only": true,
+      "public_url_override": "https://mp.weixin.qq.com/"
+    }
+  ]
+}

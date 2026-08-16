@@ -27,7 +27,7 @@ cp .env.example .env
 DEEPSEEK_API_KEY=sk-xxx
 ```
 
-其他配置项均有默认值，详见 `.env.example` 中的注释。第一次本地试跑可以先保留站点身份默认值；如果暂时没有 Mp2RSS 合集 feed，可以不设置 `MP2RSS_FEED_URL`，loader 会跳过 `wx_mp2rss` 并继续加载其他信源。
+其他配置项均有默认值，详见 `.env.example` 中的注释。抓取 `data/sources.toml` 中启用的 X API 信源时还需配置 `X_BEARER_TOKEN`；请求窗口和单轮上限见下文「信源池」。第一次本地试跑可以先保留站点身份默认值；如果暂时没有 Mp2RSS 合集 feed，可以不设置 `MP2RSS_FEED_URL`，loader 会跳过 `wx_mp2rss` 并继续加载其他信源。
 
 ### 3. 初始化数据库
 
@@ -183,7 +183,8 @@ AI_RADAR_SITE_X_URL=
 信源池配置在 `data/sources.toml`，每个信源包含 slug、名称、URL、优先级层级（T1/T1.5/T2）等字段。`kind` 支持：
 
 - `feed`：普通 RSS/Atom 信源
-- `x`：X/Twitter 导出的 RSS 信源，前端允许展示完整 thread
+- `web`：没有可用原始 RSS/Atom 的官方网页或列表 API；每个来源使用代码登记的确定性解析器和允许范围，不做任意链接抓取
+- `x`：X/Twitter 信源。`meta.adapter="x_api"` 的源通过 X API 读取原创帖子，不抓回复或转推；首次只看最近 20 分钟，之后以 checkpoint 增量读取，每轮每源只请求一页、`max_results=5`，繁忙账号通过持久 cursor 在后续轮次逐页排空，不做接入前历史回填；需要 `X_BEARER_TOKEN`。X RSS 源推荐显式声明 `meta.adapter="rss"`，未声明 adapter 的历史配置继续按 RSS 兼容读取
 - `wechat`：微信公众号源，生产链路当前仍通过托管的 [Mp2RSS](https://mp2rss.bugcode.dev/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开）。未设置或设置为空时，loader 会记录 warning、跳过该源，并继续加载其他信源；设置 `MP2RSS_FEED_URL` 后该源自动启用。文章卡片按 author 显示真实公众号名与头像。仓库另含一个默认关闭的公众号后台发现候选：它只做私有 shadow 验证，未接入 `fetch`/pipeline，也不替代当前 Mp2RSS。配置、试跑与切换门槛见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
 
 公众号后台发现候选的安全起点是只读状态检查；默认应显示 `DISABLED` 和当前配置的账号数：
@@ -211,6 +212,21 @@ AI_RADAR_SITE_X_URL=
 已在可见浏览器中完成获授权后台登录与二次登录，并验证项目会话格式可加载、只保存 12 个适用域 Cookie、权限为 `0600`。旧程序把若干后台非成功响应记录成 `AUTH_REQUIRED` 或 `RATE_LIMITED`，但当时没有持久化 exact `ret`；这些历史记录不能证明微信官方存在 24 小时频控。2026-08-14 和 2026-08-16 各有一次 `searchbiz` 成功取得“歸藏的AI工具箱”的唯一规范化名称匹配和私有 provisional mapping；两次后续 probe 均未取得文章候选，其中 2026-08-16 one-shot 仍由旧 parser 写成宽泛的 `RATE_LIMITED`。shadow ledger 当前 schema v10 完整保留 3 条 resolution、4 条 probe 和 0 条 candidate；所有旧平台失败明确标为 exact ret 未记录且不再触发特殊次日冷却，今后的整数 `200013` 才作为可证明频控，整数 `200002` 等其他拒绝单列为 `PLATFORM_REJECTED`。默认配置保持关闭，不能据此取消 Mp2RSS。详见运维文档、ADR-024 至 ADR-032、ADR-040、ADR-041、ADR-043 至 ADR-045。
 
 第二条默认关闭的微信读书只读 canary 也已在获授权的可见登录态 Chrome 中生成真实 schema v7 evidence：书架请求得到 HTTP 200 成功响应，但目标 `MP_WXS_3540975510` 不在书架，因此 canary 按契约停在 `BLOCKED_NO_SHELF_ENTRY`，没有发 article-list 请求、没有观察动态头，也没有修改书架。该结果证明登录态书架边界可用，不证明文章发现路线可用；任何单账号书架变更仍需另行取得明确许可，生产 `wx_mp2rss` 保持不变。
+
+当前机器契约配置了 AIHOT 已审核滚动观察并集中的 161 个主站来源：109 个 X 账号、34 个原始 Feed 和 18 个原始 Web/API 列表；另有一个可选的 `wx_mp2rss`，只服务「微信文章解读」，不进入精选、全部动态、搜索或策展。当前验收证据包括一次覆盖 2,020 条内容、174 个可见来源且 reconciliation 零缺口的 AIHOT 完整滚动观察，全部 52 个 non-X 来源的两轮 live 读取与一次 immutable replay，以及 `x_openai` 的一次身份请求和一次最近 20 分钟 timeline 请求（均为 HTTP 200，并提交合法的空窗口 checkpoint）。空窗口没有提供实际 X 帖子读取证据，109 个 X 账号也没有逐一 live 验证；这里的“对齐”只指来源成员集合、原始读取实现和上述受限验收，不表示清理、筛选、标签、排序、评分、摘要或策展结果与 AIHOT 等价。
+
+X 的 20 分钟窗口只用于首次接入；空窗口会提交时间 checkpoint，有帖子后改用 post ID checkpoint，积压则由 cursor 按上述单轮上限排空，但仍不证明接入前历史召回已经与 AIHOT 对齐。正常 15 分钟调度按启用的 X API 账号数发起请求。不要用全量账号抓取来做连通性测试；先运行 `uv run python scripts/probe_x_source.py --source x_openai --db <全新临时数据库> --output <持久收据>`，它把身份解析和 timeline 分轮、每次最多一个远端请求。当前离线状态机和受限真实连通性均已验证；本次真实空窗口只证明身份、timeline 与 checkpoint 链路可用，不证明实际帖子或全部账号均已读取成功。
+
+### 信源维护与验证
+
+信源变更不是只改 `data/sources.toml`。`tests/fixtures/aihot_sources.json` 是完整机器契约；新增、改名或退休来源时必须同步稳定 `derived_aihot_identity`/显式 aliases、原始入口、解析器/规则、正反 fixture、公开投影、数量锚点与文档。Web/API 来源还必须同步 `src/airadar/fetcher/web.py` 的登记与解析边界。
+
+- `uv run python scripts/audit_aihot_sources.py --output <plans/.../artifacts/aihot-observation-final.json>`：遍历 AIHOT 滚动 API，输出 comparison-only 观测；成功记录追加到 `artifacts/observations/index.json`，ambiguous/unmapped/conflict 会失败而不会自动改契约。
+- `uv run python scripts/check_aihot_membership_transition.py --previous <旧契约或基线> --next tests/fixtures/aihot_sources.json --retirements data/aihot_retirements.json`：拒绝没有官方迁移、30 天观察加显式复核或用户决定依据的来源删除。
+- `uv run python scripts/audit_non_x_retrieval.py --config data/sources.toml --db <全新临时数据库> --output <持久收据>`：两轮实读 34 Feed + 18 Web/API，并比较独立 oracle、生产解析和 SQLite 持久集合；收据中的代码哈希变化后必须重跑。
+- 上述 `probe_x_source.py`：只验证 `x_openai`，使用全新临时库，绝不回填或全量扫 109 个账号；missing token、401、draining 和 terminal 分别出具不含凭据的结果。
+
+配置 reload 只禁用已移除来源、保留历史 SQLite 行；所有公开 source/timeline/search/selected/wechat 消费面会过滤 disabled 行。合法退休仍须经 transition checker，不能靠一次安静窗口或改展示名绕过身份连续性。
 
 ### 微信文章解读
 

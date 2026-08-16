@@ -182,7 +182,7 @@ def timeline(
     q: str | None = None,
 ) -> dict[str, object]:
     params: list[object] = []
-    where_clauses: list[str] = []
+    where_clauses: list[str] = ["s.enabled=1", "COALESCE(s.kind, 'feed') != 'wechat'"]
     search_subquery, search_params = search_id_subquery(q)
     if search_subquery:
         where_clauses.append(f"i.id IN ({search_subquery})")

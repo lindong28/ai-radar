@@ -73,9 +73,9 @@ def _require_equal(label: str, actual: object, expected: object) -> None:
 
 
 def _expected_manifest(config: ShapeConfig) -> dict[str, Any]:
-    curated_ids = [_item_id(index) for index in range(config.items - 1, -1, -1)]
+    curated_ids = [_item_id(index) for index in range(config.items - 1, -1, -1) if index % 10 != 0]
     displayed_indices = list(range(config.displayed_interpretations - 1, -1, -1))
-    wechat_item_ids = [_item_id(index) for index in displayed_indices]
+    wechat_item_ids = [_item_id(index * 10) for index in displayed_indices]
     wechat_slugs = [_slug(index) for index in displayed_indices]
     return {
         "schema_version": 1,
@@ -99,13 +99,13 @@ def _expected_manifest(config: ShapeConfig) -> dict[str, Any]:
                 for offset in range(config.curated_rows // config.curation_runs)
             ),
             "wechat_interpretations": _relation_sha256(
-                (_item_id(index), _slug(index), 1 if index < config.displayed_interpretations else 0)
+                (_item_id(index * 10), _slug(index), 1 if index < config.displayed_interpretations else 0)
                 for index in range(config.interpretations)
             ),
         },
         "visible": {
             "curated_eligible_ids": curated_ids,
-            "curated_total": config.items,
+            "curated_total": len(curated_ids),
             "curated_page_1_ids": curated_ids[: config.curated_page_size],
             "curated_page_2_ids": curated_ids[config.curated_page_size : config.curated_page_size * 2],
             "joinable_wechat_item_ids": wechat_item_ids,
@@ -114,7 +114,7 @@ def _expected_manifest(config: ShapeConfig) -> dict[str, Any]:
             "wechat_page_2_slugs": wechat_slugs[config.wechat_page_size : config.wechat_page_size * 2],
             "detail_slug": wechat_slugs[0],
             "detail_item_id": wechat_item_ids[0],
-            "detail_title": f"Synthetic item {displayed_indices[0]:05d}",
+            "detail_title": f"Synthetic item {displayed_indices[0] * 10:05d}",
         },
     }
 
@@ -283,7 +283,7 @@ def build_production_shape(db_path: Path, manifest_path: Path) -> ProductionShap
                 """,
                 [
                     (
-                        _item_id(index),
+                        _item_id(index * 10),
                         _slug(index),
                         1 if index < config.displayed_interpretations else 0,
                         _timestamp(index),
@@ -355,8 +355,11 @@ def validate_production_shape(db_path: Path, manifest: dict[str, Any]) -> None:
                 f"""
                 SELECT i.id
                 FROM items i
+                JOIN sources s ON s.id=i.source_id
                 {latest_curated_join}
-                WHERE {deduped_item_clause('i')}
+                WHERE s.enabled=1
+                  AND COALESCE(s.kind, 'feed') != 'wechat'
+                  AND {deduped_item_clause('i')}
                 ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
                 """
             ).fetchall()
@@ -372,7 +375,10 @@ def validate_production_shape(db_path: Path, manifest: dict[str, Any]) -> None:
             SELECT wi.item_id, wi.slug
             FROM wechat_interpretations wi
             JOIN items i ON i.id=wi.item_id
+            JOIN sources s ON s.id=i.source_id
             WHERE wi.save_decision=1
+              AND s.enabled=1
+              AND COALESCE(s.kind, 'feed')='wechat'
             ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
             """
         ).fetchall()

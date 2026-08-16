@@ -132,7 +132,8 @@ def list_wechat_items(
         SELECT COUNT(*)
         FROM wechat_interpretations wi
         JOIN items i ON i.id=wi.item_id
-        WHERE wi.save_decision=1{where_sql}
+        JOIN sources s ON s.id=i.source_id
+        WHERE wi.save_decision=1 AND s.enabled=1 AND COALESCE(s.kind, 'feed')='wechat'{where_sql}
         """,
         search_params,
     ).fetchone()[0]
@@ -156,7 +157,7 @@ def list_wechat_items(
           ON COALESCE(s.kind, 'feed')='wechat'
          AND wa.account=i.author
          AND wa.avatar_url IS NOT NULL
-        WHERE wi.save_decision=1{where_sql}
+        WHERE wi.save_decision=1 AND s.enabled=1 AND COALESCE(s.kind, 'feed')='wechat'{where_sql}
         ORDER BY {order_sql}
         LIMIT ? OFFSET ?
         """,
@@ -184,7 +185,7 @@ def get_wechat_detail(conn: sqlite3.Connection, slug: str) -> dict[str, Any]:
           ON COALESCE(s.kind, 'feed')='wechat'
          AND wa.account=i.author
          AND wa.avatar_url IS NOT NULL
-        WHERE wi.slug=? AND wi.save_decision=1
+        WHERE wi.slug=? AND wi.save_decision=1 AND s.enabled=1 AND COALESCE(s.kind, 'feed')='wechat'
         """,
         (slug,),
     ).fetchone()

@@ -79,7 +79,7 @@ def precompute_curated_summaries(conn: sqlite3.Connection, run_id: str) -> int:
           ON COALESCE(s.kind, 'feed')='wechat'
          AND wa.account=i.author
          AND wa.avatar_url IS NOT NULL
-        WHERE c.run_id=?
+        WHERE c.run_id=? AND s.enabled=1 AND COALESCE(s.kind, 'feed') != 'wechat'
         ORDER BY c.rank
         """,
         (run_id,),

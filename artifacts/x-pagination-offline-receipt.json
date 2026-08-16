@@ -1,0 +1,24 @@
+{
+  "artifact_type": "x_pagination_offline_test",
+  "captured_at": "2026-08-16T12:20:45Z",
+  "production_code_sha256_by_path_relative_to_repository_root": {
+    "src/airadar/fetcher/runner.py": "669cef875aa19c8714836301c80ec3ff7c6998d140990788bc7ff2062015496f",
+    "src/airadar/fetcher/x_api.py": "b3b03ff785af551680c24d015bc161f3cfa75714f63e4587bb19f5007ae2e064",
+    "src/airadar/sources/x_state.py": "2e7ba8440391f1b844b55fe0da1c2ee0d0886459900ef14f1d5cd99482250204"
+  },
+  "pytest_exit_code": 0,
+  "pytest_node_ids": [
+    "tests/test_x_api.py::test_fetch_x_timeline_uses_one_bounded_cold_start_page_and_persists_cursor",
+    "tests/test_x_api.py::test_fetch_x_timeline_drains_one_saved_page_per_round_then_advances_since_id",
+    "tests/test_x_api.py::test_time_checkpoint_pagination_keeps_one_start_boundary",
+    "tests/test_x_api.py::test_fetch_x_timeline_rejects_non_advancing_pagination_token"
+  ],
+  "pytest_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "pytest_stdout_sha256": "b4e6716fbd6745e8531d806d530757d7b2e907a881718c8369d92405a53c4ebc",
+  "report_payload_sha256": "68a44cfc921d292dbf4ca95f5b3d0627aef535c64b1e63343b83f1823150b160",
+  "schema_version": 1,
+  "status": "success",
+  "test_code_sha256_by_path_relative_to_repository_root": {
+    "tests/test_x_api.py": "26146eddc2174995e876979b34591029cd35507817be20be92bcea32cab37834"
+  }
+}

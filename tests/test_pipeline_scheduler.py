@@ -917,7 +917,9 @@ def test_readme_documents_automatic_scheduler_setup() -> None:
 
     assert "## 自动化调度" in readme
     assert "./pipeline.sh" in readme
-    assert "sed \"s|/path/to/ai-radar|$PWD|g\" deploy/cron/ai-radar-pipeline | crontab -" in readme
+    assert "./install.sh pipeline" in readme
+    assert "不要把 `deploy/cron/ai-radar-pipeline` 或其展开结果直接送入 `crontab -`" in readme
+    assert "sed \"s|/path/to/ai-radar|$PWD|g\" deploy/cron/ai-radar-pipeline | crontab -" not in readme
     assert "*/15 * * * *" in readme
     assert "launchd 备选模板" in readme
     assert ".env" in readme

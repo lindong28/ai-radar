@@ -12,7 +12,7 @@ Run either mode from the repository root. Both modes expose the same `base_url`,
 ./tests/run_user_verify.sh
 ```
 
-When `AI_RADAR_PLAYWRIGHT_BASE_URL` is absent, the fixture creates a session-scoped SQLite backup of the configured `AI_RADAR_DB`, migrates only that temporary copy, starts `./run.sh serve` on a free local port with the copy explicitly selected as pre-migrated, and stops that child service after the suite. The source database supplies meaningful local data but is never served or migrated by the suite.
+When `AI_RADAR_PLAYWRIGHT_BASE_URL` is absent, the fixture creates and migrates a fresh session-scoped SQLite database without reading the configured `AI_RADAR_DB`. It loads the current source configuration, adds a test-only WeChat source with a safe public URL, and seeds deterministic feed/X/WeChat items plus curation, daily, hot, search, media, and pagination prerequisites. It then starts `./run.sh serve` on a free local port with that database explicitly selected as pre-migrated and stops the child service after the suite. The fixture does not call X, Mp2RSS, or any other content source.
 
 ### External service
 
@@ -39,6 +39,6 @@ Coverage by file:
 | `test_phase3_daily.py` | V13, V13a, V13b, V13c, V13d |
 | `test_phase4_about.py` | V5 about route/content |
 | `test_phase5_boundaries.py` | V15a, V18, V19, V20 runtime boundaries: infinite-scroll prefetch/generation guards, search page normalization, category URL normalization, server-filter retention, and loading/error/empty states |
-| `test_fixture_isolation.py` | Self-managed DB isolation and external-mode no-DB/no-service-process contract |
+| `test_fixture_isolation.py` | Deterministic self-managed DB isolation and external-mode no-DB/no-service-process contract |
 
 Public-domain checks V1/V18 production rerun and owner checks V2/V16/V17 are intentionally left for Phase 7.

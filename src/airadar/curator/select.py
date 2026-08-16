@@ -83,6 +83,8 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
         JOIN items i ON i.id=e.item_id
         JOIN sources s ON s.id=i.source_id
         WHERE e.stage='scoring'
+          AND s.enabled=1
+          AND COALESCE(s.kind, 'feed') != 'wechat'
           AND e.error IS NULL
           AND e.id = (
             SELECT MAX(latest.id) FROM item_evaluations latest

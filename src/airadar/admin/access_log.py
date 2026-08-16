@@ -38,7 +38,7 @@ STATIC_SUFFIXES = (
     ".woff2",
     ".map",
 )
-PUBLIC_PATHS = {"/", "/all", "/about", "/wechat", "/api/v1/curated", "/api/v1/timeline", "/api/v1/sources", "/api/v1/healthz", "/api/v1/wechat"}
+PUBLIC_PATHS = {"/", "/all", "/about", "/wechat", "/api/v1/curated", "/api/v1/timeline", "/api/v1/sources", "/api/v2/sources", "/api/v1/healthz", "/api/v1/wechat"}
 PUBLIC_PATH_PREFIXES = ("/daily", "/wechat/", "/api/v1/items/")
 SCANNER_PATH_TOKENS = (
     "/.env",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -235,6 +236,59 @@ def test_fetch_all_continues_after_parallel_source_fetch_error(monkeypatch, tmp_
     assert summary.sources[1].error == "TimeoutException: blocked"
 
 
+def test_fetch_all_reports_enabled_x_api_pool_when_token_is_unconfigured(
+    monkeypatch, tmp_path: Path
+) -> None:  # noqa: ANN001
+    from airadar.fetcher import runner
+
+    x_source = SourceConfig(
+        slug="x_openai",
+        name="X OpenAI",
+        url="https://api.x.com/2/users/by/username/OpenAI/tweets",
+        tier="T1",
+        kind="x",
+        meta={"adapter": "x_api", "username": "OpenAI"},
+    )
+    feed_source = SourceConfig(
+        slug="feed_source",
+        name="Feed",
+        url="https://example.com/feed.xml",
+        tier="T1",
+    )
+
+    def reload_fixture(conn: sqlite3.Connection, path: Path | None) -> list[SourceConfig]:  # noqa: ARG001
+        sync_to_db([x_source, feed_source], conn)
+        return [x_source, feed_source]
+
+    monkeypatch.setattr(runner, "reload_sources", reload_fixture)
+    monkeypatch.setattr(runner, "read_value", lambda key: "")
+    seen: list[str] = []
+    monkeypatch.setattr(
+        runner,
+        "_fetch_and_apply_sources",
+        lambda conn, sources: seen.extend(source.slug for source in sources) or [],
+    )
+
+    db_path = tmp_path / "radar.db"
+    summary = runner.fetch_all(db_path=db_path)
+    conn = sqlite3.connect(db_path)
+    stored = json.loads(conn.execute("SELECT meta_json FROM sources WHERE id='x_openai'").fetchone()[0])
+    conn.close()
+
+    assert summary.sources == [
+        runner.SourceFetchSummary(
+            source_id="x_openai",
+            error="RuntimeError: X_BEARER_TOKEN is not configured",
+        )
+    ]
+    assert summary.attempted == 1
+    assert summary.failed == 1
+    assert seen == ["feed_source"]
+    assert stored["x_reference_status"] == "blocked"
+    assert stored["x_reference_reason"] == "x_bearer_token_not_configured"
+    assert stored["x_reference_recovery"] == "configure_X_BEARER_TOKEN_then_rerun_fetch"
+
+
 def test_parse_feed_extracts_entry_fields() -> None:
     source = SourceConfig(
         slug="example", name="Example", url="https://example.com/feed.xml", tier="T2", enabled=True, meta={}
@@ -402,3 +456,15 @@ def test_upsert_item_deduplicates_by_source_and_url_when_title_changes(tmp_path:
     assert rows[0][0] == "https://x.com/example/status/1"
     assert rows[0][1] == "Updated AI psychosis title"
     assert rows[0][2] == "Updated Hacker News title and metadata."
+
+
+def test_upsert_item_preserves_distinct_canonical_urls_with_same_body(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    sync_to_db([SourceConfig(slug="releases", name="Releases", url="https://example.com/feed", tier="T1")], conn)
+    base = FetchedItem("releases", "https://example.com/releases/1", "One", None, "2026-08-13T00:00:00Z", "2026-08-13T00:01:00Z", "Same short release body")
+    second = FetchedItem(**{**base.__dict__, "url": "https://example.com/releases/2", "title": "Two"})
+    assert upsert_item(conn, base) is True
+    assert upsert_item(conn, second) is True
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2

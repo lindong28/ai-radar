@@ -1,0 +1,659 @@
+{
+  "artifact_type": "aihot_source_union",
+  "contract_sha256": "b25437cd7f5ccf1f58aa7bf8cf0f7171bf9a685d494c0f720a7ecfe18a443ad7",
+  "identities": [
+    {
+      "derived_aihot_identity": "feed:ai_normal_technology",
+      "slug": "ai_normal_technology"
+    },
+    {
+      "derived_aihot_identity": "feed:apple_ml",
+      "slug": "apple_ml"
+    },
+    {
+      "derived_aihot_identity": "feed:ars_ai",
+      "slug": "ars_ai"
+    },
+    {
+      "derived_aihot_identity": "feed:ai_news",
+      "slug": "ai_news"
+    },
+    {
+      "derived_aihot_identity": "feed:bytebytego",
+      "slug": "bytebytego"
+    },
+    {
+      "derived_aihot_identity": "feed:cmu_ml",
+      "slug": "cmu_ml"
+    },
+    {
+      "derived_aihot_identity": "feed:claude_code_releases",
+      "slug": "claude_code_releases"
+    },
+    {
+      "derived_aihot_identity": "feed:claude_youtube",
+      "slug": "claude_youtube"
+    },
+    {
+      "derived_aihot_identity": "feed:databricks",
+      "slug": "databricks"
+    },
+    {
+      "derived_aihot_identity": "feed:dwarkesh",
+      "slug": "dwarkesh"
+    },
+    {
+      "derived_aihot_identity": "feed:gary_marcus",
+      "slug": "gary_marcus"
+    },
+    {
+      "derived_aihot_identity": "feed:github_blog",
+      "slug": "github_blog"
+    },
+    {
+      "derived_aihot_identity": "feed:google_ai",
+      "slug": "google_ai"
+    },
+    {
+      "derived_aihot_identity": "feed:google_cloud_databases",
+      "slug": "google_cloud_databases"
+    },
+    {
+      "derived_aihot_identity": "feed:google_deepmind",
+      "slug": "google_deepmind"
+    },
+    {
+      "derived_aihot_identity": "feed:google_developers",
+      "slug": "google_developers"
+    },
+    {
+      "derived_aihot_identity": "feed:buzzing_hn",
+      "slug": "buzzing_hn"
+    },
+    {
+      "derived_aihot_identity": "feed:huggingface_blog",
+      "slug": "huggingface_blog"
+    },
+    {
+      "derived_aihot_identity": "feed:ithome",
+      "slug": "ithome"
+    },
+    {
+      "derived_aihot_identity": "feed:linear_now",
+      "slug": "linear_now"
+    },
+    {
+      "derived_aihot_identity": "feed:marktechpost",
+      "slug": "marktechpost"
+    },
+    {
+      "derived_aihot_identity": "feed:meta_engineering",
+      "slug": "meta_engineering"
+    },
+    {
+      "derived_aihot_identity": "feed:nvidia",
+      "slug": "nvidia"
+    },
+    {
+      "derived_aihot_identity": "feed:interconnects",
+      "slug": "interconnects"
+    },
+    {
+      "derived_aihot_identity": "feed:openai_blog",
+      "slug": "openai_blog"
+    },
+    {
+      "derived_aihot_identity": "feed:openrouter_announcements",
+      "slug": "openrouter_announcements"
+    },
+    {
+      "derived_aihot_identity": "feed:sakana_blog",
+      "slug": "sakana_blog"
+    },
+    {
+      "derived_aihot_identity": "feed:simonw",
+      "slug": "simonw"
+    },
+    {
+      "derived_aihot_identity": "feed:techcrunch_ai",
+      "slug": "techcrunch_ai"
+    },
+    {
+      "derived_aihot_identity": "feed:the_decoder",
+      "slug": "the_decoder"
+    },
+    {
+      "derived_aihot_identity": "feed:the_verge_ai",
+      "slug": "the_verge_ai"
+    },
+    {
+      "derived_aihot_identity": "feed:tomer_tunguz",
+      "slug": "tomer_tunguz"
+    },
+    {
+      "derived_aihot_identity": "feed:a16z_news",
+      "slug": "a16z_news"
+    },
+    {
+      "derived_aihot_identity": "feed:elsewhere",
+      "slug": "elsewhere"
+    },
+    {
+      "derived_aihot_identity": "web:anthropic_news",
+      "slug": "anthropic_news"
+    },
+    {
+      "derived_aihot_identity": "web:anthropic_research",
+      "slug": "anthropic_research"
+    },
+    {
+      "derived_aihot_identity": "web:claude_platform_releases",
+      "slug": "claude_platform_releases"
+    },
+    {
+      "derived_aihot_identity": "web:claude_blog",
+      "slug": "claude_blog"
+    },
+    {
+      "derived_aihot_identity": "web:cursor_blog",
+      "slug": "cursor_blog"
+    },
+    {
+      "derived_aihot_identity": "web:every_latest",
+      "slug": "every_latest"
+    },
+    {
+      "derived_aihot_identity": "web:google_research",
+      "slug": "google_research"
+    },
+    {
+      "derived_aihot_identity": "web:hf_daily_papers",
+      "slug": "hf_daily_papers"
+    },
+    {
+      "derived_aihot_identity": "web:lmsys_blog",
+      "slug": "lmsys_blog"
+    },
+    {
+      "derived_aihot_identity": "web:langchain_blog",
+      "slug": "langchain_blog"
+    },
+    {
+      "derived_aihot_identity": "web:microsoft_ai",
+      "slug": "microsoft_ai"
+    },
+    {
+      "derived_aihot_identity": "web:mistral_news",
+      "slug": "mistral_news"
+    },
+    {
+      "derived_aihot_identity": "web:runway_news",
+      "slug": "runway_news"
+    },
+    {
+      "derived_aihot_identity": "web:sierra_blog",
+      "slug": "sierra_blog"
+    },
+    {
+      "derived_aihot_identity": "web:suno_blog",
+      "slug": "suno_blog"
+    },
+    {
+      "derived_aihot_identity": "web:xai_news",
+      "slug": "xai_news"
+    },
+    {
+      "derived_aihot_identity": "web:inclusionai_models",
+      "slug": "inclusionai_models"
+    },
+    {
+      "derived_aihot_identity": "web:deepseek_api_updates",
+      "slug": "deepseek_api_updates"
+    },
+    {
+      "derived_aihot_identity": "x:aisafetymemes",
+      "slug": "x_aisafetymemes"
+    },
+    {
+      "derived_aihot_identity": "x:aiatmeta",
+      "slug": "x_aiatmeta"
+    },
+    {
+      "derived_aihot_identity": "x:_akhaliq",
+      "slug": "x__akhaliq"
+    },
+    {
+      "derived_aihot_identity": "x:aidangomez",
+      "slug": "x_aidangomez"
+    },
+    {
+      "derived_aihot_identity": "x:alexandr_wang",
+      "slug": "x_alexandr_wang"
+    },
+    {
+      "derived_aihot_identity": "x:ammaar",
+      "slug": "x_ammaar"
+    },
+    {
+      "derived_aihot_identity": "x:milichab",
+      "slug": "x_milichab"
+    },
+    {
+      "derived_aihot_identity": "x:andrewyng",
+      "slug": "x_andrewyng"
+    },
+    {
+      "derived_aihot_identity": "x:anthropicai",
+      "slug": "x_anthropicai"
+    },
+    {
+      "derived_aihot_identity": "x:aravsrinivas",
+      "slug": "x_aravsrinivas"
+    },
+    {
+      "derived_aihot_identity": "x:artificialanlys",
+      "slug": "x_artificialanlys"
+    },
+    {
+      "derived_aihot_identity": "x:barret_china",
+      "slug": "x_barret_china"
+    },
+    {
+      "derived_aihot_identity": "x:bcherny",
+      "slug": "x_bcherny"
+    },
+    {
+      "derived_aihot_identity": "x:charlieholtz",
+      "slug": "x_charlieholtz"
+    },
+    {
+      "derived_aihot_identity": "x:claudeai",
+      "slug": "x_claudeai"
+    },
+    {
+      "derived_aihot_identity": "x:claudedevs",
+      "slug": "x_claudedevs"
+    },
+    {
+      "derived_aihot_identity": "x:clementdelangue",
+      "slug": "x_clementdelangue"
+    },
+    {
+      "derived_aihot_identity": "x:cohere",
+      "slug": "x_cohere"
+    },
+    {
+      "derived_aihot_identity": "x:deedydas",
+      "slug": "x_deedydas"
+    },
+    {
+      "derived_aihot_identity": "x:demishassabis",
+      "slug": "x_demishassabis"
+    },
+    {
+      "derived_aihot_identity": "x:dexhorthy",
+      "slug": "x_dexhorthy"
+    },
+    {
+      "derived_aihot_identity": "x:elonmusk",
+      "slug": "x_elonmusk"
+    },
+    {
+      "derived_aihot_identity": "x:omarsar0",
+      "slug": "x_omarsar0"
+    },
+    {
+      "derived_aihot_identity": "x:emostaque",
+      "slug": "x_emostaque"
+    },
+    {
+      "derived_aihot_identity": "x:epochairesearch",
+      "slug": "x_epochairesearch"
+    },
+    {
+      "derived_aihot_identity": "x:ericmitchellai",
+      "slug": "x_ericmitchellai"
+    },
+    {
+      "derived_aihot_identity": "x:ericzakariasson",
+      "slug": "x_ericzakariasson"
+    },
+    {
+      "derived_aihot_identity": "x:emollick",
+      "slug": "x_emollick"
+    },
+    {
+      "derived_aihot_identity": "x:drfeifei",
+      "slug": "x_drfeifei"
+    },
+    {
+      "derived_aihot_identity": "x:fchollet",
+      "slug": "x_fchollet"
+    },
+    {
+      "derived_aihot_identity": "x:lifesinger",
+      "slug": "x_lifesinger"
+    },
+    {
+      "derived_aihot_identity": "x:gabriel1",
+      "slug": "x_gabriel1"
+    },
+    {
+      "derived_aihot_identity": "x:geminiapp",
+      "slug": "x_geminiapp"
+    },
+    {
+      "derived_aihot_identity": "x:googleai",
+      "slug": "x_googleai"
+    },
+    {
+      "derived_aihot_identity": "x:googleaidevs",
+      "slug": "x_googleaidevs"
+    },
+    {
+      "derived_aihot_identity": "x:googledeepmind",
+      "slug": "x_googledeepmind"
+    },
+    {
+      "derived_aihot_identity": "x:gdb",
+      "slug": "x_gdb"
+    },
+    {
+      "derived_aihot_identity": "x:jxnlco",
+      "slug": "x_jxnlco"
+    },
+    {
+      "derived_aihot_identity": "x:jeffdean",
+      "slug": "x_jeffdean"
+    },
+    {
+      "derived_aihot_identity": "x:jensenhuang",
+      "slug": "x_jensenhuang"
+    },
+    {
+      "derived_aihot_identity": "x:joshwoodward",
+      "slug": "x_joshwoodward"
+    },
+    {
+      "derived_aihot_identity": "x:karinanguyen",
+      "slug": "x_karinanguyen"
+    },
+    {
+      "derived_aihot_identity": "x:kimmonismus",
+      "slug": "x_kimmonismus"
+    },
+    {
+      "derived_aihot_identity": "x:kimi_moonshot",
+      "slug": "x_kimi_moonshot"
+    },
+    {
+      "derived_aihot_identity": "x:krea_ai",
+      "slug": "x_krea_ai"
+    },
+    {
+      "derived_aihot_identity": "x:leerob",
+      "slug": "x_leerob"
+    },
+    {
+      "derived_aihot_identity": "x:officiallogank",
+      "slug": "x_officiallogank"
+    },
+    {
+      "derived_aihot_identity": "x:lumalabsai",
+      "slug": "x_lumalabsai"
+    },
+    {
+      "derived_aihot_identity": "x:finkd",
+      "slug": "x_finkd"
+    },
+    {
+      "derived_aihot_identity": "x:mntruell",
+      "slug": "x_mntruell"
+    },
+    {
+      "derived_aihot_identity": "x:msftresearch",
+      "slug": "x_msftresearch"
+    },
+    {
+      "derived_aihot_identity": "x:minimax_ai",
+      "slug": "x_minimax_ai"
+    },
+    {
+      "derived_aihot_identity": "x:mistralai",
+      "slug": "x_mistralai"
+    },
+    {
+      "derived_aihot_identity": "x:mustafasuleyman",
+      "slug": "x_mustafasuleyman"
+    },
+    {
+      "derived_aihot_identity": "x:natolambert",
+      "slug": "x_natolambert"
+    },
+    {
+      "derived_aihot_identity": "x:noahzweben",
+      "slug": "x_noahzweben"
+    },
+    {
+      "derived_aihot_identity": "x:polynoamial",
+      "slug": "x_polynoamial"
+    },
+    {
+      "derived_aihot_identity": "x:odysseyml",
+      "slug": "x_odysseyml"
+    },
+    {
+      "derived_aihot_identity": "x:openai",
+      "slug": "x_openai"
+    },
+    {
+      "derived_aihot_identity": "x:openaidevs",
+      "slug": "x_openaidevs"
+    },
+    {
+      "derived_aihot_identity": "x:openrouter",
+      "slug": "x_openrouter"
+    },
+    {
+      "derived_aihot_identity": "x:perplexity_ai",
+      "slug": "x_perplexity_ai"
+    },
+    {
+      "derived_aihot_identity": "x:steipete",
+      "slug": "x_steipete"
+    },
+    {
+      "derived_aihot_identity": "x:pixverse_",
+      "slug": "x_pixverse"
+    },
+    {
+      "derived_aihot_identity": "x:replit",
+      "slug": "x_replit"
+    },
+    {
+      "derived_aihot_identity": "x:rohanpaul_ai",
+      "slug": "x_rohanpaul_ai"
+    },
+    {
+      "derived_aihot_identity": "x:runwayml",
+      "slug": "x_runwayml"
+    },
+    {
+      "derived_aihot_identity": "x:sama",
+      "slug": "x_sama"
+    },
+    {
+      "derived_aihot_identity": "x:semianalysis_",
+      "slug": "x_semianalysis"
+    },
+    {
+      "derived_aihot_identity": "x:sundarpichai",
+      "slug": "x_sundarpichai"
+    },
+    {
+      "derived_aihot_identity": "x:suno",
+      "slug": "x_suno"
+    },
+    {
+      "derived_aihot_identity": "x:testingcatalog",
+      "slug": "x_testingcatalog"
+    },
+    {
+      "derived_aihot_identity": "x:trq212",
+      "slug": "x_trq212"
+    },
+    {
+      "derived_aihot_identity": "x:thom_wolf",
+      "slug": "x_thom_wolf"
+    },
+    {
+      "derived_aihot_identity": "x:tianyi",
+      "slug": "x_tianyi"
+    },
+    {
+      "derived_aihot_identity": "x:thsottiaux",
+      "slug": "x_thsottiaux"
+    },
+    {
+      "derived_aihot_identity": "x:viggleai",
+      "slug": "x_viggleai"
+    },
+    {
+      "derived_aihot_identity": "x:thexpin",
+      "slug": "x_thexpin"
+    },
+    {
+      "derived_aihot_identity": "x:yuchenj_uw",
+      "slug": "x_yuchenj_uw"
+    },
+    {
+      "derived_aihot_identity": "x:zho_zho_zho",
+      "slug": "x_zho_zho_zho"
+    },
+    {
+      "derived_aihot_identity": "x:cb_doge",
+      "slug": "x_cb_doge"
+    },
+    {
+      "derived_aihot_identity": "x:fofrai",
+      "slug": "x_fofrai"
+    },
+    {
+      "derived_aihot_identity": "x:karminski3",
+      "slug": "x_karminski3"
+    },
+    {
+      "derived_aihot_identity": "x:opencode",
+      "slug": "x_opencode"
+    },
+    {
+      "derived_aihot_identity": "x:swyx",
+      "slug": "x_swyx"
+    },
+    {
+      "derived_aihot_identity": "x:huaweicloud1",
+      "slug": "x_huaweicloud1"
+    },
+    {
+      "derived_aihot_identity": "x:kling_ai",
+      "slug": "x_kling_ai"
+    },
+    {
+      "derived_aihot_identity": "x:jietang",
+      "slug": "x_jietang"
+    },
+    {
+      "derived_aihot_identity": "x:frxiaobei",
+      "slug": "x_frxiaobei"
+    },
+    {
+      "derived_aihot_identity": "x:zai_org",
+      "slug": "x_zai_org"
+    },
+    {
+      "derived_aihot_identity": "x:lijigang",
+      "slug": "x_lijigang"
+    },
+    {
+      "derived_aihot_identity": "x:hongming731",
+      "slug": "x_hongming731"
+    },
+    {
+      "derived_aihot_identity": "x:baidu_inc",
+      "slug": "x_baidu_inc"
+    },
+    {
+      "derived_aihot_identity": "x:tencenthunyuan",
+      "slug": "x_tencenthunyuan"
+    },
+    {
+      "derived_aihot_identity": "x:antlingagi",
+      "slug": "x_antlingagi"
+    },
+    {
+      "derived_aihot_identity": "x:chunxiangai",
+      "slug": "x_chunxiangai"
+    },
+    {
+      "derived_aihot_identity": "x:alibaba_qwen",
+      "slug": "x_alibaba_qwen"
+    },
+    {
+      "derived_aihot_identity": "x:foxshuo",
+      "slug": "x_foxshuo"
+    },
+    {
+      "derived_aihot_identity": "x:ayi_ainotes",
+      "slug": "x_ayi_ainotes"
+    },
+    {
+      "derived_aihot_identity": "x:alibaba_cloud",
+      "slug": "x_alibaba_cloud"
+    },
+    {
+      "derived_aihot_identity": "x:openbmb",
+      "slug": "x_openbmb"
+    },
+    {
+      "derived_aihot_identity": "x:dongxi_nlp",
+      "slug": "x_dongxi_nlp"
+    },
+    {
+      "derived_aihot_identity": "x:openclaw",
+      "slug": "x_openclaw"
+    },
+    {
+      "derived_aihot_identity": "x:spacexai",
+      "slug": "x_spacexai"
+    },
+    {
+      "derived_aihot_identity": "x:workbuddy_ai",
+      "slug": "x_workbuddy_ai"
+    },
+    {
+      "derived_aihot_identity": "x:petermccrory",
+      "slug": "x_petermccrory"
+    },
+    {
+      "derived_aihot_identity": "x:deepseek_ai",
+      "slug": "x_deepseek_ai"
+    },
+    {
+      "derived_aihot_identity": "x:zhang_benita",
+      "slug": "x_zhang_benita"
+    },
+    {
+      "derived_aihot_identity": "x:siliconflowai",
+      "slug": "x_siliconflowai"
+    }
+  ],
+  "limitations": "Generated projection of the current contract only; it is not per-identity observation or live retrieval evidence.",
+  "schema_version": 1,
+  "source_counts": {
+    "feed": 34,
+    "total": 161,
+    "web": 18,
+    "x": 109
+  },
+  "status": "generated_current_contract_projection"
+}

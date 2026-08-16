@@ -732,7 +732,7 @@ def test_probe_runs_four_journeys_against_origin_and_public_and_stores_samples(
     monkeypatch.setattr("airadar.performance.journey_monitor.measure_browser_journey", fake_measure)
     samples = probe_journeys(runtime, observed_at=datetime(2026, 7, 18, tzinfo=UTC))
     sample_path = tmp_path / "journey-samples.jsonl"
-    store_samples(sample_path, samples)
+    store_samples(sample_path, samples, now=datetime(2026, 7, 18, tzinfo=UTC))
 
     assert len(samples) == 8
     assert {sample.journey for sample in samples} == {
@@ -905,7 +905,11 @@ def test_probe_infra_failure_is_persisted_and_never_fires_site_alert(
         for index in range(MIN_CONFIRMABLE_SAMPLES)
     ]
     sample_path = tmp_path / "journey-samples.jsonl"
-    store_samples(sample_path, infra_rows)
+    store_samples(
+        sample_path,
+        infra_rows,
+        now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
+    )
     result = run_performance_alerts(
         sample_path=sample_path,
         state_path=tmp_path / "state.json",
@@ -1264,7 +1268,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     monkeypatch.setattr("airadar.admin.alerts.send_alert_message", sender)
 
     high = [_sample(observed_at=started + timedelta(minutes=index), value_ms=4000) for index in range(20)]
-    store_samples(sample_path, high)
+    store_samples(sample_path, high, now=started + timedelta(minutes=20))
     first = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
@@ -1275,7 +1279,11 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     )
     assert first["sent_count"] == 0
 
-    store_samples(sample_path, [_sample(observed_at=started + timedelta(minutes=20), value_ms=4000)])
+    store_samples(
+        sample_path,
+        [_sample(observed_at=started + timedelta(minutes=20), value_ms=4000)],
+        now=started + timedelta(minutes=21),
+    )
     second = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
@@ -1286,7 +1294,11 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     )
     assert second["sent_count"] == 0
 
-    store_samples(sample_path, [_sample(observed_at=started + timedelta(minutes=21), value_ms=4000)])
+    store_samples(
+        sample_path,
+        [_sample(observed_at=started + timedelta(minutes=21), value_ms=4000)],
+        now=started + timedelta(minutes=22),
+    )
     confirmed = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
@@ -1307,6 +1319,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     store_samples(
         sample_path,
         [_sample(observed_at=started + timedelta(minutes=22), value_ms=100, load_class="unknown")],
+        now=started + timedelta(minutes=23),
     )
     unchanged = run_performance_alerts(
         sample_path=sample_path,
@@ -1322,7 +1335,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
         _sample(observed_at=started + timedelta(minutes=23 + index), value_ms=100)
         for index in range(22)
     ]
-    store_samples(sample_path, low)
+    store_samples(sample_path, low, now=started + timedelta(minutes=46))
     resolved = run_performance_alerts(
         sample_path=sample_path,
         state_path=state_path,
@@ -1351,7 +1364,7 @@ def test_performance_rules_emit_only_idle_cells_and_never_busy_rollup(tmp_path: 
         value_ms=100,
         minute_offset=100,
     )
-    store_samples(sample_path, samples)
+    store_samples(sample_path, samples, now=started + timedelta(minutes=200))
 
     result = run_performance_alerts(
         sample_path=sample_path,
@@ -1382,7 +1395,8 @@ def test_performance_rules_emit_only_idle_cells_and_never_busy_rollup(tmp_path: 
             load_class="busy",
             value_ms=4000,
             minute_offset=100,
-        )
+        ),
+        now=started + timedelta(minutes=200),
     )
     assert len(idle_firing) == 1
     assert idle_firing[0].rule_id == "PERF:homepage.first_card:same_host_origin:idle"
@@ -1429,7 +1443,11 @@ def test_latest_probe_infra_outcome_holds_existing_site_firing_state(
         )
         for index in range(MIN_CONFIRMABLE_SAMPLES)
     ]
-    store_samples(sample_path, site_failures)
+    store_samples(
+        sample_path,
+        site_failures,
+        now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
+    )
     sent: list[str] = []
     kwargs = {
         "sample_path": sample_path,
@@ -1461,6 +1479,7 @@ def test_latest_probe_infra_outcome_holds_existing_site_firing_state(
                 vantage="same_host_origin",
             )
         ],
+        now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES + 2),
     )
     held = run_performance_alerts(
         now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES + 2),
@@ -1498,7 +1517,11 @@ def test_probe_infra_hold_retries_pending_site_firing_delivery(
         )
         for index in range(MIN_CONFIRMABLE_SAMPLES)
     ]
-    store_samples(sample_path, [legacy_incompatible, *site_failures])
+    store_samples(
+        sample_path,
+        [legacy_incompatible, *site_failures],
+        now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
+    )
     deliveries = iter(
         [
             {"skipped": True},
@@ -1575,7 +1598,11 @@ def test_legacy_incompatible_samples_hold_existing_site_firing_state(
         )
         for index in range(MIN_CONFIRMABLE_SAMPLES)
     ]
-    store_samples(sample_path, site_failures)
+    store_samples(
+        sample_path,
+        site_failures,
+        now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
+    )
     sent: list[str] = []
     kwargs = {
         "sample_path": sample_path,
@@ -1606,7 +1633,11 @@ def test_legacy_incompatible_samples_hold_existing_site_firing_state(
         )
         for index in range(MIN_CONFIRMABLE_SAMPLES)
     ]
-    store_samples(sample_path, legacy_infra)
+    store_samples(
+        sample_path,
+        legacy_infra,
+        now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES * 2 + 2),
+    )
     held = run_performance_alerts(
         now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES * 2 + 2),
         **kwargs,
@@ -3283,7 +3314,10 @@ def test_firing_idle_cell_explains_path_impact_and_immediate_action(
 
     idle = next(
         result
-        for result in evaluate_performance_rules(samples)
+        for result in evaluate_performance_rules(
+            samples,
+            now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
+        )
         if result.rule_id == f"PERF:homepage.first_card:{vantage}:idle"
     )
 
@@ -3333,6 +3367,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
     store_samples(
         sample_path,
         [_sample(observed_at=started + timedelta(minutes=index), value_ms=4000) for index in range(20)],
+        now=started + timedelta(minutes=20),
     )
     confirmed: dict[str, object] = {}
     for now_minute in (20, 21, 22):
@@ -3340,6 +3375,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
             store_samples(
                 sample_path,
                 [_sample(observed_at=started + timedelta(minutes=now_minute - 1), value_ms=4000)],
+                now=started + timedelta(minutes=now_minute),
             )
         confirmed = run_performance_alerts(
             sample_path=sample_path,

@@ -10,6 +10,7 @@ import feedparser
 from ..sources.loader import SourceConfig
 from .content import clean_content
 from .dedup import FetchedItem
+from .feed_rules import include_feed_entry, normalized_entry_url
 from .urls import canonicalize_item_url
 
 
@@ -51,8 +52,10 @@ def parse_feed(source: SourceConfig, body: bytes) -> list[FetchedItem]:
     items: list[FetchedItem] = []
     for entry in parsed.entries:
         title = clean_content(str(entry.get("title") or "Untitled"))
-        url = str(entry.get("link") or "")
+        url = normalized_entry_url(source, str(entry.get("link") or ""))
         if not url:
+            continue
+        if not include_feed_entry(source, entry, url):
             continue
         extra = {
             "guid": entry.get("id") or entry.get("guid"),
@@ -74,4 +77,7 @@ def parse_feed(source: SourceConfig, body: bytes) -> list[FetchedItem]:
                 extra=extra,
             )
         )
-    return items
+    by_url: dict[str, FetchedItem] = {}
+    for item in items:
+        by_url[item.url.rstrip("/").casefold()] = item
+    return list(by_url.values())

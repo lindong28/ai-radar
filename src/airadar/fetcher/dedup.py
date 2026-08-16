@@ -39,7 +39,11 @@ def _normalized_url(value: str) -> str:
 
 
 def upsert_item(conn: sqlite3.Connection, item: FetchedItem) -> bool:
-    item_content_hash = content_hash(item.content_text)
+    x_post_id = str(item.extra.get("x_post_id") or "")
+    identity_text = f"{item.content_text}\n{_normalized_url(item.url)}"
+    if x_post_id:
+        identity_text = f"{identity_text}\n{x_post_id}"
+    item_content_hash = content_hash(identity_text)
     extra_json = json.dumps(item.extra, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     existing = conn.execute(
         "SELECT id FROM items WHERE source_id=? AND content_hash=?",

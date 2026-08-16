@@ -94,7 +94,7 @@ def _archive_where(
     selected_date: str | None = None,
 ) -> tuple[str, list[object], str | None]:
     params: list[object] = []
-    where_clauses = [deduped_item_clause("i")]
+    where_clauses = ["s.enabled=1", "COALESCE(s.kind, 'feed') != 'wechat'", deduped_item_clause("i")]
     search_subquery, search_params = search_id_subquery(q)
     if search_subquery:
         where_clauses.append(f"i.id IN ({search_subquery})")
@@ -187,7 +187,9 @@ def _compute_daily_archive(conn: sqlite3.Connection) -> list[dict[str, object]]:
         FROM items i
         JOIN sources s ON s.id=i.source_id
         {_latest_curated_join()}
-        WHERE {deduped_item_clause("i")}
+        WHERE s.enabled=1
+          AND COALESCE(s.kind, 'feed') != 'wechat'
+          AND {deduped_item_clause("i")}
           AND date(datetime(i.published_at, '+08:00')) <= date(datetime('now', '+08:00'))
         GROUP BY issue_date
         ORDER BY issue_date DESC
@@ -287,7 +289,10 @@ def _archive_response_date(conn: sqlite3.Connection, items: list[dict[str, Any]]
         SELECT i.published_at
         FROM items i
         {_latest_curated_join()}
-        WHERE {deduped_item_clause('i')}
+        JOIN sources s ON s.id=i.source_id
+        WHERE s.enabled=1
+          AND COALESCE(s.kind, 'feed') != 'wechat'
+          AND {deduped_item_clause('i')}
         ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
         LIMIT 1
         """

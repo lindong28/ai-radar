@@ -25,7 +25,7 @@ def item_detail(request: Request, item_id: str) -> dict[str, object]:
               ON COALESCE(s.kind, 'feed')='wechat'
              AND wa.account=i.author
              AND wa.avatar_url IS NOT NULL
-            WHERE i.id=?
+            WHERE i.id=? AND s.enabled=1 AND COALESCE(s.kind, 'feed') != 'wechat'
             """,
             (item_id,),
         ).fetchone()

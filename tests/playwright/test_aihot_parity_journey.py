@@ -479,7 +479,7 @@ def test_parity_wechat_search_empty_and_pagination_match_api(page: Page, base_ur
 
 
 def test_parity_about_sources_match_api_and_filter_states(page: Page, base_url: str) -> None:
-    sources = _api_data(page, base_url, "/api/v1/sources")["sources"]
+    sources = _api_data(page, base_url, "/api/v2/sources")["sources"]
     expected_ids = [str(source["id"]) for source in sources]
     page.goto(f"{base_url}/about", wait_until="domcontentloaded")
     rows = page.locator("#sources-table tr")
@@ -498,8 +498,8 @@ def test_parity_about_sources_match_api_and_filter_states(page: Page, base_url: 
     assert rows.locator("td:first-child").all_inner_texts() == expected_filtered
 
     page.locator("#search").fill("__ai_radar_source_no_results__")
-    expect(page.locator("#sources-table td[colspan='5']")).to_have_text("没有匹配信源")
-    assert page.locator("#sources-table tr:not(:has(td[colspan='5']))").count() == 0
+    expect(page.locator("#sources-table td[colspan='6']")).to_have_text("没有匹配信源")
+    assert page.locator("#sources-table tr:not(:has(td[colspan='6']))").count() == 0
     page.locator("#search").fill("")
     expect(rows).to_have_count(len(sources))
 
@@ -1357,7 +1357,7 @@ def test_parity_daily_and_changelog_journeys_match_dynamic_content(page: Page, b
     section_counts = [int(value) for value in page.locator(".daily-section-count strong").all_inner_texts()]
     assert sum(section_counts) == article_count
     assert all(
-        re.match(r"^\d{2}\n.+\n[A-Z /]+\n\d+ 篇$", header)
+        re.match(r"^\d{2}\n.+\n[A-Z &/]+\n\d+ 篇$", header)
         for header in page.locator(".daily-section-header").all_inner_texts()
     )
     visible_summary_text = "".join(page.locator(".daily-article-summary").all_inner_texts())

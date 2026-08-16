@@ -40,7 +40,10 @@ def _load_precomputed(
     search_subquery, search_params = search_id_subquery(q)
     if search_subquery:
         source_match_sql, source_match_params = source_match_expression(q, source_alias="s", item_alias="i")
-        where = f"WHERE c.run_id=? AND c.summary_json IS NOT NULL AND i.id IN ({search_subquery})"
+        where = (
+            "WHERE c.run_id=? AND c.summary_json IS NOT NULL AND s.enabled=1 "
+            f"AND COALESCE(s.kind, 'feed') != 'wechat' AND i.id IN ({search_subquery})"
+        )
         params: list[object] = [*source_match_params, run_id, *search_params]
         if selected_date:
             where += " AND date(datetime(i.published_at, '+08:00')) = ?"
@@ -77,7 +80,8 @@ def _load_precomputed(
             "  ON COALESCE(s.kind, 'feed')='wechat' "
             " AND wa.account=i.author "
             " AND wa.avatar_url IS NOT NULL "
-            "WHERE c.run_id=? AND c.summary_json IS NOT NULL ORDER BY c.rank",
+            "WHERE c.run_id=? AND c.summary_json IS NOT NULL AND s.enabled=1 "
+            "AND COALESCE(s.kind, 'feed') != 'wechat' ORDER BY c.rank",
             (run_id,),
         ).fetchall()
 
@@ -111,7 +115,7 @@ def _compute_items(
     q: str | None,
 ) -> list[dict[str, Any]]:
     search_subquery, search_params = search_id_subquery(q)
-    where = "WHERE c.run_id=?"
+    where = "WHERE c.run_id=? AND s.enabled=1 AND COALESCE(s.kind, 'feed') != 'wechat'"
     params: list[object] = [run["id"]]
     where += f" AND {deduped_item_clause('i')}"
     if selected_date:

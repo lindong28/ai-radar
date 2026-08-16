@@ -235,10 +235,13 @@ def test_v10b_article_media_does_not_dominate_viewport(page: Page, base_url: str
 def test_v10d_all_page_preserves_aihot_media_score_and_selected_reason(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/all", cards=True)
 
+    preload = page.locator("#__PRELOAD__").evaluate("el => JSON.parse(el.textContent || 'null')")
+    expected_selected = sum(item.get("rank") is not None for item in preload["items"])
     assert page.locator(".timeline-card").count() >= 30
     assert page.locator(".timeline-card .article-media-img").count() >= 1
     assert page.locator(".timeline-card .timeline-score").count() == page.locator(".timeline-card").count()
-    assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() == 0
+    assert 0 < expected_selected < page.locator(".timeline-card").count()
+    assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() == expected_selected
 
     _goto(page, base_url, "/", cards=True)
     assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() >= 1

@@ -78,6 +78,12 @@ def test_wechat_journey_paths_are_public_metrics_paths() -> None:
         assert is_bot_request(entry) is False
 
 
+def test_v2_sources_is_a_public_metrics_path() -> None:
+    entry = AccessLogEntry(ip="203.0.113.9", method="GET", path="/api/v2/sources", status=200)
+
+    assert is_bot_request(entry) is False
+
+
 def test_wechat_api_route_matching_is_segment_aware() -> None:
     secret = AccessLogEntry(ip="203.0.113.9", method="GET", path="/api/v1/wechat-secret", status=200)
 
