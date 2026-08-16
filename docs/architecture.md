@@ -467,7 +467,8 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | trafilatura | HTML 正文提取 |
 | beautifulsoup4 | 微信公众号 HTML 解析 |
 | Playwright + Chromium | 微信公众号原文抓取 + 默认 `performance-probe` 四旅程测量的浏览器运行时 |
-| Mp2RSS | 微信公众号发现层，将已订阅公众号暴露为 RSS/Atom |
+| Mp2RSS | 当前生产微信公众号发现层，将已订阅公众号暴露为 RSS/Atom |
+| 微信公众号后台（候选） | 默认关闭的 shadow 发现路径；私有登录态只供显式单账号 probe，尚未进入 pipeline |
 | markdown-it-py | 微信文章解读详情页 markdown 渲染 |
 | nh3 | 微信文章解读详情页 HTML sanitizer |
 | json-repair | 容错 JSON 解析（LLM 输出修复） |
@@ -478,7 +479,9 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 
 | 任务 | 关键文件 |
 |---|---|
-| 添加新信源 | `data/sources.toml`；wechat 源通过 Mp2RSS 合集 feed 配置 |
+| 添加新信源 | `data/sources.toml`；生产 wechat 源仍通过 Mp2RSS 合集 feed 配置；后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
+| 调整微信发现候选 | `wechat_discovery/`、`data/wechat-discovery.toml`、[ADR-024](adr/024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md) 至 [ADR-032](adr/032-reject-duplicate-urls-before-wechat-shadow-comparison.md)、[ADR-040](adr/040-verify-provisional-searchbiz-mapping-with-article-url-biz.md)、[ADR-041](adr/041-version-wechat-discovery-invariant-hardening.md)、[摄取 runbook](operations/wechat-ingestion.md) |
+| 调整微信读书只读 canary | `scripts/wechat_weread_canary/`、[ADR-033](adr/033-version-weread-canary-shelf-request-evidence.md) 至 [ADR-038](adr/038-observe-weread-dynamic-header-presence-without-replay.md)、[摄取 runbook](operations/wechat-ingestion.md) |
 | 修改 LLM prompt | `prefilter/prompts.py`, `scorer/prompts.py`, `enrich/prompts.py` |
 | 添加新 LLM provider | `provider/base.py`（Protocol）+ 新实现文件 + 对应 runner 的 `_provider_from_env` |
 | 修改评分权重 | `curator/weights.py`（DEFAULT_WEIGHTS） |

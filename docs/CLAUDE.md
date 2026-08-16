@@ -106,6 +106,26 @@
 | [021-audit-alert-delivery-and-suppression-decisions.md](adr/021-audit-alert-delivery-and-suppression-decisions.md) | 告警 ledger 区分投递、D3 生命周期与 INTERNAL 抑制决策 |
 | [022-evaluate-a6-in-progress-cost-as-lower-bound.md](adr/022-evaluate-a6-in-progress-cost-as-lower-bound.md) | A6 在途成本下界可触发告警，但不能证明恢复 |
 | [023-define-recorded-row-measurement-scope.md](adr/023-define-recorded-row-measurement-scope.md) | 从 `llm_usage` 记录行派生的加总量是下界，cohort 统计只描述已记录调用 |
+| [024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md](adr/024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md) | 以默认关闭的 shadow canary 验证公众号后台发现适配器后再替换 Mp2RSS；cadence/page-size 已由 ADR-025 部分 supersede |
+| [025-conservative-wechat-discovery-probe-defaults.md](adr/025-conservative-wechat-discovery-probe-defaults.md) | 单账号人工 probe 暂用每天一次、每页 5 篇的保守默认，scheduled canary 启用前仍需 live 验证 |
+| [026-explicit-windowed-mp2rss-shadow-comparison.md](adr/026-explicit-windowed-mp2rss-shadow-comparison.md) | 用显式只读命令按账号、attempt 与观察窗比较 shadow 和 Mp2RSS，证据不足时返回不可比较 |
+| [027-self-describing-recoverable-wechat-shadow-page-size.md](adr/027-self-describing-recoverable-wechat-shadow-page-size.md) | shadow 页大小增加显式来源，v1/v2 与部分迁移状态可安全接手，并串行化首次发现判定 |
+| [028-resolve-wechat-fakeid-before-shadow-probe.md](adr/028-resolve-wechat-fakeid-before-shadow-probe.md) | 先解析并一次性消费已验证 fakeid，再执行微信 shadow probe；其 searchbiz 验证语义已由 ADR-040 supersede |
+| [029-single-source-wechat-discovery-ledgers.md](adr/029-single-source-wechat-discovery-ledgers.md) | 微信发现 ledger 采用单一权威并保持崩溃可恢复 |
+| [030-remove-derived-wechat-discovery-fields.md](adr/030-remove-derived-wechat-discovery-fields.md) | schema v6 移除可派生字段并用 config v3 明示 public biz |
+| [031-preserve-only-provable-wechat-migration-facts.md](adr/031-preserve-only-provable-wechat-migration-facts.md) | 微信历史 ledger 迁移只保留可证明事实，缺 provenance 时降级、矛盾关系回滚 |
+| [032-reject-duplicate-urls-before-wechat-shadow-comparison.md](adr/032-reject-duplicate-urls-before-wechat-shadow-comparison.md) | 微信后台单次响应含重复 URL 时显式失败，避免把去重快照误作完整窗口证据 |
+| [033-version-weread-canary-shelf-request-evidence.md](adr/033-version-weread-canary-shelf-request-evidence.md) | 微信读书只读 canary 证据升为 v2，并显式保留书架请求状态与条件式平台错误码 |
+| [034-use-a-single-auditable-weread-canary-evidence-ledger.md](adr/034-use-a-single-auditable-weread-canary-evidence-ledger.md) | 微信读书只读 canary v3 以单一校验器、请求账本与候选内嵌观察状态形成可审计证据 |
+| [035-bind-weread-canary-evidence-to-targets-producer-and-relations.md](adr/035-bind-weread-canary-evidence-to-targets-producer-and-relations.md) | 微信读书只读 canary v4 将证据绑定到目标、源码摘要和经重算的身份关系 |
+| [036-preserve-public-page-observation-outcomes.md](adr/036-preserve-public-page-observation-outcomes.md) | 微信读书只读 canary v5 区分已观察页面与客户端失败，并闭合请求顺序和返回页关系 |
+| [037-retain-observed-captcha-target-at-attempt-end.md](adr/037-retain-observed-captcha-target-at-attempt-end.md) | 微信读书只读 canary v6 在 attempt 结束时保留验证码 target，并闭合失败关系 |
+| [038-observe-weread-dynamic-header-presence-without-replay.md](adr/038-observe-weread-dynamic-header-presence-without-replay.md) | 微信读书只读 canary v7 仅观察既有列表请求的动态鉴权头名称是否出现，不捕获或回放头值 |
+| [040-verify-provisional-searchbiz-mapping-with-article-url-biz.md](adr/040-verify-provisional-searchbiz-mapping-with-article-url-biz.md) | searchbiz 只产 provisional mapping，再由返回文章 URL 的 public biz 完成身份验证 |
+| [041-version-wechat-discovery-invariant-hardening.md](adr/041-version-wechat-discovery-invariant-hardening.md) | 微信 discovery 不变量加固以 schema v8 发布，不原地改写已落地 v7 |
+| [043-waive-manual-wechat-probe-cooldown-once.md](adr/043-waive-manual-wechat-probe-cooldown-once.md) | 对一次获授权微信后台 probe 豁免本地 1440 分钟冷却 |
+| [044-persist-wechat-platform-error-ret.md](adr/044-persist-wechat-platform-error-ret.md) | schema v9 持久化后台 exact ret，区分平台拒绝与可证明频控 |
+| [045-require-integer-platform-ret-and-evidence-backed-cooldown.md](adr/045-require-integer-platform-ret-and-evidence-backed-cooldown.md) | schema v10 只接受整数后台错误码，特殊冷却仅由已记录频控证据触发 |
 
 ### docs/experiences/ [Agent]
 

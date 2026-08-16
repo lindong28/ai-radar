@@ -184,7 +184,33 @@ AI_RADAR_SITE_X_URL=
 
 - `feed`：普通 RSS/Atom 信源
 - `x`：X/Twitter 导出的 RSS 信源，前端允许展示完整 thread
-- `wechat`：微信公众号源，通过托管的 [Mp2RSS](https://mp2rss.com/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开）。未设置或设置为空时，loader 会记录 warning、跳过该源，并继续加载其他信源；设置 `MP2RSS_FEED_URL` 后该源自动启用。文章卡片按 author 显示真实公众号名与头像。配置和运维记录见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
+- `wechat`：微信公众号源，生产链路当前仍通过托管的 [Mp2RSS](https://mp2rss.bugcode.dev/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开）。未设置或设置为空时，loader 会记录 warning、跳过该源，并继续加载其他信源；设置 `MP2RSS_FEED_URL` 后该源自动启用。文章卡片按 author 显示真实公众号名与头像。仓库另含一个默认关闭的公众号后台发现候选：它只做私有 shadow 验证，未接入 `fetch`/pipeline，也不替代当前 Mp2RSS。配置、试跑与切换门槛见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
+
+公众号后台发现候选的安全起点是只读状态检查；默认应显示 `DISABLED` 和当前配置的账号数：
+
+```bash
+./run.sh admin wechat-discovery status
+```
+
+`status` 与后面的 `compare` 都以只读方式打开私有 shadow DB，不会隐式升级旧 schema；若它们提示 schema 需要迁移，先对该私有库做精确备份，再显式运行 `./run.sh admin wechat-discovery migrate`，随后重新执行原只读命令。
+
+只有在操作者确认拥有获授权的公众号后台账号后，才运行 `login` 打开 headed 浏览器扫码。首次后台请求还需把 config v3 的 `manual_backend_requests_enabled` 显式改为 `true`，并只能选择已有经复核公开 seed 身份记录的账号；公开文章身份字段明确命名为 `public_biz` 与 `identity.observed_public_biz`。`resolve` 只凭唯一规范化名称匹配取得一次性 provisional `fakeid` mapping，不把它称为已验证身份；全局冷却结束后，`probe` 才能把该 mapping 分配给一次 reservation，并仅在所有返回文章 URL 的 `__biz` 都匹配配置账号时形成可比较的身份验证证据。公开 `biz` 永远不能直接当作后台 `fakeid`。这些命令不会启用定时 canary，也不会写生产 `items`：
+
+```bash
+./run.sh admin wechat-discovery login
+./run.sh admin wechat-discovery resolve --account '歸藏的AI工具箱'
+./run.sh admin wechat-discovery probe --account '歸藏的AI工具箱'
+```
+
+取得成功 probe 后，使用显式只读命令把该 attempt 与同账号、同观察窗的生产 Mp2RSS URL 对比；证据不足会返回 `NOT_COMPARABLE`，不会伪装成覆盖成功。单次后台响应内重复 URL 会被视为 `RESPONSE_INVALID`，不会静默去重后进入比较：
+
+```bash
+./run.sh admin wechat-discovery compare --account '歸藏的AI工具箱' --attempt ATTEMPT_ID --since '2026-08-13T00:00:00+08:00'
+```
+
+已在可见浏览器中完成获授权后台登录与二次登录，并验证项目会话格式可加载、只保存 12 个适用域 Cookie、权限为 `0600`。旧程序把若干后台非成功响应记录成 `AUTH_REQUIRED` 或 `RATE_LIMITED`，但当时没有持久化 exact `ret`；这些历史记录不能证明微信官方存在 24 小时频控。2026-08-14 和 2026-08-16 各有一次 `searchbiz` 成功取得“歸藏的AI工具箱”的唯一规范化名称匹配和私有 provisional mapping；两次后续 probe 均未取得文章候选，其中 2026-08-16 one-shot 仍由旧 parser 写成宽泛的 `RATE_LIMITED`。shadow ledger 当前 schema v10 完整保留 3 条 resolution、4 条 probe 和 0 条 candidate；所有旧平台失败明确标为 exact ret 未记录且不再触发特殊次日冷却，今后的整数 `200013` 才作为可证明频控，整数 `200002` 等其他拒绝单列为 `PLATFORM_REJECTED`。默认配置保持关闭，不能据此取消 Mp2RSS。详见运维文档、ADR-024 至 ADR-032、ADR-040、ADR-041、ADR-043 至 ADR-045。
+
+第二条默认关闭的微信读书只读 canary 也已在获授权的可见登录态 Chrome 中生成真实 schema v7 evidence：书架请求得到 HTTP 200 成功响应，但目标 `MP_WXS_3540975510` 不在书架，因此 canary 按契约停在 `BLOCKED_NO_SHELF_ENTRY`，没有发 article-list 请求、没有观察动态头，也没有修改书架。该结果证明登录态书架边界可用，不证明文章发现路线可用；任何单账号书架变更仍需另行取得明确许可，生产 `wx_mp2rss` 保持不变。
 
 ### 微信文章解读
 

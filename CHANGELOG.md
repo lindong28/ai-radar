@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-08-16
+
+- 微信公众号后台 shadow ledger 先以 schema v9 在 resolution 与 probe 保存 exact `base_resp.ret`，再以 schema v10 拒绝布尔、字符串、小数和 SQLite 非整数错误码，并把特殊次日冷却收窄为仅由已记录的频控证据触发。只有整数 `200013` 或明确 frequency 文本进入 `RATE_LIMITED`；整数 `200002` 和其他非认证、非频控拒绝进入 `PLATFORM_REJECTED`。v8 之前的旧 `AUTH_REQUIRED`、`RATE_LIMITED` 与 `RESPONSE_INVALID` 只标记为“错误码未记录”，不会追溯猜测、改判或生成虚假解禁时间。一次获授权 one-shot probe 仍未得到文章候选；它发生在 exact-ret 修复前，因此只能证明后台返回了旧 parser 归入宽分类的失败，不能证明微信官方存在 24 小时窗口。生产 Mp2RSS、`items`、scheduler 与默认关闭配置均未改变；本地私有库在 0600 SQLite backup 后迁移，3 条 resolution、4 条 probe、0 条 candidate 完整保留。
+
+## 2026-08-14
+
+- 微信公众号后台 shadow discovery 将 `searchbiz` 名称匹配收窄为一次性 provisional mapping；只有后续 probe 返回的全部文章 URL 都以唯一 `__biz` 匹配配置账号时，才形成可比较的身份验证证据。空列表、URL 无法提供 `__biz`、身份不匹配与请求失败分别持久化，CLI 不显示私有 `fakeid`，并将文章 URL public biz 矛盾明确报告为 `IDENTITY_MISMATCH`、安全失效 provisional mapping，不再误归入一般未验证状态；v6 成功历史不被升级成新证明。schema v8 在已落地 v7 之上加固 active mapping 与不可变 candidate snapshot，并让 disabled status 和 compare 使用同一 URL 身份判定；只读 `status` / `compare` 不再隐式迁移旧 shadow DB，升级必须经显式 `wechat-discovery migrate`。一次获授权的 live `searchbiz` 先以 `RESPONSE_INVALID` 结束，按新契约修正后的一次请求成功形成“歸藏的AI工具箱”的 provisional mapping；public biz 与文章发现仍待冷却后的 probe 验证。生产 `wx_mp2rss`、定时 pipeline 和 `items` 均未改变。边界见 ADR-040 与 ADR-041。
+- 微信读书只读 canary 在获授权、可见的登录态 Chrome 中生成首份真实 schema v7 evidence：`/web/shelf/sync` 得到 HTTP 200 成功响应，但目标公众号不在书架，因而结果为 `blocked_no_shelf_entry`，article-list 请求与动态头观察均未执行，替换结论仍为 `not_validated`。本次运行没有修改书架、写生产 candidate 或改变 pipeline；目标书架变更仍需独立明确授权。边界见 ADR-038 与微信摄取运维文档。
+
+## 2026-08-13
+
+- 新增默认关闭的微信公众号后台发现候选，用于在取消 Mp2RSS 前做低频 shadow 验证。首版包含 14 个现有公众号的非敏感 public biz 与逐号公开身份记录、headed Playwright 扫码入口、独立 shadow SQLite、状态 CLI，以及按账号、成功 attempt 和观察窗执行的只读 Mp2RSS 对比命令。后续源码审计确认公开 `biz` 不能作为通用安全的后台 `fakeid` 映射；resolution/probe ledger 因此增加单账号 `searchbiz` 身份解析、一次性 mapping 分配、请求前 `finished_at=NULL` 的 crash-safe reservation、文章 URL `__biz` 双层校验、失效与 supersession 历史，并用 probe 引用与不可变 attempt snapshot 取代双向消费和全局 candidate 双写。schema v6 进一步移除 verified probe/candidate 的重复身份、固定 kind/change-basis 与可派生成功子类型，所有时间统一 UTC；config v3 使用 `public_biz` / `observed_public_biz` 自描述字段。v3 及更早 attempt 标为 `predates_resolution`，不得形成覆盖结论；真实私有库已在 pre-v5、pre-v6 精确备份与副本演练后迁至 v6，两条旧失败证据完整保留。获授权后台登录与二次登录已在可见浏览器中完成；两次真实请求分别得到 `AUTH_REQUIRED` 与 `RATE_LIMITED`，没有文章候选，生产数据未变。人工请求临时默认成功后间隔 24 小时，probe 每次 5 篇；单次响应内重复 URL 会显式失败，不会去重后形成假窗口证据。尚无成功 `searchbiz`、文章列表、14 账号后台兼容、session 寿命或平台配额证据。所有请求仍不进入 pipeline，也不改变 Mp2RSS；当时边界由 ADR-024 至 ADR-032 约束，后续身份语义与 schema 演进见 2026-08-14 条目。
+- 新增默认关闭的单账号微信读书只读 canary 作为第二条可行性路线。schema v7 在既有、至多一次的 article-list 请求周围被动观察 CDP Network 事件，只记录监听、精确请求匹配、ExtraInfo 与 `x-wrpa-0` / `x-wr-ticket` 两个头名的存在性；不保存、显示或回放头值，也不新增请求、修改书架或写入生产数据。证据继续保留 HTTP / WeRead API / response-shape、候选身份、public target 生命周期和 `NOT_VALIDATED` 替换结论；v1–v6 artifact 保持冻结可读。当前只有真实 v4 未登录失败样本，没有真实 v7 或登录态正例，不能据此取消 Mp2RSS；边界由 ADR-033 至 ADR-038 约束。
+- 微信读书 canary 的请求前目标路径冲突现明确显示 `NOT_STARTED` 与 `Request dispatch: NOT_ATTEMPTED`，并保证既有 evidence 不变；帮助与运维文档同步公开 stdout、stderr 和退出码契约，避免把未发请求误报成 dispatch unknown。
+
 ## 2026-08-10
 
 - 新增 A5 微信解读停滞与 A6 近 24 小时 LLM 量结构成本突变告警，并把 unpriced、stale、due-review、price-changed 作为独立 D3 notification 去重通知。A6 用同一现行 tariff snapshot、cache 全未命中基准重算当前窗与 14 个 UTC 基线日，不把纯调价或 cache 采集比例变化误报为量结构突变；超过 3×基线先 notice，超过 6×高档阈值才 page，已观测到的缺数会显式降级。当前 pipeline 运行造成的暂时测量缺口把已记录金额作为下界继续允许首次 firing 与升级；下界未越线时保留同一 firing episode，等待封口后只确认记录行金额是否回落，不宣称整体计量健康。D3 发送/clear 失败可重试，保留间歇模型价格签名，并把成功生命周期写入共享 ledger；A1/A2/A5 合并由 pipeline 心跳门控，INTERNAL suppression 同样可审计。A3 的主动 healthz 探针现从已安装 serve plist 解析端口，不再因本机 serve 使用 8010 而对 8000 持续假告警。`/admin/usage` 新增阶段、Provider/模型、日序列与 cache 中性等长前窗聚合，`/api/v1/admin/usage` 的 `measurement_scope` 明示调用数、token 合计和同口径金额合计是记录行下界，而均值、占比与环比只描述记录行 cohort、相对全部付费调用真值的偏差方向未知。新增 `admin cost-report` 和周一 09:17 的 `cost-report` cron lifecycle；报表用 durable items 与逐 stage 成功产出识别整日及 partial stall，错误行不冒充成功，顶部单列异常，并同时展示 nominal 估算金额/占比、记录行口径与只除以可定价记录行的单篇解读前窗参考；所有金额都不是账单实付，unpriced 不计入金额。

@@ -7,6 +7,13 @@ data/alert-events.jsonl
 data/alert-events.lock
 data/alert-state.json
 data/pricing_cache.json
+data/wechat-discovery.db
+data/wechat-discovery.db-shm
+data/wechat-discovery.db-wal
+data/wechat-discovery-session.json
+data/.wechat-discovery-session.*
+data/wechat-discovery-browser/
+data/recovery/wechat-discovery/
 
 # Python
 __pycache__/
