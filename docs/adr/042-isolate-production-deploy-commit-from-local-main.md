@@ -23,6 +23,8 @@ push 许可同时单独说明条件式恢复授权：若 post-receive/slot healt
 
 `D` 成功且公共验收无回归后，等当前本地 `main` 写入者提交或释放，再另行取得本地整合许可，把包含 `D` 的 `tencent/main` 合并回本地 `main`；不再合并 `0c2e25a` 分支，避免重复应用同一 patch。清账完成的机械判据是 `git merge-base --is-ancestor D main` 成功、整合后的聚焦测试通过且工作树干净。满足前不得清理原 worktree/branch，也不得把本次改动称为已整合本地 `main`。未来每次部署前都先 fetch，先用 `git merge-base --is-ancestor tencent/main candidate` 确认候选可 fast-forward，再逐条列出 `tencent/main..candidate`；任一检查失败或出现未授权 commit 时重新制作最小候选。
 
-## 已知未验证项
+## 执行结果与剩余项
 
-决策落盘时，尚未证明 `0c2e25a` 的 patch 能在 `b242943` 上无冲突复放，尚未创建或验证 `D`，用户也尚未授权 push。部署后的公共入口、缓存边界和 MacBook 成对性能验收均仍待执行。EdgeOne/DNS 回切不属于本决策；若后续证据指向基础设施问题，另行决策和授权。
+隔离生产 commit `D` 最终为 `aeeccfdf69f81051ac6131d9e60c8d427d58edbf`，直接以 `b242943eded59142b1de48c27a7dc5e010d86338` 为父节点，只包含本任务的 10 个文件。聚焦测试在该生产父链上通过 111 项，Ruff、symlink、diff、patch 内容复核与 review gate 均通过；用户授权后，`D` 已 fast-forward push 到 `tencent:refs/heads/main`，post-receive 完成部署，服务器 `.deployed-sha` 与公开入口均指向 `D`。缓存窗口后的公开路由、视觉、缓存边界和用户 MacBook 可见 Chrome 成对性能验收全部通过，因此没有触发普通 revert，也没有执行 EdgeOne/DNS 回切。
+
+本地 `main` 的整合仍是独立待办：须等并发写入者释放，并按本 ADR 另取显式整合许可后，只整合包含 `D` 的生产历史；在此之前保留原 worktree 与分支，不把生产部署成功表述为本地 `main` 已完成清账。
