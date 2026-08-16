@@ -42,8 +42,10 @@
 | [036](./036-preserve-public-page-observation-outcomes.md) | 微信读书 canary v5 区分已观察页面与客户端失败，并闭合请求顺序和返回页关系 | accepted; supersedes ADR-035 for new evidence | 2026-08-13 |
 | [037](./037-retain-observed-captcha-target-at-attempt-end.md) | 微信读书 canary v6 在 attempt 结束时保留已观察到的验证码 target，并闭合失败关系 | accepted; supersedes ADR-036 for new evidence | 2026-08-13 |
 | [038](./038-observe-weread-dynamic-header-presence-without-replay.md) | 微信读书 canary v7 仅观察既有列表请求的动态鉴权头名称是否出现，不捕获或回放头值 | accepted; supersedes ADR-037 for new evidence | 2026-08-13 |
+| [039](./039-route-news-through-edgeone-dns-only-cname.md) | 通过 DNS-only CNAME 将 news 入口接入 EdgeOne | accepted | 2026-08-13 |
 | [040](./040-verify-provisional-searchbiz-mapping-with-article-url-biz.md) | searchbiz 只产 provisional mapping，再由返回文章 URL 的 public biz 完成身份验证 | accepted; supersedes ADR-028 searchbiz verification semantics | 2026-08-14 |
 | [041](./041-version-wechat-discovery-invariant-hardening.md) | 微信 discovery 不变量加固以 schema v8 发布，不原地改写已落地 v7 | accepted; clarifies ADR-029 through ADR-031 and ADR-040 | 2026-08-14 |
+| [042](./042-isolate-production-deploy-commit-from-local-main.md) | 从本地 main 的未发布提交中隔离生产部署 commit | accepted | 2026-08-16 |
 | [043](./043-waive-manual-wechat-probe-cooldown-once.md) | 对一次获授权微信后台 probe 豁免本地 1440 分钟冷却 | accepted; one-shot exception to ADR-025 only | 2026-08-16 |
 | [044](./044-persist-wechat-platform-error-ret.md) | schema v9 持久化后台 exact ret，区分平台拒绝与可证明频控 | accepted; clarifies ADR-025 failure and cooldown semantics | 2026-08-16 |
 | [045](./045-require-integer-platform-ret-and-evidence-backed-cooldown.md) | schema v10 只接受整数平台错误码，特殊冷却仅由已记录频控证据触发 | accepted; clarifies ADR-025 and ADR-044 | 2026-08-16 |

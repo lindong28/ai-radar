@@ -5,6 +5,7 @@
 - 微信公众号后台 shadow ledger 先以 schema v9 在 resolution 与 probe 保存 exact `base_resp.ret`，再以 schema v10 拒绝布尔、字符串、小数和 SQLite 非整数错误码，并把特殊次日冷却收窄为仅由已记录的频控证据触发。只有整数 `200013` 或明确 frequency 文本进入 `RATE_LIMITED`；整数 `200002` 和其他非认证、非频控拒绝进入 `PLATFORM_REJECTED`。v8 之前的旧 `AUTH_REQUIRED`、`RATE_LIMITED` 与 `RESPONSE_INVALID` 只标记为“错误码未记录”，不会追溯猜测、改判或生成虚假解禁时间。一次获授权 one-shot probe 仍未得到文章候选；它发生在 exact-ret 修复前，因此只能证明后台返回了旧 parser 归入宽分类的失败，不能证明微信官方存在 24 小时窗口。生产 Mp2RSS、`items`、scheduler 与默认关闭配置均未改变；本地私有库在 0600 SQLite backup 后迁移，3 条 resolution、4 条 probe、0 条 candidate 完整保留。
 - 主时间线和精选已配置 AIHOT 审核滚动观察并集中的 109 个 X 账号、34 个原始 Feed、18 个原始 Web/API 列表，共 161 个主站来源。另保留可选 `wx_mp2rss`，但它只服务「微信文章解读」，不进入精选、全部动态、搜索或策展。Web/API 来源使用逐来源确定性解析器；被配置移除的旧来源及历史关系继续保存在 SQLite，但不再从公开 v2 消费面出现。验收已覆盖 2,020 条 AIHOT 完整滚动观察且来源 reconciliation 零缺口，以及全部 52 个 non-X 来源的两轮 live 读取和一次 immutable replay；这只证明来源成员集合和原始读取链路，不表示下游清理、筛选、标签、排序、评分、摘要或策展结果与 AIHOT 等价。
 - X 读取不依赖付费 Mp2RSS，需要 `X_BEARER_TOKEN`；身份解析与 timeline 分轮，每个账号每轮至多一个请求，timeline 最多 5 条，只读原创帖子。首次窗口为最近 20 分钟，后续由持久 checkpoint/cursor 增量推进，不做接入前历史回填。仓库提供只允许 `x_openai` 的低成本探针；受限真实探针的一次身份请求和一次 timeline 请求均返回 HTTP 200，并提交了合法的空窗口 checkpoint。该结果没有实际帖子读取证据，也不代表 109 个账号均已逐一 live 验证。
+- 缩短 `https://news.aiplanet.live/wechat` 首次打开时的空白等待：`news.aiplanet.live` 现通过 DNS-only CNAME 接入 EdgeOne 全球加速，公开列表与静态资源按明确边界使用边缘缓存，搜索、详情、管理页和健康检查继续保持不缓存；`/wechat` 列表页把共享样式表内联到 SSR HTML，消除冷首屏等待第二次 CSS 请求的串行阻塞，同时保留单一 CSS 源文件和原有页面视觉。
 
 ## 2026-08-14
 

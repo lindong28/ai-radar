@@ -121,8 +121,10 @@
 | [036-preserve-public-page-observation-outcomes.md](adr/036-preserve-public-page-observation-outcomes.md) | 微信读书只读 canary v5 区分已观察页面与客户端失败，并闭合请求顺序和返回页关系 |
 | [037-retain-observed-captcha-target-at-attempt-end.md](adr/037-retain-observed-captcha-target-at-attempt-end.md) | 微信读书只读 canary v6 在 attempt 结束时保留验证码 target，并闭合失败关系 |
 | [038-observe-weread-dynamic-header-presence-without-replay.md](adr/038-observe-weread-dynamic-header-presence-without-replay.md) | 微信读书只读 canary v7 仅观察既有列表请求的动态鉴权头名称是否出现，不捕获或回放头值 |
+| [039-route-news-through-edgeone-dns-only-cname.md](adr/039-route-news-through-edgeone-dns-only-cname.md) | `news.aiplanet.live` 通过 DNS-only CNAME 接入 EdgeOne，并以内联 CSS 缩短 `/wechat` 冷首屏链路 |
 | [040-verify-provisional-searchbiz-mapping-with-article-url-biz.md](adr/040-verify-provisional-searchbiz-mapping-with-article-url-biz.md) | searchbiz 只产 provisional mapping，再由返回文章 URL 的 public biz 完成身份验证 |
 | [041-version-wechat-discovery-invariant-hardening.md](adr/041-version-wechat-discovery-invariant-hardening.md) | 微信 discovery 不变量加固以 schema v8 发布，不原地改写已落地 v7 |
+| [042-isolate-production-deploy-commit-from-local-main.md](adr/042-isolate-production-deploy-commit-from-local-main.md) | 从本地 `main` 的未发布提交中隔离生产 deployment commit，并用普通 revert 与后续 merge 收口 |
 | [043-waive-manual-wechat-probe-cooldown-once.md](adr/043-waive-manual-wechat-probe-cooldown-once.md) | 对一次获授权微信后台 probe 豁免本地 1440 分钟冷却 |
 | [044-persist-wechat-platform-error-ret.md](adr/044-persist-wechat-platform-error-ret.md) | schema v9 持久化后台 exact ret，区分平台拒绝与可证明频控 |
 | [045-require-integer-platform-ret-and-evidence-backed-cooldown.md](adr/045-require-integer-platform-ret-and-evidence-backed-cooldown.md) | schema v10 只接受整数后台错误码，特殊冷却仅由已记录频控证据触发 |

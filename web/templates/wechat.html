@@ -7,7 +7,9 @@
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');try{var t=localStorage.getItem("ai-radar:theme")||"dark";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;m.setAttribute("content",d?"#10151c":"#f4f5f6");}catch(e){r.dataset.theme="dark";r.dataset.themeMode="dark";m.setAttribute("content","#10151c");}})();</script>
     <title>AI Radar · 微信文章解读</title>
     <link rel="modulepreload" href="/app.js?v=20260809-dark">
-    <link rel="stylesheet" href="/style.css?v=20260808-icp2">
+    <style data-inline-stylesheet="wechat">
+{% include "_wechat_inline_style.css" %}
+    </style>
   </head>
   <body>
     <aside id="app-sidebar" class="sidebar" aria-label="主导航">

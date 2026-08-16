@@ -9,6 +9,7 @@ an empty shell that looks like a broken one.
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,35 @@ BEIAN_URL = "https://beian.miit.gov.cn/"
 # *visible* at a given viewport is a CSS question and is covered by the
 # browser check in tests/playwright, not here.
 COVERED_PATHS = ("/", "/all", "/hot", "/wechat", "/about", "/changelog", "/bookmarks", "/more")
+
+
+class _IcpFooterProbe(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.found = False
+
+    def handle_starttag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        for name, value in attrs:
+            if name == "class" and value and "icp-footer" in value.split():
+                self.found = True
+
+
+def _has_icp_footer(html: str) -> bool:
+    probe = _IcpFooterProbe()
+    probe.feed(html)
+    return probe.found
+
+
+@pytest.mark.parametrize(
+    "markup",
+    (
+        '<footer class="icp-footer"></footer>',
+        "<div data-slot='filing' class='other icp-footer'></div>",
+        "<span class='icp-footer other' data-slot='filing'></span>",
+    ),
+)
+def test_icp_footer_probe_detects_real_elements(markup: str) -> None:
+    assert _has_icp_footer(markup) is True
 
 
 @pytest.fixture
@@ -74,4 +104,4 @@ def test_unconfigured_renders_no_footer_at_all(
     body = unconfigured_client.get(path).text
     assert BEIAN not in body
     assert "beian.miit.gov.cn" not in body
-    assert "icp-footer" not in body
+    assert _has_icp_footer(body) is False
