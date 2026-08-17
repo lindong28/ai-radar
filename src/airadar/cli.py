@@ -83,6 +83,7 @@ from .wechat_discovery.protocol import (
     DiscoveryResponseInvalid,
     WeChatAdminClient,
     load_credentials,
+    normalized_account_name,
     observed_article_biz,
     select_unique_searchbiz_candidate,
     verify_account_identity,
@@ -627,16 +628,23 @@ def _admin_wechat_discovery_compare(args: argparse.Namespace) -> int:
                     "WHERE source_id='wx_mp2rss' AND author IS NOT NULL"
                 )
             }
-            if account.name not in authors:
+            matched_authors = sorted(
+                author
+                for author in authors
+                if normalized_account_name(author) == normalized_account_name(account.name)
+            )
+            if not matched_authors:
                 raise ShadowNotComparable(
-                    "the configured account name has no exact production author bucket"
+                    "the configured account name has no normalized production author bucket"
                 )
+            placeholders = ", ".join("?" for _ in matched_authors)
             baseline_rows = conn.execute(
-                """
+                f"""
                 SELECT url, published_at
-                FROM items WHERE source_id='wx_mp2rss' AND author=?
+                FROM items
+                WHERE source_id='wx_mp2rss' AND author IN ({placeholders})
                 """,
-                (account.name,),
+                matched_authors,
             ).fetchall()
         finally:
             conn.close()

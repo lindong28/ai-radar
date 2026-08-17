@@ -17,10 +17,7 @@ from scripts.audit_aihot_sources import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests/fixtures/aihot_sources.json"
-CURRENT_FAILED_OBSERVATION = (
-    ROOT
-    / "plans/20260812-aihot-original-source-alignment/artifacts/aihot-observation-current.json"
-)
+FAILED_SOURCE_DELTA_FIXTURE = ROOT / "tests/fixtures/aihot_failed_source_delta.json"
 
 
 def test_terminal_cursor_traversal() -> None:
@@ -170,7 +167,7 @@ def test_contract_reconciliation_reports_unmapped(tmp_path) -> None:
 
 
 def test_current_failed_observation_reconciles_after_accepting_fresh_source_delta() -> None:
-    observation = json.loads(CURRENT_FAILED_OBSERVATION.read_text(encoding="utf-8"))
+    observation = json.loads(FAILED_SOURCE_DELTA_FIXTURE.read_text(encoding="utf-8"))
     assert observation["status"] == "failed"
 
     result = reconcile_sources(observation["observed_source_item_urls"], CONTRACT)

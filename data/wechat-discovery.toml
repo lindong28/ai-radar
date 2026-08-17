@@ -1,0 +1,87 @@
+version = 3
+manual_backend_requests_enabled = false
+refresh_interval_minutes = 1440
+
+[[account]]
+name = "AI前线"
+public_biz = "MzU1NDA4NjU2MA=="
+seed_urls = ["https://mp.weixin.qq.com/s/73WzIkwD0c8FqA9pHnyh2w"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/73WzIkwD0c8FqA9pHnyh2w", observed_name = "AI前线", observed_public_biz = "MzU1NDA4NjU2MA==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "AI寒武纪"
+public_biz = "Mzg3MTkxMjYzOA=="
+seed_urls = ["https://mp.weixin.qq.com/s/i3KskDomnYaqEe_GAySADw"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/i3KskDomnYaqEe_GAySADw", observed_name = "AI寒武纪", observed_public_biz = "Mzg3MTkxMjYzOA==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "AI科技评论"
+public_biz = "MzA5ODEzMjIyMA=="
+seed_urls = ["https://mp.weixin.qq.com/s/Oq1s7UYryrBccInF4NXRGw"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/Oq1s7UYryrBccInF4NXRGw", observed_name = "AI科技评论", observed_public_biz = "MzA5ODEzMjIyMA==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "Draco正在VibeCoding"
+public_biz = "MzI2NzM4MTQwMg=="
+seed_urls = ["https://mp.weixin.qq.com/s/KY3RxHm8lPM_CXnWRgcYAg"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/KY3RxHm8lPM_CXnWRgcYAg", observed_name = "Draco正在VibeCoding", observed_public_biz = "MzI2NzM4MTQwMg==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "Founder Park"
+public_biz = "MzY5ODQwMTkxNA=="
+seed_urls = ["https://mp.weixin.qq.com/s/0GD6A1RBXnJiXdUYoRgKKg"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/0GD6A1RBXnJiXdUYoRgKKg", observed_name = "Founder Park", observed_public_biz = "MzY5ODQwMTkxNA==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "InfoQ"
+public_biz = "MjM5MDE0Mjc4MA=="
+seed_urls = ["https://mp.weixin.qq.com/s/Nmfg5eF6rC7HY3e-zT3CFg"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/Nmfg5eF6rC7HY3e-zT3CFg", observed_name = "InfoQ", observed_public_biz = "MjM5MDE0Mjc4MA==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "数字生命卡兹克"
+public_biz = "MzIyMzA5NjEyMA=="
+seed_urls = ["https://mp.weixin.qq.com/s/JDYKMEbLYMSAUGnxut7C0g"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/JDYKMEbLYMSAUGnxut7C0g", observed_name = "数字生命卡兹克", observed_public_biz = "MzIyMzA5NjEyMA==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "暗涌Waves"
+public_biz = "Mzk0MDMyNDUxOQ=="
+seed_urls = ["https://mp.weixin.qq.com/s/zEeMT8Eo9Ac2HM6UM_nlbA"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/zEeMT8Eo9Ac2HM6UM_nlbA", observed_name = "暗涌Waves", observed_public_biz = "Mzk0MDMyNDUxOQ==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "歸藏的AI工具箱"
+public_biz = "MzU0MDk3NTUxMA=="
+seed_urls = ["https://mp.weixin.qq.com/s/KWtnToEa7K-13k002K-nRw"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/KWtnToEa7K-13k002K-nRw", observed_name = "歸藏的 AI 工具箱", observed_public_biz = "MzU0MDk3NTUxMA==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "海外独角兽"
+public_biz = "Mzg2OTY0MDk0NQ=="
+seed_urls = ["https://mp.weixin.qq.com/s/DfQFOgOZxhReNiXbYG8ybA"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/DfQFOgOZxhReNiXbYG8ybA", observed_name = "海外独角兽", observed_public_biz = "Mzg2OTY0MDk0NQ==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "硅星人Pro"
+public_biz = "MzkyNjU2ODM2NQ=="
+seed_urls = ["https://mp.weixin.qq.com/s/Jmkkb3Qf7iPUTE6yxKbPLw"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/Jmkkb3Qf7iPUTE6yxKbPLw", observed_name = "硅星人Pro", observed_public_biz = "MzkyNjU2ODM2NQ==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "虎嗅APP"
+public_biz = "MTQzMjE1NjQwMQ=="
+seed_urls = ["https://mp.weixin.qq.com/s/IFlEhFEuQXUBLPNAM0IXqg"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/IFlEhFEuQXUBLPNAM0IXqg", observed_name = "虎嗅APP", observed_public_biz = "MTQzMjE1NjQwMQ==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "赛博禅心"
+public_biz = "MzkzNDQxOTU2MQ=="
+seed_urls = ["https://mp.weixin.qq.com/s/QqHTq-EvRdCJtvxWrtZ3dA"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/QqHTq-EvRdCJtvxWrtZ3dA", observed_name = "赛博禅心", observed_public_biz = "MzkzNDQxOTU2MQ==", observed_at = "2026-08-13" }
+
+[[account]]
+name = "量子位"
+public_biz = "MzIzNjc1NzUzMw=="
+seed_urls = ["https://mp.weixin.qq.com/s/-iEzAqsgHWwiBq462SPkFg"]
+identity = { seed_url = "https://mp.weixin.qq.com/s/-iEzAqsgHWwiBq462SPkFg", observed_name = "量子位", observed_public_biz = "MzIzNjc1NzUzMw==", observed_at = "2026-08-13" }
