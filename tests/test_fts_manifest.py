@@ -43,7 +43,9 @@ def _create_snapshot(path: Path, *, exclusive: bool = True) -> None:
             """
             CREATE TABLE sources (
                 id TEXT PRIMARY KEY,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                kind TEXT NOT NULL DEFAULT 'feed'
             );
             CREATE TABLE items (
                 id TEXT PRIMARY KEY,
@@ -62,7 +64,8 @@ def _create_snapshot(path: Path, *, exclusive: bool = True) -> None:
                 numeric_json TEXT,
                 error TEXT
             );
-            INSERT INTO sources VALUES ('source', 'Generic Source');
+            INSERT INTO sources (id, name, enabled, kind)
+            VALUES ('source', 'Generic Source', 1, 'feed');
             """
         )
         connection.execute(
@@ -236,6 +239,114 @@ def test_manifest_http_expectations_filter_nonvisible_raw_fts_matches(
     )
     assert title_probe["matches"] == title_probe["unqualified_matches"]
     assert payload["fts"]["row_count"] == 6
+
+
+def _add_item_on_source(
+    connection: sqlite3.Connection,
+    *,
+    source_id: str,
+    enabled: int,
+    kind: str,
+    item_id: str,
+    title_zh: str,
+) -> None:
+    """Attach one item to a freshly created source, sharing the title beacon.
+
+    No prefilter rows are written by these callers, so ``has_prefilter`` stays
+    false and the prefilter/scoring clause is not applied at all. Dedup cannot
+    exclude the item either -- it is the only row for its (source_id, url) pair.
+    Source visibility is therefore the single predicate that can hide it, which
+    is what makes the assertions below discriminating.
+    """
+
+    connection.execute(
+        "INSERT INTO sources (id, name, enabled, kind) VALUES (?, 'Generic Source', ?, ?)",
+        (source_id, enabled, kind),
+    )
+    connection.execute(
+        "INSERT INTO items_fts "
+        "(item_id, title, content_text, source_name, author, title_zh) "
+        "VALUES (?, 'TitleOnlyBeacon', 'generic body', 'Generic Source', "
+        "'Generic Author', ?)",
+        (item_id, title_zh),
+    )
+    connection.execute(
+        "INSERT INTO items "
+        "(id, source_id, url, title, content_text, author, published_at, fetched_at) "
+        "VALUES (?, ?, ?, 'TitleOnlyBeacon', 'generic body', 'Generic Author', "
+        "'2026-01-09T00:00:00Z', '2026-01-09T00:00:00Z')",
+        (item_id, source_id, f"https://example.invalid/{item_id}"),
+    )
+
+
+def test_manifest_http_expectations_exclude_disabled_source_items(
+    tmp_path: Path,
+) -> None:
+    """Regression for the quarantined round: sources.enabled=0 must not be promised.
+
+    The producer shipped a manifest promising item 000553f3075cface (source hn_ai,
+    enabled=0) on /api/v1/timeline. The endpoint filters that source out, so the
+    candidate returned nothing and the deterministic gate quarantined the snapshot.
+    """
+
+    snapshot = tmp_path / "snapshot.db"
+    artifact = tmp_path / "shipping.db"
+    output = tmp_path / "manifest.json"
+    _create_snapshot(snapshot)
+    _create_artifact(artifact)
+    with sqlite3.connect(snapshot) as connection:
+        _add_item_on_source(
+            connection,
+            source_id="disabled-source",
+            enabled=0,
+            kind="feed",
+            item_id="item-title-disabled",
+            title_zh="通用译名戊",
+        )
+
+    payload = manifest_module.build_manifest(
+        snapshot=snapshot, artifact=artifact, output=output
+    )
+
+    title_probe = payload["probes"]["title"]
+    assert "item-title-disabled" in title_probe["unqualified_matches"]["item_ids"]
+    assert "item-title-disabled" not in title_probe["timeline_http_matches"]["item_ids"]
+    assert "item-title" in title_probe["timeline_http_matches"]["item_ids"]
+
+
+def test_manifest_http_expectations_exclude_wechat_source_items(
+    tmp_path: Path,
+) -> None:
+    """The wechat clause is a second, independent conjunct of source visibility.
+
+    A wechat source is enabled, so the disabled-source regression above cannot
+    cover it: only ``COALESCE(s.kind, 'feed') != 'wechat'`` keeps these items off
+    the main timeline, and they are served by /wechat instead.
+    """
+
+    snapshot = tmp_path / "snapshot.db"
+    artifact = tmp_path / "shipping.db"
+    output = tmp_path / "manifest.json"
+    _create_snapshot(snapshot)
+    _create_artifact(artifact)
+    with sqlite3.connect(snapshot) as connection:
+        _add_item_on_source(
+            connection,
+            source_id="wechat-source",
+            enabled=1,
+            kind="wechat",
+            item_id="item-title-wechat",
+            title_zh="通用译名己",
+        )
+
+    payload = manifest_module.build_manifest(
+        snapshot=snapshot, artifact=artifact, output=output
+    )
+
+    title_probe = payload["probes"]["title"]
+    assert "item-title-wechat" in title_probe["unqualified_matches"]["item_ids"]
+    assert "item-title-wechat" not in title_probe["timeline_http_matches"]["item_ids"]
+    assert "item-title" in title_probe["timeline_http_matches"]["item_ids"]
 
 
 def test_manifest_applies_visibility_before_rejecting_app_search_expansion(

@@ -25,6 +25,15 @@ from .search import search_id_subquery, source_match_expression
 router = APIRouter()
 
 _timeline_total_cache = VersionedTotalCache(maxsize=64)
+
+# Which sources the public timeline is allowed to surface at all. This is the
+# single owner of that rule: deploy/sync/build_fts_manifest.py imports it so the
+# shipped FTS oracle and this endpoint cannot disagree about what /api/v1/timeline
+# will return. They silently did disagree once -- ab9442d tightened the endpoint
+# and left the manifest builder's parallel predicate behind, which shipped a
+# manifest expecting a disabled-source item and quarantined the sync round.
+TIMELINE_SOURCE_VISIBILITY_CLAUSES = ("s.enabled=1", "COALESCE(s.kind, 'feed') != 'wechat'")
+
 _PREFILTER_SCORING_CLAUSE = """
 EXISTS (
   SELECT 1 FROM item_evaluations pre
@@ -182,7 +191,7 @@ def timeline(
     q: str | None = None,
 ) -> dict[str, object]:
     params: list[object] = []
-    where_clauses: list[str] = ["s.enabled=1", "COALESCE(s.kind, 'feed') != 'wechat'"]
+    where_clauses: list[str] = list(TIMELINE_SOURCE_VISIBILITY_CLAUSES)
     search_subquery, search_params = search_id_subquery(q)
     if search_subquery:
         where_clauses.append(f"i.id IN ({search_subquery})")

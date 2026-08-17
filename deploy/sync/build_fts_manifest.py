@@ -42,9 +42,12 @@ unqualified result set exactly equals the target result set. These raw results
 remain the SQLite-level oracle.
 
 ``timeline_http_matches`` is a separate, required expectation for the application's
-``/api/v1/timeline`` search path. It is produced with the app-owned search,
-deduplication, prefilter, and scoring predicates rather than a copied SQL
-predicate. A raw-exclusive term is accepted for HTTP use only when at least one
+``/api/v1/timeline`` search path. It is produced with the app-owned search, source
+visibility, deduplication, prefilter, and scoring predicates rather than a copied SQL
+predicate. Every one of those five is imported from the route module; none may be
+restated here. Source visibility was once absent rather than copied, which reads as
+compliance with this rule and is not: an omitted predicate has no stale copy to
+notice. A raw-exclusive term is accepted for HTTP use only when at least one
 of its raw target matches survives those visibility rules. Failure to find a
 raw-exclusive, HTTP-visible term for any field aborts manifest creation.
 
@@ -75,7 +78,10 @@ if str(SRC_DIR) not in sys.path:
 
 from airadar.web.routes.categories import deduped_item_clause  # noqa: E402
 from airadar.web.routes.search import search_id_subquery  # noqa: E402
-from airadar.web.routes.timeline import _PREFILTER_SCORING_CLAUSE  # noqa: E402
+from airadar.web.routes.timeline import (  # noqa: E402
+    _PREFILTER_SCORING_CLAUSE,
+    TIMELINE_SOURCE_VISIBILITY_CLAUSES,
+)
 
 FORMAT_VERSION = 2
 FTS_FIELDS = ("item_id", "title", "content_text", "source_name", "author", "title_zh")
@@ -420,7 +426,7 @@ def _timeline_http_match_ids(
     search_ids = sorted({_raw_text(row[0]) for row in search_rows})
     if not search_ids:
         return {"count": 0, "item_ids": []}
-    visibility = [deduped_item_clause("i")]
+    visibility = [*TIMELINE_SOURCE_VISIBILITY_CLAUSES, deduped_item_clause("i")]
     has_prefilter = connection.execute(
         "SELECT 1 FROM item_evaluations WHERE stage='prefilter' LIMIT 1"
     ).fetchone()

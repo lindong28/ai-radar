@@ -63,7 +63,7 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 | `rollback_failed` | consumer gate 失败后回切未收敛；journal 保留 `rollback-to-previous-serving` 恢复动作 | 先查 canonical health、active include、两槽 unit 与 journal；保留旧槽，按证据修复后才重新触发 apply reconcile |
 | producer terminal poll timeout | 本轮是否已接受未知；apply 可能仍在运行，也可能停在非 terminal 状态 | 立即读 journal、receipt、`systemctl status ai-radar-db-apply.service` 与两份 apply log；不要直接再启动第二轮 producer |
 
-`VERIFIER_VERSION` 当前为 `fts-apply-v4`，且属于 retry authority。若 journal 报 `retry_blocked_verifier_changed`，不要靠重启绕过；保全旧/新 verifier identity 与 last failure，交由代码 owner 按 [architecture.md 的 retry authority 契约](../architecture.md#mac-primary--tencent-serving-replica)裁决。
+`VERIFIER_VERSION` 当前为 `fts-apply-v5`，且属于 retry authority。若 journal 报 `retry_blocked_verifier_changed`，不要靠重启绕过；保全旧/新 verifier identity 与 last failure，交由代码 owner 按 [architecture.md 的 retry authority 契约](../architecture.md#mac-primary--tencent-serving-replica)裁决。
 
 ### Alert 判定与 lifecycle
 

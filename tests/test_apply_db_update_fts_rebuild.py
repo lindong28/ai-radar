@@ -1104,8 +1104,8 @@ def test_pre_switch_http_timeout_keeps_prepared_retry_transient(
     assert deploy.cfg.claimed.is_file()
 
 
-@pytest.mark.parametrize("checkpoint_identity", ["fts-apply-v2", "fts-apply-v3"])
-def test_older_prepared_checkpoint_blocks_under_v4_without_migration(
+@pytest.mark.parametrize("checkpoint_identity", ["fts-apply-v2", "fts-apply-v3", "fts-apply-v4"])
+def test_older_prepared_checkpoint_blocks_under_v5_without_migration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     checkpoint_identity: str,
@@ -1128,7 +1128,7 @@ def test_older_prepared_checkpoint_blocks_under_v4_without_migration(
         deploy,
         "_continue_release",
         lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("older prepared checkpoint resumed under verifier v4")
+            AssertionError("older prepared checkpoint resumed under verifier v5")
         ),
     )
 
@@ -1138,7 +1138,7 @@ def test_older_prepared_checkpoint_blocks_under_v4_without_migration(
     blocked = json.loads(deploy.cfg.journal.read_text())
     assert blocked["state"] == "retry_blocked_verifier_changed"
     assert blocked["verifier_identity"] == checkpoint_identity
-    assert blocked["observed_verifier_identity"] == "fts-apply-v4"
+    assert blocked["observed_verifier_identity"] == "fts-apply-v5"
     assert blocked["recovery_action"] == "manual-intervention"
     assert blocked["automatic_fresh_rebuild_retries_used"] == 0
 

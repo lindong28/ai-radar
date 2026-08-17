@@ -60,7 +60,9 @@ def _create_live_db(path: Path) -> None:
             """
             CREATE TABLE sources (
               id TEXT PRIMARY KEY,
-              name TEXT NOT NULL
+              name TEXT NOT NULL,
+              enabled INTEGER NOT NULL DEFAULT 1,
+              kind TEXT NOT NULL DEFAULT 'feed'
             );
             CREATE TABLE items (
               id TEXT PRIMARY KEY,
@@ -88,8 +90,10 @@ def _create_live_db(path: Path) -> None:
               title_zh,
               tokenize='trigram'
             );
-            INSERT INTO sources VALUES ('generic', 'Generic Source');
-            INSERT INTO sources VALUES ('exclusive', 'SourceOnlyCedar');
+            INSERT INTO sources (id, name, enabled, kind)
+            VALUES ('generic', 'Generic Source', 1, 'feed');
+            INSERT INTO sources (id, name, enabled, kind)
+            VALUES ('exclusive', 'SourceOnlyCedar', 1, 'feed');
             """
         )
         rows = [

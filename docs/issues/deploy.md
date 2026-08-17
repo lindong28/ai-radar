@@ -2,6 +2,35 @@
 
 > 部署与 DB 同步链路的运维问题跟踪（含影响其验收的测试基线）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
 
+## [open] 2026-08-17：manifest 不携带 oracle 语义版本，新 consumer 无法拒绝旧语义 sidecar
+
+- Type: contract gap · Priority: medium · Discovered: 2026-08-17, ADR-051 的 review-gate（HIGH, INDEPENDENT）
+
+`build_fts_manifest.py` 写入 `format_version=2`，payload 里没有 oracle semantics version，也没有 producer 的 verifier identity。`validate_manifest()` 只校验结构、自哈希与 `timeline_http_matches ⊆ raw matches`——**旧语义 sidecar（其 probe 含 disabled / WeChat source item）完全满足这三条**，所以 v5 consumer 会接受它，并把它错记成 v5 retry authority，最终在 candidate HTTP 精确比较处再次 deterministic quarantine。`VERIFIER_VERSION` 只在 consumer 写 checkpoint 时进 journal，证明不了 sidecar 由哪个 producer 生成。
+
+这是 ADR-051 之前就存在的契约缺口，该 ADR 既未造成也未闭合它，故标为 INDEPENDENT。
+
+触发有**两个分支**，二者都会让旧语义 sidecar 遇上新 consumer：
+
+1. **已 staging 未 apply**：旧 producer 生成的 sidecar 已发布到服务器，尚未被旧 consumer 消费。2026-08-17 实测服务器 `data/` 下无任何 `radar.db.fts-manifest.*.json`、无 `radar.db.incoming` / `.upload`（quarantine 已把上一轮的搬入 `quarantine/<snapshot_id>/`），该分支当时不存在。
+2. **in-flight 旧 producer**：Mac 侧某个仍在跑的旧 producer 已构建出旧语义 sidecar、但尚未发布。**服务器目录为空排除不了这一支**——它稍后才会发布。此分支只能靠"Mac 工作树里的 producer 代码已含修复"来排除，而不是靠服务器读数。
+
+用户据此 waive 本轮、不阻塞 ADR-051 发布。
+
+修法方向：升 manifest format 版本，或加入一个同时被自哈希与 sidecar lookup 名绑定的 oracle semantic identity。该模块 docstring 规定 format 升级须 consumer-first rollout。
+
+## [open] 2026-08-17：同一 snapshot 无法发布语义修正后的 manifest
+
+- Type: contract gap · Priority: medium · Discovered: 2026-08-17, ADR-051 的 review-gate（HIGH, DEPENDENT）
+
+`snapshot_id` 只取 base-only artifact 的 SHA-256，而 sidecar 名是 `radar.db.fts-manifest.<snapshot_id>.json`。当 oracle 语义变化而 artifact 字节不变时，新旧 manifest **同名而内容不同**：发布逻辑 `mv -n` 发现目标已存在后只接受逐字节相同，不同即 `exit 42` 且「database commit marker was not published」（`deploy/sync/sync-db-to-server.sh:373`）。于是正确的 sidecar 发不出去，整轮卡死。
+
+已实测该机制真实存在，不是推理：用 ADR-051 的补丁在失败轮那份快照上重建 manifest，`snapshot_id` 仍是 `ed700a3a…`，而 `manifest_sha256` 由 `f0b11012…` 变为 `d106e0f6…`。
+
+触发还需「旧 manifest 仍留在 staging 未被 quarantine 移走」。2026-08-17 实测该名已腾空（见上一条），且 Mac primary 自 13:42 后已有新 item，下一轮 artifact 字节必然不同、snapshot_id 也随之改变，故本轮撞不上。失败模式为 fail-closed（producer 停止、服务器不受影响），恢复是人工确认后删除陈旧 sidecar。用户据此 waive 本轮。
+
+修法方向：把 oracle semantic identity 纳入不可变 sidecar identity，或为「同一 artifact 的合法语义升级」定义明确迁移路径。与上一条同源，宜合并处置。
+
 ## [open] 2026-08-10：sync 链路人读终端输出未过 cli-output 专项审
 
 - Type: docs/review debt · Priority: medium · Discovered: 2026-08-10, execute-plan 收尾
@@ -52,11 +81,13 @@ repo-owned 的 DB sync cron 与 performance-remediate cron 都列在 README/serv
 
 本轮同步最终 committed、但 cron 启动时 receipt 已超龄的场景下，wrapper 仍按旧的现在时文案报 exit 4（"replica 已陈旧"），与实际终态矛盾（review 判 MEDIUM）。修正需获准编辑 cron wrapper 的单元（该文件在 20260809 plan 中冻结未动）。
 
-## [open] 2026-08-10：VERIFIER_VERSION 依赖人工 bump（现 fts-apply-v4）
+## [open] 2026-08-10：VERIFIER_VERSION 依赖人工 bump（现 fts-apply-v5）
 
 - Type: ops discipline · Priority: low · Discovered: 2026-08-10, U4c 决策评审
 
 apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-relevant 改动（HTTP gate 判据、manifest 消费语义、rebuild SQL）必须按 ADR-014 记录的政策同步 bump；漏 bump 会让旧 checkpoint 在新判定输入下错误获得一次自动 fresh retry。无机械强制（内容哈希方案已被决策评审否决——闭包不止代码文件），依赖 review 纪律，值得跟踪。
+
+2026-08-17 更新（保持 open）：v4→v5 的 bump 又一次实证了这条问题。首轮决策评审只按 `git grep fts-apply-v4` 得到"精确字符串闭包"六处，复核轮指出那不是语义闭包——还漏了测试函数名 `..._blocks_under_v4_...`、失败断言文案 `"resumed under verifier v4"`，以及旧 checkpoint parametrize 参数需要补入 `fts-apply-v4` 才能覆盖新的 v4→v5 边界。字符串搜索找得到版本号出现的地方，找不到版本号被拼进标识符或被参数集合隐含的地方。本次改动是该问题描述的现象本身，不是它的解决证据。
 
 ## [open] 2026-08-10：Mac 本机 env 的 AI_RADAR_SITE_DOMAIN 仍指向已退役域名
 

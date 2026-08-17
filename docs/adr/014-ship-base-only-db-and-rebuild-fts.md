@@ -46,7 +46,7 @@ Manifest v2 是与 transfer artifact 原子配对的 sidecar oracle。它以 `sn
 
 采用 R4-F09 有界重试契约：retry authority 固定为 `(snapshot_id, manifest_sha256, verifier_identity)`。三者不变时，pre-switch crash 每 snapshot 最多一次 automatic fresh rebuild retry；第二次 crash进入 quarantine。确定性 manifest/rebuild/equality/search failure 不消费重试，立即 quarantine。post-switch pending states只允许回滚/quarantine，不允许向前恢复。
 
-`VERIFIER_VERSION` 是 retry authority 的语义版本，当前为 `fts-apply-v4`。当 base verification、candidate rebuild、manifest/row equality、raw MATCH probes、candidate/public HTTP probes或这些 verifier 的直接契约输入发生语义变化时，必须在同一改动显式 bump。若已绑定 artifact/manifest 的 `rebuilding` / `prepared` retry checkpoint 与运行中 verifier 不同，状态进入 `retry_blocked_verifier_changed` 与 `recovery_action=manual-intervention`；若漂移发生在尚未绑定 manifest 的 `claiming`，则 fail closed 并 quarantine。新 verifier在两种情形下都不得静默继承旧 checkpoint 的一次重试权限。
+`VERIFIER_VERSION` 是 retry authority 的语义版本，当前为 `fts-apply-v5`（2026-08-17 由 `fts-apply-v4` bump，因 `timeline_http_matches` 这一 candidate/public HTTP probe 的直接契约输入补入了 source visibility 谓词，见 [ADR-051](051-share-timeline-source-visibility-with-the-fts-oracle.md)）。当 base verification、candidate rebuild、manifest/row equality、raw MATCH probes、candidate/public HTTP probes或这些 verifier 的直接契约输入发生语义变化时，必须在同一改动显式 bump。若已绑定 artifact/manifest 的 `rebuilding` / `prepared` retry checkpoint 与运行中 verifier 不同，状态进入 `retry_blocked_verifier_changed` 与 `recovery_action=manual-intervention`；若漂移发生在尚未绑定 manifest 的 `claiming`，则 fail closed 并 quarantine。新 verifier在两种情形下都不得静默继承旧 checkpoint 的一次重试权限。
 
 ## Consequences
 

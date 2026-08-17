@@ -124,7 +124,7 @@ VERIFIER_ID_RE = re.compile(r"fts-apply-v[1-9][0-9]*")
 # behavior. Bump whenever base verification, candidate rebuild, manifest/row
 # equivalence, MATCH probes, candidate HTTP probes, or their direct contract
 # inputs change. A missed bump can incorrectly authorize one fresh retry.
-VERIFIER_VERSION = "fts-apply-v4"
+VERIFIER_VERSION = "fts-apply-v5"
 FTS_SHADOW_TABLES = {
     "items_fts_config",
     "items_fts_content",

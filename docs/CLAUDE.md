@@ -133,6 +133,7 @@
 | [048-require-semantic-live-validation-receipts.md](adr/048-require-semantic-live-validation-receipts.md) | 用语义完整的收据验收来源读取能力 |
 | [049-keep-human-audit-summaries-and-remove-duplicate-authorities.md](adr/049-keep-human-audit-summaries-and-remove-duplicate-authorities.md) | 保留人读审计摘要并移除重复权威 |
 | [050-allow-versioned-data-configs-through-code-deploy.md](adr/050-allow-versioned-data-configs-through-code-deploy.md) | 代码部署仅放行已核验的版本化 data 配置 |
+| [051-share-timeline-source-visibility-with-the-fts-oracle.md](adr/051-share-timeline-source-visibility-with-the-fts-oracle.md) | 由 timeline 单一持有 source visibility 谓词，FTS oracle 复用它 |
 
 ### docs/experiences/ [Agent]
 
