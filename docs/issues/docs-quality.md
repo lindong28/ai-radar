@@ -27,3 +27,9 @@
 - Type: content currency · Priority: low · Discovered: 2026-08-10, sync-docs 重审 wave
 
 模块树漏 `runtime_env.py`、`web/routes/daily_metrics.py`；`performance/` 仅列 3/9 模块且无省略标记；`web/templates` 仅列 4/16（漏掉路由表自己引用的 hot/changelog/more/admin/admin_usage/bookmarks/wechat_404 与 partials）；`web/static` 漏 `wechat-icon.svg`。另：general.md 与 ux-contract-issues.md 仍有 [resolved] 条目未按协议 §4.8 移入 archive/closed.md。
+
+## [open] 2026-08-17：CLAUDE.md 首行 Python 版本与实跑不符（cache-busting 审查发现，本轮范围外）
+
+- Type: content currency · Priority: low · Discovered: 2026-08-17, Frontend Asset Cache Busting 一节的 CLAUDE.md 审查
+
+`CLAUDE.md` 第 5 行称 "AI Radar is a **Python 3.12** FastAPI application"，但实测 `pyproject.toml` 的 `requires-python = ">=3.12"` 是**下限**、`.python-version` 为 `3.13`（2026-08-09 提交）、`.venv/pyvenv.cfg` 的 `version_info = 3.13.12` 是实际运行时。准确写法是「Python ≥3.12（本地 pin 3.13）」，或去掉版本数字让 `pyproject.toml` 单独承载。属既有行、非本轮改动引入，故未就地修。

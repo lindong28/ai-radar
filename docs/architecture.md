@@ -117,6 +117,8 @@ src/airadar/
     ├── cost_audit.py   #   raw catalog、派生成本、anchor 与 residue 对账
     └── alerts.py       #   A1–A6、D3、投递与 lifecycle
 
+web/asset-pins.json     # /app.js 与 /style.css 的内容摘要与 ?v= 版本串（刻意放在 static/ 之外，避免成为公开 URL）
+
 web/static/             # 前端静态文件（根目录 web/，非 src 内）
 ├── index.html          #   精选首页旧静态文件（deprecated，保留作回滚）
 ├── all.html            #   全量时间线旧静态文件（deprecated，保留作回滚）
@@ -509,3 +511,4 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | 前端页面修改 | `web/templates/`（`/`、`/all` SSR 首屏）+ `web/static/`（JS/CSS 与静态页面） |
 | 调整微信文章解读 | `interpret/runner.py`、`web/routes/wechat.py`、`web/templates/wechat*.html` |
 | 行为等价的 Web route / presentation / SSR 重构 | `scripts/web_contract_golden.py` + [Web Contract Golden 验证](references/web-contract-golden.md) |
+| 改动 `web/static/app.js` 或 `web/static/style.css` | `scripts/bump_frontend_assets.py`（重算 `?v=`）+ [ADR-039](adr/039-route-news-through-edgeone-dns-only-cname.md)、[前端经验](experiences/frontend.md) |

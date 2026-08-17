@@ -2,6 +2,7 @@
 
 ## 2026-08-17
 
+- `https://news.aiplanet.live/about` 的信源表格此前仍会列出 34 个已停用的历史来源（旧 nitter X 账号、旧 Feed 与旧 WeWe RSS 微信源），与 2026-08-16 记录的「被配置移除的旧来源……不再从公开 v2 消费面出现」不符。原因不在数据或代码：站点代码早已改为读取只返回启用来源的 v2 接口，但页面引用的 `?v=` 版本串在那次发布中没有更新，而 EdgeOne 对 `/app.js` 与 `/style.css` 强制节点缓存 7 天，部分边缘节点因此持续约 20 小时提供旧版脚本，旧版脚本读的是保留全量历史来源的 v1 接口。现已更新版本串使新脚本生效；数据库中的停用来源行与其历史内容按既有可见性规则保持不可见、未删除。同时新增 `scripts/bump_frontend_assets.py` 与配套测试，使版本串由资源内容摘要派生，漏更新在提交前即被拦下。
 - `pipeline.sh` 由 crontab 拉起时拿到的是非交互 shell，不加载交互式 rc，因此没有出网代理变量；`httpx` 的 `trust_env` 无从生效。`mp2rss.bugcode.dev` 直连被重置（走代理 HTTP 200，不走代理 `Recv failure: Connection reset by peer`，cron 空环境完整复现），`wx_mp2rss` 自 2026-08-14 12:16Z 起连续失败约 73 小时、微信零入库；2026-08-17 新增的约 120 个海外来源同样从未成功。现由 gitignored `.env` 提供 `AI_RADAR_PROXY_FILE` 指针，`pipeline.sh` 在运行时从该文件解析代理地址并导出，同时把解析结果写入日志。指针指向的地址由外部 tunnel 在每次重连时改写，因此不把端口固化进配置——固化会在下次重连后以完全相同的症状静默复发。修复后单轮 `attempted=162 / failed=0`（修复前 37 成功、125 失败），`wx_mp2rss` 单轮 `fetched=100 inserted=100` 且微信正文抓取零失败。该修复只覆盖出网链路：后段 `enrich`/`curate`/`interpret` 仍会因既有锁回收缺陷被后续轮次打断，消费面恢复不由本次改动保证。
 
 ## 2026-08-16

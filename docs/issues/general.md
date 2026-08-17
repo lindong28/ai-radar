@@ -416,3 +416,9 @@
 该测试用 `page.set_viewport_size()` + `page.goto(..., wait_until="domcontentloaded")` 后立即量盒，**没有等待布局在新视口下稳定**；同文件其它用例已有 `_settle_card_count()` 一类的稳定等待，这条没有。
 
 **为什么值得记**：它与本文件上一条（对隔离快照过拟合）同族但成因不同——那批是断言绑定了某份数据快照，这条是**断言绑定了单跑时的时序**。两者共同的后果是：这套 Playwright 目前**不能作为无人值守的 CI gate**，因为它在"换数据"和"换运行顺序"两个维度都会产生假失败。修法是给该用例补视口切换后的布局稳定等待（对 `.timeline` 的盒做两次采样直到一致，或复用既有的 settle 助手），而不是放宽断言容差——容差放宽会把真回归一起放过。
+
+## [open] 2026-08-17：`test_reclaimer_cannot_steal_atomically_published_live_initializer` 在满负载下 flaky
+
+- Type: test reliability · Priority: low · Discovered: 2026-08-17，前端 cache-busting 改动的独立评审中由 reviewer 观测到
+
+该用例用 `subprocess.run(..., timeout=30)` 起外部脚本，属负载敏感。reviewer 在满负载全量跑中观测到一次 `1 failed`，单独重跑 3/3 绿；本地三次全量（`--ignore=tests/playwright`，1554 passed）与单独重跑均未复现。与前端资源改动无共享代码路径。**影响**：把"全量绿"当发布 gate 时，它在这台机器上不是稳定可复现的。仓库根目录当前遗留 79 个 `.pipeline.lock.reclaim.*` 目录，可能与该用例的环境假设相互作用，值得一并排查。
