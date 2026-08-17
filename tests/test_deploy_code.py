@@ -548,9 +548,87 @@ def test_runtime_owned_classification() -> None:
     for p in (".env", ".venv/bin/python3", "logs/serve.log",
               "data/radar-8000.db", "data/anything.db"):
         assert owned(p), f"{p} must be runtime-owned"
-    for p in ("data/sources.toml", ".env.example", ".python-version",
+    for p in ("data/sources.toml", "data/aihot_retirements.json",
+              "data/wechat-discovery.toml", ".env.example", ".python-version",
               "src/airadar/db.py", "deploy/sync/deploy_code.py"):
         assert not owned(p), f"{p} must NOT be runtime-owned"
+
+
+def test_materialize_accepts_versioned_data_configs(tmp_path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    _git(src, "init", "-q")
+    _git(src, "config", "user.email", "t@example.com")
+    _git(src, "config", "user.name", "t")
+    (src / "keep.txt").write_text("v\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "base")
+    base = _git(src, "rev-parse", "HEAD")
+    (src / "data").mkdir()
+    (src / "data" / "aihot_retirements.json").write_text("{}\n")
+    (src / "data" / "wechat-discovery.toml").write_text("version = 3\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "add versioned configs")
+    target = _git(src, "rev-parse", "HEAD")
+
+    bare = tmp_path / "bare.git"
+    _git(tmp_path, "clone", "--bare", "-q", str(src), str(bare))
+    home = tmp_path / "home"
+    (home / "data").mkdir(parents=True)
+    d = dc.CodeDeploy(_make_cfg(tmp_path, bare, home))
+    idx = home / ".git-deploy-index"
+
+    d.materialize(base, home, idx, base=None)
+    d.materialize(target, home, idx, base=base)
+    assert (home / "data" / "aihot_retirements.json").read_text() == "{}\n"
+    assert (home / "data" / "wechat-discovery.toml").read_text() == "version = 3\n"
+
+
+def test_materialize_refuses_allowlisted_config_symlink(tmp_path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    _git(src, "init", "-q")
+    _git(src, "config", "user.email", "t@example.com")
+    _git(src, "config", "user.name", "t")
+    (src / "data").mkdir()
+    (src / "data" / "wechat-discovery.toml").symlink_to("../runtime-secret")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "symlink config")
+    target = _git(src, "rev-parse", "HEAD")
+
+    bare = tmp_path / "bare.git"
+    _git(tmp_path, "clone", "--bare", "-q", str(src), str(bare))
+    home = tmp_path / "home"
+    (home / "data").mkdir(parents=True)
+    d = dc.CodeDeploy(_make_cfg(tmp_path, bare, home))
+
+    with pytest.raises(dc.DeployError, match="regular tracked files"):
+        d.materialize(target, home, home / ".git-deploy-index", base=None)
+
+
+def test_first_materialize_refuses_preexisting_allowlisted_config(tmp_path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    _git(src, "init", "-q")
+    _git(src, "config", "user.email", "t@example.com")
+    _git(src, "config", "user.name", "t")
+    (src / "data").mkdir()
+    (src / "data" / "aihot_retirements.json").write_text("{}\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "tracked config")
+    target = _git(src, "rev-parse", "HEAD")
+
+    bare = tmp_path / "bare.git"
+    _git(tmp_path, "clone", "--bare", "-q", str(src), str(bare))
+    home = tmp_path / "home"
+    (home / "data").mkdir(parents=True)
+    live_config = home / "data" / "aihot_retirements.json"
+    live_config.write_text('{"runtime": true}\n')
+    d = dc.CodeDeploy(_make_cfg(tmp_path, bare, home))
+
+    with pytest.raises(dc.DeployError, match="pre-existing untracked config"):
+        d.materialize(target, home, home / ".git-deploy-index", base=None)
+    assert live_config.read_text() == '{"runtime": true}\n'
 
 
 def test_materialize_real_git_deletes_path_with_space(tmp_path) -> None:

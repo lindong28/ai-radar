@@ -132,6 +132,7 @@
 | [047-use-controlled-original-web-lists-for-aihot-source-alignment.md](adr/047-use-controlled-original-web-lists-for-aihot-source-alignment.md) | AIHOT 来源对齐使用受控的原始 Web/API 列表 |
 | [048-require-semantic-live-validation-receipts.md](adr/048-require-semantic-live-validation-receipts.md) | 用语义完整的收据验收来源读取能力 |
 | [049-keep-human-audit-summaries-and-remove-duplicate-authorities.md](adr/049-keep-human-audit-summaries-and-remove-duplicate-authorities.md) | 保留人读审计摘要并移除重复权威 |
+| [050-allow-versioned-data-configs-through-code-deploy.md](adr/050-allow-versioned-data-configs-through-code-deploy.md) | 代码部署仅放行已核验的版本化 data 配置 |
 
 ### docs/experiences/ [Agent]
 

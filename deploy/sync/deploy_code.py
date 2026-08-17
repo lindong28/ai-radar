@@ -241,7 +241,7 @@ class CodeDeploy:
         }
         # Refuse, before touching the tree, any commit that tracks a
         # runtime-owned path -- checkout-index -f would overwrite live state.
-        self._guard_runtime_paths(sha, env)
+        self._guard_runtime_paths(sha, tree, base, env)
         # A pre-existing (possibly empty) index file is fatal to git -- "index
         # file smaller than expected" -- so start each materialize clean.
         if index.exists():
@@ -261,7 +261,11 @@ class CodeDeploy:
     # files; everything under .env (the exact secrets file), .venv/, and logs/
     # is live state git must never write over. .env.example is not .env, so it
     # is not caught.
-    _RUNTIME_ALLOW = frozenset({"data/sources.toml"})
+    _RUNTIME_ALLOW = frozenset({
+        "data/aihot_retirements.json",
+        "data/sources.toml",
+        "data/wechat-discovery.toml",
+    })
 
     @classmethod
     def _is_runtime_owned(cls, path: str) -> bool:
@@ -274,21 +278,60 @@ class CodeDeploy:
             or path.startswith("data/")
         )
 
-    def _guard_runtime_paths(self, sha: str, env: dict) -> None:
+    def _tree_entries(self, sha: str, env: dict) -> dict[str, tuple[str, str]]:
         res = self.r.run("git", "-c", "core.bare=false", "ls-tree", "-r",
-                         "--name-only", "-z", sha, env=env)
+                         "-z", sha, env=env)
         if res.returncode != 0:
             raise DeployError(
                 f"could not list tree {sha}: {(res.stderr or res.stdout)[-200:]}"
             )
+        entries: dict[str, tuple[str, str]] = {}
+        for record in res.stdout.split("\0"):
+            if not record:
+                continue
+            try:
+                header, path = record.split("\t", 1)
+                mode, object_type, _object_id = header.split(" ", 2)
+            except ValueError as exc:
+                raise DeployError(f"could not parse tree entry for {sha}") from exc
+            entries[path] = (mode, object_type)
+        return entries
+
+    def _guard_runtime_paths(
+        self, sha: str, tree: Path, base: str | None, env: dict
+    ) -> None:
+        entries = self._tree_entries(sha, env)
         offenders = sorted(
-            p for p in res.stdout.split("\0") if p and self._is_runtime_owned(p)
+            path for path in entries if self._is_runtime_owned(path)
         )
         if offenders:
             raise DeployError(
                 "refusing to deploy: commit tracks runtime-owned paths that "
                 "checkout would overwrite (live state git cannot restore): "
                 + ", ".join(offenders[:10])
+            )
+        invalid_configs = sorted(
+            path
+            for path, entry in entries.items()
+            if path in self._RUNTIME_ALLOW and entry != ("100644", "blob")
+        )
+        if invalid_configs:
+            raise DeployError(
+                "refusing to deploy: versioned data configs must be regular tracked files: "
+                + ", ".join(invalid_configs[:10])
+            )
+        if tree != self.cfg.home:
+            return
+        base_entries = self._tree_entries(base, env) if base else {}
+        untracked_collisions = sorted(
+            path
+            for path in self._RUNTIME_ALLOW & entries.keys()
+            if path not in base_entries and os.path.lexists(tree / path)
+        )
+        if untracked_collisions:
+            raise DeployError(
+                "refusing to deploy over a pre-existing untracked config: "
+                + ", ".join(untracked_collisions[:10])
             )
 
     def _apply_deletions(self, base: str, sha: str, tree: Path, env: dict) -> None:
