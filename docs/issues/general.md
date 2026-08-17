@@ -422,3 +422,24 @@
 - Type: test reliability · Priority: low · Discovered: 2026-08-17，前端 cache-busting 改动的独立评审中由 reviewer 观测到
 
 该用例用 `subprocess.run(..., timeout=30)` 起外部脚本，属负载敏感。reviewer 在满负载全量跑中观测到一次 `1 failed`，单独重跑 3/3 绿；本地三次全量（`--ignore=tests/playwright`，1554 passed）与单独重跑均未复现。与前端资源改动无共享代码路径。**影响**：把"全量绿"当发布 gate 时，它在这台机器上不是稳定可复现的。仓库根目录当前遗留 79 个 `.pipeline.lock.reclaim.*` 目录，可能与该用例的环境假设相互作用，值得一并排查。
+
+## [open] 2026-08-17：首屏密度守卫用相交判可见、用均值守最坏形态，两条都放行真失败
+
+- Type: test reliability（守卫失效）· Priority: medium · Discovered: 2026-08-17，与 AIHOT 做同条件成对 UI 对比时实测线上首屏
+
+线上 `news.aiplanet.live` 当日 15:01 那版在 1440×900 下**首屏完整可见条目数 = 0**：首张卡片 949px、高过 900px 的视口，第二条卡片顶边在 y=1276；滚动加载后 80 条里有 8 条超过 900px，最高 998px。而 `tests/playwright/test_phase2.py` 里三条本该防住它的断言全部通过。
+
+`0f827cd` 已把根因（列表卡片渲染正文配图）整条移除，随之删掉了三条里的第一条（`max_ratio <= 0.4`）。**剩下两条原封不动，仍然是坏的**：
+
+| 断言 | 位置 | 为什么放行 |
+|---|---|---|
+| `firstViewportCards >= 2` | `test_phase2.py:264,269` 与 `456,462` | 判据是 `top < innerHeight && bottom > 0`，即**相交**而非完整可见；一张占满整屏的卡片照样计 1 |
+| `avgHeight <= 520`（`/all` 档为 420） | `test_phase2.py:265,270` 与 `457,463` | **均值**摊平最坏形态：一条 998px 混进九条约 210px，均值 289 |
+
+作为参照，已删的那条错在口径是**单张图**不是整张卡片——生产上 4 图拼贴每张 360/900 = 恰好 0.400 逐张合规，两行合计 0.8 视口，加标题摘要推荐理由就是 949px。
+
+更根本的一层在夹具：`tests/playwright/conftest.py:176` 只给 index 0 和 30 两条配图、每条 1 张，且 URL 是 `http://127.0.0.1:9/playwright-media.png`（discard 端口，**永不加载**）。于是当时那条名为"配图不得主导视口"的断言，在"图确实不主导"与"根本没有配图"两种情况下读数完全相同——它从未在会让它失败的输入上跑过。配图移除后这条具体夹具缺口不再有消费者，但同一形态的下一条守卫仍会踩。
+
+**怎么修**：这两条断言的正确量法已经落成可执行仪器 `~/.claude/bin/first-screen-density`（完整可见而非相交、max 而非均值、band 要扣 fixed/sticky 头且经祖先裁剪、两条可见性路径不一致即报 unresolved），17 条夹具矩阵在同目录 `.test.py`。要么在 Playwright 里照它的判据重写，要么直接在 CI 里调它。**先让新断言在会失败的输入上红一次再改实现**——当前实现已无正文配图，最坏形态得靠夹具造（一条超过视口高的卡片）。
+
+**关联**：`docs/contracts/ux-contract.md` 的 HP-1 与「精选页"正常日"最少条数 ≥10 条（首屏）」把"首屏"定义成 SSR 直出条数，与"视口里看得见几条"脱钩；改守卫时一并收。HP-7 的配图条款已由 `0f827cd` 记入 `ux-contract-issues.md`。
