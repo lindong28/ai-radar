@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-17
+
+- `pipeline.sh` 由 crontab 拉起时拿到的是非交互 shell，不加载交互式 rc，因此没有出网代理变量；`httpx` 的 `trust_env` 无从生效。`mp2rss.bugcode.dev` 直连被重置（走代理 HTTP 200，不走代理 `Recv failure: Connection reset by peer`，cron 空环境完整复现），`wx_mp2rss` 自 2026-08-14 12:16Z 起连续失败约 73 小时、微信零入库；2026-08-17 新增的约 120 个海外来源同样从未成功。现由 gitignored `.env` 提供 `AI_RADAR_PROXY_FILE` 指针，`pipeline.sh` 在运行时从该文件解析代理地址并导出，同时把解析结果写入日志。指针指向的地址由外部 tunnel 在每次重连时改写，因此不把端口固化进配置——固化会在下次重连后以完全相同的症状静默复发。修复后单轮 `attempted=162 / failed=0`（修复前 37 成功、125 失败），`wx_mp2rss` 单轮 `fetched=100 inserted=100` 且微信正文抓取零失败。该修复只覆盖出网链路：后段 `enrich`/`curate`/`interpret` 仍会因既有锁回收缺陷被后续轮次打断，消费面恢复不由本次改动保证。
+
 ## 2026-08-16
 
 - 微信公众号后台 shadow ledger 先以 schema v9 在 resolution 与 probe 保存 exact `base_resp.ret`，再以 schema v10 拒绝布尔、字符串、小数和 SQLite 非整数错误码，并把特殊次日冷却收窄为仅由已记录的频控证据触发。只有整数 `200013` 或明确 frequency 文本进入 `RATE_LIMITED`；整数 `200002` 和其他非认证、非频控拒绝进入 `PLATFORM_REJECTED`。v8 之前的旧 `AUTH_REQUIRED`、`RATE_LIMITED` 与 `RESPONSE_INVALID` 只标记为“错误码未记录”，不会追溯猜测、改判或生成虚假解禁时间。一次获授权 one-shot probe 仍未得到文章候选；它发生在 exact-ret 修复前，因此只能证明后台返回了旧 parser 归入宽分类的失败，不能证明微信官方存在 24 小时窗口。生产 Mp2RSS、`items`、scheduler 与默认关闭配置均未改变；本地私有库在 0600 SQLite backup 后迁移，3 条 resolution、4 条 probe、0 条 candidate 完整保留。

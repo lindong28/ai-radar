@@ -9,6 +9,33 @@ cd "$SCRIPT_DIR"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
+# cron runs this in a non-interactive shell, so nothing from the interactive
+# rc is present. Local deployment settings live in a gitignored .env.
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/.env"
+fi
+
+# Resolve the egress proxy at run time: agent-proxy picks an ephemeral port per
+# tunnel, so pinning one here would break silently on the next reconnect.
+PROXY_STATUS="not configured"
+if [[ -n "${AI_RADAR_PROXY_FILE:-}" ]]; then
+  if [[ -r "$AI_RADAR_PROXY_FILE" ]]; then
+    proxy_url="$(tr -d '[:space:]' <"$AI_RADAR_PROXY_FILE")"
+    if [[ -n "$proxy_url" ]]; then
+      export HTTP_PROXY="$proxy_url" HTTPS_PROXY="$proxy_url"
+      export http_proxy="$proxy_url" https_proxy="$proxy_url"
+      export NO_PROXY="${AI_RADAR_NO_PROXY:-localhost,127.0.0.1,::1}"
+      export no_proxy="$NO_PROXY"
+      PROXY_STATUS="$proxy_url"
+    else
+      PROXY_STATUS="FAILED: $AI_RADAR_PROXY_FILE is empty"
+    fi
+  else
+    PROXY_STATUS="FAILED: cannot read $AI_RADAR_PROXY_FILE"
+  fi
+fi
+
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/pipeline-$(date +%Y%m%d-%H%M%S).log"
@@ -271,6 +298,8 @@ run_stage() {
     FAILED=1
   fi
 }
+
+log "=== egress proxy: $PROXY_STATUS ==="
 
 run_stage fetch
 run_stage prefilter --since 24h
