@@ -122,6 +122,40 @@ curl -sS --compressed -D - -o /dev/null 'https://news.aiplanet.live/wechat?q=Ope
 
 > 无法用 zone API 自动化：现有 `CLOUDFLARE_API_TOKEN` 能读 zone 但无 rulesets 权限（`/zones/<zone>/rulesets` → 403），故此规则只在 dashboard 手工维护；不要为此拓宽或替换该 token。
 
+## EdgeOne 节点缓存规则对账与 purge
+
+EdgeOne 对 `news.aiplanet.live` 下的精确路径 `/style.css` 与 `/app.js` 强制节点缓存 7 天（[ADR-039](../adr/039-route-news-through-edgeone-dns-only-cname.md)「决策」节）。该规则住在腾讯云控制台，是**仓外权威**：控制台新增一条强制缓存路径时，仓内 `tests/test_frontend_asset_versions.py` 仍会全绿，而那条路径上的资源若没有 `?v=` 版本串，发布后会在边缘陈旧整个 TTL——2026-08-17 的事故正是这个失效形态（见 [前端经验](../experiences/frontend.md)）。
+
+### 凭据
+
+腾讯云 CAM 最小权限子账号密钥，只需两个 action：`teo:DescribeL7AccRules`（读规则）与 `teo:CreatePurgeTask`（清缓存）。三个值放进 gitignored `.env`：
+
+| 键 | 说明 |
+|---|---|
+| `EDGEONE_SECRET_ID` | 子账号 SecretId |
+| `EDGEONE_SECRET_KEY` | 子账号 SecretKey |
+| `EDGEONE_ZONE_ID` | 站点 ID，形如 `zone-xxxx` |
+
+### 命令与退出码
+
+```bash
+./run.sh admin edgeone check                      # 对账；部署前跑
+./run.sh admin edgeone check --update-snapshot    # 审阅后接受当前规则，刷新仓内快照
+./run.sh admin edgeone purge --url https://news.aiplanet.live/style.css?v=xxx
+```
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 已核对，与 `web/edgeone-cache-rules.json` 一致 |
+| 1 | 已核对，发现漂移 |
+| 2 | **未核对**——凭据未配置或 API 调用失败 |
+
+退出码刻意三值：把"未核实"与"已核实通过"分开，否则未配置的检查会以 exit 0 冒充通过。判定依据是**整份规则集与仓内快照的差异**，不是从规则条件里解析路径——新版规则引擎的匹配条件是表达式字符串，解析漏一条就会报出"无漂移"，那正是本机制要防的失效。
+
+漂移属实且是有意变更时：先把新路径加进 `scripts/bump_frontend_assets.py` 的 `ASSETS`（使其获得内容派生的版本串），再 `--update-snapshot`。这个顺序是**强制**的——`--update-snapshot` 在发现强制缓存路径未被 `ASSETS` 覆盖、或匹配条件超出它能读懂的形态时会拒绝落盘并返回 2。因为快照只能证明「与上次一样」，不能证明上次接受的状态安全：把一个没有版本串的路径钉进基线，此后它就永远不会再被报出来。
+
+条件形态采用白名单：只有 `${http.request.uri.path} in ['…']`（可与 host 相等子句 AND）会被判为已理解，`not in`、`contains`、`full_uri`、文件扩展名匹配、以及任何嵌套在 `SubRules` 里的缓存规则一律判为未核实（exit 2），不会被当成已覆盖。
+
 ## Cloudflare tunnel shared ingress
 
 The `ai-radar` tunnel configuration still contains one retired AI Radar ingress and one active shared-site ingress:

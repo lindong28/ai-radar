@@ -12,6 +12,7 @@ from pathlib import Path
 from time import monotonic
 
 from . import db, runtime_env
+from .admin import edgeone
 from .admin.alerts import (
     DEFAULT_SERVE_LAUNCH_AGENT_PATH,
     collect_alert_signals,
@@ -1646,7 +1647,105 @@ def _admin(args: argparse.Namespace) -> int:
         for line in lines:
             print(line)
         return 0 if audit_report.passed else 1
+    if args.admin_command == "edgeone":
+        return _admin_edgeone(args)
     return _not_implemented("admin")
+
+
+def _admin_edgeone(args: argparse.Namespace) -> int:
+    config = edgeone.load_config()
+    if config is None:
+        missing = ", ".join(edgeone.missing_env())
+        print(f"NOT VERIFIED: EdgeOne cache rules were not checked ({missing} not set).")
+        print("Impact: a force-cache rule added in the console would go unnoticed here.")
+        print(f"Next: put {', '.join(edgeone.REQUIRED_ENV)} in .env, then re-run.")
+        return edgeone.EXIT_NOT_VERIFIED
+
+    if args.edgeone_command == "purge":
+        try:
+            response = edgeone.purge_urls(config, args.url)
+        except Exception as error:  # SDK raises provider-specific errors; all are "not purged".
+            print(f"FAILED: purge was not submitted ({error}).")
+            print("Next: verify the credential has teo:CreatePurgeTask and the zone id is right.")
+            return edgeone.EXIT_DRIFT
+        # A JobId comes back even when some targets were rejected, so the failure list --
+        # not the presence of a job -- decides whether those URLs were actually purged.
+        failures = edgeone.purge_failures(response)
+        job_id = response.get("JobId")
+        if failures:
+            for target, reason in failures:
+                print(f"NOT PURGED: {target} -- {reason}")
+            print(f"Impact: {len(failures)} of {len(args.url)} URL(s) still serve the cached copy.")
+            print("Next: re-submit the failed targets, or clear them in the EdgeOne console.")
+            return edgeone.EXIT_DRIFT
+        if not job_id:
+            print(f"NOT VERIFIED: no JobId came back, so the purge is unconfirmed ({response}).")
+            return edgeone.EXIT_NOT_VERIFIED
+        print(f"Submitted purge task {job_id} for {len(args.url)} URL(s).")
+        print("Next: re-request each URL and confirm eo-cache-status flips to MISS.")
+        return edgeone.EXIT_CLEAN
+
+    try:
+        rules = edgeone.fetch_rules(config)
+        current = edgeone.normalize_rules(rules)
+    except Exception as error:
+        print(f"NOT VERIFIED: could not read the EdgeOne rules ({error}).")
+        print("Impact: drift between the console and this repo remains unchecked.")
+        print("Next: re-run; a short or contradictory read is never recorded as a baseline.")
+        return edgeone.EXIT_NOT_VERIFIED
+
+    print(f"Read {len(current)} enabled rule(s); caching-relevant branches:")
+    for rule in current:
+        for branch, nested in edgeone.iter_cache_branches(rule):
+            condition = branch.get("Condition") or ""
+            paths = edgeone.summarize_paths(condition)
+            label = rule.get("RuleName") or "(unnamed)"
+            print(f"  - {label}{' [nested]' if nested else ''}: {', '.join(paths) or condition}")
+
+    coverage = edgeone.check_asset_coverage(current, edgeone.pinned_assets())
+    for path in coverage.uncovered:
+        print(f"UNCOVERED: {path} is force-cached but has no content-derived ?v= in ASSETS.")
+    for condition in coverage.unparseable:
+        print(f"UNPARSEABLE: could not read the paths out of {condition!r}.")
+
+    if args.update_snapshot:
+        # A snapshot only ever proves "same as last time"; refusing to pin an unsafe state
+        # is what stops an uncovered path from becoming the permanently expected baseline.
+        if not coverage.verified:
+            print("REFUSED: will not pin a state whose force-cached paths are unverified.")
+            print("Next: add each path above to scripts/bump_frontend_assets.py ASSETS")
+            print("(so it gets a content-derived version), then re-run with --update-snapshot.")
+            return edgeone.EXIT_NOT_VERIFIED
+        edgeone.write_snapshot(current)
+        print(f"Recorded {len(current)} rule(s) to {edgeone.SNAPSHOT_PATH}.")
+        return edgeone.EXIT_CLEAN
+
+    recorded = edgeone.load_snapshot()
+    if recorded is None:
+        print("NOT VERIFIED: no snapshot recorded yet, so there is nothing to compare against.")
+        print("Next: review the rules above, then run with --update-snapshot to pin them.")
+        return edgeone.EXIT_NOT_VERIFIED
+
+    drift = edgeone.compare_to_snapshot(current, recorded)
+    if not drift.has_drift and coverage.verified:
+        print("OK: the console rules match the pinned snapshot.")
+        return edgeone.EXIT_CLEAN
+    if not drift.has_drift:
+        print("NOT VERIFIED: the snapshot matches, but the paths above could not be verified.")
+        return edgeone.EXIT_NOT_VERIFIED
+
+    for rule in drift.added:
+        print(f"DRIFT (console has, repo does not): {rule.get('RuleName') or '(unnamed)'} [{rule.get('RuleId')}]")
+    for rule in drift.removed:
+        print(f"DRIFT (repo has, console does not): {rule.get('RuleName') or '(unnamed)'} [{rule.get('RuleId')}]")
+    if drift.reordered:
+        print("DRIFT: same rules, different order -- the engine evaluates top to bottom, so")
+        print("the effective cache TTL for an overlapping path may have changed.")
+    print("Impact: a newly force-cached path whose asset carries no ?v= can go stale at the")
+    print("edge for the full TTL, and no in-repo test can see it (ADR-039).")
+    print("Next: if the change is intended, make sure every force-cached path is in")
+    print("scripts/bump_frontend_assets.py ASSETS, then re-run with --update-snapshot.")
+    return edgeone.EXIT_DRIFT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1751,6 +1850,12 @@ def build_parser() -> argparse.ArgumentParser:
         db_retention.add_argument("--keep-days", type=_non_negative_int, default=DEFAULT_KEEP_DAYS)
         db_retention.add_argument("--dry-run", action="store_true")
         db_retention.add_argument("--db-path")
+    edgeone_parser = admin_subparsers.add_parser("edgeone")
+    edgeone_subparsers = edgeone_parser.add_subparsers(dest="edgeone_command", required=True)
+    edgeone_check = edgeone_subparsers.add_parser("check")
+    edgeone_check.add_argument("--update-snapshot", action="store_true")
+    edgeone_purge = edgeone_subparsers.add_parser("purge")
+    edgeone_purge.add_argument("--url", action="append", required=True)
     sources_parser = admin_subparsers.add_parser("sources")
     sources_subparsers = sources_parser.add_subparsers(dest="sources_command", required=True)
     sources_subparsers.add_parser("reload")

@@ -20,6 +20,8 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
 - `uv run pytest tests/test_frontend_asset_versions.py` 只保证**仓内**一致；**已上线的边缘陈旧只能从真实公网观测**——origin 已是新代码而部分边缘节点仍吐旧副本，本地与 curl 都可能看不出来。
 - 改 style.css 时 `/wechat` **要多做一件事、不是少做**：它把 style.css 内联进 SSR HTML，故没有 `style.css?v=` 可 bump，改为按 ADR-039「决策」节里那条内联契约，在约 120 秒缓存窗口后从真实公网 `/wechat` 验证内联内容。（它照常引用 `app.js?v=`，改 app.js 时不例外。）
 
+- 部署前跑 `./run.sh admin edgeone check`：强制缓存规则住在腾讯云控制台，是仓外权威，控制台多出一条路径时仓内测试全绿也看不见。**exit 2 表示未核实、不等于通过**（0=无漂移，1=有漂移，2=未核实）。
+
 bump 范围为何是"全部 HTML"、以及已上线后的补救，见 [docs/experiences/frontend.md](docs/experiences/frontend.md)。
 
 ## Useful Commands
