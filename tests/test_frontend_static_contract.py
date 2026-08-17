@@ -310,8 +310,6 @@ def test_app_js_wechat_card_renders_visit_original_link() -> None:
 def test_app_js_uses_title_and_media_as_natural_external_targets() -> None:
     js = _read("app.js")
 
-    assert "article-media-link" in js
-    assert 'aria-label="${esc(label)}"' in js
     assert '<a class="item-title"' in js
     assert "x-media-affordance" not in js
     assert "mediaAffordance" not in js
@@ -319,13 +317,16 @@ def test_app_js_uses_title_and_media_as_natural_external_targets() -> None:
     assert "查看原推媒体" not in js
 
 
-def test_app_js_renders_article_media_assets() -> None:
+def test_list_cards_do_not_render_article_media() -> None:
+    """ADR-054: 列表卡片不渲染正文图片，CSR 与 SSR 两条路径都不得留下渲染器。"""
     js = _read("app.js")
+    prepaint = (TEMPLATES / "_prepaint_list.html").read_text(encoding="utf-8")
 
-    assert "articleMedia" in js
-    assert "media_assets" in js
-    assert "article-media" in js
-    assert "article-media-img" in js
+    assert "articleMedia" not in js
+    assert "article-media-link" not in js
+    assert "article-media-img" not in js
+    assert "article-media" not in prepaint
+    assert "media_assets" not in prepaint
 
 
 def test_app_js_supports_all_page_channel_pagination_and_full_card_affordances() -> None:
@@ -425,13 +426,12 @@ def test_app_js_renders_x_cards_with_clickable_title_instead_of_origin_action() 
 
 
 
-def test_article_media_is_constrained_for_scan_reading() -> None:
+def test_article_media_styles_are_gone() -> None:
+    """ADR-054: 渲染器删除后不留无消费者的样式规则。"""
     css = _read("style.css")
 
-    assert ".article-media {" in css
-    assert "width: 100%;" in css
-    assert "max-width: 100%;" in css
-    assert "max-height: 360px;" in css
+    assert ".article-media {" not in css
+    assert ".article-media-img" not in css
 
 
 
@@ -511,12 +511,72 @@ def test_global_visual_tokens_light_default_with_dark_variant() -> None:
     # 每个现有 public HTML consumer 的 head 都内联完整主题 bootstrap，避免 FOUC。
     for path in THEMED_PUBLIC_PAGES:
         html = path.read_text(encoding="utf-8")
+        # theme-color 静态初值只是内联脚本跑之前的兜底色，不表达默认主题。
         assert '<meta name="theme-color" content="#10151c">' in html
-        assert 'localStorage.getItem("ai-radar:theme")||"dark"' in html
+        # 默认档为 system；且不得再出现旧的 ||"dark" 默认。
+        assert 'localStorage.getItem("ai-radar:theme")' in html
+        assert '||"dark"' not in html
+        assert '?s:"system"' in html
+        # 容错契约：存储读取单独 try、matchMedia 缺失时常量兜底深色。
+        assert "try{s=localStorage.getItem" in html
+        assert 'typeof matchMedia!=="function"' in html
         assert "dataset.theme" in html
         assert "dataset.themeMode" in html
         assert 'querySelector(\'meta[name="theme-color"]\')' in html
         assert 'setAttribute("content",d?"#10151c":"#f4f5f6")' in html
+
+
+def test_score_pill_carries_semantic_label_on_both_render_paths() -> None:
+    """评分不是裸数字：CSR 与 SSR 必须同形，否则首绘与 hydration 之间会跳字。"""
+    js = _read("app.js")
+    prepaint = (TEMPLATES / "_prepaint_list.html").read_text(encoding="utf-8")
+
+    label = '<span class="timeline-score-label">AI<span class="timeline-score-label-rest"> 评分</span></span>'
+    assert label in js
+    assert label in prepaint
+    # 不得写死分母：T1 信源有 1.25 倍 tier 乘数，weighted_score 可超过 10，
+    # 生产实况已有 10.75 的条目，`/100` 会渲染出 108/100 这种假值。
+    # 只查渲染出的那段标记，不查整份文件——否则解释这件事的注释自己会命中断言。
+    js_markup = js.split('<span class="timeline-score ${tier}"', 1)[1].split("`;", 1)[0]
+    prepaint_markup = prepaint.split('<span class="timeline-score {{ item.score_tier }}"', 1)[1].split(
+        "</span>{% endif %}", 1
+    )[0]
+    for markup in (js_markup, prepaint_markup):
+        assert "/100" not in markup
+        assert "timeline-score-max" not in markup
+
+
+def test_score_label_shortens_on_narrow_screens_without_hiding_itself() -> None:
+    """窄屏只缩短标签、不整体隐藏——移动端正是 tooltip 够不到的地方。"""
+    css = _read("style.css")
+
+    # 断言那条规则本身，不是"整个 media block 里某处有 display:none"——
+    # 后者在规则被改成 opacity 时仍会命中别处的 display:none 而静默通过（实测）。
+    assert ".timeline-score-label-rest" in css
+    rest_rule = css.split(".timeline-score-label-rest {", 1)[1].split("}", 1)[0]
+    # 必须是视觉隐藏，不能是 display:none——后者会把「评分」二字一并移出可访问性树，
+    # 读屏器只剩「AI 108」，而这段文字正是用来解释那个数字的。
+    assert "display: none" not in rest_rule, "display:none 会连可访问性树一起隐藏"
+    assert "position: absolute;" in rest_rule
+    assert "clip-path: inset(50%);" in rest_rule
+    # 该规则必须落在 ≤960px 媒体查询内，否则桌面端也会丢掉「评分」二字。
+    before_rule = css.split(".timeline-score-label-rest {", 1)[0]
+    nearest_media = before_rule.rsplit("@media", 1)[1].split("{", 1)[0].strip()
+    assert nearest_media == "(max-width: 960px)", nearest_media
+    # 标签不得再压透明度：12px 小字叠 opacity 会掉到 4.5:1 对比度线以下。
+    label_rule = css.split(".timeline-score-label {", 1)[1].split("}", 1)[0]
+    assert "opacity" not in label_rule
+
+
+def test_app_js_theme_default_matches_inline_bootstrap() -> None:
+    """默认档与容错契约必须在 app.js 与内联脚本之间一致（见 6724dd6 的 FOUC 教训）。"""
+    js = _read("app.js")
+
+    assert 'return value === "dark" || value === "system" || value === "light" ? value : "system"' in js
+    assert "function storedThemeValue" in js
+    assert "function systemPrefersDark" in js
+    assert 'typeof window.matchMedia !== "function"' in js
+    assert '? value : "dark"' not in js
 
 
 def test_shell_declares_theme_toggle_and_bookmarks_nav() -> None:
@@ -743,9 +803,7 @@ def test_phase2a_timeline_structure_is_kept_in_sync_for_ssr_and_csr() -> None:
         "source-line",
         "timeline-selected-badge",
         "timeline-score",
-        "article-media",
-        "article-media-link",
-        "article-media-img",
+        # article-media* 随 ADR-054 移除，不再是 CSR/SSR 的共有类名
         "tags",
         "tag",
         "timeline-divider",
@@ -835,8 +893,7 @@ def test_phase2a_css_uses_measured_badge_timeline_media_and_quote_values() -> No
     assert "border: 0;" in tag_rule
     assert "border-radius: 0;" in tag_rule
 
-    assert "max-height: 360px;" in css
+    # max-height:360px 与 cursor:zoom-in 只属于 .article-media*，随 ADR-054 移除
     assert ".summary-body blockquote {" in css
-    assert "cursor: zoom-in;" in css
     assert ".brand-logo-ai {\n  color: var(--accent-ink);" in css
     assert '.bookmark-btn[aria-pressed="true"] {\n  color: var(--accent-ink);' in css

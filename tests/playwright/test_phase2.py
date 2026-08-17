@@ -221,24 +221,26 @@ def test_v10_x_cards_keep_original_title_link_but_render_body_first(page: Page, 
         assert card.locator(".x-media-affordance").count() == 0
 
 
-def test_v10b_article_media_does_not_dominate_viewport(page: Page, base_url: str) -> None:
+def test_v10b_list_cards_render_no_article_media(page: Page, base_url: str) -> None:
+    """ADR-054: 列表不渲染正文图片，但 API 仍返回 media_assets。"""
     _goto(page, base_url, "/", cards=True)
 
-    media = page.locator(".article-media-img")
-    assert media.count() >= 1
-    max_ratio = media.evaluate_all(
-        """imgs => Math.max(...imgs.map(img => img.getBoundingClientRect().height / window.innerHeight))"""
+    assert page.locator(".article-media-img").count() == 0
+    assert page.locator(".article-media").count() == 0
+
+    preload = page.locator("#__PRELOAD__").evaluate("el => JSON.parse(el.textContent || 'null')")
+    assert any(item.get("media_assets") for item in preload["items"]), (
+        "数据侧应仍带 media_assets；若这里为空则本用例失去区分度"
     )
-    assert max_ratio <= 0.4
 
 
-def test_v10d_all_page_preserves_aihot_media_score_and_selected_reason(page: Page, base_url: str) -> None:
+def test_v10d_all_page_preserves_aihot_score_and_selected_reason(page: Page, base_url: str) -> None:
     _goto(page, base_url, "/all", cards=True)
 
     preload = page.locator("#__PRELOAD__").evaluate("el => JSON.parse(el.textContent || 'null')")
     expected_selected = sum(item.get("rank") is not None for item in preload["items"])
     assert page.locator(".timeline-card").count() >= 30
-    assert page.locator(".timeline-card .article-media-img").count() >= 1
+    assert page.locator(".timeline-card .article-media-img").count() == 0  # ADR-054
     assert page.locator(".timeline-card .timeline-score").count() == page.locator(".timeline-card").count()
     assert 0 < expected_selected < page.locator(".timeline-card").count()
     assert page.locator(".timeline-card .timeline-selected-badge", has_text="精选").count() == expected_selected

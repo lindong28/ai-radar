@@ -320,7 +320,10 @@ function scorePill(item) {
   const title = "LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明";
   const score = Math.round(Number(item.weighted_score) * 10);
   const tier = scoreTierClass(score);
-  return `<span class="timeline-score ${tier}" title="${esc(title)}">${score}</span>`;
+  // 标签而非裸数字：tooltip 在移动端不可达，裸「89」读不出这个数字是什么。
+  // 不写「/100」：T1 信源有 1.25 倍 tier 乘数（curator/score.py），weighted_score 可超过 10,
+  // 生产实况里已有 10.75 的条目，写死分母会渲染出 108/100 这种假值。SSR 侧同形在 _prepaint_list.html。
+  return `<span class="timeline-score ${tier}" title="${esc(title)}"><span class="timeline-score-label">AI<span class="timeline-score-label-rest"> 评分</span></span> ${score}</span>`;
 }
 
 function scoreTierClass(score) {
@@ -377,16 +380,8 @@ function itemHref(item) {
   return url.split("#", 1)[0] || url;
 }
 
-function articleMedia(item) {
-  const assets = Array.isArray(item.media_assets) ? item.media_assets.filter((asset) => asset?.type === "image" && asset.url) : [];
-  if (!assets.length) return "";
-  const label = `打开大图：${itemTitleText(item) || "查看媒体"}`;
-  const images = assets.slice(0, 4).map((asset) => `
-    <a class="article-media-link" href="${esc(asset.url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
-      <img class="article-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.article-media-link').hidden=true">
-    </a>`).join("");
-  return `<div class="article-media article-media-count-${Math.min(assets.length, 4)}">${images}</div>`;
-}
+/* 列表卡片不渲染正文抓取的图片，见 ADR-054。`media_assets` 仍在 API 响应里，
+   /img 代理与 source-avatar 路径不受影响。SSR 侧的对应改动在 _prepaint_list.html。 */
 
 function itemTitleText(item) {
   return item.title_zh || item.title || excerpt(item);
@@ -416,7 +411,6 @@ function itemCard(item, showScore, options = {}) {
   const title = itemTitle
     ? `<a class="item-title" href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(itemTitle)}</a>`
     : "";
-  const media = compact ? "" : articleMedia(item);
   return `<article class="item-row timeline-card${isX ? " x-card" : ""}${compact ? " compact-card" : ""}${options.clampSummary ? " clamped-card" : ""}" data-item-id="${esc(item.id)}" data-source-id="${esc(item.source_id)}" data-published-date="${esc(itemDateBucket(item))}" data-published-at="${esc(isoDateTime(itemTime(item)))}">
     <div class="card-topline">
       ${sourceLine(item, item.rank != null && !mobileFeed, mobileFeed)}
@@ -424,7 +418,6 @@ function itemCard(item, showScore, options = {}) {
     </div>
     ${title}
     <p class="summary">${esc(excerpt(item))}</p>
-    ${media}
     ${options.showTags === false || mobileFeed ? "" : `<div class="tags">${badges(item)}</div>`}
     ${showRelated ? relatedDiscussions(item) : ""}
     ${reason ? '<hr class="timeline-divider">' : ""}
@@ -1878,19 +1871,45 @@ function missingItem(title) {
   </section>`;
 }
 
-/* ---------- theme (暗色默认 + 浅色变体 + 跟随系统) ---------- */
+/* ---------- theme (默认跟随系统 + 深色/浅色显式档) ----------
+   默认值同时存在于此处与 14 个公共 HTML 的内联 FOUC 脚本，两处必须一致，
+   否则会先按一个值首绘、再在 hydration 时跳到另一个（见 6724dd6 的教训）。
+   HTML 里 theme-color 的静态初值 #10151c 只是"内联脚本执行前的极短兜底色"，
+   不表达默认主题——内联脚本会在首绘前按 matchMedia 结果覆写它。
+   容错契约两处也必须一致：localStorage 读取失败 → 当作无存储值；
+   matchMedia 不可用 → 常量兜底深色。两者都不得让异常逃逸。 */
 
 const THEME_KEY = "ai-radar:theme";
 const THEME_COLORS = { light: "#f4f5f6", dark: "#10151c" };
 
+// 存储不可用时（隐私模式等）用它承接本次会话内的选择，使切换仍即时生效。
+let themePrefFallback = null;
+
+function storedThemeValue() {
+  // 本次会话内的显式选择优先于存储值：localStorage 可读但 setItem 失败（配额、
+  // 存储策略）时，若让旧存储值胜出，用户点击会被静默吞掉——那比抛错更难发现。
+  if (themePrefFallback) return themePrefFallback;
+  // localStorage 在隐私模式等环境下会抛错；单独隔离，异常等同"无存储值"。
+  try {
+    return localStorage.getItem(THEME_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function systemPrefersDark() {
+  // matchMedia 不可用时按常量兜底为深色，与 inline FOUC 脚本同一兜底值。
+  if (typeof window.matchMedia !== "function") return true;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 function themePreference() {
-  const value = localStorage.getItem(THEME_KEY);
-  return value === "dark" || value === "system" || value === "light" ? value : "dark";
+  const value = storedThemeValue();
+  return value === "dark" || value === "system" || value === "light" ? value : "system";
 }
 
 function applyThemePreference(pref) {
-  const dark = pref === "dark"
-    || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const dark = pref === "dark" || (pref === "system" && systemPrefersDark());
   const theme = dark ? "dark" : "light";
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.themeMode = pref;
@@ -1919,13 +1938,20 @@ export function initThemeToggle() {
   };
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
-      localStorage.setItem(THEME_KEY, btn.dataset.themePref);
+      themePrefFallback = btn.dataset.themePref;
+      try {
+        localStorage.setItem(THEME_KEY, btn.dataset.themePref);
+      } catch {
+        /* 存储不可用：选择只在本次会话内生效，不跨会话保留 */
+      }
       sync();
     });
   });
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
-    if (themePreference() === "system") applyThemePreference("system");
-  });
+  if (typeof window.matchMedia === "function") {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+      if (themePreference() === "system") applyThemePreference("system");
+    });
+  }
   sync();
 }
 

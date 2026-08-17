@@ -577,7 +577,9 @@ def test_prepaint_uses_wechat_author_name_and_avatar_without_rss_suffix() -> Non
     assert feed["weekday_label"] == "星期一"
     assert feed["iso_datetime"] == "2026-06-01T00:00:00.000Z"
     assert feed["score"] == 83
-    assert feed["media_assets"] == [{"type": "image", "url": "https://example.com/one.png"}]
+    # ADR-054: prepaint view model 不再投影 media_assets（列表模板已不渲染正文图片）。
+    # API 侧的投影权威在 presentation/summary.py，不受影响。
+    assert "media_assets" not in feed
 
 
 def test_prepaint_uses_generic_wechat_icon_when_author_avatar_missing() -> None:

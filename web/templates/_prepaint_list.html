@@ -32,7 +32,7 @@
                 {% if item.selected %}<span class="timeline-selected-badge">精选</span>{% endif %}
               </div>
               <span class="card-topline-end">
-                {% if item.score is not none %}<span class="timeline-score {{ item.score_tier }}" title="LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明">{{ item.score }}</span>{% endif %}
+                {% if item.score is not none %}<span class="timeline-score {{ item.score_tier }}" title="LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明"><span class="timeline-score-label">AI<span class="timeline-score-label-rest"> 评分</span></span> {{ item.score }}</span>{% endif %}
                 <button type="button" class="bookmark-btn" data-bookmark-id="{{ item.item_id }}" aria-pressed="false" aria-label="收藏" title="收藏 / 取消收藏"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4.2-5.5 4.2z"/></svg></button>
               </span>
             </div>
@@ -40,15 +40,7 @@
               <a class="item-title" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
             {% endif %}
             <p class="summary">{{ item.summary }}</p>
-            {% if item.media_assets %}
-              <div class="article-media article-media-count-{{ item.media_assets | length }}">
-                {% for asset in item.media_assets %}
-                  <a class="article-media-link" href="{{ asset.url }}" target="_blank" rel="noopener noreferrer" aria-label="打开大图：{{ item.title or '查看媒体' }}">
-                    <img class="article-media-img" src="{{ asset.url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.article-media-link').hidden=true">
-                  </a>
-                {% endfor %}
-              </div>
-            {% endif %}
+            {# 列表卡片不渲染正文图片，见 ADR-054；CSR 侧同改在 app.js #}
             {% if show_tags %}
               <div class="tags">
                 {% for tag in item.tags %}

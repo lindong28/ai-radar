@@ -134,6 +134,9 @@
 | [049-keep-human-audit-summaries-and-remove-duplicate-authorities.md](adr/049-keep-human-audit-summaries-and-remove-duplicate-authorities.md) | 保留人读审计摘要并移除重复权威 |
 | [050-allow-versioned-data-configs-through-code-deploy.md](adr/050-allow-versioned-data-configs-through-code-deploy.md) | 代码部署仅放行已核验的版本化 data 配置 |
 | [051-share-timeline-source-visibility-with-the-fts-oracle.md](adr/051-share-timeline-source-visibility-with-the-fts-oracle.md) | 由 timeline 单一持有 source visibility 谓词，FTS oracle 复用它 |
+| [054-stop-rendering-article-images-in-list-cards.md](adr/054-stop-rendering-article-images-in-list-cards.md) | 列表卡片不再渲染正文抓取的图片 |
+| [055-default-new-visitors-to-system-theme.md](adr/055-default-new-visitors-to-system-theme.md) | 新访客默认主题改为跟随系统 |
+| [056-label-the-score-instead-of-showing-a-bare-number.md](adr/056-label-the-score-instead-of-showing-a-bare-number.md) | 评分显示语义标签，且不写死分母 |
 
 ### docs/experiences/ [Agent]
 
