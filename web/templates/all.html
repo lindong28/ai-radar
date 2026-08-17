@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AI Radar · 全部 AI 动态</title>
     <meta name="theme-color" content="#10151c">
-    <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');try{var t=localStorage.getItem("ai-radar:theme")||"dark";var d=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;m.setAttribute("content",d?"#10151c":"#f4f5f6");}catch(e){r.dataset.theme="dark";r.dataset.themeMode="dark";m.setAttribute("content","#10151c");}})();</script>
-    <link rel="modulepreload" href="/app.js?v=20260817-aihot-e3d7f9b1">
-    <link rel="stylesheet" href="/style.css?v=20260817-aihot-94a94372">
+    <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');var s=null;try{s=localStorage.getItem("ai-radar:theme");}catch(e){}var t=(s==="dark"||s==="light"||s==="system")?s:"system";var d=t==="dark"||(t==="system"&&(typeof matchMedia!=="function"||matchMedia("(prefers-color-scheme: dark)").matches));r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;if(m)m.setAttribute("content",d?"#10151c":"#f4f5f6");})();</script>
+    <link rel="modulepreload" href="/app.js?v=20260817-aihot-51a3bb69">
+    <link rel="stylesheet" href="/style.css?v=20260817-aihot-0b2e7540">
   </head>
   <body>
     <aside id="app-sidebar" class="sidebar" aria-label="主导航">
@@ -86,7 +86,7 @@
     </script>
 {% include "_mobile_tabbar.html" %}
     <script type="module" async>
-      import { initTimeline } from "/app.js?v=20260817-aihot-e3d7f9b1";
+      import { initTimeline } from "/app.js?v=20260817-aihot-51a3bb69";
       initTimeline();
     </script>
   </body>

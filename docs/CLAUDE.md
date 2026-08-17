@@ -136,6 +136,9 @@
 | [051-share-timeline-source-visibility-with-the-fts-oracle.md](adr/051-share-timeline-source-visibility-with-the-fts-oracle.md) | 由 timeline 单一持有 source visibility 谓词，FTS oracle 复用它 |
 | [052-hold-pipeline-mutex-with-kernel-flock.md](adr/052-hold-pipeline-mutex-with-kernel-flock.md) | pipeline 互斥改由内核 flock 持有，删除用户态判活与 stale reclaim |
 | [053-retry-startup-migration-on-database-locked.md](adr/053-retry-startup-migration-on-database-locked.md) | web 启动 migration 遇 database is locked 时有限退避重试 |
+| [054-stop-rendering-article-images-in-list-cards.md](adr/054-stop-rendering-article-images-in-list-cards.md) | 列表卡片不再渲染正文抓取的图片 |
+| [055-default-new-visitors-to-system-theme.md](adr/055-default-new-visitors-to-system-theme.md) | 新访客默认主题改为跟随系统 |
+| [056-label-the-score-instead-of-showing-a-bare-number.md](adr/056-label-the-score-instead-of-showing-a-bare-number.md) | 评分显示语义标签，且不写死分母 |
 
 ### docs/experiences/ [Agent]
 

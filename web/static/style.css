@@ -1633,6 +1633,32 @@ button:disabled {
   background: currentColor;
 }
 
+/* 不加 opacity：12px 小字再压透明度会掉到 4.5:1 对比度线以下，
+   而这段文字正是用来解释旁边那个数字是什么的。 */
+.timeline-score-label {
+  font-weight: 500;
+  margin-right: -2px;
+}
+
+/* ≤960px 视觉上只留「AI」两字。实测 390px、最长信源名
+   （Hacker News popular via buzzing.cc，完整需 230px）下，用本文件的真实类名量：
+   完整「AI 评分」→ pill 78px，信源名被挤成省略号（217px），顶栏 19→27px；
+   只留「AI」   → pill 47px，信源名完整 230px，gap 81px，顶栏 19px。
+   不整体隐藏标签——移动端正是 tooltip 够不到的地方，裸数字在那里最没法读。 */
+@media (max-width: 960px) {
+  /* 视觉隐藏而非 display:none——后者会把「评分」二字一并移出可访问性树，
+     读屏器只会读到「AI 108」。position:absolute 使它不占布局宽度，
+     因此窄屏的挤压问题同样解决。 */
+  .timeline-score-label-rest {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 .timeline-score.score-high {
   color: var(--success-ink);
 }
@@ -1804,40 +1830,7 @@ button:disabled {
   font-weight: 600;
 }
 
-.article-media {
-  display: grid;
-  gap: 6px;
-  width: 100%;
-  max-width: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.article-media-count-1 {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.article-media-link {
-  display: block;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  cursor: zoom-in;
-}
-
-.article-media-img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  max-height: 360px;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
-  background: var(--panel-soft);
-}
-
-.article-media-count-1 .article-media-img {
-  height: auto;
-  aspect-ratio: auto;
-}
+/* .article-media* 规则随 ADR-054 一并移除：列表卡片不再渲染正文图片 */
 
 /* ---------- states ---------- */
 
