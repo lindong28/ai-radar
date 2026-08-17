@@ -34,6 +34,7 @@ from ..admin.alerts import (
     reserve_alert_evaluation_sequence,
     run_alert_results_state_machine,
 )
+from ..pipeline_lock import DEFAULT_PIPELINE_LOCK_PATH, pipeline_lock_is_held
 from .browser_probe import (
     PROBE_INFRA_FAILURE_OUTCOME,
     measure_browser_journey,
@@ -47,7 +48,6 @@ SAME_HOST_SCOPE = "same-host provisional; not a regional SLO"
 DEFAULT_SAMPLE_PATH = db.PROJECT_ROOT / "logs" / "performance" / "journey-samples.jsonl"
 DEFAULT_ALERT_STATE_PATH = db.PROJECT_ROOT / "logs" / "performance" / "alert-state.json"
 DEFAULT_EVIDENCE_DIR = db.PROJECT_ROOT / "logs" / "performance" / "evidence"
-DEFAULT_PIPELINE_LOCK_DIR = db.PROJECT_ROOT / ".pipeline.lock"
 PROBE_OVERALL_TIMEOUT_SECONDS = 15 * 60
 PROBE_EXTERNAL_TIMEOUT_SECONDS = 16 * 60
 PROBE_EXTERNAL_KILL_AFTER_SECONDS = 5.0
@@ -85,7 +85,7 @@ _SPEC_BY_JOURNEY = {spec.journey: spec for spec in JOURNEY_SPECS}
 class JourneyMonitorRuntime:
     origin_url: str
     public_url: str
-    pipeline_lock_dir: Path
+    pipeline_lock_path: Path
     db_path: Path
 
 
@@ -111,92 +111,30 @@ class _PipelineActivitySnapshot:
     trustworthy: bool
 
 
-def _current_boot_id() -> str | None:
-    linux_boot_id = Path("/proc/sys/kernel/random/boot_id")
-    try:
-        if linux_boot_id.exists():
-            value = linux_boot_id.read_text(encoding="utf-8").strip()
-            return value or None
-        completed = subprocess.run(
-            ["/usr/sbin/sysctl", "-n", "kern.boottime"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    value = completed.stdout.strip()
-    return value if completed.returncode == 0 and value else None
-
-
-def _process_start_identity(pid: int) -> str | None:
-    try:
-        completed = subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    value = " ".join(completed.stdout.split())
-    return value if completed.returncode == 0 and value else None
-
-
-def _read_pipeline_owner(lock_dir: Path) -> dict[str, str] | None:
-    try:
-        lines = (lock_dir / "owner").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    owner: dict[str, str] = {}
-    for line in lines:
-        key, separator, value = line.partition("=")
-        if not separator or not key or not value:
-            return None
-        owner[key] = value
-    required = {"token", "pid", "boot_id", "process_start"}
-    return owner if required <= owner.keys() else None
-
-
-def classify_pipeline_load(lock_dir: Path) -> str:
-    if not lock_dir.exists():
-        return "idle"
-    owner = _read_pipeline_owner(lock_dir)
-    if owner is None:
-        return "idle" if not lock_dir.exists() else "unknown"
-    try:
-        pid = int(owner["pid"])
-        if pid <= 0:
-            return "unknown"
-        if _current_boot_id() != owner["boot_id"]:
-            return "unknown"
-        if _process_start_identity(pid) != owner["process_start"]:
-            return "unknown"
-        os.kill(pid, 0)
-    except (OSError, ValueError):
-        return "idle" if not lock_dir.exists() else "unknown"
-    return "busy"
+def classify_pipeline_load(lock_path: Path) -> str:
+    held = pipeline_lock_is_held(lock_path)
+    if held is None:
+        return "unknown"
+    return "busy" if held else "idle"
 
 
 def _interval_load_class(before: str, after: str) -> str:
     return before if before == after and before in {"idle", "busy"} else "unknown"
 
 
-def _pipeline_activity_path(lock_dir: Path) -> Path:
-    return lock_dir.with_suffix(".activity")
+def _pipeline_activity_path(lock_path: Path) -> Path:
+    return lock_path.with_suffix(".activity")
 
 
-def _read_pipeline_activity(lock_dir: Path) -> _PipelineActivitySnapshot:
-    marker_path = _pipeline_activity_path(lock_dir)
+def _read_pipeline_activity(lock_path: Path) -> _PipelineActivitySnapshot:
+    marker_path = _pipeline_activity_path(lock_path)
     try:
         generation_before = marker_path.read_bytes()
     except FileNotFoundError:
         generation_before = None
     except OSError:
         return _PipelineActivitySnapshot("unknown", None, False)
-    load_class = classify_pipeline_load(lock_dir)
+    load_class = classify_pipeline_load(lock_path)
     try:
         generation_after = marker_path.read_bytes()
     except FileNotFoundError:
@@ -304,7 +242,7 @@ def probe_journeys(
         if vantage == "same_host_public" and not base_url:
             continue
         for spec in JOURNEY_SPECS:
-            before = _read_pipeline_activity(runtime.pipeline_lock_dir)
+            before = _read_pipeline_activity(runtime.pipeline_lock_path)
             if before.load_class != "idle" or not before.trustworthy:
                 continue
             measurement = measure_browser_journey(
@@ -314,7 +252,7 @@ def probe_journeys(
                 timeout_seconds=spec.timeout_seconds,
                 expected=_probe_expectation(runtime.db_path, spec.target, detail_slug),
             )
-            after = _read_pipeline_activity(runtime.pipeline_lock_dir)
+            after = _read_pipeline_activity(runtime.pipeline_lock_path)
             if (
                 _activity_interval_load_class(before, after) != "idle"
                 or measurement.outcome == "skipped_overlap"
@@ -836,7 +774,7 @@ def _retired_busy_results(previous_state: dict[str, Any]) -> list[AlertRuleResul
     return results
 
 
-def _diagnostics(pipeline_lock_dir: Path) -> dict[str, object]:
+def _diagnostics(pipeline_lock_path: Path) -> dict[str, object]:
     try:
         git_sha = subprocess.run(
             ["/usr/bin/git", "rev-parse", "HEAD"],
@@ -879,8 +817,8 @@ def _diagnostics(pipeline_lock_dir: Path) -> dict[str, object]:
         "host_cpu_percent": host_cpu,
         "host_load_1m": os.getloadavg()[0] if hasattr(os, "getloadavg") else "unknown",
         "pipeline": {
-            "status": classify_pipeline_load(pipeline_lock_dir),
-            "lock_dir": str(pipeline_lock_dir),
+            "status": classify_pipeline_load(pipeline_lock_path),
+            "lock_path": str(pipeline_lock_path),
         },
     }
 
@@ -890,7 +828,7 @@ def _write_firing_evidence(
     result: AlertRuleResult,
     samples: list[dict[str, object]],
     evidence_dir: Path,
-    pipeline_lock_dir: Path,
+    pipeline_lock_path: Path,
     now: datetime,
 ) -> Path:
     values = result.values
@@ -914,7 +852,7 @@ def _write_firing_evidence(
         "provisional": True,
         "regional_slo_claim": False,
         "recent_samples": recent,
-        "diagnostics": _diagnostics(pipeline_lock_dir),
+        "diagnostics": _diagnostics(pipeline_lock_path),
     }
     evidence_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(result.rule_id.encode()).hexdigest()[:12]
@@ -944,7 +882,7 @@ def run_performance_alerts(
     sample_path: Path,
     state_path: Path,
     evidence_dir: Path,
-    pipeline_lock_dir: Path,
+    pipeline_lock_path: Path,
     event_path: Path = DEFAULT_EVENT_PATH,
     now: datetime | None = None,
     send: AlertSender | None = None,
@@ -1104,7 +1042,7 @@ def run_performance_alerts(
                 result=result,
                 samples=samples,
                 evidence_dir=evidence_dir,
-                pipeline_lock_dir=pipeline_lock_dir,
+                pipeline_lock_path=pipeline_lock_path,
                 now=current,
             )
             result = replace(result, detail=f"{result.detail}; evidence={evidence_path}")
@@ -1295,7 +1233,7 @@ def run_journey_monitor(
     sample_path: Path = DEFAULT_SAMPLE_PATH,
     state_path: Path = DEFAULT_ALERT_STATE_PATH,
     evidence_dir: Path = DEFAULT_EVIDENCE_DIR,
-    pipeline_lock_dir: Path = DEFAULT_PIPELINE_LOCK_DIR,
+    pipeline_lock_path: Path = DEFAULT_PIPELINE_LOCK_PATH,
     db_path: Path | None = None,
 ) -> dict[str, object]:
     with _probe_process_deadline():
@@ -1303,7 +1241,7 @@ def run_journey_monitor(
         runtime = JourneyMonitorRuntime(
             origin_url=origin_url,
             public_url=public_url,
-            pipeline_lock_dir=pipeline_lock_dir,
+            pipeline_lock_path=pipeline_lock_path,
             db_path=db_path or db.resolve_db_path(),
         )
         samples = probe_journeys(runtime, observed_at=observed_at)
@@ -1332,7 +1270,7 @@ def run_journey_monitor(
             sample_path=sample_path,
             state_path=state_path,
             evidence_dir=evidence_dir,
-            pipeline_lock_dir=pipeline_lock_dir,
+            pipeline_lock_path=pipeline_lock_path,
             now=observed_at,
             enabled_vantages=frozenset(enabled),
             known_corrupt_input=corrupt_input,

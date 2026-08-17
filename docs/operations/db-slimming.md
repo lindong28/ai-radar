@@ -60,7 +60,7 @@
 
 本段只处理 Mac primary 的 `data/radar.db` 原地 VACUUM；腾讯服务器上的只读 serving replica 由独立的 base-only 逻辑增量 + 服务器候选槽重建的同步状态机管理，不在这里原地瘦身。整个流程 **fail-closed 严格有序**，任一 gate 不满足即停在该步：
 
-1. **停写放行门**（正向取证，非"发个停止命令"）：`crontab -l` / launchd 清点并 disable 本项目**全部**定时项（pipeline、performance-probe、DB sync 等）；`pipeline.sh` 终态以 `.pipeline.lock` 目录不存在为准（不用子进程 pgrep，父进程 stage 间隙无子进程仍会启下一 writer）；`PRAGMA wal_checkpoint(TRUNCATE)` 返回 `busy=0` 证无活跃写事务。
+1. **停写放行门**（正向取证，非"发个停止命令"）：`crontab -l` / launchd 清点并 disable 本项目**全部**定时项（pipeline、performance-probe、DB sync 等）；`pipeline.sh` 终态以对 `.pipeline.flock` 取得非阻塞排他锁**并持有它贯穿整个维护窗口**为准（内核锁由整棵 pipeline 进程树持有，树上最后一个进程退出才释放，见 ADR-052；不用子进程 pgrep）。探测后立即释放不算数：disable 调度与取锁之间已启动、尚未取锁的轮次会在释放后进来——持有到维护结束才挡得住它；`PRAGMA wal_checkpoint(TRUNCATE)` 返回 `busy=0` 证无活跃写事务。
 2. **停本机 reader**：任何仍指向该 primary 的本机 serve 都经既有 supervisor 正常 stop，非直接 kill。至此宿主对 `radar.db` 无打开连接。
 3. **磁盘 preflight**：可用空间 ≥ 2× 库大小，否则停、交回。
 4. **备份并验证**（A2 硬门，验证过才算可信回滚锚点）：`sqlite3 "$PROD_DB" ".backup '$BACKUP'"`（用 `.backup`，**不用** `VACUUM INTO`——后者坏 FTS5）；在 `$BACKUP`（已 checkpoint 一致）上测准 freelist；验证三层 `PRAGMA integrity_check=ok` + `INSERT INTO items_fts(items_fts) VALUES('integrity-check')` 无错 + FTS 覆盖完整（`items.id` 全键集 == `items_fts.item_id` 全键集）。任一失败 → 备份不可信、停。

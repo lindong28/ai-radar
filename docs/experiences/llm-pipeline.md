@@ -5,7 +5,7 @@
 ## 2026-06-01 fetched_at-only backfill 会放大定时 pipeline 的候选量
 
 - Problem: 为修复新源历史导入文章永不处理的问题，prefilter/score 的 `--since` 窗口改为 `fetched_at`-only。这个语义正确，但若定时 `pipeline.sh` 同时跑 `prefilter --since 24h`，会把"近期抓取的大批历史 backfill"一次性纳入 LLM 队列。实施时本地 pipeline 自动启动后持有 `data/radar.db` 写锁，并进入 broad prefilter/score/enrich 阶段，阻塞了测试和服务启动。
-- Solution: 对已知小批 backfill 用 `--item-id-file` 精确处理；运行全量 verify 前确认没有 `pipeline.sh` / `airadar.cli prefilter|score|enrich` 正在持有 DB。若本地 scheduler 已启动 broad run，需要先判断候选量，必要时终止本地 pipeline 并清理 stale `.pipeline.lock`，再用精确 id backfill 继续。
+- Solution: 对已知小批 backfill 用 `--item-id-file` 精确处理；运行全量 verify 前确认没有 `pipeline.sh` / `airadar.cli prefilter|score|enrich` 正在持有 DB。若本地 scheduler 已启动 broad run，需要先判断候选量，必要时终止本地 pipeline（整棵进程树退出后内核自动释放 `.pipeline.flock`，无 stale 锁需要清理，见 ADR-052），再用精确 id backfill 继续。
 - Applies when: 修改 LLM 候选窗口、接入新源历史存量、或在生产同步 DB 上跑 verify。先做候选量 SQL probe；不要直接放开 broad `--since`，除非确认待处理数量和成本可接受。
 
 ## 2026-05-12 DeepSeek V4 Pro 不适合做 pairwise judge eval

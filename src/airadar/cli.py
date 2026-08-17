@@ -39,7 +39,7 @@ from .interpret.runner import run_interpret
 from .performance.journey_monitor import (
     DEFAULT_ALERT_STATE_PATH,
     DEFAULT_EVIDENCE_DIR,
-    DEFAULT_PIPELINE_LOCK_DIR,
+    DEFAULT_PIPELINE_LOCK_PATH,
     DEFAULT_SAMPLE_PATH,
     LAUNCHD_INSTALL_HINT,
     run_journey_monitor,
@@ -443,7 +443,7 @@ def _performance_probe(args: argparse.Namespace) -> int:
         sample_path=Path(args.samples_path),
         state_path=Path(args.state_path),
         evidence_dir=Path(args.evidence_dir),
-        pipeline_lock_dir=Path(args.pipeline_lock),
+        pipeline_lock_path=Path(args.pipeline_lock),
         db_path=Path(args.db_path),
     )
     print(str(result["scope"]))
@@ -1813,7 +1813,7 @@ def build_parser() -> argparse.ArgumentParser:
     performance_probe.add_argument("--samples-path", default=str(DEFAULT_SAMPLE_PATH))
     performance_probe.add_argument("--state-path", default=str(DEFAULT_ALERT_STATE_PATH))
     performance_probe.add_argument("--evidence-dir", default=str(DEFAULT_EVIDENCE_DIR))
-    performance_probe.add_argument("--pipeline-lock", default=str(DEFAULT_PIPELINE_LOCK_DIR))
+    performance_probe.add_argument("--pipeline-lock", default=str(DEFAULT_PIPELINE_LOCK_PATH))
     performance_probe.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
 
     performance_remediate = subparsers.add_parser(

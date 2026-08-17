@@ -21,6 +21,7 @@ from typing import Any, Literal, Protocol
 import httpx
 
 from .. import db
+from ..pipeline_lock import DEFAULT_PIPELINE_LOCK_PATH, pipeline_lock_is_held
 from .calibration import SCHEMA_ERROR_RE, _is_upstream_error
 from .cost_report import (
     _load_usage_rows,
@@ -1949,42 +1950,17 @@ def _wechat_interpretation_signal(
     )
 
 
-def _pipeline_lock_owner_is_live(lock_dir: Path) -> bool:
-    try:
-        owner_lines = (lock_dir / "owner").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    owner = dict(line.split("=", 1) for line in owner_lines if "=" in line)
-    try:
-        pid = int(owner["pid"])
-        expected_start = owner["process_start"]
-    except (KeyError, ValueError):
-        return False
-    if pid <= 0 or not expected_start:
-        return False
-    try:
-        completed = subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
-        actual_start = " ".join(completed.stdout.split())
-        os.kill(pid, 0)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return completed.returncode == 0 and actual_start == expected_start
-
-
 def _a6_measurement_in_progress(
     activity: dict[str, dict[str, Any]],
     *,
     start: datetime,
     end: datetime,
-    lock_dir: Path,
+    lock_path: Path,
 ) -> bool:
-    if not _pipeline_lock_owner_is_live(lock_dir):
+    # A running pipeline is whoever holds the kernel flock (ADR-052); an
+    # unknown probe result must not suppress the alert, so only a positive
+    # "held" counts as measurement in progress.
+    if pipeline_lock_is_held(lock_path) is not True:
         return False
     problem_days: list[str] = []
     cursor = start.astimezone(SHANGHAI_TZ).date()
@@ -2008,7 +1984,7 @@ def collect_alert_signals(
     usage_db_path: str | Path | None = None,
     pricing_catalog: Any | None = None,
     now: datetime | None = None,
-    pipeline_lock_dir: str | Path | None = None,
+    pipeline_lock_path: str | Path | None = None,
 ) -> AlertSignals:
     current = now or datetime.now(SHANGHAI_TZ)
     if current.tzinfo is None:
@@ -2085,10 +2061,10 @@ def collect_alert_signals(
     metering_start = current - timedelta(hours=24)
     a6_activity = _pipeline_activity(log_dir, metering_start, current)
     metering = _window_metering(a6_activity, metering_start, current)
-    lock_dir = (
-        Path(pipeline_lock_dir)
-        if pipeline_lock_dir is not None
-        else db.PROJECT_ROOT / ".pipeline.lock"
+    lock_path = (
+        Path(pipeline_lock_path)
+        if pipeline_lock_path is not None
+        else DEFAULT_PIPELINE_LOCK_PATH
     )
     measurement_in_progress = (
         not bool(metering["complete"])
@@ -2096,7 +2072,7 @@ def collect_alert_signals(
             a6_activity,
             start=metering_start,
             end=current,
-            lock_dir=lock_dir,
+            lock_path=lock_path,
         )
     )
     a6_signal = evaluate_a6_cost(

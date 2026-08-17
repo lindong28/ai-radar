@@ -268,7 +268,7 @@ Server `apply_db_update.py` 是 consumer：claim 后保留 immutable base-only a
 
 ## Performance Monitoring and Remediation
 
-`performance-probe` 是 CLI 入口层下的只读浏览器探针：专属 per-file LaunchAgent 以 `StartInterval=300` 经 `./run.sh performance-probe` 启动，依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定。每条旅程测量前后都读取 `.pipeline.lock` 与 pipeline 持久 activity generation；只有两端都证明 idle 且 generation 未变时，`performance/journey_monitor.py` 才把该样本写入 `logs/performance/`，并让 `PERF:<journey>:<vantage>:idle` 窗口消费它。pipeline 正在运行、owner 不可信或测量期间 activity 变化时跳过该次旅程尝试，不保存对应样本、不让 non-idle 输入进入规则。每个 cell 保留 20 个 warm samples + 3 个逐样本窗口，首个 confirmed firing 需要 22 条有效 idle 样本，P75/P95 超预算或 hard failure 连续满足确认窗后直接输出 page。样本和诊断证据保留 14 天；两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
+`performance-probe` 是 CLI 入口层下的只读浏览器探针：专属 per-file LaunchAgent 以 `StartInterval=300` 经 `./run.sh performance-probe` 启动，依次从同机 origin 与同机 public（`AI_RADAR_PUBLIC_URL`；未配置时跳过该 vantage、其告警评估同步排除并自动 resolve 既有 firing 状态）测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定。每条旅程测量前后都以非阻塞共享锁探测 `.pipeline.flock`（pipeline 进程树对它持内核排他锁，见 [ADR-052](adr/052-hold-pipeline-mutex-with-kernel-flock.md)）并读取 pipeline 持久 activity generation；只有两端都证明 idle 且 generation 未变时，`performance/journey_monitor.py` 才把该样本写入 `logs/performance/`，并让 `PERF:<journey>:<vantage>:idle` 窗口消费它。pipeline 正在运行、锁探测失败或测量期间 activity 变化时跳过该次旅程尝试，不保存对应样本、不让 non-idle 输入进入规则。每个 cell 保留 20 个 warm samples + 3 个逐样本窗口，首个 confirmed firing 需要 22 条有效 idle 样本，P75/P95 超预算或 hard failure 连续满足确认窗后直接输出 page。样本和诊断证据保留 14 天；两个 vantage 都来自部署主机，语义固定为 same-host provisional，不是区域 SLO。
 
 ### Alert state → delivery → ledger → remediation
 

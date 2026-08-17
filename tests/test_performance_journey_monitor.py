@@ -664,59 +664,49 @@ def test_pipeline_lock_classification_distinguishes_idle_busy_and_unknown(
     monkeypatch,
     tmp_path: Path,
 ) -> None:  # noqa: ANN001
-    lock_dir = tmp_path / ".pipeline.lock"
-    assert classify_pipeline_load(lock_dir) == "idle"
+    lock_path = tmp_path / ".pipeline.flock"
+    # No anchor file yet: a pipeline that never ran is not running.
+    assert classify_pipeline_load(lock_path) == "idle"
 
-    lock_dir.mkdir()
-    (lock_dir / "pid").write_text("4242\n", encoding="utf-8")
-    (lock_dir / "owner").write_text(
-        "token=owner\npid=4242\nboot_id=boot\nprocess_start=start\n",
-        encoding="utf-8",
+    lock_path.touch()
+    assert classify_pipeline_load(lock_path) == "idle"
+
+    with open(lock_path, "w", encoding="utf-8") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        assert classify_pipeline_load(lock_path) == "busy"
+    assert classify_pipeline_load(lock_path) == "idle"
+
+    monkeypatch.setattr(
+        "airadar.pipeline_lock.pipeline_lock_is_held",
+        lambda _path: None,
     )
     monkeypatch.setattr(
-        "airadar.performance.journey_monitor._current_boot_id",
-        lambda: "boot",
+        "airadar.performance.journey_monitor.pipeline_lock_is_held",
+        lambda _path: None,
     )
-    monkeypatch.setattr(
-        "airadar.performance.journey_monitor._process_start_identity",
-        lambda _pid: "start",
-    )
-    monkeypatch.setattr("airadar.performance.journey_monitor.os.kill", lambda pid, signal: None)
-    assert classify_pipeline_load(lock_dir) == "busy"
-
-    def dead_process(pid: int, signal: int) -> None:
-        raise ProcessLookupError
-
-    monkeypatch.setattr("airadar.performance.journey_monitor.os.kill", dead_process)
-    assert classify_pipeline_load(lock_dir) == "unknown"
-    (lock_dir / "pid").write_text("not-a-pid\n", encoding="utf-8")
-    assert classify_pipeline_load(lock_dir) == "unknown"
+    assert classify_pipeline_load(lock_path) == "unknown"
 
 
-def test_pipeline_lock_rejects_reused_pid_owner_identity(tmp_path: Path) -> None:
-    lock_dir = tmp_path / ".pipeline.lock"
-    lock_dir.mkdir()
-    (lock_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
-    (lock_dir / "owner").write_text(
-        (
-            f"token=old-owner\npid={os.getpid()}\n"
-            "boot_id=different-boot\nprocess_start=different-process-start\n"
-        ),
-        encoding="utf-8",
-    )
-
-    assert classify_pipeline_load(lock_dir) == "unknown"
+def test_pipeline_lock_probe_does_not_hold_the_lock(tmp_path: Path) -> None:
+    # The observer probe must release immediately: after classification an
+    # exclusive lock must still be acquirable (a probe that keeps a shared
+    # lock would make the pipeline skip spuriously).
+    lock_path = tmp_path / ".pipeline.flock"
+    lock_path.touch()
+    assert classify_pipeline_load(lock_path) == "idle"
+    with open(lock_path, "w", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def test_probe_runs_four_journeys_against_origin_and_public_and_stores_samples(
     monkeypatch,
     tmp_path: Path,
 ) -> None:  # noqa: ANN001
-    lock_dir = tmp_path / ".pipeline.lock"
+    lock_dir = tmp_path / ".pipeline.flock"
     runtime = JourneyMonitorRuntime(
         origin_url="http://origin.invalid",
         public_url="https://public.invalid",
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         db_path=tmp_path / "radar.db",
     )
     calls: list[tuple[str, str]] = []
@@ -758,7 +748,7 @@ def test_probe_skips_public_vantage_when_public_url_empty(
     runtime = JourneyMonitorRuntime(
         origin_url="http://origin.invalid",
         public_url="",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
 
@@ -785,7 +775,7 @@ def test_probe_skips_non_idle_load_before_measurement(
     runtime = JourneyMonitorRuntime(
         origin_url="http://origin.invalid",
         public_url="",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
     calls: list[object] = []
@@ -811,7 +801,7 @@ def test_probe_discards_interval_that_stops_being_idle(
     runtime = JourneyMonitorRuntime(
         origin_url="http://origin.invalid",
         public_url="",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
     classifications = 0
@@ -846,7 +836,7 @@ def test_probe_discards_skipped_overlap_instead_of_recording_hard_failure(
     runtime = JourneyMonitorRuntime(
         origin_url="http://origin.invalid",
         public_url="",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
     monkeypatch.setattr(
@@ -872,7 +862,7 @@ def test_probe_infra_failure_is_persisted_and_never_fires_site_alert(
     runtime = JourneyMonitorRuntime(
         origin_url="http://origin.invalid",
         public_url="",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
     monkeypatch.setattr(
@@ -915,7 +905,7 @@ def test_probe_infra_failure_is_persisted_and_never_fires_site_alert(
         state_path=tmp_path / "state.json",
         event_path=tmp_path / "alert-events.jsonl",
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=runtime.pipeline_lock_dir,
+        pipeline_lock_path=runtime.pipeline_lock_path,
         now=started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
         send=lambda _text, *, severity="page", **_kwargs: pytest.fail(
             "probe infra outcome must not send a site-performance alert"
@@ -943,7 +933,7 @@ def test_probe_discards_real_pipeline_activity_hidden_between_idle_endpoints(
     runtime = JourneyMonitorRuntime(
         origin_url="http://origin.invalid",
         public_url="",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
 
@@ -956,7 +946,9 @@ def test_probe_discards_real_pipeline_activity_hidden_between_idle_endpoints(
             timeout=5,
         )
         assert completed.returncode == 0, completed.stderr
-        assert not runtime.pipeline_lock_dir.exists()
+        # The anchor file persists after a run; what proves the pipeline is
+        # gone is that its exclusive flock has been released.
+        assert journey_monitor.pipeline_lock_is_held(runtime.pipeline_lock_path) is False
         assert (tmp_path / ".pipeline.activity").exists()
         return BrowserMeasurement(
             request_url=str(kwargs["base_url"]),
@@ -1189,7 +1181,7 @@ def test_writing_firing_evidence_removes_evidence_older_than_fourteen_days(
         state_path=tmp_path / "state.json",
         event_path=Path(tmp_path / "state.json").with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now,
     )
 
@@ -1252,7 +1244,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
     sample_path = tmp_path / "journey-samples.jsonl"
     state_path = tmp_path / "journey-alert-state.json"
     evidence_dir = tmp_path / "evidence"
-    lock_dir = tmp_path / ".pipeline.lock"
+    lock_dir = tmp_path / ".pipeline.flock"
     started = datetime(2026, 7, 18, tzinfo=UTC)
     sent: list[str] = []
 
@@ -1274,7 +1266,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         now=started + timedelta(minutes=20),
     )
     assert first["sent_count"] == 0
@@ -1289,7 +1281,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         now=started + timedelta(minutes=21),
     )
     assert second["sent_count"] == 0
@@ -1304,7 +1296,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         now=started + timedelta(minutes=22),
     )
     assert confirmed["sent_count"] == 1
@@ -1326,7 +1318,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         now=started + timedelta(minutes=23),
     )
     assert unchanged["sent_count"] == 0
@@ -1341,7 +1333,7 @@ def test_performance_alert_requires_three_advanced_warm_windows_and_resolves(
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         now=started + timedelta(minutes=46),
     )
     assert resolved["sent_count"] == 1
@@ -1371,7 +1363,7 @@ def test_performance_rules_emit_only_idle_cells_and_never_busy_rollup(tmp_path: 
         state_path=tmp_path / "state.json",
         event_path=Path(tmp_path / "state.json").with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=started + timedelta(minutes=200),
         send=lambda text, *, severity="page": {"skipped": False},
     )
@@ -1454,7 +1446,7 @@ def test_latest_probe_infra_outcome_holds_existing_site_firing_state(
         "state_path": state_path,
         "event_path": tmp_path / "alert-events.jsonl",
         "evidence_dir": tmp_path / "evidence",
-        "pipeline_lock_dir": tmp_path / ".pipeline.lock",
+        "pipeline_lock_path": tmp_path / ".pipeline.flock",
         "send": (
             lambda text, *, severity="page", **_kwargs: (
                 sent.append(text) or {"skipped": False}
@@ -1534,7 +1526,7 @@ def test_probe_infra_hold_retries_pending_site_firing_delivery(
         "state_path": state_path,
         "event_path": tmp_path / "alert-events.jsonl",
         "evidence_dir": tmp_path / "evidence",
-        "pipeline_lock_dir": tmp_path / ".pipeline.lock",
+        "pipeline_lock_path": tmp_path / ".pipeline.flock",
         "send": lambda _text, *, severity="page", **_kwargs: next(deliveries),
     }
 
@@ -1609,7 +1601,7 @@ def test_legacy_incompatible_samples_hold_existing_site_firing_state(
         "state_path": state_path,
         "event_path": tmp_path / "alert-events.jsonl",
         "evidence_dir": tmp_path / "evidence",
-        "pipeline_lock_dir": tmp_path / ".pipeline.lock",
+        "pipeline_lock_path": tmp_path / ".pipeline.flock",
         "send": (
             lambda text, *, severity="page", **_kwargs: (
                 sent.append(text) or {"skipped": False}
@@ -1692,7 +1684,7 @@ def test_resolved_no_basis_firing_rearms_from_fresh_observed_samples(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=current + timedelta(minutes=1),
         send=lambda _text, *, severity="page", **_kwargs: {"skipped": False},
     )
@@ -1722,7 +1714,7 @@ def test_resolved_no_basis_firing_rearms_from_fresh_observed_samples(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=fresh_started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
         send=lambda _text, *, severity="page", **_kwargs: {"skipped": False},
     )
@@ -1815,7 +1807,7 @@ def test_no_basis_firing_intent_is_cleared_without_replay(
         state_path=state_path,
         event_path=tmp_path / "alert-events.jsonl",
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=current + timedelta(minutes=1),
         send=lambda _text, *, severity="page", **_kwargs: (
             deploy_receipts.append(severity) or {"skipped": False}
@@ -1878,7 +1870,7 @@ def test_no_basis_firing_without_evaluation_metadata_is_retired(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=current + timedelta(minutes=1),
         send=lambda _text, *, severity="page", **_kwargs: (
             receipts.append(severity) or {"skipped": False}
@@ -1921,7 +1913,7 @@ def test_historical_journey_samples_replay_smoke_is_idle_only_end_to_end(
         state_path=state_path,
         event_path=tmp_path / "alert-events.jsonl",
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=started + timedelta(minutes=200),
         send=lambda _text, *, severity="page", **_kwargs: {"skipped": False},
     )
@@ -2010,7 +2002,7 @@ def test_idle_only_migration_resolves_announced_legacy_busy_lifecycles_once(
         "state_path": state_path,
         "event_path": state_path.with_name("alert-events.jsonl"),
         "evidence_dir": tmp_path / "evidence",
-        "pipeline_lock_dir": tmp_path / ".pipeline.lock",
+        "pipeline_lock_path": tmp_path / ".pipeline.flock",
         "send": lambda text, *, severity="page": {"skipped": False},
     }
 
@@ -2096,7 +2088,7 @@ def test_idle_only_migration_retries_only_skipped_real_sender_delivery(
         "state_path": state_path,
         "event_path": state_path.with_name("alert-events.jsonl"),
         "evidence_dir": tmp_path / "evidence",
-        "pipeline_lock_dir": tmp_path / ".pipeline.lock",
+        "pipeline_lock_path": tmp_path / ".pipeline.flock",
     }
 
     first = run_performance_alerts(now=started + timedelta(minutes=1), **kwargs)
@@ -2149,7 +2141,7 @@ def test_idle_only_migration_send_exception_preserves_legacy_state(tmp_path: Pat
             state_path=state_path,
             event_path=state_path.with_name("alert-events.jsonl"),
             evidence_dir=tmp_path / "evidence",
-            pipeline_lock_dir=tmp_path / ".pipeline.lock",
+            pipeline_lock_path=tmp_path / ".pipeline.flock",
             now=started + timedelta(minutes=1),
             send=fail_send,
         )
@@ -2226,7 +2218,7 @@ def test_round_without_new_samples_trims_stale_rows_and_resolves_stale_page(
         sample_path=sample_path,
         state_path=state_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
 
@@ -2284,7 +2276,7 @@ def test_corrupt_sample_window_holds_existing_firing_state(
         state_path=state_path,
         event_path=state_path.with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now,
         send=lambda text, *, severity="page": pytest.fail(
             f"corrupt window must hold state, got {severity}: {text}"
@@ -2339,7 +2331,7 @@ def test_corrupt_hold_survives_compaction_until_a_fresh_sample_arrives(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now,
         send=lambda text, *, severity="page": pytest.fail(
             f"corrupt round resolved {severity}: {text}"
@@ -2353,7 +2345,7 @@ def test_corrupt_hold_survives_compaction_until_a_fresh_sample_arrives(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now + timedelta(minutes=1),
         send=lambda text, *, severity="page": pytest.fail(
             f"compacted corrupt hold resolved {severity}: {text}"
@@ -2379,7 +2371,7 @@ def test_corrupt_hold_survives_compaction_until_a_fresh_sample_arrives(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now + timedelta(minutes=1),
         send=lambda text, *, severity="page": pytest.fail(
             f"pre-corruption sample cleared hold {severity}: {text}"
@@ -2404,7 +2396,7 @@ def test_corrupt_hold_survives_compaction_until_a_fresh_sample_arrives(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now + timedelta(minutes=2),
         send=lambda text, *, severity="page": sent.append(text) or {"skipped": False},
     )
@@ -2457,7 +2449,7 @@ def test_fresh_sample_for_other_cell_does_not_clear_corrupt_hold(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now,
         send=lambda text, *, severity="page": pytest.fail(
             f"corrupt round resolved {severity}: {text}"
@@ -2482,7 +2474,7 @@ def test_fresh_sample_for_other_cell_does_not_clear_corrupt_hold(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now + timedelta(minutes=2),
         send=lambda text, *, severity="page": pytest.fail(
             f"other cell cleared hold and sent {severity}: {text}"
@@ -2530,7 +2522,7 @@ def test_sample_snapshot_gets_sequence_after_interleaved_append(
         "state_path": state_path,
         "event_path": event_path,
         "evidence_dir": tmp_path / "evidence",
-        "pipeline_lock_dir": tmp_path / ".pipeline.lock",
+        "pipeline_lock_path": tmp_path / ".pipeline.flock",
         "now": started + timedelta(minutes=MIN_CONFIRMABLE_SAMPLES),
     }
     calls: list[str] = []
@@ -2604,7 +2596,7 @@ def test_disabled_vantage_resolves_even_when_cell_has_corrupt_hold(
         "state_path": state_path,
         "event_path": event_path,
         "evidence_dir": tmp_path / "evidence",
-        "pipeline_lock_dir": tmp_path / ".pipeline.lock",
+        "pipeline_lock_path": tmp_path / ".pipeline.flock",
         "now": now,
     }
     held = run_performance_alerts(
@@ -2725,7 +2717,7 @@ with lock_path.open("a+") as stream:
             sample_path=sample_path,
             state_path=tmp_path / "state.json",
             evidence_dir=tmp_path / "evidence",
-            pipeline_lock_dir=tmp_path / ".pipeline.lock",
+            pipeline_lock_path=tmp_path / ".pipeline.flock",
             db_path=tmp_path / "radar.db",
         )
         assert skipped_round["samples"] == []
@@ -3004,7 +2996,7 @@ wait $!
             "--evidence-dir",
             str(tmp_path / "evidence"),
             "--pipeline-lock",
-            str(tmp_path / ".pipeline.lock"),
+            str(tmp_path / ".pipeline.flock"),
             "--db-path",
             str(tmp_path / "radar.db"),
         ],
@@ -3159,7 +3151,7 @@ journey_monitor.run_journey_monitor(
     sample_path=Path({str(tmp_path / "samples.jsonl")!r}),
     state_path=Path({str(state_path)!r}),
     evidence_dir=Path({str(tmp_path / "evidence")!r}),
-    pipeline_lock_dir=Path({str(tmp_path / ".pipeline.lock")!r}),
+    pipeline_lock_path=Path({str(tmp_path / ".pipeline.flock")!r}),
     db_path=Path({str(tmp_path / "radar.db")!r}),
 )
 """
@@ -3202,7 +3194,7 @@ journey_monitor.run_journey_monitor(
     sample_path=Path({str(tmp_path / "samples.jsonl")!r}),
     state_path=Path({str(tmp_path / "state.json")!r}),
     evidence_dir=Path({str(tmp_path / "evidence")!r}),
-    pipeline_lock_dir=Path({str(tmp_path / ".pipeline.lock")!r}),
+    pipeline_lock_path=Path({str(tmp_path / ".pipeline.flock")!r}),
     db_path=Path({str(tmp_path / "radar.db")!r}),
 )
 """
@@ -3275,7 +3267,7 @@ def test_migration_uses_nested_lifecycle_projection_when_top_level_is_ok(
         state_path=state_path,
         event_path=state_path.with_name("alert-events.jsonl"),
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=now,
         send=lambda _text, *, severity="page": {"skipped": False},
     )
@@ -3331,7 +3323,7 @@ def test_probe_requires_origin_url(tmp_path: Path) -> None:
     runtime = JourneyMonitorRuntime(
         origin_url="",
         public_url="https://public.invalid",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         db_path=tmp_path / "radar.db",
     )
     try:
@@ -3349,7 +3341,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
     sample_path = tmp_path / "journey-samples.jsonl"
     state_path = tmp_path / "journey-alert-state.json"
     evidence_dir = tmp_path / "evidence"
-    lock_dir = tmp_path / ".pipeline.lock"
+    lock_dir = tmp_path / ".pipeline.flock"
     started = datetime(2026, 7, 18, tzinfo=UTC)
     sent: list[str] = []
 
@@ -3382,7 +3374,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
             state_path=state_path,
             event_path=Path(state_path).with_name("alert-events.jsonl"),
             evidence_dir=evidence_dir,
-            pipeline_lock_dir=lock_dir,
+            pipeline_lock_path=lock_dir,
             now=started + timedelta(minutes=now_minute),
         )
     assert confirmed["sent_count"] == 1
@@ -3395,7 +3387,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         now=started + timedelta(minutes=30),
         enabled_vantages=frozenset({"same_host_origin"}),
     )
@@ -3424,7 +3416,7 @@ def test_disabled_public_vantage_resolves_stale_firing_state(
         state_path=state_path,
         event_path=Path(state_path).with_name("alert-events.jsonl"),
         evidence_dir=evidence_dir,
-        pipeline_lock_dir=lock_dir,
+        pipeline_lock_path=lock_dir,
         now=started + timedelta(minutes=31),
         enabled_vantages=frozenset({"same_host_origin"}),
         send=sender,
@@ -3461,7 +3453,7 @@ def test_performance_entry_persists_state_when_notification_ledger_is_corrupt(
         state_path=state_path,
         event_path=event_path,
         evidence_dir=tmp_path / "evidence",
-        pipeline_lock_dir=tmp_path / ".pipeline.lock",
+        pipeline_lock_path=tmp_path / ".pipeline.flock",
         now=started + timedelta(days=1),
         send=lambda text, *, severity="page": {"skipped": False},
     )

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import os
+import sqlite3
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -35,6 +38,8 @@ TEMPLATES_DIR = db.PROJECT_ROOT / "web" / "templates"
 CHANGELOG_PATH = db.PROJECT_ROOT / "CHANGELOG.md"
 PRELOAD_ITEM_KEYS = set(FeedItem.model_fields)
 PRE_MIGRATED_DB_ENV = "AI_RADAR_PRE_MIGRATED_DB"
+MIGRATE_RETRY_WINDOW_SECONDS = 30.0
+_MIGRATE_LOGGER = logging.getLogger(__name__)
 PRELOAD_ITEM_KEYS.difference_update(
     name
     for name, field in FeedItem.model_fields.items()
@@ -466,9 +471,39 @@ def _wechat_back_href(page: int | None, q: str | None = None) -> str:
     return f"/wechat?{urlencode(params)}" if params else "/wechat"
 
 
+def _migrate_with_retry(db_path: str | Path | None) -> None:
+    """Retry the whole ``db.migrate()`` call when the DB is locked (ADR-053).
+
+    A pipeline write transaction can hold the DB past the connection's 5s
+    busy_timeout during startup. Rerunning the full migrate relies on the
+    migration suite's existing re-entrancy — the same property every
+    launchd-restart recovery already exercises. The 30s window is 3x the
+    launchd default throttle: shorter gains nothing over a restart, longer
+    just delays handing back to the existing KeepAlive recovery chain.
+    """
+    deadline = time.monotonic() + MIGRATE_RETRY_WINDOW_SECONDS
+    delay = 0.5
+    waited = 0.0
+    while True:
+        try:
+            db.migrate(db_path)
+            return
+        except sqlite3.OperationalError as error:
+            if "database is locked" not in str(error) or time.monotonic() + delay > deadline:
+                raise
+        time.sleep(delay)
+        waited += delay
+        _MIGRATE_LOGGER.warning(
+            "startup migration hit a locked database; retrying (waited %.1fs of %.0fs window)",
+            waited,
+            MIGRATE_RETRY_WINDOW_SECONDS,
+        )
+        delay = min(delay * 2, 5.0)
+
+
 def create_app(db_path: str | Path | None = None) -> FastAPI:
     if os.environ.get(PRE_MIGRATED_DB_ENV) != "1":
-        db.migrate(db_path)
+        _migrate_with_retry(db_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

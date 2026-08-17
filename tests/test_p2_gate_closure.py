@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import fcntl
 import json
-import os
-import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -428,40 +427,27 @@ def test_a6_identifies_only_live_current_day_run_as_measurement_in_progress(
         "[2026-08-11T16:15:00+08:00] === fetch START ===\n",
         encoding="utf-8",
     )
-    lock_dir = tmp_path / ".pipeline.lock"
-    lock_dir.mkdir()
-    pid = os.getpid()
-    process_start = " ".join(
-        subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.split()
-    )
-    (lock_dir / "owner").write_text(
-        f"token=test\npid={pid}\nprocess_start={process_start}\n",
-        encoding="utf-8",
-    )
+    lock_path = tmp_path / ".pipeline.flock"
     now = datetime.fromisoformat("2026-08-11T16:17:00+08:00")
     start = now - timedelta(hours=24)
     activity = _pipeline_activity(log_dir, start, now)
 
-    assert _a6_measurement_in_progress(
-        activity, start=start, end=now, lock_dir=lock_dir
-    ) is True
-    activity.pop("2026-08-10")
-    assert _a6_measurement_in_progress(
-        activity, start=start, end=now, lock_dir=lock_dir
-    ) is False
-    (lock_dir / "owner").write_text(
-        "token=stale\npid=999999\nprocess_start=stale\n", encoding="utf-8"
-    )
+    with open(lock_path, "w", encoding="utf-8") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        assert _a6_measurement_in_progress(
+            activity, start=start, end=now, lock_path=lock_path
+        ) is True
+        activity.pop("2026-08-10")
+        assert _a6_measurement_in_progress(
+            activity, start=start, end=now, lock_path=lock_path
+        ) is False
+    # Lock released: no pipeline process tree is alive, so a current-day run
+    # can no longer be classified as measurement in progress.
     assert _a6_measurement_in_progress(
         _pipeline_activity(log_dir, start, now),
         start=start,
         end=now,
-        lock_dir=lock_dir,
+        lock_path=lock_path,
     ) is False
 
 

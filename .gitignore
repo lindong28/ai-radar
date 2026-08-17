@@ -45,5 +45,9 @@ deploy/wewe-rss/
 # Runtime logs
 logs/
 
+# Pipeline runtime state (kernel flock anchor + activity generation)
+.pipeline.flock
+.pipeline.activity
+
 # Execution-plan workspace (audit trail is promoted to docs/plans/ after completion)
 /plans/

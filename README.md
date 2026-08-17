@@ -57,7 +57,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 ## 自动化调度
 
-`pipeline.sh` 按顺序执行 `fetch → prefilter → score → enrich → curate → interpret`，每个阶段只处理尚未评估的新条目。单阶段失败会记录 `FAIL` 后继续，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`，`.pipeline.lock` 跳过重叠运行。
+`pipeline.sh` 按顺序执行 `fetch → prefilter → score → enrich → curate → interpret`，每个阶段只处理尚未评估的新条目。单阶段失败会记录 `FAIL` 后继续，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`，`.pipeline.flock` 上的内核排他锁跳过重叠运行。
 
 默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 

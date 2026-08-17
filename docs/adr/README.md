@@ -55,3 +55,5 @@
 | [049](./049-keep-human-audit-summaries-and-remove-duplicate-authorities.md) | 保留人读审计摘要并移除重复权威 | accepted | 2026-08-13 |
 | [050](./050-allow-versioned-data-configs-through-code-deploy.md) | 代码部署仅放行已核验的版本化 data 配置 | accepted | 2026-08-17 |
 | [051](./051-share-timeline-source-visibility-with-the-fts-oracle.md) | 由 timeline 单一持有 source visibility 谓词，FTS oracle 复用它 | accepted | 2026-08-17 |
+| [052](./052-hold-pipeline-mutex-with-kernel-flock.md) | pipeline 互斥改由内核 flock 持有，删除用户态判活与 stale reclaim | accepted | 2026-08-17 |
+| [053](./053-retry-startup-migration-on-database-locked.md) | web 启动 migration 遇 database is locked 时有限退避重试 | accepted | 2026-08-17 |
