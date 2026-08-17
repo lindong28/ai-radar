@@ -439,52 +439,24 @@ def _install_fake_sdk(monkeypatch, client_cls) -> None:
     monkeypatch.setitem(sys.modules, "tencentcloud.teo.v20220901", teo)
 
 
-def test_s1_follow_origin_with_default_cache_on_still_needs_a_version_string() -> None:
-    """The origin sends no Cache-Control for these assets (ADR-039), so DefaultCache=on caches."""
-    rules = copy.deepcopy(BASE_RULES)
-    rules[0]["Branches"][0]["Condition"] = "${http.request.uri.path} in ['/vendor.js']"
-    rules[0]["Branches"][0]["Actions"] = [
-        {
-            "Name": "Cache",
-            "CacheParameters": {
-                "FollowOrigin": {
-                    "Switch": "on",
-                    "DefaultCache": "on",
-                    "DefaultCacheStrategy": "off",
-                    "DefaultCacheTime": 604800,
-                }
-            },
-        }
-    ]
-    coverage = edgeone.check_asset_coverage(edgeone.normalize_rules(rules), ASSETS)
-    assert coverage.uncovered == ["/vendor.js"]
-
-
-def test_s1_follow_origin_that_never_caches_does_not_demand_a_version_string() -> None:
-    rules = copy.deepcopy(BASE_RULES)
-    rules[0]["Branches"][0]["Condition"] = "${http.request.uri.path} in ['/api/foo']"
-    rules[0]["Branches"][0]["Actions"] = [
-        {"Name": "Cache", "CacheParameters": {"FollowOrigin": {"Switch": "on", "DefaultCache": "off"}}}
-    ]
-    assert edgeone.check_asset_coverage(edgeone.normalize_rules(rules), ASSETS).verified
-
-
 def _cache_action(params: dict) -> list[dict]:
     return [{"Name": "Cache", "CacheParameters": params}]
 
 
-def test_s1_1_an_unreadable_follow_origin_switch_is_treated_as_caching() -> None:
-    """Missing/unknown must not collapse into 'off' -- that is the false "does not cache"."""
-    for follow in (
-        {"DefaultCache": "on"},
-        {"Switch": None, "DefaultCache": "on"},
-        {"Switch": "maybe", "DefaultCache": "on"},
-    ):
-        rules = copy.deepcopy(BASE_RULES)
-        rules[0]["Branches"][0]["Condition"] = "${http.request.uri.path} in ['/vendor.js']"
-        rules[0]["Branches"][0]["Actions"] = _cache_action({"FollowOrigin": follow})
-        coverage = edgeone.check_asset_coverage(edgeone.normalize_rules(rules), ASSETS)
-        assert coverage.uncovered == ["/vendor.js"], f"{follow!r} must not read as never-caching"
+def test_s1_follow_origin_is_reported_rather_than_judged() -> None:
+    """S1, twice corrected. Demanding a ?v= made the gate permanently red on the real zone
+    (/wechat cannot carry one). Probing the origin looked like the fix but cannot work: a
+    public GET may be served from the edge, so it reports the cached object's headers, not
+    what the origin sends now. What is left is to report these paths on every run and let
+    the human who pins the snapshot carry that judgement.
+    """
+    cond = "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/vendor.js']"
+    rules = edgeone.normalize_rules(
+        _rule_with(cond, {"FollowOrigin": {"Switch": "on", "DefaultCache": "on"}, "NoCache": None, "CustomTime": None})
+    )
+    coverage = edgeone.check_asset_coverage(rules, ASSETS)
+    assert coverage.uncovered == []
+    assert coverage.origin_governed == ["/vendor.js"]
 
 
 def test_s1_2_an_inactive_nocache_is_not_a_forced_cache() -> None:
@@ -523,3 +495,84 @@ def test_duplicate_cache_actions_cannot_hide_a_forced_cache() -> None:
     ]
     coverage = edgeone.check_asset_coverage(edgeone.normalize_rules(rules), ASSETS)
     assert coverage.uncovered == ["/vendor.js"], "an ordering-dependent read would miss this"
+
+
+REAL_FOLLOW_ORIGIN = {"FollowOrigin": {"Switch": "on", "DefaultCache": "on", "DefaultCacheStrategy": "on", "DefaultCacheTime": 0}, "NoCache": None, "CustomTime": None}
+REAL_FORCE_CACHE = {"FollowOrigin": None, "NoCache": None, "CustomTime": {"Switch": "on", "IgnoreCacheControl": "on", "CacheTime": 604800}}
+
+
+def _rule_with(condition: str, params: dict) -> list[dict]:
+    return [
+        {
+            "Status": "enable",
+            "RuleId": "r1",
+            "RuleName": "probe",
+            "Branches": [{"Condition": condition, "Actions": [{"Name": "Cache", "CacheParameters": params}], "SubRules": []}],
+        }
+    ]
+
+
+def test_follow_origin_paths_are_not_demanded_to_carry_a_version_string() -> None:
+    """Measured against the live zone: the origin governs /wechat, so no ?v= is possible.
+
+    Treating this as uncovered made the gate permanently red -- the false-red failure that
+    blocks a baseline from ever being pinned.
+    """
+    cond = "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/wechat']"
+    rules = edgeone.normalize_rules(_rule_with(cond, REAL_FOLLOW_ORIGIN))
+    coverage = edgeone.check_asset_coverage(rules, ASSETS)
+    assert coverage.uncovered == []
+    assert coverage.origin_governed == ["/wechat"]
+
+
+def test_ignore_cache_control_paths_still_demand_a_version_string() -> None:
+    cond = "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/vendor.js']"
+    rules = edgeone.normalize_rules(_rule_with(cond, REAL_FORCE_CACHE))
+    assert edgeone.check_asset_coverage(rules, ASSETS).uncovered == ["/vendor.js"]
+
+
+
+
+def test_follow_origin_paths_do_not_block_pinning_a_baseline() -> None:
+    """They are reported, not judged -- a legitimate zone must remain pinnable."""
+    cond = "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/wechat']"
+    coverage = edgeone.check_asset_coverage(
+        edgeone.normalize_rules(_rule_with(cond, REAL_FOLLOW_ORIGIN)), ASSETS
+    )
+    assert coverage.verified, "reporting must not turn into a permanent red"
+    assert coverage.origin_governed == ["/wechat"]
+
+
+def test_a_host_less_condition_still_yields_a_usable_report() -> None:
+    """No host clause used to synthesise https:///path and block the baseline forever."""
+    coverage = edgeone.check_asset_coverage(
+        edgeone.normalize_rules(_rule_with("${http.request.uri.path} in ['/wechat']", REAL_FOLLOW_ORIGIN)),
+        ASSETS,
+    )
+    assert coverage.verified and coverage.origin_governed == ["/wechat"]
+
+
+def test_follow_origin_with_default_cache_off_is_also_just_reported() -> None:
+    params = {"FollowOrigin": {"Switch": "on", "DefaultCache": "off"}, "NoCache": None, "CustomTime": None}
+    cond = "${http.request.uri.path} in ['/api/foo']"
+    coverage = edgeone.check_asset_coverage(edgeone.normalize_rules(_rule_with(cond, params)), ASSETS)
+    assert coverage.verified and coverage.uncovered == []
+
+
+def test_cli_surfaces_origin_governed_paths_before_reporting_clean(monkeypatch, capsys) -> None:
+    """The one thing keeping an unchecked path visible is a line of CLI output.
+
+    Asserting only CoverageReport.origin_governed would let a refactor delete that line
+    while the suite stayed green -- and the unchecked paths would silently vanish from a
+    run that still exits 0.
+    """
+    cond = "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/wechat']"
+    raw = _rule_with(cond, REAL_FOLLOW_ORIGIN)
+    monkeypatch.setattr(edgeone, "load_config", lambda: edgeone.EdgeOneConfig("i", "k", "z"))
+    monkeypatch.setattr(edgeone, "fetch_rules", lambda cfg: raw)
+    monkeypatch.setattr(edgeone, "load_snapshot", lambda path=None: edgeone.normalize_rules(raw))
+    code = cli._admin_edgeone(cli.build_parser().parse_args(["admin", "edgeone", "check"]))
+    out = capsys.readouterr().out
+    assert code == edgeone.EXIT_CLEAN
+    assert "ORIGIN-GOVERNED: /wechat" in out
+    assert "not checked here" in out, "a clean exit must still say what it did not check"

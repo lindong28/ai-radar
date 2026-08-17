@@ -173,12 +173,18 @@ def _switch(config: Any) -> str | None:
     return value if value in ("on", "off") else None
 
 
-def _action_forces_cache(params: Any) -> bool:
-    """Whether one Cache action pins a node TTL.
+def _action_overrides_origin(params: Any) -> bool:
+    """Whether one Cache action lets the edge outlive what the origin says.
 
-    The SDK allows at most one of CustomTime / FollowOrigin / NoCache to be switched on.
-    Each is read as a tri-state: on decides, off falls through to the next, and anything
-    unreadable answers True so an unfamiliar shape gets the stricter treatment.
+    This -- not "does it cache at all" -- is what makes a version string necessary.
+    Under CustomTime the edge pins its own TTL and ignores the origin's Cache-Control,
+    so only a new URL can invalidate it. Under FollowOrigin the origin's own headers
+    still govern; whether the origin actually sends them is a fact this module cannot
+    observe (see check_asset_coverage), so those paths are reported, not judged.
+
+    The SDK allows at most one of CustomTime / FollowOrigin / NoCache to be on. Each is
+    read as a tri-state: on decides, off falls through, unreadable answers True so an
+    unfamiliar shape gets the stricter treatment.
     """
     if not isinstance(params, dict):
         return True
@@ -190,29 +196,31 @@ def _action_forces_cache(params: Any) -> bool:
         return True
 
     follow = params.get("FollowOrigin")
-    if follow is not None:
-        state = _switch(follow)
-        if state is None:
-            return True
-        if state == "on":
-            # "Follow origin" still caches when the origin sends no Cache-Control and
-            # DefaultCache is on (SDK: 源站未返回 Cache-Control 头时，缓存/不缓存开关).
-            # ADR-039 records that these assets are served without Cache-Control, so
-            # treating FollowOrigin as never-caching would miss the live configuration.
-            return follow.get("DefaultCache") != "off"
+    if follow is not None and _switch(follow) is None:
+        return True
 
     no_cache = params.get("NoCache")
-    if no_cache is not None:
-        state = _switch(no_cache)
-        if state is None:
-            return True
-        if state == "on":
-            return False
+    if no_cache is not None and _switch(no_cache) is None:
+        return True
     return False
 
 
+def _action_follows_origin(params: Any) -> bool:
+    follow = isinstance(params, dict) and params.get("FollowOrigin")
+    return isinstance(follow, dict) and _switch(follow) == "on"
+
+
+def follows_origin(branch: dict[str, Any]) -> bool:
+    """True when the branch defers freshness to the origin's own Cache-Control."""
+    return any(
+        _action_follows_origin(action.get("CacheParameters"))
+        for action in branch.get("Actions") or []
+        if isinstance(action, dict) and action.get("Name") == "Cache"
+    )
+
+
 def forces_node_cache(branch: dict[str, Any]) -> bool:
-    """True when *any* Cache action on the branch pins a node TTL.
+    """True when *any* Cache action on the branch lets the edge override the origin.
 
     Deliberately a union rather than "the last action wins": the public API defines
     Actions as an array without saying whether a name may repeat or how duplicates
@@ -222,7 +230,7 @@ def forces_node_cache(branch: dict[str, Any]) -> bool:
     which is visible and correctable, unlike a silently missed cache rule.
     """
     return any(
-        _action_forces_cache(action.get("CacheParameters"))
+        _action_overrides_origin(action.get("CacheParameters"))
         for action in branch.get("Actions") or []
         if isinstance(action, dict) and action.get("Name") == "Cache"
     )
@@ -248,6 +256,7 @@ class CoverageReport:
 
     uncovered: list[str] = field(default_factory=list)
     unparseable: list[str] = field(default_factory=list)
+    origin_governed: list[str] = field(default_factory=list)
 
     @property
     def verified(self) -> bool:
@@ -263,17 +272,33 @@ def check_asset_coverage(rules: list[dict[str, Any]], assets: tuple[str, ...]) -
     covered = {f"/{asset}" for asset in assets}
     uncovered: list[str] = []
     unparseable: list[str] = []
+    origin_governed: list[str] = []
     for rule in rules:
         for branch, nested in iter_cache_branches(rule):
-            if not forces_node_cache(branch):
+            overrides = forces_node_cache(branch)
+            defers = follows_origin(branch)
+            if not overrides and not defers:
                 continue
             condition = branch.get("Condition") or ""
             paths = None if nested else understood_paths(condition)
             if paths is None:
                 unparseable.append(f"{condition} (nested)" if nested else condition)
                 continue
-            uncovered.extend(path for path in paths if path not in covered)
-    return CoverageReport(uncovered=sorted(set(uncovered)), unparseable=sorted(set(unparseable)))
+            if overrides:
+                uncovered.extend(path for path in paths if path not in covered)
+                continue
+            # Deferred to the origin. Whether such a path can go stale depends on the
+            # origin's own Cache-Control, which cannot be observed from here: a public
+            # GET can be served from the edge (EO-Cache-Status: HIT), returning the
+            # cached object's headers rather than what the origin sends now. Rather than
+            # claim knowledge we do not have, these are surfaced on every run so the
+            # human who pins the snapshot reviews them.
+            origin_governed.extend(paths)
+    return CoverageReport(
+        uncovered=sorted(set(uncovered)),
+        unparseable=sorted(set(unparseable)),
+        origin_governed=sorted(set(origin_governed)),
+    )
 
 
 @dataclass(frozen=True)

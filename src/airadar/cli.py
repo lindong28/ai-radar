@@ -1704,9 +1704,12 @@ def _admin_edgeone(args: argparse.Namespace) -> int:
 
     coverage = edgeone.check_asset_coverage(current, edgeone.pinned_assets())
     for path in coverage.uncovered:
-        print(f"UNCOVERED: {path} is force-cached but has no content-derived ?v= in ASSETS.")
+        print(f"UNCOVERED: {path} lets the edge override the origin but has no ?v= in ASSETS.")
     for condition in coverage.unparseable:
         print(f"UNPARSEABLE: could not read the paths out of {condition!r}.")
+
+    for path in coverage.origin_governed:
+        print(f"ORIGIN-GOVERNED: {path} defers to the origin's Cache-Control; not checked here.")
 
     if args.update_snapshot:
         # A snapshot only ever proves "same as last time"; refusing to pin an unsafe state

@@ -136,6 +136,12 @@ EdgeOne 对 `news.aiplanet.live` 下的精确路径 `/style.css` 与 `/app.js` �
 | `EDGEONE_SECRET_KEY` | 子账号 SecretKey |
 | `EDGEONE_ZONE_ID` | 站点 ID，形如 `zone-xxxx` |
 
+### 密钥会因闲置被自动禁用
+
+腾讯云自 2025-06-30 起分批**自动禁用超过 90 天未使用的 AccessKey**（登录页公告）。本密钥只在部署前对账时使用，闲置超 90 天是常态，因此它被自动禁用只是时间问题。
+
+届时的表现是 `check` 返回 **exit 2（未核实）**并打印 API 错误——不会冒充通过，但也不会自己说清根因。排查时先到 CAM「访问密钥」页确认该密钥状态，而不是先怀疑权限或 ZoneId 配错。恢复方式是在控制台重新启用或新建密钥并更新 `.env`。
+
 ### 命令与退出码
 
 ```bash
@@ -153,6 +159,10 @@ EdgeOne 对 `news.aiplanet.live` 下的精确路径 `/style.css` 与 `/app.js` �
 退出码刻意三值：把"未核实"与"已核实通过"分开，否则未配置的检查会以 exit 0 冒充通过。判定依据是**整份规则集与仓内快照的差异**，不是从规则条件里解析路径——新版规则引擎的匹配条件是表达式字符串，解析漏一条就会报出"无漂移"，那正是本机制要防的失效。
 
 漂移属实且是有意变更时：先把新路径加进 `scripts/bump_frontend_assets.py` 的 `ASSETS`（使其获得内容派生的版本串），再 `--update-snapshot`。这个顺序是**强制**的——`--update-snapshot` 在发现强制缓存路径未被 `ASSETS` 覆盖、或匹配条件超出它能读懂的形态时会拒绝落盘并返回 2。因为快照只能证明「与上次一样」，不能证明上次接受的状态安全：把一个没有版本串的路径钉进基线，此后它就永远不会再被报出来。
+
+**检查范围的边界**：只有让边缘**覆盖源站新鲜度**的规则（`CustomTime` / `IgnoreCacheControl`）才被要求有 `?v=` 覆盖。`FollowOrigin` 类规则（当前是 `/wechat` 与 `/api/v1/wechat`）由源站自己的 `Cache-Control` 治理，每次 `check` 会把它们列成 `ORIGIN-GOVERNED` 但**不判定**——因为「源站现在发不发这个头」从公网观察不到：一次公网 GET 可能命中边缘缓存（`EO-Cache-Status: HIT`），返回的是缓存对象的旧头而非源站当前的响应。这部分判断由录基线的人承担：`--update-snapshot` 就是「我看过这些路径并认可」的签字。
+
+（排查缓存问题时注意：本站同一路径 **HEAD 返回 `private, no-store`、GET 返回 `max-age=90`**，用 HEAD 会得到相反结论。）
 
 条件形态采用白名单：只有 `${http.request.uri.path} in ['…']`（可与 host 相等子句 AND）会被判为已理解，`not in`、`contains`、`full_uri`、文件扩展名匹配、以及任何嵌套在 `SubRules` 里的缓存规则一律判为未核实（exit 2），不会被当成已覆盖。
 

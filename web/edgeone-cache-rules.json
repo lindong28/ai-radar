@@ -1,0 +1,142 @@
+{
+  "note": "EdgeOne rule-engine rules mirrored from the Tencent Cloud console (ADR-039). Every enabled rule is recorded verbatim and in order; refresh deliberately with ./run.sh admin edgeone check --update-snapshot",
+  "rules": [
+    {
+      "Branches": [
+        {
+          "Actions": [
+            {
+              "AccessURLRedirectParameters": null,
+              "AdvancedOriginRoutingParameters": null,
+              "AuthenticationParameters": null,
+              "CacheKeyParameters": null,
+              "CacheParameters": {
+                "CustomTime": null,
+                "FollowOrigin": {
+                  "DefaultCache": "on",
+                  "DefaultCacheStrategy": "on",
+                  "DefaultCacheTime": 0,
+                  "Switch": "on"
+                },
+                "NoCache": null
+              },
+              "CachePrefreshParameters": null,
+              "ClientIPCountryParameters": null,
+              "ClientIPHeaderParameters": null,
+              "CompressionParameters": null,
+              "ContentCompressionParameters": null,
+              "CustomActionParameters": null,
+              "ErrorPageParameters": null,
+              "ForceRedirectHTTPSParameters": null,
+              "HSTSParameters": null,
+              "HTTP2Parameters": null,
+              "HTTPUpstreamTimeoutParameters": null,
+              "HostHeaderParameters": null,
+              "HttpResponseParameters": null,
+              "MaxAgeParameters": null,
+              "ModifyOriginParameters": null,
+              "ModifyRequestHeaderParameters": null,
+              "ModifyResponseHeaderParameters": null,
+              "Name": "Cache",
+              "OCSPStaplingParameters": null,
+              "OfflineCacheParameters": null,
+              "OriginAuthenticationParameters": null,
+              "OriginPullProtocolParameters": null,
+              "PostMaxSizeParameters": null,
+              "QUICParameters": null,
+              "RangeOriginPullParameters": null,
+              "ResponseSpeedLimitParameters": null,
+              "SetContentIdentifierParameters": null,
+              "ShieldParameters": null,
+              "SiteFailoverParameters": null,
+              "SmartRoutingParameters": null,
+              "StatusCodeCacheParameters": null,
+              "TLSConfigParameters": null,
+              "UpstreamFollowRedirectParameters": null,
+              "UpstreamHTTP2Parameters": null,
+              "UpstreamRequestParameters": null,
+              "UpstreamURLRewriteParameters": null,
+              "VaryParameters": null,
+              "WebSocketParameters": null
+            }
+          ],
+          "Condition": "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/wechat', '/api/v1/wechat']",
+          "SubRules": null
+        }
+      ],
+      "Description": null,
+      "RuleId": "rule-3tqd7hwdvi49",
+      "RuleName": "news public lists follow origin cache",
+      "RulePriority": 2,
+      "Status": "enable"
+    },
+    {
+      "Branches": [
+        {
+          "Actions": [
+            {
+              "AccessURLRedirectParameters": null,
+              "AdvancedOriginRoutingParameters": null,
+              "AuthenticationParameters": null,
+              "CacheKeyParameters": null,
+              "CacheParameters": {
+                "CustomTime": {
+                  "CacheTime": 604800,
+                  "IgnoreCacheControl": "on",
+                  "Switch": "on"
+                },
+                "FollowOrigin": null,
+                "NoCache": null
+              },
+              "CachePrefreshParameters": null,
+              "ClientIPCountryParameters": null,
+              "ClientIPHeaderParameters": null,
+              "CompressionParameters": null,
+              "ContentCompressionParameters": null,
+              "CustomActionParameters": null,
+              "ErrorPageParameters": null,
+              "ForceRedirectHTTPSParameters": null,
+              "HSTSParameters": null,
+              "HTTP2Parameters": null,
+              "HTTPUpstreamTimeoutParameters": null,
+              "HostHeaderParameters": null,
+              "HttpResponseParameters": null,
+              "MaxAgeParameters": null,
+              "ModifyOriginParameters": null,
+              "ModifyRequestHeaderParameters": null,
+              "ModifyResponseHeaderParameters": null,
+              "Name": "Cache",
+              "OCSPStaplingParameters": null,
+              "OfflineCacheParameters": null,
+              "OriginAuthenticationParameters": null,
+              "OriginPullProtocolParameters": null,
+              "PostMaxSizeParameters": null,
+              "QUICParameters": null,
+              "RangeOriginPullParameters": null,
+              "ResponseSpeedLimitParameters": null,
+              "SetContentIdentifierParameters": null,
+              "ShieldParameters": null,
+              "SiteFailoverParameters": null,
+              "SmartRoutingParameters": null,
+              "StatusCodeCacheParameters": null,
+              "TLSConfigParameters": null,
+              "UpstreamFollowRedirectParameters": null,
+              "UpstreamHTTP2Parameters": null,
+              "UpstreamRequestParameters": null,
+              "UpstreamURLRewriteParameters": null,
+              "VaryParameters": null,
+              "WebSocketParameters": null
+            }
+          ],
+          "Condition": "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/style.css', '/app.js']",
+          "SubRules": null
+        }
+      ],
+      "Description": null,
+      "RuleId": "rule-3tqexfbhd95r",
+      "RuleName": "news versioned css js edge cache",
+      "RulePriority": 1,
+      "Status": "enable"
+    }
+  ]
+}
