@@ -443,3 +443,19 @@
 **怎么修**：这两条断言的正确量法已经落成可执行仪器 `~/.claude/bin/first-screen-density`（完整可见而非相交、max 而非均值、band 要扣 fixed/sticky 头且经祖先裁剪、两条可见性路径不一致即报 unresolved），17 条夹具矩阵在同目录 `.test.py`。要么在 Playwright 里照它的判据重写，要么直接在 CI 里调它。**先让新断言在会失败的输入上红一次再改实现**——当前实现已无正文配图，最坏形态得靠夹具造（一条超过视口高的卡片）。
 
 **关联**：`docs/contracts/ux-contract.md` 的 HP-1 与「精选页"正常日"最少条数 ≥10 条（首屏）」把"首屏"定义成 SSR 直出条数，与"视口里看得见几条"脱钩；改守卫时一并收。HP-7 的配图条款已由 `0f827cd` 记入 `ux-contract-issues.md`。
+
+## [pending] X 推文媒体在列表里缺失：拓扑决定了不能用请求时代理
+
+- Discovered: 2026-08-17 用户问「为什么 aiplanet 上文章都没有图，aihot 上有」时逐层查出。
+- **aihot 的规则**（curl SSR HTML 实测）：首页 8 个 `<img>` = 4 个 `uc-avatar` + 4 个 `x-tweet-media-img`；`/all` 26 个 = 16 + 10。**RSS 正文抓取图 0 张**，显示的全是 X 推文自带媒体（`pbs.twimg.com`，2048×1152 一类）。所以 ADR-054「列表不渲染 RSS 正文图」与参照站一致；不一致的只有 X 媒体这一条。
+- **我们在数据层就是空的**：`src/airadar/fetcher/x_api.py` 的 `tweet.fields` 只有 `author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets`，全文件 0 处 `expansions` / `media.fields` / `media_keys`，且 `content_html=None`；而 `media_assets` 由 `presentation/media.py` 从 `content_html` 解析。**X 推文媒体从未被取回过**。
+- **关键约束（实测读数，别再重跑）**：
+
+  | 主机 | 角色 | qpic.cn（国内） | pbs.twimg.com（海外） |
+  |---|---|---|---|
+  | macmini | 抓取 / LLM / DB 同步源 | 可达 | **经 `AI_RADAR_PROXY_FILE` 代理 HTTP 200** |
+  | 腾讯上海 | 只 serve 公网 | 可达（favicon 返回 400，即链路通） | **000 / 超时**；serve 进程环境里代理变量 **0 个**；`.env` 无 `AI_RADAR_PROXY_FILE`；交互与非交互 shell 读数相同（排除"非交互丢环境"） |
+
+- **推论**：现有 `/img?url=` 那套「请求时同源代理」跑在腾讯，对 X 媒体**结构性不可行**——把 `pbs.twimg.com` 加进 `PROXY_IMAGE_HOST_SUFFIXES` 也只会得到 502。微信图能显示恰恰因为 qpic.cn 是国内 CDN。
+- **可行形态**：抓取时在 Mac 经代理下载媒体并自存，再经一条**新的静态资产同步通道**送到腾讯由 serve 提供。图片字节不得进 DB——DB 被专门瘦身过（ADR-010：2.28GB→1.495GB；FTS 同步稳态 16.39MB）。
+- 待定项（归 plan）：资产存哪、过期策略、同步失败时的降级、存储与带宽预算、EdgeOne 缓存规则、是否改用 EdgeOne 海外节点回源 twimg（可省掉自存，但需控制台确认，agent 无法代做）。
