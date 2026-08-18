@@ -66,7 +66,9 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 
 **这一层不是 `/img` 的图片代理。** `docs/operations/services.md` 有一份写得很好的出网代理三步诊断（`systemctl is-active ai-radar-img-tunnel`、`ss -lntp | grep 39148`），那条链路只服务 `/img` 的新加坡图片代理，与 fetch 出网无关——照它走完全程也诊断不到本节的故障。
 
-A7 补的是 A4 看不见的那一面：A4 用全站 item 增量与 fetch 失败率判定，单个来源死亡时其余来源仍把总量顶在 floor 之上，因此 2026-08-14 至 08-17 微信来源零入库约 73 小时期间 A4 全程按 `notice` 处理、未投递（`sent=0`）。
+A7 补的是 A4 看不见的那一面：A4 用全站 item 增量与 fetch 失败率判定，单个来源死亡时其余来源仍把总量顶在 floor 之上。2026-08-14 至 08-17 微信来源零入库约 73 小时期间，A4 每天分别判定 firing 9 / 36 / 59 次，而 `send A4` 在 08-14、08-15 为 0 次、08-16 为 4 次。
+
+本节此前写作「A4 全程按 `notice` 处理、未投递（`sent=0`）」，两处均不成立：alert-check 日志的 firing 行不记录 severity，该归类未经核实；08-16 的 4 次投递也不是 `sent=0`。**未投递的真实机制不是 severity 分档**，而是 resolve 侧无对称确认加上 `attempted=0` 造成的假 ok 反复打断去抖计时，见 [issues/alerting.md ISSUE-A01](../issues/alerting.md)——该项当前未闭合，因此 A4 的投递不可依赖，A7 不是它的冗余而是唯一覆盖单源静默的规则。
 
 D3 每轮按 provider/model 检查 unpriced、stale、due-review 与 active tariff 变化，通过 `NOTIFICATION` webhook 发送，不带 `--alert`。未定价消息给出已记录调用数/已记录调用总数，stale/due-review 指名对象，price-changed 同时给旧值与新值。相同条件的调用计数变化不会重发；首次投递失败下轮重试，解除时 `im-notify --dedup-clear` 失败会保留 re-arm 义务，间歇未出现的模型仍保留旧价格签名。处置落点是 `src/airadar/pricing.py` 的 provider/model 条目、来源、生效区间与 `verified_at`。真实生产数据截至 P2 开发时尚未出现 stale、due-review 或 unpriced，这些分支目前只有 synthetic fixture 覆盖。
 
