@@ -50,3 +50,10 @@
   - **不能直接取「最新一篇」**：`_compute_daily_archive()` 按 `date(published_at)` 分组、条目按 `published_at DESC` 排；而日报正文按固定分类分节重排（模型发布/更新 → 产品发布/更新 → 行业动态…）。两边的"第一篇"不是同一条，rank 最小或发布时间最新都不保证等于用户点进去看到的首篇。
   - 做之前要先定契约：「索引标题 == 正文首篇」并加关系测试。否则错标题会是一个完全合法、看不出病的新闻标题——无症状错误。
   - 另需评估：同一日期可能含来自不同 run 的条目（跨 run 去重归档），「当期」的归属未定义；以及加子查询对该端点延迟的影响未量。
+
+- [pending] X 推文媒体的作者图片描述（`alt_text`）已入库，但展示层一律 `alt=""`，读屏用户拿不到
+  - 背景：2026-08-18 做 ADR-058（缩略图收缩包裹 + lightbox）时由生成后 review gate 的对抗审查发现，属**该改动之前就存在**的独立问题——本轮新增的 lightbox 只是又多了一个消费残缺契约的界面。
+  - 读数：抓取层明确请求并保存 `alt_text`（`src/airadar/fetcher/x_api.py:19` 的 `X_MEDIA_FIELDS`、`x_api.py:107` 的可选字段透传），但展示投影 `src/airadar/presentation/media.py:100-109` 只产出 `{"type", "url"}` 两个键。CSR（`app.js` 的 `xMedia()`）、SSR（`web/templates/_prepaint_list.html`）与 lightbox 因此全部写死 `alt=""`，即把每张图声明为装饰内容。
+  - 后果：作者提供了可访问描述时，读屏用户仍然什么都听不到。ADR-058 给 lightbox 加的 `aria-live` 计数器能播报"第 2 张，共 4 张"，但播报不了图是什么——那要靠描述穿过投影契约。
+  - 未随 ADR-058 修的原因：`media_assets` 是**会被本进程之外的消费者读到、且字段名与值会被人读到**的数据契约，加字段要走 `/custom:review-schema`（见 user-CLAUDE.md「数据契约 / Schema 设计」），并处理三处消费端（CSR / SSR / lightbox）与旧收藏快照的兼容。属独立改动，不随 UI 借鉴那一轮做。
+  - 若要修：投影补 `alt`（缺失时省略该键而不是写空串——空串与"作者没写描述"在下游分不开），三处消费端在有值时写进 `alt`、无值时保持 `alt=""`（无描述的图确实该按装饰处理）。

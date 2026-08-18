@@ -921,18 +921,70 @@ def test_x_media_renders_on_both_paths_and_only_for_x() -> None:
 
 
 def test_x_media_styles_bound_height_without_cropping() -> None:
-    """Readability first (no destructive crop) with a density floor."""
+    """Readability first (no destructive crop) with a density floor.
+
+    ADR-058 changed *how* "no crop" is guaranteed. It used to be object-fit:
+    contain inside a fixed-width box; it is now shrink-wrap — with width and
+    height both auto the rendered box always equals the image's own aspect
+    ratio, so object-fit has nothing to act on and cropping is impossible by
+    construction rather than by a value someone could flip. Assert the
+    construction, not the old value.
+    """
     css = _read("style.css")
 
     rule = css.split(".x-media-img {", 1)[1].split("}", 1)[0]
-    # contain, not cover: a cropped benchmark chart is worse than a smaller one.
-    assert "object-fit: contain;" in rule
+    assert "width: auto;" in rule
+    assert "height: auto;" in rule
+    # cover would be inert here, but its presence would mean someone went back
+    # to a fixed-size box — that is the regression worth catching.
     assert "cover" not in rule
-    # and a ceiling, so one image cannot push the card past the viewport.
+    # ceilings on both axes, so one image cannot push the card past the viewport
     assert "max-height:" in rule
+    assert "max-width:" in rule
     # the old RSS media styles stay gone
     assert ".article-media {" not in css
     assert ".article-media-img" not in css
+
+
+def test_x_media_container_shrink_wraps_and_aligns_left() -> None:
+    """The user-visible complaint ADR-058 fixes: images centred in a dead box.
+
+    Measured before: a 945x811 image painted 245x210 inside a 1072x210 box —
+    ~413px of grey gutter each side. The fix is structural (flex + flex-start +
+    auto sizing), so a fixed-track grid coming back is the regression.
+    """
+    css = _read("style.css")
+
+    rule = css.split("\n.x-media {", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in rule
+    assert "justify-content: flex-start;" in rule
+    assert "grid-template-columns" not in rule
+
+
+def test_media_lightbox_enhances_rather_than_replaces_the_native_link() -> None:
+    """ADR-058: the lightbox is an enhancement, never a replacement.
+
+    Two halves. (1) The anchor keeps a real href and target=_blank, so modifier
+    clicks, middle click and the context menu keep working and a script failure
+    degrades to opening the image. (2) preventDefault happens only after the
+    overlay is fully built — if construction throws, the browser follows the
+    link instead of the click doing nothing at all. Assert both, because either
+    one alone still leaves a dead click.
+    """
+    js = _read("app.js")
+    prepaint = (TEMPLATES / "_prepaint_list.html").read_text(encoding="utf-8")
+
+    for markup in (js, prepaint):
+        assert 'target="_blank"' in markup
+        assert 'rel="noopener noreferrer"' in markup
+
+    handler = js.split("export function initMediaLightbox()", 1)[1].split("\n}\n", 1)[0]
+    # every modifier is a pass-through; ctrlKey matters most — on macOS
+    # Ctrl+click is the context menu, so swallowing it would kill right-click.
+    for guard in ("event.metaKey", "event.ctrlKey", "event.shiftKey", "event.altKey"):
+        assert guard in handler
+    # transactional order: build succeeds first, cancel the navigation second.
+    assert handler.index("openMediaLightbox(link)") < handler.index("event.preventDefault()")
 
 
 def test_x_media_container_collapses_when_every_image_failed() -> None:

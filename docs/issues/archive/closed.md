@@ -27,3 +27,14 @@ P3 为把慢变 prompt 前缀移到文章前而执行 before/after 成对评测�
 `docs/operations/services.md` 的服务表曾把 `performance-probe` 写成已部署的 per-file LaunchAgent，与实机状态不符。
 
 **Resolution（2026-08-12）**：文档已与 `./status.sh performance-probe` 和 PAUSED 旧 cron 的现场证据对齐；当前状态由 services.md 服务表单点维护，明确为未安装且旧 hourly cron 保持暂停。
+
+## 2026-08-17 [drift] HP-7「媒体资产」与 ADR-054 相反，需随契约修订撤下
+
+**状态**：resolved
+
+- Discovered: 与 aihot.virxact.com 做同条件成对 UI 对比后决定列表卡片不再渲染正文抓取的图片（ADR-054）。实测依据：1440×900 下首屏完整可见条目 0（参照站 3），80 张卡片里 8 张高度超过整屏（max 998px > 视口 900px），且图片被 `object-fit: cover` 大幅裁切（1072×360 的格子里塞 534×610 竖图）。
+- 契约现状：`ux-contract.md` HP-7 仍要求「有配图的卡片展示文章图片」「点击图片在新标签页打开大图」——与当前实现直接相反。若不撤下，后续按 hard contract 跑的 UX 测试会把正确实现判成回归，甚至驱动恢复已被明确删除的渲染器。
+- 需要的修订：HP-7 整条撤下（或改写为「列表卡片不渲染正文图片；媒体数据仍在 API 中」）。`/wechat` 详情页的图片不在此列，不受影响。
+- 同轮另一处**不**冲突、无需修订：L1「时间线页」的「所有条目显示分数标签」与 L2 HP-1 的「分数标签」仍然成立——评分展示只是从裸数字 `89` 改为 `AI 评分 89`（≤960px 视觉上只留 `AI 89`，「评分」二字保留在可访问性树里），标签依然逐条存在。不写分母见 ADR-056。
+
+**Resolution（2026-08-18）**：已被 [ADR-057](../../adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md) 部分推翻，本条的建议方向已不适用。「列表不渲染 RSS 正文图」这一半仍然成立，且已写进 HP-7 现文；但「HP-7 整条撤下」是错的——ADR-057 恢复了 X 推文自带媒体的渲染，参照站的规则本就是「只显示推文媒体、不显示 RSS 正文图」，而非「不显示图片」。点击手势的演化改由 `ux-contract-issues.md` 的 2026-08-18 条目承载（[ADR-058](../../adr/058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md)）。本条留档只为保留当时的读数与推理，不再作为待办。

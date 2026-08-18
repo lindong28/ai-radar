@@ -388,12 +388,300 @@ function xMedia(item) {
   if (item.source_kind !== "x") return "";
   const assets = Array.isArray(item.media_assets) ? item.media_assets.filter((a) => a?.url) : [];
   if (!assets.length) return "";
-  const label = `打开大图：${itemTitleText(item) || "查看媒体"}`;
+  const label = `查看大图：${itemTitleText(item) || "查看媒体"}`;
   const images = assets.map((asset) => `
     <a class="x-media-link" href="${esc(asset.url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
       <img class="x-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.x-media-link').hidden=true">
     </a>`).join("");
   return `<div class="x-media x-media-count-${assets.length}">${images}</div>`;
+}
+
+/* X 媒体 lightbox（ADR-058）。
+
+   它**增强**原生链接、不取代它：<a> 保留真实 href（当前是 ADR-057 的同源 /img
+   代理地址，不是图床直链）与 target="_blank"，只在「无修饰键的主键点击」这一种
+   手势上接管。修饰键点击、中键、右键菜单一律放行给浏览器——macOS 上 Ctrl+左键
+   是上下文菜单，把它当普通左键拦下会废掉右键。
+
+   事务序是这里唯一不能动的东西：构造 → 挂载 → 施加副作用，**全部成功后才**
+   preventDefault()。任一步抛错走 teardown() 且**不** preventDefault，浏览器按
+   原生链接继续跳转——所以 lightbox 建不起来时点击不会变成"什么都没发生"。
+   teardown() 逐项独立 try/catch：某步恢复失败不得阻断其余，否则会残留 inert
+   或滚动锁。 */
+
+let activeLightbox = null;
+
+function bestEffort(step) {
+  try {
+    step();
+  } catch {
+    /* 逐项 best-effort：单步恢复失败不阻断其余恢复 */
+  }
+}
+
+/* 焦点归还降级链。每级 focus() 后校验 activeElement——isConnected 不保证可聚焦
+   （例如它已被 [hidden] 隐藏）。四级全失败时如实放弃，不假装成功。
+
+   降级候选按 **item id 重查**、不按节点钉住。两者都不能用 `trigger.closest()`：
+   trigger 脱离 DOM 后它只在游离子树里向上找，永远找不到 `.item-row`，那一级于是
+   静默永不命中（实测：本该落到标题链接，实际落到 body）。但"打开时钉住节点"同样
+   不够——跨 960px 断点时 `rebuildTimeline` 用 `innerHTML` 整块替换列表，钉住的节点
+   和 trigger 一起断开，降级链会一路掉到 `#list`、丢掉原条目位置。重查靠的是
+   `.item-row[data-item-id]`：重渲染后同一条目仍带同一个 id。
+
+   `#list` 那一级的临时 tabindex **不能在 focus 成功后立刻移除**：Chrome 会在元素
+   失去可聚焦性时主动 blur 它，等于亲手把刚拿到的焦点扔掉（实测落到 BODY）。
+   改为挂一次性 blur 监听，等焦点自然离开时再恢复，既不遗留也不丢焦点。 */
+function restoreFocus(trigger, itemId, mediaIndex, listEl, restoreTabIndex) {
+  const candidates = [];
+  if (trigger && trigger.isConnected) candidates.push(trigger);
+  const row = itemId ? document.querySelector(`.item-row[data-item-id="${CSS.escape(itemId)}"]`) : null;
+  if (row) {
+    /* 重渲染后的等价缩略图优先于标题——它才是用户刚才操作的那个东西。按序号取，
+       不是取第一张：多图条目上取第一张会把用户从第 3 张送回第 1 张。序号在条数
+       不变时对得上；条数变了（某张这次加载失败被隐藏）会落到相邻一张，属已知降级。 */
+    const media = [...row.querySelectorAll(".x-media-link:not([hidden])")];
+    const same = media[Math.min(mediaIndex, media.length - 1)];
+    if (same && same !== trigger) candidates.push(same);
+    const title = row.querySelector(".item-title");
+    if (title) candidates.push(title);
+  }
+  if (listEl && listEl.isConnected) candidates.push(listEl);
+  candidates.push(document.body);
+  for (const el of candidates) {
+    try {
+      if (el === listEl && !listEl.hasAttribute("tabindex")) listEl.setAttribute("tabindex", "-1");
+      el.focus();
+      if (document.activeElement === el || el.contains(document.activeElement)) {
+        if (el === listEl) listEl.addEventListener("blur", restoreTabIndex, { once: true });
+        else restoreTabIndex();
+        return el;
+      }
+    } catch {
+      /* 试下一级 */
+    }
+  }
+  restoreTabIndex();
+  return null;
+}
+
+function openMediaLightbox(trigger) {
+  const container = trigger.closest(".x-media");
+  const all = container ? [...container.querySelectorAll(".x-media-link")] : [trigger];
+  /* 序列开场就排掉 onerror 已隐藏的项——与 ADR-057 的失败隐藏规则一致，
+     不让用户切到一张已知取不到的图。鼠标/键盘/读屏拿到的是同一个序列。 */
+  let items = all.filter((a) => !a.hidden);
+  if (!items.length) items = [trigger];
+  let index = Math.max(0, items.indexOf(trigger));
+
+  const label = trigger.getAttribute("aria-label") || "查看大图";
+  /* 只钉住 item id 与该媒体在容器内的序号，不钉住节点——见 restoreFocus 的注释 */
+  const triggerRow = trigger.closest(".item-row");
+  const triggerItemId = triggerRow ? triggerRow.dataset.itemId || null : null;
+  /* 取可见序列里的序号（不是 `all` 里的）——restoreFocus 那边也按 :not([hidden])
+     重查，两边口径必须一致，否则容器里有已隐藏项时会错位一格。`index` 随后会被
+     切换改动，所以这里另存一份开场值。 */
+  const triggerMediaIndex = index;
+  const listEl = document.querySelector("#list");
+  const listHadTabIndex = listEl ? listEl.hasAttribute("tabindex") : false;
+  const listTabIndex = listEl ? listEl.getAttribute("tabindex") : null;
+  const restoreTabIndex = () => bestEffort(() => {
+    if (!listEl) return;
+    if (listHadTabIndex) listEl.setAttribute("tabindex", listTabIndex);
+    else listEl.removeAttribute("tabindex");
+  });
+
+  const overlay = document.createElement("div");
+  overlay.className = "media-lightbox";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", label);
+
+  const img = document.createElement("img");
+  img.className = "media-lightbox-img";
+  img.alt = "";
+  img.referrerPolicy = "no-referrer";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "media-lightbox-close";
+  closeBtn.setAttribute("aria-label", "关闭");
+  closeBtn.textContent = "✕";
+
+  const prevBtn = document.createElement("button");
+  prevBtn.type = "button";
+  prevBtn.className = "media-lightbox-nav media-lightbox-prev";
+  prevBtn.setAttribute("aria-label", "上一张");
+  prevBtn.textContent = "‹";
+
+  const nextBtn = document.createElement("button");
+  nextBtn.type = "button";
+  nextBtn.className = "media-lightbox-nav media-lightbox-next";
+  nextBtn.setAttribute("aria-label", "下一张");
+  nextBtn.textContent = "›";
+
+  const counter = document.createElement("span");
+  counter.className = "media-lightbox-counter";
+
+  /* 切图对读屏用户的唯一可感知信号。焦点始终停在同名的「下一张」按钮上，图片又
+     只能声明成装饰图（上游的 alt_text 目前没有穿过展示投影，见 ADR-058「已知未
+     验证项」），所以没有 live region 时切换在读屏里完全无声。可见文案保持紧凑的
+     「2 / 4」，播报走一个视觉隐藏的完整句子。 */
+  const announcer = document.createElement("span");
+  announcer.className = "visually-hidden";
+  announcer.setAttribute("role", "status");
+  announcer.setAttribute("aria-live", "polite");
+  announcer.setAttribute("aria-atomic", "true");
+
+  overlay.append(img, closeBtn, announcer);
+  if (items.length > 1) overlay.append(prevBtn, nextBtn, counter);
+
+  const inertApplied = [];
+  let closed = false;
+
+  function render(droppedLast = false) {
+    const source = items[index];
+    const thumb = source ? source.querySelector(".x-media-img") : null;
+    img.src = thumb ? thumb.currentSrc || thumb.src : source.href;
+    counter.textContent = `${index + 1} / ${items.length}`;
+    const single = items.length < 2;
+    /* 先移开焦点再隐藏。序列从 2 掉到 1（当前图加载失败被剔除）时，焦点可能正停在
+       即将 hidden 的导航按钮上——直接隐藏会把焦点甩回 document，遮罩还开着却已经
+       没有焦点落点，要等用户再按一次 Tab 才补得回来。 */
+    if (single && (document.activeElement === prevBtn || document.activeElement === nextBtn)) {
+      closeBtn.focus();
+    }
+    prevBtn.hidden = single;
+    nextBtn.hidden = single;
+    counter.hidden = single;
+    /* 失败自动切图必须自己播报：那一路没有用户动作，焦点又刚被挪到「关闭」，读屏
+       只会听见"关闭 按钮"，听不出图已经换了、序列也短了。剩一张时可见计数器已隐藏，
+       播报区更是唯一的通道，所以这里不能像正常单图那样置空。 */
+    if (droppedLast) {
+      announcer.textContent = single
+        ? "上一张图片加载失败，已显示剩余的 1 张"
+        : `上一张图片加载失败，已切到第 ${index + 1} 张，共 ${items.length} 张`;
+    } else {
+      announcer.textContent = single ? "" : `第 ${index + 1} 张，共 ${items.length} 张`;
+    }
+  }
+
+  function step(delta) {
+    if (items.length < 2) return;
+    index = (index + delta + items.length) % items.length;
+    render();
+  }
+
+  /* 序列收敛：lightbox 内当前图取不到时把它移出序列并自动前进；序列空则关闭。
+     否则 ←/→ 会在一张永远打不开的图上卡住。 */
+  function dropCurrent() {
+    items.splice(index, 1);
+    if (!items.length) {
+      close();
+      return;
+    }
+    if (index >= items.length) index = 0;
+    render(true);
+  }
+
+  function teardown() {
+    bestEffort(() => overlay.remove());
+    for (const entry of inertApplied) {
+      bestEffort(() => {
+        if (entry.had) entry.el.setAttribute("inert", entry.value);
+        else entry.el.removeAttribute("inert");
+      });
+    }
+    bestEffort(() => {
+      document.body.style.overflow = bodyOverflow;
+      window.scrollTo(0, scrollY);
+    });
+    bestEffort(() => document.removeEventListener("keydown", onKeydown, true));
+    activeLightbox = null;
+  }
+
+  function close() {
+    if (closed) return;
+    closed = true;
+    teardown();
+    restoreFocus(trigger, triggerItemId, triggerMediaIndex, listEl, restoreTabIndex);
+  }
+
+  function onKeydown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); return; }
+    if (event.key === "ArrowRight") { event.preventDefault(); step(1); return; }
+    if (event.key !== "Tab") return;
+    /* 焦点约束：inert 已经挡住遮罩之外，这里再把 Tab 环闭合在遮罩内的可见按钮上，
+       避免焦点跑到浏览器 UI 后再 Tab 回来落在错误位置。 */
+    const focusable = [closeBtn, prevBtn, nextBtn].filter((el) => !el.hidden && el.isConnected);
+    if (!focusable.length) return;
+    const current = focusable.indexOf(document.activeElement);
+    const delta = event.shiftKey ? -1 : 1;
+    const nextIndex = (current === -1 ? 0 : current + delta + focusable.length) % focusable.length;
+    event.preventDefault();
+    focusable[nextIndex].focus();
+  }
+
+  const scrollY = window.scrollY;
+  const bodyOverflow = document.body.style.overflow;
+
+  overlay.addEventListener("click", (event) => {
+    if (event.target === img) return;
+    close();
+  });
+  closeBtn.addEventListener("click", (event) => { event.stopPropagation(); close(); });
+  prevBtn.addEventListener("click", (event) => { event.stopPropagation(); step(-1); });
+  nextBtn.addEventListener("click", (event) => { event.stopPropagation(); step(1); });
+  img.addEventListener("error", dropCurrent);
+
+  /* 挂载与副作用是一个事务：中途任一步抛错都必须先 teardown 再把错误抛给调用方，
+     否则会漏下遮罩 / inert / 滚动锁。teardown 必须在这里调用而不是留给调用方的
+     catch——调用方那时 activeLightbox 还是 null，够不到这个闭包。 */
+  try {
+    render();
+    document.body.appendChild(overlay);
+    document.body.style.overflow = "hidden";
+    for (const el of [...document.body.children]) {
+      if (el === overlay) continue;
+      inertApplied.push({ el, had: el.hasAttribute("inert"), value: el.getAttribute("inert") });
+      el.setAttribute("inert", "");
+    }
+    document.addEventListener("keydown", onKeydown, true);
+    closeBtn.focus();
+  } catch (error) {
+    teardown();
+    restoreFocus(trigger, triggerItemId, triggerMediaIndex, listEl, restoreTabIndex);
+    throw error;
+  }
+  activeLightbox = { close };
+  return { close, teardown };
+}
+
+export function initMediaLightbox() {
+  if (document.documentElement.dataset.mediaLightbox === "on") return;
+  document.documentElement.dataset.mediaLightbox = "on";
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented) return;
+    /* 只接管无修饰键的主键点击。button!==0 / 任一修饰键 → 放行给浏览器原生处理。 */
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const link = event.target.closest ? event.target.closest(".x-media-link") : null;
+    if (!link || link.hidden) return;
+    let opened = null;
+    try {
+      opened = openMediaLightbox(link);
+    } catch {
+      /* 事务回滚：不 preventDefault，浏览器按 <a target="_blank"> 继续跳转 */
+      if (activeLightbox) bestEffort(() => activeLightbox.close());
+      return;
+    }
+    if (!opened) return;
+    event.preventDefault();
+  });
 }
 
 function itemTitleText(item) {
@@ -1018,6 +1306,7 @@ export async function initTimeline() {
   initNavigation();
   initThemeToggle();
   initBackToTop();
+  initMediaLightbox();
   const list = document.querySelector("#list");
   const search = document.querySelector("#search");
   let activeCategory = categoryFromUrl();
@@ -1189,6 +1478,7 @@ export async function initCurated() {
   initNavigation();
   initThemeToggle();
   initBackToTop();
+  initMediaLightbox();
   const search = document.querySelector("#search");
   const list = document.querySelector("#list");
   const hotBox = document.querySelector("#hot-topics");
@@ -2097,6 +2387,9 @@ export async function initBookmarks() {
   initNavigation();
   initThemeToggle();
   initBackToTop();
+  /* 正常收藏快照不含 media_assets（bookmarkSnapshot 白名单），只有导入的快照
+     才可能带媒体——ADR-058 作用域里那条"仅导入快照命中"说的就是这里。 */
+  initMediaLightbox();
   const list = document.querySelector("#list");
   const meta = document.querySelector("#run-meta");
   const exportBtn = document.querySelector("#bookmark-export");

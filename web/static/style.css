@@ -1832,22 +1832,35 @@ button:disabled {
 
 /* .article-media* 规则随 ADR-054 一并移除：列表卡片不再渲染 RSS 正文图片。
    下面是 X 推文自带媒体的样式（新类名，不复用已移除的 .article-media*）。
-   取舍：可读优先——不做破坏性裁切（object-fit: contain），推文的图常常是
-   benchmark 图表或发布截图，裁坏等于白放；同时用 max-height 守住密度底线。
+
+   布局机制（ADR-058）：盒子**收缩包裹画面**，不是定宽格。宽高皆 auto 时画面尺寸
+   由内在比例在 max 约束下决定，所以 object-fit 根本不参与——letterbox 是被构造
+   消除的，不是靠调值消除的。改前是 grid + width:100% + object-fit:contain，实测
+   945x811 的图在 1072x210 的盒子里只画出 245x210，左右各留约 413px 灰底；改后
+   |rect宽高比 − natural宽高比| < 0.02 恒成立，<a> 盒 = 图 + 2px 边框。
+
+   取舍：可读优先——不做破坏性裁切。参照站 aihot 的多图规则是 aspect-ratio:16/9
+   两列 + object-fit:cover，用它的 CSS 复刻实测每格 208x235 竖格，1200x675 的横向
+   截图被裁成一条竖缝，故**显式不采用**；推文的图常是 benchmark 图表或发布截图，
+   裁坏等于白放。
+
    max-height 的取值是实测收敛来的，不是拍的：以 600x2400 的极端竖图、每卡 2 图
    在真实浏览器里量——260px 时桌面首屏完整卡片掉到 1（低于 >=2 的底线），
    收到 170px 后回到 2、单卡 295px（远低于 900px 视口）；窄屏 150px 同理。
-   改这些数值前请照同样方法重量一次。 */
-.x-media {
-  display: grid;
-  gap: 6px;
-  width: 100%;
-  max-width: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
+   ADR-058 未改这些数值，但改了盒模型，故另做了同页 before/after 对照：40 卡
+   （17 带媒体）高度 min/中位/max 188/212/432 → 188/212/415，带媒体卡片高度合计
+   5235 → 4957px。改这些数值前请照同样方法重量一次。
 
-.x-media-count-1 {
-  grid-template-columns: minmax(0, 1fr);
+   max-width 240px 取自参照站 .x-tweet-media-single；**未取**它的 max-height 320px
+   ——320 高于上面那条实测判死的 260。 */
+.x-media {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 6px;
+  width: auto;
+  max-width: 100%;
 }
 
 /* onerror 隐藏的是 <a>，容器本身还在；而 .item-row 是 column flex + gap:8px，
@@ -1859,31 +1872,144 @@ button:disabled {
 
 .x-media-link {
   display: block;
+  width: auto;
+  max-width: 100%;
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--border);
-  background: var(--panel-soft);
+  background: transparent;
   cursor: zoom-in;
+  line-height: 0;
 }
 
 .x-media-img {
   display: block;
-  width: 100%;
+  width: auto;
+  height: auto;
+  max-width: 207px;
   max-height: 170px;
-  object-fit: contain;
 }
 
 .x-media-count-1 .x-media-img {
+  max-width: 240px;
   max-height: 210px;
 }
 
 @media (max-width: 960px) {
   .x-media-img {
+    max-width: 100%;
     max-height: 150px;
   }
+  /* 半宽约束落在 <a> 上，不落在 <img> 上：百分比需要一个**确定**的分母，而 <a>
+     的宽度恰恰是由 <img> 反推出来的。写成 .x-media-img{max-width:calc(50% - 3px)}
+     会让分母变成 <a> 自己的内容宽，实测把 130px 的图装进 269px 的盒子——本次要
+     消除的灰底空档原样回来，只是搬到了移动端。.x-media 有确定宽度，故约束挂这里。 */
+  .x-media:not(.x-media-count-1) .x-media-link {
+    max-width: calc(50% - 3px);
+  }
+  /* max-width 必须在这条里显式放开：桌面那条 .x-media-count-1 .x-media-img
+     是 (0,2,0)，压得过本 media query 里 (0,1,0) 的 .x-media-img，只写 max-height
+     的话单图在窄屏仍被 240px 卡住（实测 390 视口下内容列 296px，图只画到 240）。 */
   .x-media-count-1 .x-media-img {
+    max-width: 100%;
     max-height: 190px;
   }
+}
+
+/* ---------- media lightbox (ADR-058) ---------- */
+
+/* 缩略图小是有意的；能接受它的前提是「一键看全」。遮罩不随主题变色——它替代的是
+   看原图这件事，浅色底会削弱对比。 */
+.media-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.92);
+  cursor: zoom-out;
+  overscroll-behavior: contain;
+  animation: media-lightbox-in 0.15s ease-out;
+}
+
+@keyframes media-lightbox-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-lightbox {
+    animation: none;
+  }
+}
+
+.media-lightbox-img {
+  width: auto;
+  height: auto;
+  max-width: min(92vw, 100%);
+  max-height: 92vh;
+  border-radius: 4px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.media-lightbox-close,
+.media-lightbox-nav {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.media-lightbox-close:hover,
+.media-lightbox-nav:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.media-lightbox-close:focus-visible,
+.media-lightbox-nav:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.media-lightbox-close {
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  right: calc(env(safe-area-inset-right, 0px) + 16px);
+  width: 44px;
+  height: 44px;
+}
+
+.media-lightbox-nav {
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translateY(-50%);
+}
+
+.media-lightbox-prev { left: 16px; }
+.media-lightbox-next { right: 16px; }
+
+.media-lightbox-counter {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  transform: translateX(-50%);
 }
 
 /* ---------- states ---------- */
