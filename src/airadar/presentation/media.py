@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from html import unescape
 from html.parser import HTMLParser
@@ -7,7 +8,9 @@ from urllib.parse import quote, urlparse
 
 CURATED_MEDIA_FULL_RANK_LIMIT = 12
 CURATED_MEDIA_PREVIEW_RANK_LIMIT = 13
-PROXY_IMAGE_HOST_SUFFIXES = ("qpic.cn",)
+# qpic.cn: hotlink-blocked but reachable from the serve host.
+# pbs.twimg.com: reachable only through the egress proxy (see routes/media.py).
+PROXY_IMAGE_HOST_SUFFIXES = ("qpic.cn", "pbs.twimg.com")
 _LAZY_SRC_ATTRS = ("data-src", "data-original", "data-lazy-src")
 
 
@@ -35,8 +38,19 @@ def _safe_media_url(value: str) -> str | None:
     return value
 
 
-def image_host_needs_proxy(netloc: str) -> bool:
-    host = netloc.lower().split(":", 1)[0]
+def image_url_needs_proxy(url: str) -> bool:
+    """Whether this URL's host is one we proxy — and the SSRF allowlist.
+
+    Takes the whole URL and parses it here on purpose. The obvious-looking
+    `netloc.split(":", 1)[0]` is wrong: netloc is `[userinfo@]host[:port]`, so
+    for `http://mmbiz.qpic.cn:80@169.254.169.254/` it yields `mmbiz.qpic.cn`
+    while the request actually goes to `169.254.169.254`. Checking a different
+    string than the one connected to is exactly how an allowlist becomes a
+    blind SSRF, so callers no longer get to choose which part they pass.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return False
     return any(host == suffix or host.endswith("." + suffix) for suffix in PROXY_IMAGE_HOST_SUFFIXES)
 
 
@@ -44,8 +58,7 @@ def proxy_image_url(url: str | None) -> str | None:
     """Route hotlink-blocked image hosts through the same-origin /img proxy."""
     if not url:
         return url
-    parsed = urlparse(url)
-    if parsed.scheme in {"http", "https"} and image_host_needs_proxy(parsed.netloc):
+    if urlparse(url).scheme in {"http", "https"} and image_url_needs_proxy(url):
         return "/img?url=" + quote(url, safe="")
     return url
 
@@ -68,8 +81,42 @@ def _media_assets_from_html(value: str | None) -> list[dict[str, str]]:
     return assets
 
 
+def _x_media_assets(row: sqlite3.Row) -> list[dict[str, str]]:
+    """Media a tweet carries, in the upstream media_keys order.
+
+    Stored by the fetcher under ``extra_json.x_media``; ``content_html`` stays
+    None for X, so the RSS HTML parser below never sees these.
+    """
+    keys = row.keys()
+    if "extra_json" not in keys or not row["extra_json"]:
+        return []
+    try:
+        extra = json.loads(row["extra_json"])
+    except (TypeError, ValueError):
+        return []
+    media = extra.get("x_media") if isinstance(extra, dict) else None
+    if not isinstance(media, list):
+        return []
+    assets: list[dict[str, str]] = []
+    for entry in media:
+        if not isinstance(entry, dict):
+            continue
+        raw = entry.get("url")
+        url = _safe_media_url(raw) if isinstance(raw, str) else ""
+        proxied = proxy_image_url(url) if url else None
+        if proxied:
+            assets.append({"type": "image", "url": proxied})
+    return assets
+
+
 def _visible_media_assets(row: sqlite3.Row) -> list[dict[str, str]]:
-    assets = _media_assets_from_html(row["content_html"] if "content_html" in row.keys() else None)
+    keys = row.keys()
+    if "source_kind" in keys and row["source_kind"] == "x":
+        # A tweet's images are the tweet's content, so they are not subject to
+        # the rank-based trimming below — that policy exists for RSS body images
+        # scraped from articles (ADR-054), which X posts never have.
+        return _x_media_assets(row)
+    assets = _media_assets_from_html(row["content_html"] if "content_html" in keys else None)
     if not assets:
         return []
     if "rank" not in row.keys() or row["rank"] is None:

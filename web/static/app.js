@@ -380,8 +380,21 @@ function itemHref(item) {
   return url.split("#", 1)[0] || url;
 }
 
-/* 列表卡片不渲染正文抓取的图片，见 ADR-054。`media_assets` 仍在 API 响应里，
-   /img 代理与 source-avatar 路径不受影响。SSR 侧的对应改动在 _prepaint_list.html。 */
+/* RSS 正文抓取的图片不渲染（ADR-054）。X 推文自带的媒体渲染——推文的图就是推文
+   内容本身，不是从文章里抄来的配图。判据是 source_kind 而非"有没有 media_assets"，
+   因为 RSS 条目同样带 media_assets。SSR 侧同形在 _prepaint_list.html。 */
+
+function xMedia(item) {
+  if (item.source_kind !== "x") return "";
+  const assets = Array.isArray(item.media_assets) ? item.media_assets.filter((a) => a?.url) : [];
+  if (!assets.length) return "";
+  const label = `打开大图：${itemTitleText(item) || "查看媒体"}`;
+  const images = assets.map((asset) => `
+    <a class="x-media-link" href="${esc(asset.url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
+      <img class="x-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.x-media-link').hidden=true">
+    </a>`).join("");
+  return `<div class="x-media x-media-count-${assets.length}">${images}</div>`;
+}
 
 function itemTitleText(item) {
   return item.title_zh || item.title || excerpt(item);
@@ -418,6 +431,7 @@ function itemCard(item, showScore, options = {}) {
     </div>
     ${title}
     <p class="summary">${esc(excerpt(item))}</p>
+    ${compact ? "" : xMedia(item)}
     ${options.showTags === false || mobileFeed ? "" : `<div class="tags">${badges(item)}</div>`}
     ${showRelated ? relatedDiscussions(item) : ""}
     ${reason ? '<hr class="timeline-divider">' : ""}

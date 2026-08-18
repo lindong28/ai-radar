@@ -897,3 +897,61 @@ def test_phase2a_css_uses_measured_badge_timeline_media_and_quote_values() -> No
     assert ".summary-body blockquote {" in css
     assert ".brand-logo-ai {\n  color: var(--accent-ink);" in css
     assert '.bookmark-btn[aria-pressed="true"] {\n  color: var(--accent-ink);' in css
+
+
+def test_x_media_renders_on_both_paths_and_only_for_x() -> None:
+    """X tweet media renders; RSS body images still do not (ADR-054)."""
+    js = _read("app.js")
+    prepaint = (TEMPLATES / "_prepaint_list.html").read_text(encoding="utf-8")
+
+    # The gate is source_kind, not "does it have media_assets" — RSS items carry
+    # media_assets too, and those must stay unrendered.
+    assert 'item.source_kind !== "x"' in js
+    assert "{% if item.x_media %}" in prepaint
+
+    # Same markup on both paths, or first paint and hydration disagree (ADR-055).
+    for markup in ('class="x-media-link"', 'class="x-media-img"', 'loading="lazy"'):
+        assert markup in js, markup
+        assert markup in prepaint, markup
+
+    # ADR-054 still holds: the removed RSS renderer has not come back.
+    assert "articleMedia" not in js
+    assert "article-media" not in js
+    assert "article-media" not in prepaint
+
+
+def test_x_media_styles_bound_height_without_cropping() -> None:
+    """Readability first (no destructive crop) with a density floor."""
+    css = _read("style.css")
+
+    rule = css.split(".x-media-img {", 1)[1].split("}", 1)[0]
+    # contain, not cover: a cropped benchmark chart is worse than a smaller one.
+    assert "object-fit: contain;" in rule
+    assert "cover" not in rule
+    # and a ceiling, so one image cannot push the card past the viewport.
+    assert "max-height:" in rule
+    # the old RSS media styles stay gone
+    assert ".article-media {" not in css
+    assert ".article-media-img" not in css
+
+
+def test_x_media_container_collapses_when_every_image_failed() -> None:
+    """No dead gap when the egress proxy is unreachable — the common failure.
+
+    .item-row is a column flex with gap:8px, so a zero-height .x-media is still
+    a flex item and still eats a gap: measured 87.7px (no media) vs 95.7px (all
+    images failed). The collapse rule and the onerror handler are two halves of
+    one mechanism — if onerror moved to hiding the <img>, the selector would
+    stop matching and the gap would come back silently, so assert they agree.
+    """
+    css = _read("style.css")
+    js = _read("app.js")
+    prepaint = (TEMPLATES / "_prepaint_list.html").read_text(encoding="utf-8")
+
+    assert ".x-media:not(:has(.x-media-link:not([hidden])))" in css
+    collapse = css.split(".x-media:not(:has(.x-media-link:not([hidden])))", 1)[1].split("}", 1)[0]
+    assert "display: none;" in collapse
+
+    # The half that produces the [hidden] the selector keys off.
+    for markup in (js, prepaint):
+        assert "this.closest('.x-media-link').hidden=true" in markup

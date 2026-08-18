@@ -40,7 +40,16 @@
               <a class="item-title" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
             {% endif %}
             <p class="summary">{{ item.summary }}</p>
-            {# 列表卡片不渲染正文图片，见 ADR-054；CSR 侧同改在 app.js #}
+            {# RSS 正文图不渲染（ADR-054）；X 推文自带媒体渲染，CSR 侧同形在 app.js #}
+            {% if item.x_media %}
+              <div class="x-media x-media-count-{{ item.x_media | length }}">
+                {% for asset in item.x_media %}
+                  <a class="x-media-link" href="{{ asset.url }}" target="_blank" rel="noopener noreferrer" aria-label="打开大图：{{ item.title or '查看媒体' }}">
+                    <img class="x-media-img" src="{{ asset.url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.x-media-link').hidden=true">
+                  </a>
+                {% endfor %}
+              </div>
+            {% endif %}
             {% if show_tags %}
               <div class="tags">
                 {% for tag in item.tags %}

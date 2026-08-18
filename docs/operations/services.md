@@ -83,7 +83,64 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 | alert 发送器 | `~/.local/bin/im-notify` + page 的 `FEISHU_GENERAL_ALERT_WEBHOOK` + notice 的 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`；两个 webhook 任缺一个都拒绝 alert 安装 | `test -x "$HOME/.local/bin/im-notify"` 后运行下文无发送 preflight；已安装时检查 plist 同时有两个 key |
 | Playwright Chromium | 微信原文抓取与默认 `performance-probe` | 部署前显式运行 `uv run playwright install chromium`；`install.sh` 不自动下载或校验 |
 | Cloudflare tunnel | `deploy/cloudflared/config.yml` | `test -f deploy/cloudflared/config.yml` |
+| 图片出口代理（新加坡） | serve 主机 `.env` 里的 `AI_RADAR_IMG_PROXY_URL`，指向新加坡主机上的 tinyproxy（见下节） | 走下节「诊断顺序」的三步，**不要**只看公网 `/img` 的状态码——它对每种失败都回 404，读数区分不了故障层 |
 | Cloudflare Cache Rule | zone `aiplanet.live` 上的 `AI Radar short public pagination TTL`（见下节） | 当前生产旁路不适用；将来重新经 Cloudflare 代理后，同一 public 分页 URL 第二次请求应为 `CF-Cache-Status: HIT` |
+
+## 图片出口代理（新加坡，repo 外常驻服务）
+
+上海 serve 主机**到 `pbs.twimg.com` 的连接被上游阻断**——判别性证据：在该主机上 tcpdump，对 loopback 的对照流量捕获 45 个包（证明抓包本身工作），对 twimg 的连接捕获 0 个包，即丢弃发生在网卡之上游，不是本机 iptables 或 DNS。新加坡主机 `tencent-webserver-sg` 同一 URL 返回 200 / 41ms。故 X 推文媒体经该主机上的 tinyproxy 转发（[ADR-057](../adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md)）。
+
+它不由本仓的 `install.sh` / `status.sh` 管理，改动只在该主机上做。2026-08-18 读回的生效配置：
+
+| 项 | 值 | 为什么是这个值 |
+|---|---|---|
+| 版本 / 服务 | tinyproxy 1.11.1，systemd `active` + `enabled`，`Restart=on-failure` | `Restart` 由 drop-in 显式设置——**默认是 `no`**，实测 `kill -9` 后服务停在 `failed` 不自愈；设置后验证 PID 979054 → 979086 自动重启 |
+| 端口 / 监听 | `Port 39147`，`Listen 0.0.0.0` | 绑 `0.0.0.0` 是因为外层已有云安全组做入站限制；真正的边界在安全组，不在 bind 地址 |
+| 入站 ACL | `Allow 111.229.134.9`（上海 serve 主机）+ `Allow 127.0.0.1` | 与 BasicAuth 叠加，两道都过才放行 |
+| 认证 | `BasicAuth`，口令只存在于该机 `/etc/tinyproxy/.credpw`（600 root:root）与 serve 主机 `.env`（600） | 口令不进仓库、不进对话 |
+| 出站限制 | `ConnectPort 443` + `Filter` + `FilterDefaultDeny Yes` + `FilterType ere`，名单仅 `^pbs\.twimg\.com$` | 默认拒绝、逐条放行：即使凭据泄露，它也只能连这一个域名的 443 |
+| 云安全组 | 入站放行 源 `111.229.134.9/32` → TCP `39147` | **只能在拥有这两台主机的那个账号下添加**。这两台主机的实例元数据报 `AppId 1301555531`，而本仓运维手上的腾讯云 API 凭据属于 `AppId 1424748107`（`GetUserAppId` 读出 `Uin == OwnerUin`，是主账号凭据），后者在全部 19 个区域 `DescribeInstances` 合计 0 台且**无查询错误**——调用成功而处处为空，只与「该账号不拥有这些机器」相容，与「有机器但被削权」不相容。因此给这份凭据补 CAM 策略无用，换账号凭据或到控制台操作才行。（历史记录：早先据一条 `UnauthorizedOperation` 判为「凭据权限不足」，该错误码同时与账号不符、权限不足、参数错误相容，不足以支撑那个原因。另注意该 API 先校验参数、后校验 IAM，故参数不合法的探测无法用于判断权限。） |
+
+**已知风险（已接受）**：tinyproxy 1.11.1 存在未修补的 CVE-2026-31842。接受依据是暴露面已收窄到单 IP + 认证 + 仅 CONNECT 443 + 单域名白名单，且该主机不承载其他服务。上游发版后应跟进升级。
+
+**故障表现是静默的**：代理不可达时 `/img` 返回 404，前端 `onerror` 把图隐藏掉，页面表现为「所有 X 卡片都没有图」——不报错、不降级提示、监控无告警。
+
+**诊断顺序（`/img` 的 404 本身区分不了故障层）**。`/img` 对每一种失败都返回 404 是刻意的（见 ADR-057），代价是这个读数在「代理挂了」「图片本身被删了」「认证过期」几种情况下完全相同，所以**不要**从它开始判断。按下面从内到外走，每一步的读数只与一种原因相容：
+
+1. **代理主机上自验**（回环不经安全组，故安全组未开时也能跑）。以 root 执行：
+
+   ```bash
+   U=$(awk '/^BasicAuth/{print $2}' /etc/tinyproxy/tinyproxy.conf); P=$(cat /etc/tinyproxy/.credpw)
+   # 阳性：带认证 + 白名单域名 → 隧道建立（twimg 对裸根回 400，非 000 即通）
+   https_proxy="http://$U:$P@127.0.0.1:39147" curl -sS -o /dev/null -w '%{http_code}\n' https://pbs.twimg.com/
+   # 阴性 A：非白名单域名 → response 403（FilterDefaultDeny 在拦）
+   https_proxy="http://$U:$P@127.0.0.1:39147" curl -sv https://example.com/ 2>&1 >/dev/null | grep response
+   # 阴性 B：不带认证 → 407 Proxy Authentication Required
+   curl -sv -x http://127.0.0.1:39147 https://pbs.twimg.com/ 2>&1 >/dev/null | grep response
+   # 阴性 C：错口令 → 401（证明真在校验，而非接受任意口令）
+   curl -sv -x "http://$U:wrongpassword@127.0.0.1:39147" https://pbs.twimg.com/ 2>&1 >/dev/null | grep response
+   ```
+
+   2026-08-18 实测：400 / 403 / 407 / 401，四项符合预期。四项都对 → tinyproxy 本身没问题，往下走第 2 步。
+
+2. **从 serve 主机连代理**：
+
+   ```bash
+   printf 'proxy = "%s"\n' "$AI_RADAR_IMG_PROXY_URL" \
+     | curl -K - --connect-timeout 5 -sv https://pbs.twimg.com/ 2>&1 >/dev/null \
+     | sed -E 's/(Authorization: Basic ).*/\1<redacted>/' \
+     | grep -E 'Connected|refused|timed out|response [0-9]{3}'
+   ```
+
+   代理 URL 含 BasicAuth 凭据，此命令有意让它**既不进 argv、也不进 stdout**——两条独立的泄露路径，各堵一处：
+
+   - **不进 argv**：不要写成 `curl -x "$AI_RADAR_IMG_PROXY_URL"`——命令行参数对同机任何用户的 `ps`／进程监控可见。改为用 `printf`（shell 内建，不 fork，凭据不落任何进程的 argv）把 `proxy = "…"` 从 stdin 喂给 `curl -K -`（从 stdin 读配置）。实测：旧写法 argv 里是 `-x http://user:pass@…`，新写法 argv 只有 `curl -K - … https://pbs.twimg.com/`。
+   - **不进 stdout**：`curl -v` 会打印它**发出**的 `> Proxy-Authorization: Basic <base64(user:password)>`。`sed` 先把任何 `Authorization: Basic …` 打码再进 grep（即使日后有人加宽 grep 也不泄露）；grep **不要**含裸 `Proxy` token，它会连那行请求头一起放出——要判的 `401`/`403`/`407` 由 `response [0-9]{3}` 抓取（curl 对失败的 CONNECT 输出 `* CONNECT tunnel failed, response NNN`，实测覆盖三个码）。
+
+   连不上（`refused`/`timed out`）→ 查云安全组规则是否还在；`407`/`401` → `.env` 里的口令与该机 `/etc/tinyproxy/.credpw` 不一致。
+
+3. **公网入口**：`curl -s -o /dev/null -w '%{http_code}\n' 'https://news.aiplanet.live/img?url=<某条 X 条目当前实际引用的图片 URL>'`。**必须是 GET**——`/img` 只注册 GET，`curl -I` 发 HEAD 会得到 `405 Allow: GET`、根本走不到代理链路。前两步都正常而这里仍 404，先确认那个 URL 本身还活着（推文删除后图片即失效）——**不要拿一个写死在文档里的 URL 当探针**，它迟早会被删掉，届时这一步会稳定报 404 并把人指向代理。取当前 URL：
+   `sqlite3 data/radar.db "SELECT json_extract(extra_json,'\$.x_media[0].url') FROM items WHERE json_array_length(json_extract(extra_json,'\$.x_media'))>0 ORDER BY published_at DESC LIMIT 1"`
 
 ## Cloudflare Cache Rule（public 分页边缘缓存）
 

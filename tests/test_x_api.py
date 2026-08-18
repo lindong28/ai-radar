@@ -10,7 +10,14 @@ import pytest
 from airadar import db
 from airadar.fetcher import runner
 from airadar.fetcher.dedup import upsert_item
-from airadar.fetcher.x_api import X_MAX_RESULTS_PER_SOURCE, X_RECENT_LOOKBACK, XTimelinePage
+from airadar.fetcher.x_api import (
+    X_MAX_RESULTS_PER_SOURCE,
+    X_RECENT_LOOKBACK,
+    XTimelinePage,
+    _media_index,
+    _post_extra,
+    _usable_timeline_payload,
+)
 from airadar.sources.loader import SourceConfig, load_sources
 from airadar.sources.sync import sync_to_db
 from airadar.sources.x_state import X_RUNTIME_META_KEYS, validate_x_runtime_meta
@@ -186,7 +193,9 @@ def test_fetch_x_timeline_uses_one_bounded_cold_start_page_and_persists_cursor(m
         "start_time": "2026-08-12T13:40:00Z",
         "max_results": 5,
         "exclude": "retweets,replies",
-        "tweet.fields": "author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets",
+        "tweet.fields": "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets",
+        "expansions": "attachments.media_keys",
+        "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
     }
     assert result.items[0].source_id == "x_openai"
     assert result.items[0].url == "https://x.com/i/web/status/1234567890123456789"
@@ -199,6 +208,7 @@ def test_fetch_x_timeline_uses_one_bounded_cold_start_page_and_persists_cursor(m
         "x_post_id": "1234567890123456789",
         "x_author_id": "42",
         "x_username": "OpenAI",
+        "x_media": [],
         "lang": "en",
         "public_metrics": {"like_count": 7},
         "referenced_tweets": [{"type": "quoted", "id": "9"}],
@@ -248,7 +258,9 @@ def test_fetch_x_timeline_drains_one_saved_page_per_round_then_advances_since_id
         "pagination_token": "page-2",
         "max_results": 5,
         "exclude": "retweets,replies",
-        "tweet.fields": "author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets",
+        "tweet.fields": "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets",
+        "expansions": "attachments.media_keys",
+        "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
     }
     assert result.meta["x_since_id"] == "200"
     assert "x_pagination_token" not in result.meta
@@ -1085,3 +1097,182 @@ def test_aihot_x_sources_reach_public_inventory_without_internal_state(
     assert all(source["retrieval_entrypoint_url"].startswith("https://api.x.com/2/users/by/username/") for source in x_sources)
     assert all(not source["retrieval_entrypoint_url"].endswith("/tweets") for source in x_sources)
     assert all(source["public_landing_url"].startswith("https://x.com/") for source in x_sources)
+
+
+def _media_source() -> SourceConfig:
+    return SourceConfig(
+        slug="x_mediafixture",
+        name="X：Media Fixture",
+        url="https://api.x.com/2/users/by/username/mediafixture",
+        tier="T1.5",
+        enabled=True,
+        kind="x",
+        homepage_url="https://x.com/mediafixture",
+        icon_url="",
+        meta={"adapter": "x_api", "username": "mediafixture", "x_user_id": "42"},
+    )
+
+
+def _media_payload() -> dict:
+    """One page carrying every media shape X can return, plus a post with none."""
+    return {
+        "data": [
+            {  # photo + video, order deliberately video-first to pin ordering
+                "id": "900000000000000001",
+                "text": "chart plus clip",
+                "author_id": "42",
+                "created_at": "2026-08-18T01:00:00.000Z",
+                "attachments": {"media_keys": ["3_photo", "13_vid"]},
+            },
+            {  # animated_gif only
+                "id": "900000000000000002",
+                "text": "gif",
+                "author_id": "42",
+                "created_at": "2026-08-18T01:01:00.000Z",
+                "attachments": {"media_keys": ["16_gif"]},
+            },
+            {  # no attachments at all
+                "id": "900000000000000003",
+                "text": "text only",
+                "author_id": "42",
+                "created_at": "2026-08-18T01:02:00.000Z",
+            },
+        ],
+        "includes": {
+            "media": [
+                {"media_key": "3_photo", "type": "photo", "width": 1125, "height": 750,
+                 "url": "https://pbs.twimg.com/media/photo.jpg"},
+                {"media_key": "13_vid", "type": "video", "width": 1920, "height": 1080,
+                 "preview_image_url": "https://pbs.twimg.com/media/vidthumb.jpg"},
+                {"media_key": "16_gif", "type": "animated_gif",
+                 "preview_image_url": "https://pbs.twimg.com/media/gifthumb.jpg"},
+            ]
+        },
+        "meta": {"result_count": 3},
+    }
+
+
+def test_x_request_asks_for_media_expansions() -> None:
+    """Without the expansion the API never returns media at all."""
+    from airadar.fetcher.x_api import _request_cursor
+
+    params, _ = _request_cursor(_media_source(), datetime(2026, 8, 18, tzinfo=UTC))
+    assert params["expansions"] == "attachments.media_keys"
+    assert "media_key" in str(params["media.fields"])
+    assert "url" in str(params["media.fields"])
+    assert "preview_image_url" in str(params["media.fields"])
+    assert "attachments" in str(params["tweet.fields"])
+
+
+def test_x_media_is_typed_ordered_and_optional() -> None:
+    from airadar.fetcher.x_api import _media_index, _post_extra
+
+    payload = _media_payload()
+    index = _media_index(payload)
+    posts = payload["data"]
+
+    mixed = _post_extra(posts[0], "mediafixture", index)["x_media"]
+    # order follows attachments.media_keys, not includes.media
+    # sorted() would give ["13_vid", "3_photo"] — asserting the reverse pins real ordering
+    assert [m["media_key"] for m in mixed] == ["3_photo", "13_vid"]
+    # video has no still `url`; only preview_image_url is usable
+    assert mixed[0]["type"] == "photo"
+    assert mixed[0]["url"] == "https://pbs.twimg.com/media/photo.jpg"
+    assert mixed[0]["width"] == 1125
+    # video has no still `url`; only preview_image_url is usable
+    assert mixed[1]["type"] == "video"
+    assert mixed[1]["url"] == "https://pbs.twimg.com/media/vidthumb.jpg"
+
+    gif = _post_extra(posts[1], "mediafixture", index)["x_media"]
+    assert gif[0]["url"] == "https://pbs.twimg.com/media/gifthumb.jpg"
+
+    # a post without attachments carries no media key at all
+    assert _post_extra(posts[2], "mediafixture", index)["x_media"] == []  # present-and-empty marks "looked, none there" (F4)
+
+
+def test_x_media_index_is_per_page_and_survives_missing_includes() -> None:
+    """A page's includes must not leak into another page's posts."""
+    from airadar.fetcher.x_api import _media_index, _post_extra
+
+    page_one = _media_payload()
+    page_two = {"data": [dict(page_one["data"][0])], "meta": {"result_count": 1}}  # same post, no includes
+
+    assert _media_index(page_two) == {}
+    # The post declares media_keys but page two's index cannot resolve them.
+    # A key missing from includes is X's signal that the media is gone
+    # (deleted/protected) — terminal, not retryable. So this resolves to a
+    # final empty list, marking the post processed rather than re-querying it
+    # forever. The real index still resolves the same post to actual media, so
+    # this pair discriminates "resolved to nothing" from "resolved to media".
+    assert _post_extra(page_two["data"][0], "mediafixture", _media_index(page_two))["x_media"] == []
+    assert _post_extra(page_one["data"][0], "mediafixture", _media_index(page_one))["x_media"]
+
+
+def test_x_media_rejects_non_https_and_unknown_keys() -> None:
+    from airadar.fetcher.x_api import _post_extra
+
+    # Media resolution is terminal: whatever does not resolve to an https still
+    # is dropped and the post is marked done, never retried. A non-https photo
+    # and a video with no preview both drop; a key the index does not carry is
+    # X's signal that the media is gone (deleted/protected), which also drops.
+    index = {
+        "a": {"media_key": "a", "type": "photo", "url": "http://pbs.twimg.com/insecure.jpg"},
+        "b": {"media_key": "b", "type": "video"},  # no preview_image_url
+        "ok": {"media_key": "ok", "type": "photo", "url": "https://pbs.twimg.com/media/ok.jpg"},
+    }
+    # all keys unusable → marked done with an empty list, not left to retry
+    all_bad = {"id": "1", "author_id": "42", "attachments": {"media_keys": ["a", "b", "gone"]}}
+    assert _post_extra(all_bad, "mediafixture", index)["x_media"] == []
+    # the crucial one: a post with one good and one gone image still shows the
+    # good image and is done — a permanent miss must not withhold the rest.
+    partial = {"id": "2", "author_id": "42", "attachments": {"media_keys": ["ok", "gone"]}}
+    urls = [m["url"] for m in _post_extra(partial, "mediafixture", index)["x_media"]]
+    assert urls == ["https://pbs.twimg.com/media/ok.jpg"]
+
+
+def test_partial_success_with_errors_still_ingests_the_valid_posts() -> None:
+    """X documents 200 + `data` + `errors` as partial success, not failure.
+
+    Rejecting the whole page became a live hazard with the media expansion: one
+    deleted image among the newest five posts would fail that source every
+    round forever, because the checkpoint never advances past it.
+    """
+    payload = {
+        "data": [{"id": "1", "text": "still valid", "created_at": "2026-08-18T00:00:00.000Z"}],
+        "meta": {"result_count": 1},
+        "errors": [{"title": "Not Found Error", "resource_type": "media",
+                    "detail": "Could not find media with keys: [3_gone]"}],
+    }
+    assert _usable_timeline_payload(payload) is True
+
+
+def test_errors_without_usable_data_is_still_fatal() -> None:
+    """Negative control: a genuine error page must not be read as success.
+
+    Empty `data` with errors is the dangerous one: `data` is a list, so a
+    laxer "is it a list?" check would accept it and advance the time checkpoint
+    past a window that returned no posts, permanently skipping whatever it held.
+    """
+    assert _usable_timeline_payload({"errors": [{"title": "Unauthorized"}]}) is False
+    assert _usable_timeline_payload({"errors": [{"title": "x"}], "data": "not-a-list"}) is False
+    assert _usable_timeline_payload({"errors": [{"title": "x"}], "data": []}) is False
+    # and a truly empty window (no errors) is still fine — must not over-reject
+    assert _usable_timeline_payload({"data": [], "meta": {"result_count": 0}}) is True
+
+
+def test_media_aware_fetch_marks_text_only_posts_as_processed() -> None:
+    """Absent `x_media` means "fetched before media support" — nothing else.
+
+    If a media-aware fetch left text-only posts unmarked, they would stay
+    candidates forever and every backfill run would pay X to look them up again.
+    """
+    index = _media_index({"includes": {"media": [
+        {"media_key": "3_a", "type": "photo", "url": "https://pbs.twimg.com/media/a.jpg"}]}})
+    text_only = _post_extra({"id": "1", "author_id": "9"}, "acct", media_index=index)
+    with_media = _post_extra({"id": "2", "author_id": "9",
+                              "attachments": {"media_keys": ["3_a"]}}, "acct", media_index=index)
+    assert text_only["x_media"] == []          # present and empty: "looked, none there"
+    assert len(with_media["x_media"]) == 1
+    # And the pre-media path (no expansion requested) still leaves no marker,
+    # so genuinely un-backfilled rows stay candidates.
+    assert "x_media" not in _post_extra({"id": "3", "author_id": "9"}, "acct")

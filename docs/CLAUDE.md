@@ -139,6 +139,7 @@
 | [054-stop-rendering-article-images-in-list-cards.md](adr/054-stop-rendering-article-images-in-list-cards.md) | 列表卡片不再渲染正文抓取的图片 |
 | [055-default-new-visitors-to-system-theme.md](adr/055-default-new-visitors-to-system-theme.md) | 新访客默认主题改为跟随系统 |
 | [056-label-the-score-instead-of-showing-a-bare-number.md](adr/056-label-the-score-instead-of-showing-a-bare-number.md) | 评分显示语义标签，且不写死分母 |
+| [057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md](adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md) | X 推文媒体经新加坡出口代理取回，RSS 正文图仍不展示 |
 
 ### docs/experiences/ [Agent]
 

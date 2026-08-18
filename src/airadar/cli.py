@@ -23,6 +23,7 @@ from .admin.alerts import (
 from .admin.cost_audit import run_cost_audit
 from .admin.cost_report import build_cost_report, deliver_cost_report, format_cost_report
 from .admin.metrics import SHANGHAI_TZ
+from .admin.x_media_backfill import backfill_x_media
 from .curator.precompute import (
     DEFAULT_KEEP_DAYS,
     RetentionStats,
@@ -896,6 +897,14 @@ def _admin(args: argparse.Namespace) -> int:
                 for row in rows:
                     print(f"{row['id']}\t{row['tier']}\t{row['enabled']}\t{row['url']}")
                 return 0
+    if args.admin_command == "x-media" and args.x_media_command == "backfill":
+        with db.get_conn(args.db_path) as conn:
+            backfill_receipt = backfill_x_media(conn, limit=args.limit, dry_run=args.dry_run).as_dict()
+        print(json.dumps(backfill_receipt, ensure_ascii=False, sort_keys=True))
+        # Non-zero when the receipt does not reconcile: requested must equal
+        # what came back plus what we explicitly could not resolve.
+        return 0 if backfill_receipt["reconciled"] else 1
+
     if args.admin_command == "wechat-avatar" and args.wechat_avatar_command == "refresh":
         with db.get_conn(args.db_path) as conn:
             avatar_url = refresh_wechat_avatar(conn, args.account)
@@ -1868,6 +1877,14 @@ def build_parser() -> argparse.ArgumentParser:
     wechat_avatar_refresh = wechat_avatar_subparsers.add_parser("refresh")
     wechat_avatar_refresh.add_argument("--account", required=True)
     wechat_avatar_refresh.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
+    x_media_parser = admin_subparsers.add_parser("x-media")
+    x_media_subparsers = x_media_parser.add_subparsers(dest="x_media_command", required=True)
+    x_media_backfill_parser = x_media_subparsers.add_parser("backfill")
+    x_media_backfill_parser.add_argument("--limit", type=_positive_int, default=None,
+                                         help="cap how many items this run looks up (X bills per returned post)")
+    x_media_backfill_parser.add_argument("--dry-run", action="store_true",
+                                         help="report the candidate count without issuing any request")
+    x_media_backfill_parser.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
     wechat_discovery_parser = admin_subparsers.add_parser("wechat-discovery")
     wechat_discovery_subparsers = wechat_discovery_parser.add_subparsers(
         dest="wechat_discovery_command", required=True

@@ -1830,7 +1830,61 @@ button:disabled {
   font-weight: 600;
 }
 
-/* .article-media* 规则随 ADR-054 一并移除：列表卡片不再渲染正文图片 */
+/* .article-media* 规则随 ADR-054 一并移除：列表卡片不再渲染 RSS 正文图片。
+   下面是 X 推文自带媒体的样式（新类名，不复用已移除的 .article-media*）。
+   取舍：可读优先——不做破坏性裁切（object-fit: contain），推文的图常常是
+   benchmark 图表或发布截图，裁坏等于白放；同时用 max-height 守住密度底线。
+   max-height 的取值是实测收敛来的，不是拍的：以 600x2400 的极端竖图、每卡 2 图
+   在真实浏览器里量——260px 时桌面首屏完整卡片掉到 1（低于 >=2 的底线），
+   收到 170px 后回到 2、单卡 295px（远低于 900px 视口）；窄屏 150px 同理。
+   改这些数值前请照同样方法重量一次。 */
+.x-media {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.x-media-count-1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* onerror 隐藏的是 <a>，容器本身还在；而 .item-row 是 column flex + gap:8px，
+   零高度的容器仍算一个 flex item，照样吃掉一个 gap。图片全失败时（代理不可
+   达即是此状态）卡片会比无媒体的卡片高 8px——实测差值 87.7 → 95.7。 */
+.x-media:not(:has(.x-media-link:not([hidden]))) {
+  display: none;
+}
+
+.x-media-link {
+  display: block;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  cursor: zoom-in;
+}
+
+.x-media-img {
+  display: block;
+  width: 100%;
+  max-height: 170px;
+  object-fit: contain;
+}
+
+.x-media-count-1 .x-media-img {
+  max-height: 210px;
+}
+
+@media (max-width: 960px) {
+  .x-media-img {
+    max-height: 150px;
+  }
+  .x-media-count-1 .x-media-img {
+    max-height: 190px;
+  }
+}
 
 /* ---------- states ---------- */
 

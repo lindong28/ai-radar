@@ -14,7 +14,9 @@ from .dedup import FetchedItem
 X_API_BASE_URL = "https://api.x.com"
 X_RECENT_LOOKBACK = timedelta(minutes=20)
 X_MAX_RESULTS_PER_SOURCE = 5
-X_TWEET_FIELDS = "author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets"
+X_TWEET_FIELDS = "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets"
+X_EXPANSIONS = "attachments.media_keys"
+X_MEDIA_FIELDS = "media_key,type,url,preview_image_url,width,height,alt_text"
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,87 @@ def _post_text(post: dict[str, Any]) -> str:
     return str(post.get("text") or "").strip()
 
 
-def _post_extra(post: dict[str, Any], username: str) -> dict[str, Any]:
+def _media_index(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Build media_key -> media object from one page's ``includes.media``.
+
+    The index is per page: X returns a fresh ``includes`` block with every
+    response, so reusing a previous page's map would attribute the wrong
+    media to a post.
+    """
+    includes = payload.get("includes")
+    if not isinstance(includes, dict):
+        return {}
+    media = includes.get("media")
+    if not isinstance(media, list):
+        return {}
+    return {
+        str(entry["media_key"]): entry
+        for entry in media
+        if isinstance(entry, dict) and entry.get("media_key")
+    }
+
+
+def _media_still_url(entry: dict[str, Any]) -> str | None:
+    """Still-image URL for one media object, or None when it has none.
+
+    ``photo`` carries ``url``; ``video`` and ``animated_gif`` carry only
+    ``preview_image_url`` (X exposes no still ``url`` for them, just the mp4
+    variants we deliberately do not use).
+    """
+    kind = str(entry.get("type") or "")
+    url = entry.get("url") if kind == "photo" else entry.get("preview_image_url")
+    return str(url) if isinstance(url, str) and url.startswith("https://") else None
+
+
+def _post_media(post: dict[str, Any], media_index: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Still images for one post, in upstream ``media_keys`` order.
+
+    Resolution is terminal: a key that does not resolve to a still contributes
+    nothing and is not retried. Two rounds of trying to make "unresolved" mean
+    "retry later" failed for the same reason — neither the index nor X's error
+    payload distinguishes a transient miss from a permanent one:
+
+    * a key missing from ``includes.media`` is X's documented signal that the
+      media was deleted / is protected / is not authorized — permanent, not a
+      transient expansion hiccup (there is no documented transient-missing
+      shape);
+    * a key present but yielding no https still (a video with only an mp4, or a
+      non-https url) is likewise permanent.
+
+    Treating either as "incomplete, retry" would re-query every such post on
+    every backfill run forever *and* withhold the post's other, perfectly good
+    images. So we emit whatever resolved and treat the post as done; a wholly
+    unavailable page is already caught upstream by ``_usable_timeline_payload``
+    and ``raise_for_status``.
+    """
+    attachments = post.get("attachments")
+    if not isinstance(attachments, dict):
+        return []
+    keys = attachments.get("media_keys")
+    if not isinstance(keys, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for key in keys:
+        entry = media_index.get(str(key))
+        if not entry:
+            continue
+        url = _media_still_url(entry)
+        if not url:
+            continue
+        item: dict[str, Any] = {"media_key": str(key), "type": str(entry.get("type") or ""), "url": url}
+        for optional in ("width", "height", "alt_text"):
+            value = entry.get(optional)
+            if value not in (None, "", [], {}):
+                item[optional] = value
+        out.append(item)
+    return out
+
+
+def _post_extra(
+    post: dict[str, Any],
+    username: str,
+    media_index: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     extra: dict[str, Any] = {
         "x_post_id": str(post["id"]),
         "x_author_id": str(post.get("author_id") or ""),
@@ -44,7 +126,35 @@ def _post_extra(post: dict[str, Any], username: str) -> dict[str, Any]:
         value = post.get(key)
         if value not in (None, "", [], {}):
             extra[key] = value
+    if media_index is not None:
+        # Once the request asked for media, always record the result — the
+        # resolved stills, or [] for a post with none. Resolution is terminal
+        # (see _post_media), so this marks the post processed and it is not
+        # looked up again on every later backfill run.
+        extra["x_media"] = _post_media(post, media_index)
     return extra
+
+
+def _usable_timeline_payload(payload: dict[str, Any]) -> bool:
+    """Whether a 200 response carries posts we can ingest.
+
+    X documents HTTP 200 with both ``data`` and ``errors`` as a *partial*
+    success: some expanded resource was unavailable while the posts themselves
+    are valid. Rejecting the whole page was tolerable before media expansions —
+    with them, a single deleted image inside a source's newest five posts would
+    fail that source on every round forever, because the checkpoint can only
+    advance through a page we accept.
+
+    https://docs.x.com/x-api/fundamentals/response-codes-and-errors
+    """
+    if not payload.get("errors"):
+        return True
+    # Partial success means the posts are *there* despite an errored expansion.
+    # `data: []` with errors is not partial success — the error covered the
+    # whole window. Accepting it would advance the time checkpoint past a
+    # window that returned no posts, permanently skipping whatever it held.
+    data = payload.get("data")
+    return isinstance(data, list) and len(data) > 0
 
 
 def _post_high_water(posts: list[dict[str, Any]]) -> str | None:
@@ -58,6 +168,8 @@ def _request_cursor(source: SourceConfig, fetched_at: datetime) -> tuple[dict[st
         "max_results": X_MAX_RESULTS_PER_SOURCE,
         "exclude": "retweets,replies",
         "tweet.fields": X_TWEET_FIELDS,
+        "expansions": X_EXPANSIONS,
+        "media.fields": X_MEDIA_FIELDS,
     }
     pagination_token = str(source.meta.get("x_pagination_token") or "") or None
     since_id = str(source.meta.get("x_since_id") or "") or None
@@ -223,11 +335,14 @@ def fetch_x_timeline(
     )
     response.raise_for_status()
     payload = response.json()
-    if not isinstance(payload, dict) or payload.get("errors"):
+    if not isinstance(payload, dict):
+        raise ValueError(f"invalid X timeline response for {source.slug}: payload is not an object")
+    if not _usable_timeline_payload(payload):
         raise ValueError(f"invalid X timeline response for {source.slug}: error payload")
     response_meta = payload.get("meta")
     if not isinstance(response_meta, dict):
         raise ValueError(f"invalid X timeline response for {source.slug}: meta is missing")
+    media_index = _media_index(payload)
     posts = payload.get("data")
     if posts is None and response_meta.get("result_count") == 0:
         posts = []
@@ -278,7 +393,7 @@ def fetch_x_timeline(
                 fetched_at=_utc_timestamp(fetched_at),
                 content_text=text,
                 content_html=None,
-                extra=_post_extra(raw_post, username),
+                extra=_post_extra(raw_post, username, media_index),
             )
         )
     return XTimelinePage(

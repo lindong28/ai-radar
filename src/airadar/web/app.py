@@ -349,8 +349,15 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
         tags = raw_item.get("enriched_tags") or raw_item.get("topic_tags") or []
         if not isinstance(tags, list) or not tags:
             tags = ["社交" if source_kind == "x" else "AI"]
-        # media_assets 不再进 prepaint view model：列表模板已不渲染正文图片（ADR-054）。
-        # API 侧的投影权威在 presentation/summary.py，不受此处影响。
+        # RSS 正文抓取图仍然不进 view model（ADR-054）；X 推文自带的媒体是推文内容
+        # 本身，按 source_kind 放行。投影权威在 presentation/summary.py。
+        x_media = []
+        if source_kind == "x":
+            x_media = [
+                {"url": str(asset["url"])}
+                for asset in (raw_item.get("media_assets") or [])
+                if isinstance(asset, dict) and asset.get("url")
+            ]
         related = raw_item.get("related_discussions") or []
         related_discussions = (
             [entry for entry in related if isinstance(entry, dict)]
@@ -382,6 +389,7 @@ def _prepaint_items(items: object, *, timeline_page: bool) -> list[dict[str, obj
                 ),
                 "summary": summary,
                 "tags": [str(tag).lstrip("#") for tag in tags[:4]],
+                "x_media": x_media,
                 "related_discussions": related_discussions,
                 "score": score,
                 "score_tier": _score_tier(score or 0),

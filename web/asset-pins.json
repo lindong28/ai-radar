@@ -1,10 +1,10 @@
 {
   "app.js": {
-    "sha256": "51a3bb6904a24e48d2df500994f9f28b31f0be8dbc81009a6085af61cf686483",
-    "version": "20260817-aihot-51a3bb69"
+    "sha256": "352538f6eda7e00851080a16bcb919dc8fee5ba58072775e46233f3f1043c16b",
+    "version": "20260817-aihot-352538f6"
   },
   "style.css": {
-    "sha256": "0b2e75407a971346414b63cde3a3362cb234f78cc96166b77c9c64b568fb22fc",
-    "version": "20260817-aihot-0b2e7540"
+    "sha256": "9eb8e3760f6331b2addada731f1f9bb613b42eff3ef2764120bec6f5f3c56bb1",
+    "version": "20260817-aihot-9eb8e376"
   }
 }
