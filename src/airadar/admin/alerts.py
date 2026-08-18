@@ -32,7 +32,7 @@ from .cost_report import (
 from .metrics import SHANGHAI_TZ, _parse_dt, collect_metrics
 from .thresholds import ALERT_THRESHOLDS
 
-RULESET = ("A1", "A2", "A3", "A4", "A5", "A6")
+RULESET = ("A1", "A2", "A3", "A4", "A5", "A6", "A7")
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
 DEFAULT_EVENT_PATH = db.PROJECT_ROOT / "data" / "alert-events.jsonl"
 COOLDOWN = timedelta(minutes=30)
@@ -119,6 +119,16 @@ class AlertSignals:
     a6_pricing_freshness: str = "unknown"
     a6_metering_complete: bool = True
     a6_metering_failure_count: int = 0
+    # A7: per-source silence. (source_id, display name, hours silent, threshold
+    # used). Rolled up into one rule result — a shared upstream failure takes
+    # every source down at once, and one page per source is exactly the fatigue
+    # that gets an alert muted.
+    silent_sources: list[tuple[str, str, float, float]] = field(default_factory=list)
+    # Sources whose own history is too sparse to say whether silence is
+    # anomalous. Reported rather than silently passed: an unevaluated source
+    # looks identical to a healthy one in the rule's output otherwise.
+    unevaluable_sources: int = 0
+    evaluated_sources: int = 0
 
 
 @dataclass(frozen=True)
@@ -291,6 +301,21 @@ def evaluate_rules(
         if signals.hours_since_successful_interpretation is None
         else f"已 {signals.hours_since_successful_interpretation:.1f} 小时无成功解读"
     )
+    a7_firing = bool(signals.silent_sources)
+    a7_named = sorted(signals.silent_sources, key=lambda row: -row[2])
+    a7_detail = (
+        "；".join(
+            f"{name} 静默 {hours:.1f}h（阈值 {limit:.0f}h）"
+            for _sid, name, hours, limit in a7_named[:5]
+        )
+        + (f"；另有 {len(a7_named) - 5} 个源" if len(a7_named) > 5 else "")
+        if a7_firing
+        else (
+            f"{signals.evaluated_sources} 个源均在各自节奏内"
+            + (f"，{signals.unevaluable_sources} 个源历史过稀无法评估" if signals.unevaluable_sources else "")
+        )
+    )
+
     a6_floor = _float_threshold(a6, "daily_floor_cny", 20.0)
     a6_multiplier = _float_threshold(a6, "spike_multiplier", 3.0)
     a6_lower_bound_evaluable = bool(
@@ -488,6 +513,36 @@ def evaluate_rules(
                 "in_progress"
                 if signals.a6_measurement_in_progress
                 else ("degraded" if a6_degraded else "scope_limited")
+            ),
+        ),
+        AlertRuleResult(
+            rule_id="A7",
+            title="来源静默",
+            firing=a7_firing,
+            detail=a7_detail,
+            action=(
+                "按源逐个核对：先看 logs/pipeline-*.log 里该 source_id 的 OK/FAIL 行——"
+                "整批同时静默通常是出网链路（核对 pipeline 日志开头的 egress proxy 行），"
+                "单源静默则查该源站点或其上游订阅服务。"
+            ),
+            values={
+                "silent_sources": [
+                    {"source_id": sid, "name": name, "hours": hours, "threshold_hours": limit}
+                    for sid, name, hours, limit in a7_named
+                ],
+                "silent_count": len(a7_named),
+                "evaluated_sources": signals.evaluated_sources,
+                "unevaluable_sources": signals.unevaluable_sources,
+            },
+            severity=PAGE_SEVERITY,
+            impact=(
+                f"{len(a7_named)} 个来源已停止产出，站点上这些来源的内容正在变旧"
+                if a7_firing
+                else ""
+            ),
+            urgency="是——需立即核查" if a7_firing else "",
+            evaluation_state=(
+                "scope_limited" if signals.unevaluable_sources and not a7_firing else "healthy"
             ),
         ),
     ]
@@ -1895,6 +1950,75 @@ def _recent_upstream_stats(db_path: str | Path | None, since: datetime) -> tuple
     return total, upstream / total if total else 0.0, schema / total if total else 0.0
 
 
+def _silent_source_signal(
+    db_path: str | Path | None,
+    current: datetime,
+    *,
+    floor_hours: float = 6.0,
+    lookback_days: int = 30,
+    min_history: int = 5,
+) -> tuple[list[tuple[str, str, float, float]], int, int]:
+    """Find enabled sources that have stopped producing items.
+
+    Exists because the aggregate ingestion signal cannot see a single source
+    die: when WeChat produced nothing for 73 hours the other ~160 sources kept
+    the site-wide item count above its floor, so the volume branch stayed
+    healthy the whole time.
+
+    The threshold is per source, not global. A flat 6h would page constantly
+    for the accounts that publish every few days, and an alert that pages on
+    healthy behaviour gets muted — at which point it protects nothing. So 6h is
+    the floor and each source's own recent cadence widens it from there.
+
+    Sources with too little history to characterise are returned as a count
+    rather than assumed healthy: silently passing them would make "never
+    checked" indistinguishable from "checked and fine".
+
+    Returns (silent, evaluated_count, unevaluable_count) where each silent row
+    is (source_id, name, hours_silent, threshold_hours).
+    """
+    window_hours = lookback_days * 24.0
+    cutoff = (current - timedelta(days=lookback_days)).isoformat().replace("+00:00", "Z")
+    silent: list[tuple[str, str, float, float]] = []
+    evaluated = 0
+    unevaluable = 0
+    with db.get_conn(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.name,
+                   MAX(i.fetched_at) AS last_fetched,
+                   SUM(CASE WHEN i.fetched_at >= ? THEN 1 ELSE 0 END) AS recent_count
+            FROM sources s
+            LEFT JOIN items i ON i.source_id = s.id
+            WHERE s.enabled = 1
+            GROUP BY s.id, s.name
+            """,
+            (cutoff,),
+        ).fetchall()
+    for row in rows:
+        recent = int(row["recent_count"] or 0)
+        last_fetched = row["last_fetched"]
+        if recent < min_history or not last_fetched:
+            unevaluable += 1
+            continue
+        try:
+            last = datetime.fromisoformat(str(last_fetched).replace("Z", "+00:00"))
+        except ValueError:
+            unevaluable += 1
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        evaluated += 1
+        # Coarse cadence: the average gap over the window. Doubling it keeps a
+        # source that merely skipped one publishing slot out of the alert.
+        typical_gap_hours = window_hours / recent
+        threshold = max(floor_hours, 2.0 * typical_gap_hours)
+        hours_silent = (current - last).total_seconds() / 3600.0
+        if hours_silent > threshold:
+            silent.append((str(row["id"]), str(row["name"]), hours_silent, threshold))
+    return silent, evaluated, unevaluable
+
+
 def _wechat_interpretation_signal(
     db_path: str | Path | None, current: datetime, no_success_hours: float
 ) -> tuple[float | None, int, int, str | None]:
@@ -2045,6 +2169,12 @@ def collect_alert_signals(
     latest_fetch = ingestion.get("latest_fetch", {})
     attempted = int(latest_fetch.get("attempted", 0)) if isinstance(latest_fetch, dict) else 0
     failed = int(latest_fetch.get("failed", 0)) if isinstance(latest_fetch, dict) else 0
+    a7 = _threshold_section(ALERT_THRESHOLDS, "a7")
+    silent_sources, evaluated_sources, unevaluable_sources = _silent_source_signal(
+        db_path,
+        current,
+        floor_hours=_float_threshold(a7, "silence_floor_hours", 6.0),
+    )
     a5 = _threshold_section(ALERT_THRESHOLDS, "a5")
     no_success_hours = _float_threshold(a5, "no_success_hours", 4.0)
     hours_since_interpret, pending_count, frozen_count, pending_title = _wechat_interpretation_signal(
@@ -2122,6 +2252,9 @@ def collect_alert_signals(
         ),
         a6_unpriced_calls=int(a6_signal["unpriced_calls"]),
         a6_pricing_freshness=str(a6_signal["pricing_freshness"]),
+        silent_sources=silent_sources,
+        evaluated_sources=evaluated_sources,
+        unevaluable_sources=unevaluable_sources,
         a6_metering_complete=bool(a6_signal["metering_complete"]),
         a6_metering_failure_count=int(a6_signal["metering_failure_count"]),
     )

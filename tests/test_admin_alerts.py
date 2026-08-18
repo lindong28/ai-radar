@@ -22,6 +22,7 @@ import pytest
 
 from airadar.admin import alerts as alerts_module
 from airadar.admin.alerts import (
+    RULESET,
     AlertRuleResult,
     AlertSignals,
     _project_lifecycles,
@@ -78,7 +79,7 @@ def _state_without_evaluation_metadata(serialized: str) -> dict[str, object]:
 def test_evaluate_rules_covers_all_alerts_and_negative_schema_noise() -> None:
     normal = evaluate_rules(_normal_signals())
 
-    assert [result.rule_id for result in normal] == ["A1", "A2", "A3", "A4", "A5", "A6"]
+    assert [result.rule_id for result in normal] == list(RULESET)
     assert all(not result.firing for result in normal)
 
     upstream = _normal_signals()
@@ -109,7 +110,7 @@ def test_a6_operator_text_scopes_cost_and_counts_to_recorded_calls() -> None:
     signals.a6_threshold_cny = 60.0
     signals.a6_page_threshold_cny = 120.0
     signals.a6_baseline_days = 14
-    a6 = evaluate_rules(signals)[-1]
+    a6 = next(r for r in evaluate_rules(signals) if r.rule_id == "A6")
 
     assert a6.title == "已记录 LLM 调用近 24 小时成本突变"
     assert (
@@ -3161,3 +3162,80 @@ def test_skip_log_parses_with_and_without_a_pid(tmp_path: Path) -> None:
     assert isinstance(fetch, dict)
     assert fetch["attempted"] == 162
     assert fetch["failed"] == 162
+
+
+def test_a7_rolls_silent_sources_into_one_page() -> None:
+    """A shared upstream failure must page once, not once per source.
+
+    When the pipeline lost its egress proxy every one of 162 sources went
+    silent in the same round. One page per source is precisely the volume that
+    gets an alert muted, and a muted alert protects nothing.
+    """
+    signals = _normal_signals()
+    signals.silent_sources = [
+        ("wx_mp2rss", "微信公众号（Mp2RSS 合集）", 73.2, 6.0),
+        ("x_openai", "OpenAI", 12.0, 6.0),
+    ]
+    signals.evaluated_sources = 59
+    a7 = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
+
+    assert a7.firing is True
+    assert a7.severity == "page"
+    assert len([r for r in evaluate_rules(signals) if r.rule_id == "A7"]) == 1
+    # Worst offender first, and both named in the single message.
+    assert a7.detail.index("微信公众号") < a7.detail.index("OpenAI")
+    # P3: the reader must get impact and urgency without opening anything.
+    assert a7.impact and a7.urgency.startswith("是")
+    assert a7.action
+
+    signals.silent_sources = []
+    assert next(r for r in evaluate_rules(signals) if r.rule_id == "A7").firing is False
+
+
+def test_a7_threshold_widens_for_low_cadence_sources(tmp_path: Path) -> None:
+    """A source that normally publishes every few days must not page at 6h.
+
+    The floor alone would fire on entirely normal behaviour for the slower
+    accounts, and an alert that pages when nothing is wrong gets silenced —
+    taking the fast sources' coverage down with it.
+    """
+    from airadar.admin.alerts import _silent_source_signal
+
+    db_path = tmp_path / "a7.db"
+    now = datetime.fromisoformat("2026-08-18T09:00:00+00:00")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
+            INSERT INTO sources VALUES ('fast','Fast source',1);
+            INSERT INTO sources VALUES ('slow','Slow source',1);
+            INSERT INTO sources VALUES ('sparse','Sparse source',1);
+            """
+        )
+        # 120 items/30d -> ~6h typical gap -> threshold 12h. Silent 20h: fires.
+        for n in range(120):
+            conn.execute(
+                "INSERT INTO items VALUES (?,?,?)",
+                (f"f{n}", "fast", (now - timedelta(hours=20 + n * 6)).isoformat()),
+            )
+        # 10 items/30d -> 72h typical gap -> threshold 144h. Silent 100h: quiet.
+        for n in range(10):
+            conn.execute(
+                "INSERT INTO items VALUES (?,?,?)",
+                (f"s{n}", "slow", (now - timedelta(hours=100 + n * 72)).isoformat()),
+            )
+        # Below the history minimum: must be counted, not assumed healthy.
+        conn.execute(
+            "INSERT INTO items VALUES ('p0','sparse',?)",
+            ((now - timedelta(days=20)).isoformat(),),
+        )
+        conn.commit()
+
+    silent, evaluated, unevaluable = _silent_source_signal(db_path, now)
+    silent_ids = {row[0] for row in silent}
+
+    assert "fast" in silent_ids, "a source 3x past its own cadence must fire"
+    assert "slow" not in silent_ids, "6h floor must not page a source that is behaving normally"
+    assert evaluated == 2
+    assert unevaluable == 1, "sparse history is reported, not silently passed"

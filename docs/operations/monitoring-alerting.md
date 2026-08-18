@@ -48,6 +48,10 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 | A5 | 微信解读产出停滞 | 解读启用、4 小时无成功解读，且存在 fetched 至少 4 小时、仍符合重试资格的微信 pending 时 page；无近期成功且 pending 因退避/冻结归零时标为不可评估，不发「已恢复」 | 先查近 4 小时 pipeline/interpret 日志与 provider 成功/错误，再核对余额/配额；`ark-breaker.json` 只有 `opened_at` 仍在 2 小时 cooldown 内才是当前证据 |
 | A6 | 已记录 LLM 调用近 24 小时成本突变 | 两侧按同一现行费率、cache 全未命中重算；金额/次数只统计 `llm_usage` 记录行，未写入该表的付费调用不在内，因此只能作为下界（例如失败链路或未接入计量的调用点）。超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。当前实现固定把前 14 个 UTC 日都纳入基线，无记录日按 ¥0 进入中位数，所以 `baseline_days` 恒为 14；“至少 3 个有记录日”并不是现行门槛，缺口见 [ISSUE-023](../issues/cost-observability.md#issue-023--a6-的至少-3-个基线日门当前不可达)。近 24 小时已观测日志缺数时标为不可评估；若唯一缺口是当前上海日且 `.pipeline.flock` 的内核锁探测证明本轮在运行，则暂记 `in-progress`，把已记录金额作为下界继续允许首次 firing 与 notice→page，只在下界未越线时保留既有 episode、等待封口后再判断记录行金额是否回落；resolve 不表示 attempt-level 健康 | 先按消息中的 Top 驱动核查；它复用 A6 的 cache 中性已知成本聚合。未定价调用在 `/admin/usage` 单列，nominal 目录价不是账单实付 |
 
+| A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时 page。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数，不按健康处理。所有静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该 `source_id` 的 OK/FAIL 行：整批同时静默通常是出网链路（核对日志开头的 `egress proxy` 行），单源静默则查该源站点或其上游订阅服务 |
+
+A7 补的是 A4 看不见的那一面：A4 用全站 item 增量与 fetch 失败率判定，单个来源死亡时其余来源仍把总量顶在 floor 之上，因此 2026-08-14 至 08-17 微信来源零入库约 73 小时期间 A4 全程按 `notice` 处理、未投递（`sent=0`）。
+
 D3 每轮按 provider/model 检查 unpriced、stale、due-review 与 active tariff 变化，通过 `NOTIFICATION` webhook 发送，不带 `--alert`。未定价消息给出已记录调用数/已记录调用总数，stale/due-review 指名对象，price-changed 同时给旧值与新值。相同条件的调用计数变化不会重发；首次投递失败下轮重试，解除时 `im-notify --dedup-clear` 失败会保留 re-arm 义务，间歇未出现的模型仍保留旧价格签名。处置落点是 `src/airadar/pricing.py` 的 provider/model 条目、来源、生效区间与 `verified_at`。真实生产数据截至 P2 开发时尚未出现 stale、due-review 或 unpriced，这些分支目前只有 synthetic fixture 覆盖。
 
 ### LLM 成本报表与对账

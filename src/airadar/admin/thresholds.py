@@ -50,6 +50,9 @@ ALERT_THRESHOLDS: dict[str, object] = {
         "debounce_minutes_by_severity": {"page": 0, "notice": 30},
     },
     "a5": {"no_success_hours": 4},
+    # Floor only. Each source's own 30-day cadence widens it, so an account that
+    # normally publishes every few days does not page for behaving normally.
+    "a7": {"silence_floor_hours": 6},
     "a6": {
         "daily_floor_cny": 20.0,
         "spike_multiplier": 3.0,
