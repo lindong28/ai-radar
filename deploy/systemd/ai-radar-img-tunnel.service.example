@@ -1,0 +1,36 @@
+# Encrypted egress tunnel for X tweet media (see docs/adr/057).
+#
+# A plaintext forward proxy leaks `CONNECT pbs.twimg.com` on the China->Singapore
+# hop and the GFW resets it; SSH is not reset, so the serve host reaches the
+# Singapore tinyproxy over an SSH local-forward instead of connecting to it
+# directly. AI_RADAR_IMG_PROXY_URL then points at 127.0.0.1:<local-port>.
+#
+# Install on the serve host (the one behind the GFW):
+#   1. ssh-keygen -t ed25519 -f ~/.ssh/sg_img_tunnel -N ""   # dedicated key
+#   2. On the Singapore host, add the pubkey to ~/.ssh/authorized_keys with a
+#      tunnel-only restriction:
+#        restrict,port-forwarding,permitopen="127.0.0.1:39147" ssh-ed25519 AAAA... img-tunnel
+#   3. Fill in <SG_USER>@<SG_HOST> below, copy to
+#      /etc/systemd/system/ai-radar-img-tunnel.service, then:
+#        systemctl daemon-reload && systemctl enable --now ai-radar-img-tunnel
+#   4. Set AI_RADAR_IMG_PROXY_URL=http://<user>:<pw>@127.0.0.1:39148 in .env
+#
+# 39147 = tinyproxy port on the Singapore host (loopback there).
+# 39148 = local port on the serve host that .env points at.
+
+[Unit]
+Description=ai-radar image egress SSH tunnel (serve host -> Singapore tinyproxy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=<SERVE_USER>
+ExecStart=/usr/bin/ssh -i /home/<SERVE_USER>/.ssh/sg_img_tunnel \
+  -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes \
+  -N -L 39148:127.0.0.1:39147 <SG_USER>@<SG_HOST>
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

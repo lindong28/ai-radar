@@ -34,9 +34,22 @@
 
 `/img` 的主机允许名单同时是 SSRF 防线。若只校验最终 URL，一个指向内网的开放重定向仍然会被**实际请求出去**——校验发生在请求之后就已经晚了。实现改为手动跟随重定向（最多 3 跳），每一跳在发出之前重新过一次允许名单。
 
+### 传输必须加密：明文正向代理扛不住 GFW（2026-08-18 实测修正）
+
+上线打开新加坡防火墙 39147 端口后，端到端实测发现**明文 tinyproxy 这一层不成立**：正向代理把 `CONNECT pbs.twimg.com:443` 以**明文**发在中国→新加坡这一跳上，GFW 按主机名注入 RST。判别性对照（同一条代理、同一把认证）：
+
+- CONNECT `example.com`（非敏感）→ tinyproxy 正常回 `403 Filtered`
+- CONNECT `pbs.twimg.com`（敏感）→ tinyproxy 尚未响应即 `Connection reset by peer`，3/3 确定性、~0.13s 极快重置
+
+唯一差别是 CONNECT 行里的主机名字符串，RST 早于 tinyproxy 的响应到达 → 是中间盒（GFW）按明文主机名重置，不是代理配置问题。
+
+**修复：中国→新加坡这一跳改走 SSH 隧道**（SSH 握手实测不被 GFW 重置）。上海 serve 主机跑一个 systemd 服务 `ai-radar-img-tunnel`：`ssh -L 39148:127.0.0.1:39147 ubuntu@<SG>`，把本地 39148 经加密 SSH 转发到新加坡主机上 tinyproxy 的回环口。`AI_RADAR_IMG_PROXY_URL` 改指 `http://<user>:<pw>@127.0.0.1:39148`——`/img` 代码与 tinyproxy 认证都不变，只是 CONNECT 主机名现在藏在 SSH 加密通道里，GFW 看不到。隧道用一把**受限专用 key**（`restrict,port-forwarding,permitopen="127.0.0.1:39147"`，禁 shell/PTY）。实测经隧道取真实 twimg 图 `HTTP 200`、Restart 自愈通过。
+
+副作用：**新加坡防火墙放行 39147 的入站规则已不再需要**（流量走 SSH 22），可作为收尾移除；留着无害（单 IP + 认证，且明文路径本就被 GFW 打死）。
+
 ## 影响
 
-- 上海 serve 主机新增一个 repo 外依赖：新加坡主机上的常驻 tinyproxy。该代理入站锁定上海主机单个 IP 且要求 BasicAuth，运维事实记在 [operations/services.md](../operations/services.md)。
+- 上海 serve 主机新增一个 repo 外依赖：新加坡主机上的常驻 tinyproxy，**经上海主机上的 `ai-radar-img-tunnel` SSH 隧道访问**（见上「传输必须加密」）。tinyproxy 入站锁定回环 + BasicAuth，运维事实记在 [operations/services.md](../operations/services.md)。
 - tinyproxy 当前版本存在未修补的 CVE-2026-31842。接受该风险：暴露面是单 IP + 认证 + 仅 CONNECT 443 + 目标域名过滤，且该主机不承载其他服务。记录在 services.md 以便上游发版后跟进。
 - 存量数据不会自动获得媒体：普通抓取只取 checkpoint 之后的新帖。`./run.sh admin x-media backfill` 按 id 直接查 `/2/tweets` 回填，**不触碰 `sources.meta`**，因此与增量抓取的 checkpoint 互不干扰。
 - X API 自 2026-02 起按返回的 Post 资源计费，回填成本 ≈ 候选数 × 单价，故该命令默认提供 `--dry-run` 先报候选数、`--limit` 支持分片跑。2026-08-18 已对生产库执行一次：候选 246、返回 245、写入 245，其中 135 条确实带媒体，1 条推文已删除或转为受保护（保留为候选，供以后重试）。这 246 条是 2026-06-12 切换到官方 X API 之后入库的部分；更早的 3976 条 nitter 时代条目没有存 `x_post_id`，且全部早已滚出展示窗口，不回填。
@@ -46,3 +59,5 @@
 
 - **把图片转存到对象存储（COS + CDN）。** 最初的方案，理由是彻底摆脱对 twimg 可达性的依赖。用户随后告知已有一台新加坡主机可用，该方案的全部复杂度（存储桶、生命周期、回源、失效、下架链路）就只换来同一个效果，遂废弃。留档在 plan 目录。
 - **让浏览器直连 twimg。** 零服务端成本，但国内访问成功率不可控，且失败率随用户网络环境变化——无法用任何服务端读数观测到，故障对运维不可见。
+- **明文正向代理直连 SG:39147（不加隧道）。** 最初的实现，已被 GFW 实测否决（见「传输必须加密」）。留作教训：跨 GFW 的方案，只有把**目标主机名也纳入加密**才成立，只加密 payload（HTTPS 到 twimg）不够——CONNECT 行的主机名在客户端→代理这一跳就是明文。
+- **在 SG 给 tinyproxy 前置 TLS（stunnel/nginx），上海走 HTTPS 代理。** 也能把 CONNECT 主机名藏进 TLS，但要在 SG 新装并维护一个组件 + 证书；SSH 隧道复用现成 sshd、且与本机 Mac 既有的 gost-over-SSH 同模式，故选后者。

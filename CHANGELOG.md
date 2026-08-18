@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-18（下午：出口传输改为 SSH 隧道）
+
+- X 图片的出口传输从「直连新加坡 tinyproxy」改为「经 SSH 隧道」。打开新加坡防火墙后端到端实测发现：明文正向代理把 `CONNECT pbs.twimg.com:443` 明文发在中国→新加坡这一跳，GFW 按主机名注入 RST——判别性对照下 CONNECT `example.com` 得 `403 Filtered`、CONNECT `pbs.twimg.com` 得 `Connection reset by peer`（3/3、~0.13s）。修复是把这一跳加密：上海主机新增 systemd 服务 `ai-radar-img-tunnel`（`ssh -L 39148:127.0.0.1:39147`，受限专用 key，`Restart=always`），`AI_RADAR_IMG_PROXY_URL` 改指 `127.0.0.1:39148`。`/img` 代码与 tinyproxy 认证均不变。实测经隧道取真实 twimg 图 `HTTP 200`、隧道 Restart 自愈通过。部署模板见 `deploy/systemd/ai-radar-img-tunnel.service.example`，运维与诊断见 [operations/services.md](docs/operations/services.md)，设计见 [ADR-057](docs/adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md)。新加坡防火墙放行 39147 的入站规则隧道化后已不再需要（流量走 SSH 22），可作收尾移除。
+
 ## 2026-08-18
 
 - X 推文的自带图片现在会显示在列表卡片上。此前**从未取回过**这些图：X API v2 的媒体只出现在 top-level `includes.media`，请求不带 `expansions=attachments.media_keys` 就什么都不返回，因此库里 4219 条 X 条目带媒体字段的为 0 条——2026-08-17 移除 RSS 正文配图后线上一张图都不剩，并非那次改动过度，而是这个缺口一直被正文图掩盖着。两者的分工保持与参照站一致：推文的图展示，RSS 正文图不展示（图多为论文首页或网页截图，缩到卡片尺寸后读不出内容）。一条推文的多张图按推文原顺序全部展示；视频与 GIF 展示静态封面（接口不返回可播放地址）。图片高度设上限且不裁切——实测 260px 上限会把桌面首屏的完整卡片压到 1 条，低于既定的 ≥2 条密度底线，故收到 170px（单图 210px）。
