@@ -30,7 +30,15 @@ STAGE_SUMMARY_RE = re.compile(r"^(?P<stage>prefilter|score|scoring|enrich)\s+pro
 PIPELINE_DONE_RE = re.compile(
     r"^(?:\[[^\]]+\]\s+)?===\s+PIPELINE DONE\s+\(failed=(?P<failed>\d+)\)\s+==="
 )
-SKIP_RE = re.compile(r"^(?:\[[^\]]+\]\s+)?===\s+pipeline SKIP: already running pid=(?P<pid>\d+)\s+===")
+# The pid suffix disappeared when the lock moved to a kernel flock (ADR-052):
+# the holder is no longer named in the message. Both spellings are accepted so
+# that logs written before and after that change parse the same way. A skip run
+# that fails to parse as a skip is not inert — it is counted as a real run with
+# zero sources, and `latest_run` then reports attempted=0, which reads as a 0%
+# fetch failure rate no matter what the actual pipeline did.
+SKIP_RE = re.compile(
+    r"^(?:\[[^\]]+\]\s+)?===\s+pipeline SKIP: already running(?: pid=(?P<pid>\d+))?\s+==="
+)
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -132,7 +140,8 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
         if skip_match := SKIP_RE.match(line):
             run["status"] = "skip"
             run["skip"] = True
-            run["skip_pid"] = int(skip_match.group("pid"))
+            skip_pid = skip_match.group("pid")
+            run["skip_pid"] = int(skip_pid) if skip_pid else None
             continue
         if done_match := PIPELINE_DONE_RE.match(line):
             run["status"] = "done"

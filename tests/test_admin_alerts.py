@@ -3122,3 +3122,42 @@ def test_a1_a4_entry_persists_state_when_notification_ledger_is_corrupt(
     assert event_path.read_bytes() == original
     assert str(event_path) in caplog.text
     assert "JSONDecodeError" in caplog.text
+
+
+def test_skip_log_parses_with_and_without_a_pid(tmp_path: Path) -> None:
+    """A SKIP round must be recognised under both lock protocols.
+
+    The pid vanished from the message when mutual exclusion became a kernel
+    flock (ADR-052). While the parser still required it, a SKIP round parsed as
+    a *real* round with zero sources, so `latest_fetch` reported attempted=0 —
+    which A4 renders as a 0.0% fetch failure rate regardless of what the
+    pipeline actually did. A broken ingestion round and a skipped one then look
+    identical in the alert path.
+    """
+    from airadar.admin.metrics import _parse_pipeline_log
+
+    for name, line, expected_pid in (
+        ("flock", "[2026-08-18T07:15:53] === pipeline SKIP: already running ===", None),
+        ("legacy", "[2026-08-17T14:15:00] === pipeline SKIP: already running pid=99249 ===", 99249),
+    ):
+        log = tmp_path / f"pipeline-{name}.log"
+        log.write_text(line + "\n", encoding="utf-8")
+        run = _parse_pipeline_log(log)
+        assert run["skip"] is True, f"{name} SKIP not recognised"
+        assert run["skip_pid"] == expected_pid
+
+    # Negative control: a round that really did run must not be read as a skip,
+    # otherwise the fix would "pass" by classifying everything as skipped.
+    ran = tmp_path / "pipeline-ran.log"
+    ran.write_text(
+        "[2026-08-18T06:04:00] === fetch START ===\n"
+        "FAIL wx_mp2rss ConnectError: [Errno 61] Connection refused\n"
+        "=== attempted=162 inserted=0 failed=162\n",
+        encoding="utf-8",
+    )
+    run = _parse_pipeline_log(ran)
+    assert run.get("skip") is not True
+    fetch = run["fetch"]
+    assert isinstance(fetch, dict)
+    assert fetch["attempted"] == 162
+    assert fetch["failed"] == 162
