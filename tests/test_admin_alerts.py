@@ -526,7 +526,7 @@ def _a4_items_floor_firing() -> AlertSignals:
 @pytest.mark.parametrize(
     ("fetch_failed_ratio", "items_today", "expected_severity", "impact", "urgency", "detail"),
     [
-        (0.8, 300, "notice", "当前摄取量正常", "无需立即处置", "fetch 失败率"),
+        (0.8, 300, "notice", "均未判定", "未跌破 floor", "fetch 失败率"),
         (0.0, 0, "page", "文章更新可能停滞", "需立即核查", "items 增量"),
         (0.8, 0, "page", "文章更新可能停滞", "需立即核查", "fetch 失败率"),
     ],
@@ -565,9 +565,29 @@ def test_a4_branches_choose_severity_channel_and_operator_message(
     assert impact in a4.impact
     assert urgency in a4.urgency
     assert detail in a4.detail
-    assert "X(nitter)" in a4.action
+    # A batch egress failure has two distinct signatures and they need different
+    # first moves: `No route to host` rounds carry no `=== egress proxy:` line at
+    # all (the proxy never applied), while `Connection refused` rounds do carry
+    # one whose port is dead. Reading that line is therefore not a check, and
+    # neither is probing the port — a live local listener answers even when the
+    # tunnel behind it is gone. Only a request through the proxy discriminates.
+    assert "=== egress proxy: 的值" in a4.action  # discriminate by value, not presence
+    assert "not configured" in a4.action  # ...and name the value that means "no proxy"
+    assert "200 才算通" in a4.action  # a 000 or a CONNECT failure is not a pass
+    assert "AI_RADAR_PROXY_FILE" in a4.action  # ...and where its address comes from
+    assert "curl -x" in a4.action  # signature 2: verify by sending, not by reading
+    assert "只探端口不算核实" in a4.action
+    assert "logs/pipeline-*.log" in a4.action  # the evidence file, named
+    # The condemned framing must not creep back: telling the operator to *read*
+    # the proxy line is precisely the false-green this wording replaced.
+    assert "核对日志开头" not in a4.action
+    assert "nitter" not in a4.action.lower()
+    assert "api.x.com" in a4.action
     assert "Mp2RSS" in a4.action
     assert "evidence" not in a4.action.lower()
+    # The line the reader sees first must not name a cause the action contradicts.
+    assert "源站波动" not in a4.impact
+    assert "未受影响" not in a4.urgency  # floor only bounds total volume, not per-source death
     assert [(row["effective_severity"], row["channel"]) for row in payload["sent"]] == [
         (expected_severity, "NOTIFICATION" if expected_severity == "notice" else "ALERT")
     ]
@@ -3186,7 +3206,31 @@ def test_a7_rolls_silent_sources_into_one_page() -> None:
     assert a7.detail.index("微信公众号") < a7.detail.index("OpenAI")
     # P3: the reader must get impact and urgency without opening anything.
     assert a7.impact and a7.urgency.startswith("是")
-    assert a7.action
+    # Same two signatures as A4 (see its test): a missing proxy line and a dead
+    # port behind a present one need different first moves, and neither is
+    # verified by reading the line or probing the port. Keep the two messages
+    # from drifting apart — they describe the same upstream failure.
+    assert "=== egress proxy: 的值" in a7.action
+    assert "200 才算通" in a7.action
+    assert "AI_RADAR_PROXY_FILE" in a7.action
+    assert "curl -x" in a7.action
+    assert "只探端口不算核实" in a7.action
+    assert "核对 pipeline 日志开头" not in a7.action
+    # A7 hedges ("多为") rather than asserting the cause outright: a shared CDN
+    # or upstream feed service can also take a batch down at once.
+    assert "多为出网链路" in a7.action
+    # Actually compare the two, rather than asserting the same literals twice:
+    # both describe one upstream failure, so the discriminator must stay identical.
+    a4 = next(r for r in evaluate_rules(_a4_firing()) if r.rule_id == "A4")
+    shared = (
+        "看日志开头 === egress proxy: 的值"
+        "（该行无条件打印，判据是值、不是有没有）——"
+        "not configured 或 FAILED 开头 = 代理未生效（查 .env 的 AI_RADAR_PROXY_FILE）；"
+        "是地址则用它实发一次请求验通"
+        "（curl -x <地址> https://api.github.com/zen，200 才算通），"
+        "只探端口不算核实。"
+    )
+    assert shared in a4.action and shared in a7.action
 
     signals.silent_sources = []
     assert next(r for r in evaluate_rules(signals) if r.rule_id == "A7").firing is False

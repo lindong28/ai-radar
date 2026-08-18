@@ -279,8 +279,11 @@ def evaluate_rules(
         a4_impact = "文章更新可能停滞"
         a4_urgency = "是——需立即核查"
     elif a4_fetch_failed:
-        a4_impact = "当前摄取量正常，fetch 失败主要反映结构性源站波动"
-        a4_urgency = "否——当前摄取量正常，无需立即处置"
+        # Do not name a cause here. This line renders above the action, so a
+        # benign attribution ("源站波动") is what the reader acts on — and it
+        # silently contradicts the action's egress-outage branch below.
+        a4_impact = "今日累计入库仍在 floor 之上；失败集中在哪些源、什么原因均未判定"
+        a4_urgency = "否——今日 items 未跌破 floor（该指标看不到单源或部分源死亡），可按处置方向定位失败源"
     else:
         a4_impact = ""
         a4_urgency = ""
@@ -407,7 +410,17 @@ def evaluate_rules(
                     f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}，均在阈值内"
                 )
             ),
-            action="查看最近一轮各源健康并按 source error 分组：X(nitter) 源整批 SSL/超时多为公共实例瞬态（已加 30min 去抖，持续才告警）；微信源走 Mp2RSS；其余源按错误类型分别处理。",
+            action=(
+                "先按 error 分组读 logs/pipeline-*.log 最新一轮的 FAIL 行。"
+                "整批 ConnectError 多为出网链路：看日志开头 === egress proxy: 的值"
+                "（该行无条件打印，判据是值、不是有没有）——"
+                "not configured 或 FAILED 开头 = 代理未生效（查 .env 的 AI_RADAR_PROXY_FILE）；"
+                "是地址则用它实发一次请求验通"
+                "（curl -x <地址> https://api.github.com/zen，200 才算通），"
+                "只探端口不算核实。"
+                "X 源走官方 api.x.com（另查 bearer token 与配额），微信源走 Mp2RSS。"
+                "详见 docs/operations/monitoring-alerting.md 的「出网链路的两种签名」。"
+            ),
             values={
                 "fetch_failed_ratio": signals.fetch_failed_ratio,
                 "items_today": signals.items_today,
@@ -521,9 +534,15 @@ def evaluate_rules(
             firing=a7_firing,
             detail=a7_detail,
             action=(
-                "按源逐个核对：先看 logs/pipeline-*.log 里该 source_id 的 OK/FAIL 行——"
-                "整批同时静默通常是出网链路（核对 pipeline 日志开头的 egress proxy 行），"
+                "按源逐个核对：先看 logs/pipeline-*.log 里该来源的 OK/FAIL 行。"
+                "整批同时静默多为出网链路：看日志开头 === egress proxy: 的值"
+                "（该行无条件打印，判据是值、不是有没有）——"
+                "not configured 或 FAILED 开头 = 代理未生效（查 .env 的 AI_RADAR_PROXY_FILE）；"
+                "是地址则用它实发一次请求验通"
+                "（curl -x <地址> https://api.github.com/zen，200 才算通），"
+                "只探端口不算核实。"
                 "单源静默则查该源站点或其上游订阅服务。"
+                "详见 docs/operations/monitoring-alerting.md 的「出网链路的两种签名」。"
             ),
             values={
                 "silent_sources": [

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-18（下午：A4/A7 处置指引更正）
+
+- A4 与 A7 的处置指引把运维指向了三个错误方向，现更正。其一，A4 仍写着「X(nitter) 源整批 SSL/超时多为公共实例瞬态」，而 X 自 2026-08-17 13:42 起已改走官方 `api.x.com`；把整批失败读作源站瞬态会让人放过真实的出网中断。其二，两条规则都让运维「核对日志开头的 egress proxy 行」，而读这行不构成核实：08-18 00:04 那一轮头部是看着正常的 `=== egress proxy: http://127.0.0.1:59527 ===`，同轮 162 源全部 `Connection refused`。其三，判据本身要按**这行的值**而不是它的有无来分——本次修订的第一版曾写成「缺这行 = 代理未生效」，评审证伪：`pipeline.sh` 无条件打印该行，`PROXY_STATUS` 的四种取值（地址 / `not configured` / 两种 `FAILED:`）都会打印，08-17 那批日志缺这行只是因为该功能当天才由 `3f871a1` 引入。按「缺行」判会最常命中锁竞争的 SKIP 轮（682 份日志中 644 份缺该行，最新的缺失者全是 lock busy），把人指向一个没坏的 `.env`。现改为读该行的值分流，并要求经代理实发一次请求验通（`curl -x … https://api.github.com/zen`，200 才算通）而非探端口——端口探测区分不了「本地 listener 活着」与「上游隧道通」。验通目标特意选与被诊断对象无关的端点，避免拿 X 端点去验证一条正为 X 源失败而排查的链路。同时移除 A4 `impact` 里「fetch 失败主要反映结构性源站波动」这一归因：它渲染在处置方向之上，读者据它就已决定不动手。仅改消息文案与文档，fire 条件、严重度与投递契约均未动。
+- 该时段的失败面同时更正两处既有记述：那 127 个失败源含 18 个非 X 的海外源（`claude_blog`、`google_ai`、`huggingface_blog`、`wx_mp2rss` 等），是**海外出网中断**而非「X 整批失败」；且告警覆盖并不完整——A4 在 08-17 00:31 与 01:16 两次发出「已恢复」，而中断持续到 13:30；此后到 14:00 之间 A4 判定 firing 76 次、`send A4` **0 次**。即缺陷不是「读成健康」而是**判定为 firing 却一次也没投递**：resolve 清空 `since`，下次 firing 从当时重算，而 `attempted=0` 造成的假 ok 每隔几轮就打断计时，notice 档 30 分钟连续去抖因此永远达不成。已登记为未闭合项，见 [issues/alerting.md](docs/issues/alerting.md)。
+- 另核实：109 个启用的 X 来源中 55 个「近 30 天零产出」不是故障。官方 API 摄取自 08-17 13:42 才首次成功，设计上首窗只回看 20 分钟、不回填历史，故 30 天窗口内实际只有约 1 天覆盖；直调 API 抽样核对 GoogleDeepMind、`_akhaliq`、AndrewYNg 的最后原创帖分别为 08-13、08-13、08-14，均早于窗口起点，且 `exclude=retweets,replies` 使 thread 尾帖与转发不计入。`X_BEARER_TOKEN` 已配置可用。该集合会随覆盖时间累积自然收缩。
+
 ## 2026-08-18（下午：出口传输改为 SSH 隧道）
 
 - X 图片的出口传输从「直连新加坡 tinyproxy」改为「经 SSH 隧道」。打开新加坡防火墙后端到端实测发现：明文正向代理把 `CONNECT pbs.twimg.com:443` 明文发在中国→新加坡这一跳，GFW 按主机名注入 RST——判别性对照下 CONNECT `example.com` 得 `403 Filtered`、CONNECT `pbs.twimg.com` 得 `Connection reset by peer`（3/3、~0.13s）。修复是把这一跳加密：上海主机新增 systemd 服务 `ai-radar-img-tunnel`（`ssh -L 39148:127.0.0.1:39147`，受限专用 key，`Restart=always`），`AI_RADAR_IMG_PROXY_URL` 改指 `127.0.0.1:39148`。`/img` 代码与 tinyproxy 认证均不变。实测经隧道取真实 twimg 图 `HTTP 200`、隧道 Restart 自愈通过。部署模板见 `deploy/systemd/ai-radar-img-tunnel.service.example`，运维与诊断见 [operations/services.md](docs/operations/services.md)，设计见 [ADR-057](docs/adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md)。新加坡防火墙放行 39147 的入站规则隧道化后已不再需要（流量走 SSH 22），可作收尾移除。

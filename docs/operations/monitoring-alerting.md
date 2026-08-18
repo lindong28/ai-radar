@@ -24,7 +24,7 @@
 | 文章摄取 | 今日 items 增量、最新 fetch 插入/失败、最近 curation run | 看内容是否仍在进入系统；fetch 失败率高或今日增量低会触发 A4 |
 | Pipeline 阶段健康 | fetch/prefilter/scoring/enrich/curate 的处理量、错误率、P50/P95；prefilter P95 使用最近 2 小时滑动窗口，避免已恢复后旧慢样本保留到午夜 | 定位是哪一阶段异常；日志中的 `score` 已归一为 dashboard 的 `scoring` |
 | LLM 已记录用量（`/admin/usage`） | 滚动 30 天 `llm_usage` 记录行的成本三态、来源单价、cache 覆盖、分阶段/Provider/模型/日聚合与前一等长窗口比较 | 定位 Top 驱动；跨窗金额统一按当前费率、cache 全未命中重算，真实 cache 事实仍用于各窗记录行金额 |
-| 当前告警 | A1–A6 当前状态；D3 定价提醒不进入 page lifecycle | 先看故障类别，再看具体对象和下一步动作 |
+| 当前告警 | A1–A7 当前状态；D3 定价提醒不进入 page lifecycle | 先看故障类别，再看具体对象和下一步动作 |
 
 时间口径固定为 `Asia/Shanghai`。access log 当前写入 `logs/serve-access.log`，pipeline 日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
 
@@ -44,11 +44,27 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 | A1 | 上游模型不可用 | DeepSeek/OpenAI/GLM/ARK 返回 endpoint/model/权限/余额类错误；`schema validation failed` 已排除 | 查 provider 控制台余额、模型权限、API key；必要时切换 provider 或充值 |
 | A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 的错误 numerator/denominator **各自只取最近 15 分钟**；样本数分别至少为 `4/4/2` 才让错误率支路参与 page。独立的 P95 与**超过 120 分钟没有成功 pipeline**支路不受该样本门影响。prefilter 等后台 LLM 阶段的 P95 仍用最近 2 小时口径，只在持续达到真挂起量级时 page。SKIP 日志表示 pipeline 已在运行，不单独视为故障 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
 | A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测从已安装 serve plist 的 `ProgramArguments` 解析端口，连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
-| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 查 RSS / X(fedi) / 微信 Mp2RSS 源可用性、`./run.sh fetch` 输出 |
+| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 按 error 分组读 `logs/pipeline-*.log` 最新一轮的 FAIL 行，见下方「出网链路的两种签名」；X 源走官方 `api.x.com`（另查 bearer token 与配额），微信源走 Mp2RSS |
 | A5 | 微信解读产出停滞 | 解读启用、4 小时无成功解读，且存在 fetched 至少 4 小时、仍符合重试资格的微信 pending 时 page；无近期成功且 pending 因退避/冻结归零时标为不可评估，不发「已恢复」 | 先查近 4 小时 pipeline/interpret 日志与 provider 成功/错误，再核对余额/配额；`ark-breaker.json` 只有 `opened_at` 仍在 2 小时 cooldown 内才是当前证据 |
 | A6 | 已记录 LLM 调用近 24 小时成本突变 | 两侧按同一现行费率、cache 全未命中重算；金额/次数只统计 `llm_usage` 记录行，未写入该表的付费调用不在内，因此只能作为下界（例如失败链路或未接入计量的调用点）。超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。当前实现固定把前 14 个 UTC 日都纳入基线，无记录日按 ¥0 进入中位数，所以 `baseline_days` 恒为 14；“至少 3 个有记录日”并不是现行门槛，缺口见 [ISSUE-023](../issues/cost-observability.md#issue-023--a6-的至少-3-个基线日门当前不可达)。近 24 小时已观测日志缺数时标为不可评估；若唯一缺口是当前上海日且 `.pipeline.flock` 的内核锁探测证明本轮在运行，则暂记 `in-progress`，把已记录金额作为下界继续允许首次 firing 与 notice→page，只在下界未越线时保留既有 episode、等待封口后再判断记录行金额是否回落；resolve 不表示 attempt-level 健康 | 先按消息中的 Top 驱动核查；它复用 A6 的 cache 中性已知成本聚合。未定价调用在 `/admin/usage` 单列，nominal 目录价不是账单实付 |
+| A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时 page。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数，不按健康处理。所有静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该来源的 OK/FAIL 行：整批同时静默多为出网链路，见下方「出网链路的两种签名」；单源静默则查该源站点或其上游订阅服务 |
 
-| A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时 page。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数，不按健康处理。所有静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该 `source_id` 的 OK/FAIL 行：整批同时静默通常是出网链路（核对日志开头的 `egress proxy` 行），单源静默则查该源站点或其上游订阅服务 |
+### 出网链路的两种签名（A4、A7 的处置指引都指向这里）
+
+抓取整批失败时，**读 `logs/pipeline-*.log` 最新一轮开头那行 `=== egress proxy:` 的值**。判据是它的**值**，不是它在不在——`pipeline.sh` 无条件打印这一行（`PROXY_STATUS` 的四种取值都会打印），所以「没有这一行」不表示代理未生效：
+
+| 该行的值 | 含义 | 下一步 |
+|---|---|---|
+| `not configured` | `AI_RADAR_PROXY_FILE` 未设置，httpx 直连出网 | 查 `.env` 的 `AI_RADAR_PROXY_FILE`。cron 拿到的是非交互 shell，交互式 rc 里的代理变量不在 |
+| `FAILED: … cannot read` / `FAILED: … is empty` | 指针文件读不到或为空 | 同上，另查该文件本身 |
+| `http://127.0.0.1:<port>` | 地址解析到了，但该端口后面的隧道可能已死 | 取该地址**实发一次请求**验通：`curl -x http://127.0.0.1:<port> -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/zen`。`200` 算通；`000` 连同 stderr 的 `Failed to connect` 或 `CONNECT tunnel failed` 都是不通 |
+| 整行缺失 | 该轮在打印它之前就退出了 | 多为锁竞争的 SKIP 轮（`pipeline.sh` 的 SKIP 分支 `exit 0` 早于这行）。换一份真正跑过 fetch 的日志再判，别据此认定代理未生效 |
+
+**这一行的地址不是连通性证据。** 它只反映 `pipeline.sh` 从指针文件里读出了一个地址——2026-08-18 00:04 那一轮头部是 `=== egress proxy: http://127.0.0.1:59527 ===`，同轮 `attempted=162 inserted=0 failed=162`、162 条全部 `Connection refused`。**端口探测（`nc -z`）同样不算核实**：代理的 listener 在 127.0.0.1 上，端口探测区分不了「本地 listener 活着」与「上游隧道通」这两件事，所以只有实发请求才有判别力。端口由外部 agent-proxy 写入指针文件、不保证稳定，只从当轮日志读、不要记住。
+
+验通目标特意选了与被诊断对象无关的端点：拿 `api.x.com` 去验证一条正为 X 源整批失败而排查的链路会绕回自身，读数分不清是代理坏了还是 X 侧坏了。
+
+**这一层不是 `/img` 的图片代理。** `docs/operations/services.md` 有一份写得很好的出网代理三步诊断（`systemctl is-active ai-radar-img-tunnel`、`ss -lntp | grep 39148`），那条链路只服务 `/img` 的新加坡图片代理，与 fetch 出网无关——照它走完全程也诊断不到本节的故障。
 
 A7 补的是 A4 看不见的那一面：A4 用全站 item 增量与 fetch 失败率判定，单个来源死亡时其余来源仍把总量顶在 floor 之上，因此 2026-08-14 至 08-17 微信来源零入库约 73 小时期间 A4 全程按 `notice` 处理、未投递（`sent=0`）。
 
@@ -79,7 +95,7 @@ installer 当前只检查 notification webhook，`status.sh` 只检查 crontab m
 
 ### 已送达通知历史
 
-A1–A6、D3 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。成功投递的 firing/resolved 写入对应 channel；A1/A2/A5 合并时，被 carrier 吸收的规则另写 `type=suppressed, channel=INTERNAL`，并记录 carrier、reason 与 heartbeat freshness。投递行另含 `episode_since` 与 `notification_nonce`。失败 attempt 不写入。查询推送次数必须排除 INTERNAL，查询事故数必须按 episode identity 去重。例如：
+A1–A7、D3 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。成功投递的 firing/resolved 写入对应 channel；A1/A2/A5 合并时，被 carrier 吸收的规则另写 `type=suppressed, channel=INTERNAL`，并记录 carrier、reason 与 heartbeat freshness。投递行另含 `episode_since` 与 `notification_nonce`。失败 attempt 不写入。查询推送次数必须排除 INTERNAL，查询事故数必须按 episode identity 去重。例如：
 
 ```bash
 tail -n 50 data/alert-events.jsonl | jq .

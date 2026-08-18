@@ -29,7 +29,7 @@
 | 文件 | 说明 |
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
-| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A6 与 D3 告警、周报、飞书 webhook、用户旅程性能监控 runbook |
+| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A7 与 D3 告警、出网链路的两种签名、周报、飞书 webhook、用户旅程性能监控 runbook |
 | [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、真名头像 backfill、迁移留尾记录 |
 | [ai-assistant-integration.md](operations/ai-assistant-integration.md) | 可选外部 summary-agent 集成：启用条件、`./run.sh interpret` 契约、默认关闭语义 |
 | [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
@@ -71,6 +71,7 @@
 | [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时）；现存历史关闭项的归档债见 docs-quality.md |
 | [deploy.md](issues/deploy.md) | 部署与 DB 同步链路的运维问题（sync/apply/cron/verifier，含影响其验收的测试基线） |
 | [docs-quality.md](issues/docs-quality.md) | 文档自身的质量债（README 定位/重复/可观察性等审查遗留） |
+| [alerting.md](issues/alerting.md) | 服务故障告警的设计质量债（值不值得 page、严重度、消息说什么、要不要合并、基线可行性、留痕） |
 | [cost-observability.md](issues/cost-observability.md) | LLM 成本计量、定价、报告与告警消费面的未闭合项；金额口径只覆盖 `llm_usage` 记录行 |
 | [general.md](issues/general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
 | [harness-issues.md](issues/harness-issues.md) | Agent harness、wrapper、hook 或 skill 行为问题 |
