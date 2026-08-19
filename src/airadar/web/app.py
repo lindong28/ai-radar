@@ -79,6 +79,23 @@ def _uvicorn_log_config() -> dict[str, object]:
             '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
         )
         access_formatter["datefmt"] = "%Y-%m-%dT%H:%M:%S%z"
+    # The application loggers use the "default" formatter, which upstream
+    # leaves timestamp-free. An untimestamped line cannot be lined up with the
+    # access-log entry it explains, which is the whole point of emitting it —
+    # /img, for one, records why a request became a 404 while the access log
+    # records only that it did.
+    default_formatter = formatters.setdefault("default", {})
+    if isinstance(default_formatter, dict):
+        default_formatter["fmt"] = "%(asctime)s %(levelprefix)s %(message)s"
+        default_formatter["datefmt"] = "%Y-%m-%dT%H:%M:%S%z"
+    # Formatting alone changes nothing for our own loggers: "airadar.*" has no
+    # handler, and neither does root, so records fell through to logging's
+    # lastResort handler — bare "%(message)s" on stderr, no timestamp, no
+    # logger name. Wire them onto uvicorn's default handler so the formatter
+    # above actually applies.
+    loggers = config.setdefault("loggers", {})
+    if isinstance(loggers, dict):
+        loggers["airadar"] = {"handlers": ["default"], "level": "INFO", "propagate": False}
     return config
 
 
