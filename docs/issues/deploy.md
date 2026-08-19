@@ -108,3 +108,15 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 **修复方向**（需要一次独立的 deploy 改动，不属成本观测 plan）：让 plist 不承载值——引用文件路径，或让 alert 服务在运行时从 `.env` 读取。改完后旧 plist 需重装以清除已落盘的明文。
 
 **用户侧动作**（不由 agent 代做：对第三方账号的对外、不可逆操作）：轮换这两个 webhook。建议在上述机制修好之后再轮换，否则新值会以同样方式再次散落。
+
+- [pending] EdgeOne 从不缓存 `/img`，每个访客每张图都跨洋回源，并偶发 404
+  - 背景：2026-08-18 排查"某条推文的第二张图在浏览器里消失、curl 同 URL 却 200"时发现。根因取证已闭合，见下。
+  - **直接证据**：生产日志里那张图确实 404 过一次——`serve-8000.log` 的 `2026-08-18T18:47:48+0800 "GET /img?url=...HP94k8hXoAAcZgM.jpg" 404 Not Found`，同一秒另一张图（`HP91Z3iWcAEGZxD.jpg`）也 404，来自不同边缘 IP。同一个 URL 在其余 9 次请求里都是 200。槽 8000 共 1044 次 `/img` 请求、3 次 404（0.29%）；槽 8001 的 1858 次全部 200。
+  - **机制**：`src/airadar/web/routes/media.py` 的 `_CONNECT_TIMEOUT_SECONDS = 4.0` / `_FETCH_TIMEOUT_SECONDS = 10.0`，任何超时都返回 404（ADR-057 的有意设计），前端 `onerror` 随即隐藏该图。于是"慢"在页面上表现为"这张图不存在"，没有任何可见错误。
+  - **为什么会慢到撞超时**：`/img` 源站已发 `Cache-Control: public, immutable, max-age=604800`，但**边缘一次都不缓存**——同一 URL 连测三次全是 `eo-cache-status: MISS`；`./run.sh admin edgeone check` 列出的两条缓存规则（`/wechat`+`/api/v1/wechat`、`/style.css`+`/app.js`）都不覆盖 `/img`。故每个访客每次刷新都要为每张图跨洋回源一次。实测 `server-timing: app;dur≈0.5-0.7s`（源站取图其实很快），而端到端 p50 约 5s、并发 24 时 p90 9.2s / max 11.9s——与 10s 读超时同一量级。
+  - **缓存键风险已排除**（本来是这条最大的坑）：担心默认缓存键忽略 `?url=` 查询串、导致全站图片串到同一个缓存条目。实证否定——`/api/v1/wechat?page=1` 与 `?page=2` 返回不同内容且各自独立 MISS→HIT，说明 EdgeOne 默认缓存键**包含**查询串。且现有规则里没有任何 `CacheKeyParameters`（全为 null），即微信那条正是靠默认键工作的。
+  - **建议的规则**（照搬现有 `news public lists follow origin cache` 的形状，只换条件）：
+    - Condition：`${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/img']`
+    - Action：`CacheParameters.FollowOrigin = {Switch: on, DefaultCache: on, DefaultCacheStrategy: on, DefaultCacheTime: 0}` —— 跟随源站已有的 7 天 immutable，不另设 CustomTime
+  - 落地路径：仓内工具 `admin edgeone` 只有 `check` 与 `purge`，**没有写规则的能力**（ADR-039 把控制台定为仓外权威、仓内只镜像快照并查漂移）。SDK 侧 `CreateL7AccRulesRequest` 存在，但新增写能力本身是一个独立决策。规则加好后须跑 `./run.sh admin edgeone check --update-snapshot` 刷新 `web/edgeone-cache-rules.json`，否则下次 check 会报漂移。
+  - 未验证：加规则后的实际命中率与延迟改善（预期，非实测）；以及 `/img` 的 404 响应会不会被边缘缓存住（负缓存），若会则需要额外确认 404 不被长期缓存。
