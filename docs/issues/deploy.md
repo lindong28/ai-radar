@@ -112,7 +112,9 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 - [pending] EdgeOne 从不缓存 `/img`，每个访客每张图都跨洋回源，并偶发 404
   - 背景：2026-08-18 排查"某条推文的第二张图在浏览器里消失、curl 同 URL 却 200"时发现。根因取证已闭合，见下。
   - **直接证据**：生产日志里那张图确实 404 过一次——`serve-8000.log` 的 `2026-08-18T18:47:48+0800 "GET /img?url=...HP94k8hXoAAcZgM.jpg" 404 Not Found`，同一秒另一张图（`HP91Z3iWcAEGZxD.jpg`）也 404，来自不同边缘 IP。同一个 URL 在其余 9 次请求里都是 200。槽 8000 共 1044 次 `/img` 请求、3 次 404（0.29%）；槽 8001 的 1858 次全部 200。
-  - **机制**：`src/airadar/web/routes/media.py` 的 `_CONNECT_TIMEOUT_SECONDS = 4.0` / `_FETCH_TIMEOUT_SECONDS = 10.0`，任何超时都返回 404（ADR-057 的有意设计），前端 `onerror` 随即隐藏该图。于是"慢"在页面上表现为"这张图不存在"，没有任何可见错误。
+  - **机制（已核实的部分）**：`src/airadar/web/routes/media.py` 把**每一种**失败都映射成 404——主机不在允许名单、上游非 200、重定向越界、以及 `httpx.HTTPError`（含超时），全部走同一个 `return Response(status_code=404)`（ADR-057 的有意设计：宁可快速失败）。前端 `onerror` 随即隐藏该图，于是任何失败在页面上都表现为"这张图不存在"，没有可见错误。
+  - **未核实：那两次 404 到底是不是超时。** 上面那条正是原因——404 是所有失败的共同出口，日志里的状态码**区分不了**超时与"twimg 当时就返 404/403"。而 `/img` 的失败路径**不写任何日志**（异常被吞），`serve-8000.err.log` 586 行里与 img/timeout/httpx 相关的为 0 行。故服务端不存在能区分二者的读数，超时只是**待验怀疑**，不是结论。旁证（不足以定案）：18:47 那一分钟有 10 次 `/img` 请求，是相邻几分钟里最密的（18:40 为 4 次、18:48/18:49 各 1 次）；且并发压测下 p90 已达 9.2s、逼近 10s 读超时。若要定案，需要给 `/img` 的失败路径加上区分性日志（记下异常类型与上游状态码），那是一个独立改动。
+  - **注意本条的行动项不依赖上面那个未核实点**：加边缘缓存的理由是延迟读数本身（p50 约 5s、p90 9.2s，而源站只用 0.5-0.7s），与 404 归因无关。
   - **为什么会慢到撞超时**：`/img` 源站已发 `Cache-Control: public, immutable, max-age=604800`，但**边缘一次都不缓存**——同一 URL 连测三次全是 `eo-cache-status: MISS`；`./run.sh admin edgeone check` 列出的两条缓存规则（`/wechat`+`/api/v1/wechat`、`/style.css`+`/app.js`）都不覆盖 `/img`。故每个访客每次刷新都要为每张图跨洋回源一次。实测 `server-timing: app;dur≈0.5-0.7s`（源站取图其实很快），而端到端 p50 约 5s、并发 24 时 p90 9.2s / max 11.9s——与 10s 读超时同一量级。
   - **缓存键风险已排除**（本来是这条最大的坑）：担心默认缓存键忽略 `?url=` 查询串、导致全站图片串到同一个缓存条目。实证否定——`/api/v1/wechat?page=1` 与 `?page=2` 返回不同内容且各自独立 MISS→HIT，说明 EdgeOne 默认缓存键**包含**查询串。且现有规则里没有任何 `CacheKeyParameters`（全为 null），即微信那条正是靠默认键工作的。
   - **建议的规则**（照搬现有 `news public lists follow origin cache` 的形状，只换条件）：
