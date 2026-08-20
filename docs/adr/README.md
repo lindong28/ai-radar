@@ -66,3 +66,7 @@
 | [060](./060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md) | 热点榜由后台刷新的候选缓存供给，请求路径永不同步计算，未就绪返回 503 | accepted; revisits ADR-004 scope | 2026-08-20 |
 | [061](./061-deprecate-wechat-admin-discovery-line.md) | 公众号后台发现线整体废弃，发现层改由自建 Wechat2RSS 承担 | accepted; deprecates ADR-024–032、ADR-040 与探路支线 ADR-033–038 | 2026-08-20 |
 | [062](./062-cut-the-switch-cost-at-the-query-the-edge-and-the-navigation.md) | 精选 ↔ 全部 AI 动态 的切换成本在查询、边缘与导航三层同时切掉 | accepted; 推翻 ADR-004 的范围结论；沿用 ADR-005 的失效契约但记录其既有缺口；生产侧沿用 ADR-039 的规则权威 | 2026-08-20 |
+| [060](./060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md) | AIHOT benchmark manifests 在 v1 首发前删除重复 topology、标明投影并冻结版本化机器语义 | accepted; clarifies ADR-047 and ADR-049 | 2026-08-20 |
+| [061](./061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | AIHOT window 拆分共享 SSR response/binding，验收报告按 subject 类型冻结严格语义 | accepted; refines ADR-060 | 2026-08-20 |
+| [062](./062-carry-pairing-strategy-in-aihot-validation-reports.md) | AIHOT window 验收报告自持 primary/assistance/fallback pairing strategy | accepted; clarifies ADR-061 | 2026-08-20 |
+| [063](./063-require-ordered-public-response-dates-in-aihot-captures.md) | AIHOT capture 的 RSS/OpenAPI public response Date 按声明顺序非递减 | accepted; clarifies ADR-060 and ADR-061 | 2026-08-20 |

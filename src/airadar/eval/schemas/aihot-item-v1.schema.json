@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ai-radar.invalid/aihot-item-v1.schema.json",
+  "title": "AIHOT normalized item v1",
+  "description": "Strict normalized record projected from the public AIHOT v1 items API and an explicit SSR tag observation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "aihot_url",
+    "original_url",
+    "aihot_title",
+    "original_title",
+    "aihot_summary",
+    "upstream_publisher_name",
+    "published_at",
+    "aihot_discovered_at",
+    "aihot_category_slug",
+    "tags",
+    "aihot_score_0_to_100",
+    "aihot_selected",
+    "aihot_recommendation_reason",
+    "api_record_projection_observation",
+    "ssr_tags_observation"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "description": "Public v1 API item id used for the API to SSR join."
+    },
+    "aihot_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://[^/?#]+/items/[^?#]+$",
+      "description": "Absolute HTTP(S) AIHOT item URL copied from links.aihot."
+    },
+    "original_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://",
+      "description": "Absolute HTTP(S) original article URL copied from links.original; the primary exact-pairing input."
+    },
+    "aihot_title": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "description": "AIHOT display title copied without rewriting; used only after original_url and original_title for pairing."
+    },
+    "original_title": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        {"type": "null"}
+      ],
+      "description": "originalTitle copied from the API; null only when the API explicitly returned null."
+    },
+    "aihot_summary": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        {"type": "null"}
+      ],
+      "description": "AIHOT public API summary copied without rewriting; null only when explicitly returned."
+    },
+    "upstream_publisher_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "description": "Upstream publisher name copied from source.name."
+    },
+    "published_at": {
+      "anyOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ],
+      "description": "RFC 3339 publishedAt string copied from the API; null only when explicitly returned."
+    },
+    "aihot_discovered_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 discoveredAt string copied from the AIHOT public API."
+    },
+    "aihot_category_slug": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        {"type": "null"}
+      ],
+      "description": "AIHOT public API category slug copied as a string; future unknown slugs remain valid."
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+      "description": "Unique tags explicitly observed for this id over SSR. An empty array means observed with no tags, never a failed observation."
+    },
+    "aihot_score_0_to_100": {
+      "anyOf": [
+        {"type": "number", "minimum": 0, "maximum": 100},
+        {"type": "null"}
+      ],
+      "description": "AIHOT public API score on the inclusive 0 to 100 scale; null only when explicitly returned."
+    },
+    "aihot_selected": {
+      "type": "boolean",
+      "description": "Public API selected flag."
+    },
+    "aihot_recommendation_reason": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        {"type": "null"}
+      ],
+      "description": "AIHOT public API reason copied without rewriting; null only when explicitly returned."
+    },
+    "api_record_projection_observation": {
+      "type": "string",
+      "const": "complete",
+      "description": "Final row contains a complete public API record projection."
+    },
+    "ssr_tags_observation": {
+      "type": "string",
+      "const": "observed",
+      "description": "Final row tags were explicitly observed over SSR, including an observed empty array."
+    }
+  }
+}
