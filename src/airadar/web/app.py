@@ -28,7 +28,7 @@ from uvicorn.config import LOGGING_CONFIG
 from .. import db
 from ..site_config import get_site_config
 from .cors import configure_cors
-from .routes import admin, curated, health, items, media, sources, timeline
+from .routes import admin, curated, health, hot_cache, items, media, sources, timeline
 from .routes import wechat as wechat_routes
 from .routes.request_db import conn_from_request
 from .schemas import FeedItem
@@ -529,6 +529,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeline.prewarm_timeline_total_cache(app.state.db_path)
         curated.prewarm_curated_archive_total_cache(app.state.db_path)
+        # Off-thread on purpose: this hydration takes seconds, and readiness
+        # gates the deploy health check. Until it lands, the hot surfaces
+        # degrade honestly rather than wait (ADR-060).
+        hot_cache.prewarm_hot_candidates(app.state.db_path)
         yield
 
     app = FastAPI(title="AI Radar", version="0.1.0", lifespan=lifespan)
@@ -556,7 +560,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> HTMLResponse | JSONResponse:
         if exc.status_code != 404 or request.url.path.startswith("/api/"):
-            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            # exc.headers 必须透传：丢掉它，`raise HTTPException(headers=...)` 会
+            # 静默失效（Retry-After 就是这么没的），而调用点看起来完全正确。
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers=getattr(exc, "headers", None),
+            )
         if request.url.path.startswith("/wechat/"):
             page_raw = request.query_params.get("page")
             q = request.query_params.get("q")
@@ -610,7 +620,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         preload = cast(dict[str, object], context["preload"])
         context["run_meta"] = _curated_header_meta(preload.get("items"))
         context["mobile_topbar_date"] = _mobile_topbar_label()
-        context["show_hot_topics"] = not (q or "").strip() and not (category or "").strip()
+        show_hot_topics = not (q or "").strip() and not (category or "").strip()
+        context["show_hot_topics"] = show_hot_topics
+        # SSR 只读**已经热的**缓存，绝不触发计算：首页 TTFB 与热点状态必须完全
+        # 解耦（ADR-060）。读不到就不渲染这一块，由 app.js 的客户端 fetch 兜底，
+        # 与改动前的行为一致。
+        hot_payload = (
+            curated.hot_payload(limit=2, hours=48) if show_hot_topics else None
+        )
+        context["hot_topics"] = (
+            cast(dict[str, object], hot_payload["data"]).get("items") if hot_payload else None
+        )
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -715,7 +735,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/hot", include_in_schema=False)
     def hot_page(request: Request) -> HTMLResponse:
-        payload = curated.hot(request, limit=10, hours=48)
+        payload = curated.hot_payload(limit=10, hours=48)
+        if payload is None:
+            # 未就绪 ≠ 没有热点。模板里那句"过去 N 小时暂无热点"是对**已就绪且
+            # 确实为空**说的；在这里渲染它就是说假话（ADR-060）。
+            return templates.TemplateResponse(
+                request,
+                "hot.html",
+                {"generated_at": None, "hours": 48, "hot_items": [], "hot_ready": False},
+                headers={"Cache-Control": PRIVATE_CACHE_CONTROL},
+            )
         data = cast(dict[str, object], payload["data"])
         generated_at = data.get("generated_at")
         return templates.TemplateResponse(
@@ -725,6 +754,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 "generated_at": generated_at,
                 "hours": data.get("hours", 48),
                 "hot_items": _hot_template_items(data.get("items"), generated_at),
+                "hot_ready": True,
             },
         )
 

@@ -6,7 +6,7 @@
     <title>AI Radar · 热点榜</title>
     <meta name="theme-color" content="#10151c">
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');var s=null;try{s=localStorage.getItem("ai-radar:theme");}catch(e){}var t=(s==="dark"||s==="light"||s==="system")?s:"system";var d=t==="dark"||(t==="system"&&(typeof matchMedia!=="function"||matchMedia("(prefers-color-scheme: dark)").matches));r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;if(m)m.setAttribute("content",d?"#10151c":"#f4f5f6");})();</script>
-    <link rel="modulepreload" href="/app.js?v=20260817-aihot-cad81b20">
+    <link rel="modulepreload" href="/app.js?v=20260817-aihot-26d83a83">
     <link rel="stylesheet" href="/style.css?v=20260817-aihot-03fc77b5">
   </head>
   <body>
@@ -90,8 +90,12 @@
             </li>
             {% endfor %}
           </ol>
-          {% else %}
+          {% elif hot_ready %}
           <div class="hot-rank-empty">过去 {{ hours }} 小时暂无热点</div>
+          {% else %}
+          {# 未就绪 ≠ 暂无热点。上一句是对"已就绪且确实为空"说的，在候选缓存
+             还没热起来时渲染它就是说假话（ADR-060）。 #}
+          <div class="hot-rank-empty" data-hot-preparing>热点榜单正在生成，稍后自动刷新</div>
           {% endif %}
         </section>
       </div>
@@ -103,8 +107,26 @@
     </main>
 {% include "_mobile_tabbar.html" %}
     <script type="module">
-      import { initNavigationOnly } from "/app.js?v=20260817-aihot-cad81b20";
+      import { initNavigationOnly } from "/app.js?v=20260817-aihot-26d83a83";
       initNavigationOnly();
+    </script>
+    <script>
+      /* 候选缓存未就绪时有界自动重载。延迟累计 30 秒，覆盖最坏冷态（keeper 最多
+         10 秒看一眼 + 一次水合实测 3.5–6.1 秒），余量是为了不让最后一次重载恰好
+         落在数据到达前一刻。计数存在 sessionStorage 防死循环，就绪后立刻清掉，
+         否则下一次真正的未就绪只剩不到几次机会。 */
+      (function () {
+        var KEY = "ai-radar:hot-reload";
+        var DELAYS = [3000, 5000, 8000, 14000];
+        var preparing = document.querySelector("[data-hot-preparing]");
+        try {
+          if (!preparing) { sessionStorage.removeItem(KEY); return; }
+          var attempt = parseInt(sessionStorage.getItem(KEY) || "0", 10) || 0;
+          if (attempt >= DELAYS.length) return;
+          sessionStorage.setItem(KEY, String(attempt + 1));
+          setTimeout(function () { location.reload(); }, DELAYS[attempt]);
+        } catch (e) { /* sessionStorage 不可用时放弃自动重载，页面仍可手动刷新 */ }
+      })();
     </script>
   </body>
 </html>

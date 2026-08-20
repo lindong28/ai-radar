@@ -1,8 +1,18 @@
 async function api(path) {
   const response = await fetch(path);
-  const payload = await response.json();
-  if (!response.ok || !payload.success) {
-    throw new Error(payload.error || `HTTP ${response.status}`);
+  /* 失败响应不保证是本站的 JSON 信封（网关的 502/503 页就不是），所以解析要能
+     失败而不吞掉状态码。status 结构化挂在 error 上——调用方要按它分流时，解析
+     "HTTP 503" 这串文案是不可靠的。 */
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || !payload || !payload.success) {
+    const error = new Error(payload?.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return payload.data;
 }
@@ -2435,7 +2445,15 @@ export async function initBookmarks() {
 
 /* ---------- hot topics ---------- */
 
-async function renderHotTopics(container) {
+/* 503 = 候选缓存尚未就绪，它会自己好，所以退避重试；200 + 空 items 是"确实没有
+   热点"，重试没有意义（ADR-060）。
+
+   累计 30 秒是照着最坏冷态配的，不是拍的：keeper 最多 10 秒才看一眼（
+   KEEPER_POLL_SECONDS），一次水合实测 3.5–6.1 秒，合计约 16 秒。留出的余量是为了
+   不让最后一次重试恰好落在数据到达前一刻——那样访客会永久看不到已经备好的热点。 */
+export const HOT_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000];
+
+export async function renderHotTopics(container, attempt = 0) {
   try {
     const data = await api("/api/v1/hot?limit=2");
     const items = Array.isArray(data.items) ? data.items : [];
@@ -2460,7 +2478,14 @@ async function renderHotTopics(container) {
         </li>`).join("")}
       </ol>`;
     container.removeAttribute("aria-busy");
-  } catch {
+  } catch (error) {
+    if (error?.status === 503 && attempt < HOT_RETRY_DELAYS_MS.length) {
+      // 保持骨架占位（.hot-topics:empty 已留高度，无布局跳动），不隐藏容器。
+      setTimeout(() => {
+        void renderHotTopics(container, attempt + 1);
+      }, HOT_RETRY_DELAYS_MS[attempt]);
+      return;
+    }
     container.hidden = true;
     container.removeAttribute("aria-busy");
   }

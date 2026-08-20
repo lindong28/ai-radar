@@ -6,7 +6,7 @@
     <title>AI Radar · 精选</title>
     <meta name="theme-color" content="#10151c">
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');var s=null;try{s=localStorage.getItem("ai-radar:theme");}catch(e){}var t=(s==="dark"||s==="light"||s==="system")?s:"system";var d=t==="dark"||(t==="system"&&(typeof matchMedia!=="function"||matchMedia("(prefers-color-scheme: dark)").matches));r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;if(m)m.setAttribute("content",d?"#10151c":"#f4f5f6");})();</script>
-    <link rel="modulepreload" href="/app.js?v=20260817-aihot-cad81b20">
+    <link rel="modulepreload" href="/app.js?v=20260817-aihot-26d83a83">
     <link rel="stylesheet" href="/style.css?v=20260817-aihot-03fc77b5">
   </head>
   <body>
@@ -63,7 +63,9 @@
           </form>
         </div>
       </section>
-      <section id="hot-topics" class="card hot-topics"{% if not show_hot_topics %} hidden{% else %} aria-busy="true"{% endif %} aria-label="当前热点"></section>
+      <section id="hot-topics" class="card hot-topics"{% if not show_hot_topics %} hidden{% elif not hot_topics %} aria-busy="true"{% endif %} aria-label="当前热点"{% if hot_topics %} data-loaded="true"{% endif %}>{% if hot_topics %}
+{% include "_hot_topics.html" %}
+      {% endif %}</section>
       <section id="list" class="timeline" aria-live="polite">
 {% include "_prepaint_list.html" %}
       </section>
@@ -76,7 +78,7 @@
     </script>
 {% include "_mobile_tabbar.html" %}
     <script type="module" async>
-      import { initCurated } from "/app.js?v=20260817-aihot-cad81b20";
+      import { initCurated } from "/app.js?v=20260817-aihot-26d83a83";
       initCurated();
     </script>
   </body>
