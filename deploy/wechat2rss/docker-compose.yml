@@ -1,0 +1,41 @@
+# Wechat2RSS — WeChat Official Account discovery for kind="wechat" sources.
+#
+# Replaces the hosted Mp2RSS feed. Upstream is WeRead, not the mp backend, which
+# is why it still works after the 2026-07-30 platform-level restriction on
+# cross-account article listing (see plans/20260816-mp2rss-replacement/state.md
+# ISSUE-001).
+#
+# Secrets and host-specific values live in .env (gitignored). Copy .env.example
+# to .env and fill it in before the first `docker compose up -d`.
+#
+# Image source: the vendor mirror, because registry-1.docker.io is not
+# reachable from this machine (verified 2026-08-17: direct connect times out,
+# while docker.xlab.app answers 200 directly). On a host that can reach Docker
+# Hub, ttttmr/wechat2rss:latest is the same image.
+
+services:
+  wechat2rss:
+    container_name: wechat2rss
+    image: "docker.xlab.app/ttttmr/wechat2rss:latest"
+    env_file:
+      - .env
+    environment:
+      # Keep every article ever crawled. The default (50 per account) silently
+      # discards history, and a backfill cannot be re-run: the service only ever
+      # crawls the newest 20 items and does not fetch historical articles.
+      - RSS_KEEP_OLD_COUNT=-1
+      # Serve more than the 20-item default so a delayed or skipped poll on the
+      # ai-radar side cannot drop articles off the end of the feed before we
+      # read them. 量子位 alone publishes ~4/day in a single batch.
+      - RSS_MAX_ITEM_COUNT=50
+    volumes:
+      - ./data:/wechat2rss
+    ports:
+      # Bound to loopback: ai-radar fetches over localhost and the admin UI
+      # accepts subscription changes, so this must not be world-reachable.
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
