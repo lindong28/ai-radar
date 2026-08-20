@@ -1,6 +1,6 @@
 # ADR-028：先解析并一次性消费已验证 fakeid，再执行微信 shadow probe
 
-- 状态：accepted
+- 状态：accepted；searchbiz 验证语义由 ADR-040 supersede（其余部分不受该 supersede 影响）；deprecated——后台 family 平台级不可用，见 ADR-061
 - 日期：2026-08-13
 - Supersedes：ADR-024 中把公开文章 `biz` 直接作为后台 `fakeid` 的假设，以及旧 attempt 可用于后续覆盖比较的含义；不改变 ADR-025 的临时请求频率、ADR-026 的窗口比较语义或 ADR-027 的页大小来源记录
 

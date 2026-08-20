@@ -111,19 +111,13 @@ fetch 失败率破线、items floor 未破线时，A4 无条件降级为 notice�
 
 **闭合方向**：三条补齐 `impact` / `urgency`；顺带去掉 `故障类别：` 行对标题的逐字重复（7 条规则全部命中，零信息增量）。
 
-## ISSUE-A11 · alert-check 的两个日志文件无 rotation，且增速在加快
+## ISSUE-A11 · alert-check 日志无 rotation：告警侧的消费面
 
 **状态**：open · **优先级**：high · **原则**：P8
 
-`logs/alert-check.log` 在 2026-08-18 17:10 为 8.6 MiB / 74,908 行，跨 71 天，近 7 天增速 374 KB/天（71 天均值约 127 KB/天，即近期是历史的约 3 倍——ruleset 从 A1–A4 扩到 A1–A7 + D3 且 detail 变长）。按当前速率外推约 134 MB/年，每加一条规则再抬一档。launchd 的 `StandardOutPath` 直指该文件、只追加不切分；crontab、`scripts/`、`install.sh`、`deploy/` 下无任何 rotation 条目；`status.sh alert` 不检查大小。
+runbook 把「人工监看 `logs/alert-check.log` 大小」写成缓解措施，但 `status.sh alert` 只打印路径、不报大小（`status.sh:72`），该缓解因此不可执行；`logs/alert-check.err.log` 连这层纸面缓解都没有，而它是 ledger fail-open 的唯一证据通道——`_record_event_rows()` 捕获异常后只 `LOGGER.error("notification ledger write failed …")`，本批 ledger 行就此丢弃（阴性读数：至今 `grep -c "notification ledger"` = 0，尚未发生过写失败）。对照之下 `data/alert-events.jsonl` 侧是合格的（14 天 + 64 MiB 双门，当前 101 KB / 247 行，runbook 给了 jq 配方）。
 
-runbook 已承认这点并给了缓解措施「人工监看文件大小」，但该缓解不可执行——没有任何入口暴露该大小（正是同一行自己承认不检查的 `status.sh alert`）。
-
-`logs/alert-check.err.log`（99.8 KB）连这层纸面缓解都没有，而它是 ledger fail-open 的唯一证据通道：`_record_event_rows()` 捕获异常后只 `LOGGER.error("notification ledger write failed …")`，本批 ledger 行就此丢弃。阴性读数：至今 `grep -c "notification ledger"` = 0，尚未发生过写失败。
-
-对照之下 `data/alert-events.jsonl` 侧是合格的（14 天 + 64 MiB 双门，当前 101 KB / 247 行，runbook 给了 jq 配方）。
-
-**闭合方向**：按 `~/.claude/references/resource-cleanup-protocol.md` 接入本机单一 L2 age 门；在 `status.sh alert` 暴露两个文件的大小。
+**实体缺口 defer 给 [cost-observability.md ISSUE-013](cost-observability.md)**——rotation 本身归那条跟踪。此处只登记告警侧的消费面：`status.sh alert` 应暴露这两个文件的大小，否则 runbook 里那句缓解永远是空的。
 
 ## ISSUE-A12 · 告警消息不指向 runbook，A1 三类落点一个不占
 
@@ -196,3 +190,13 @@ detail 用 `name` 渲染（如 `X: karpathy 静默 40.0h`），而处置指引�
 `最老待处理：{oldest_wechat_pending_title}` 无截断，标题任意长即可挤占整屏，而处置方向没有任何一步用到该标题。
 
 **闭合方向**：截断，或移出正文。
+
+## ISSUE-A20 · 热点候选缓存的 keeper 持续失败没有主动发现路径
+
+**状态**：open · **优先级**：medium · **原则**：P1（值不值得告警）
+
+ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。它持续失败时（DB 长期 busy、水合每次抛异常、线程意外退出），当前只有日志：`hot candidates unready (...)` WARN 与 `hot candidate keeper iteration failed` ERROR。没有任何 fire 条件消费它们，`/healthz` 也不看热点就绪状态。
+
+对用户的表现是「首页热点块偶尔不见了、`/hot` 一直说正在生成」——一个没有发现时限的静默降级，而不是具名事件。三态设计特意让降级变诚实，代价是它**看起来很正常**，因此更需要一条告警而不是更不需要。
+
+**闭合方向**：以「距上次成功水合的时长」为 fire 条件（`max_stale` 的数倍即可判为异常），severity 取 notice 档；`/healthz` 或 `/admin` 暴露 `hot_candidates_age_seconds` 供其消费。注意别用「未就绪请求数」当判据——零流量时它恒为 0，与 keeper 健康时读数相同。

@@ -1,6 +1,6 @@
 # ADR-024：以 shadow canary 验证公众号后台发现适配器后再替换 Mp2RSS
 
-- 状态：Accepted；identity mapping 与旧 evidence 语义由 ADR-028 supersede
+- 状态：Accepted；identity mapping 与旧 evidence 语义由 ADR-028 supersede；cadence/page-size 由 ADR-025 supersede；deprecated——后台 family 平台级不可用，见 ADR-061
 - 日期：2026-08-13
 - 范围：AI Radar 对已知微信公众号的新文章 URL 与元数据发现；不改变现有微信正文抓取和公开展示边界
 

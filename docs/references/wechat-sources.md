@@ -1,6 +1,12 @@
 # 如何添加微信公众号源
 
-> Operational reference. 微信公众号没有公开 RSS，ai-radar 通过 WeWe RSS 做发现层，再由本项目抓取原文正文供内部 LLM 使用。
+> 读者标注：**[User]**（部署者 / 运维者视角的操作步骤，非开发者内部细节）。
+>
+> **本流程已停用，仅作回滚参考。** 微信摄取现走 Mp2RSS + Wechat2RSS 双跑取并集，见 [operations/wechat-ingestion.md](../operations/wechat-ingestion.md)。WeWe RSS 桥接已于 2026-06-06 从服务层移除，其容器又于 2026-08-20 手动停止。
+>
+> 另注：下文 `data/sources.toml` 样例里的 `url =` 是 v1 schema 的字段名；当前 sources 文件是 **v2 schema，字段名为 `fetch_url`**（`src/airadar/sources/loader.py`）。真要回滚时按 v2 写。
+>
+> Operational reference（历史）：微信公众号没有公开 RSS，ai-radar 曾通过 WeWe RSS 做发现层，再由本项目抓取原文正文供内部 LLM 使用。
 
 ## Prerequisites
 

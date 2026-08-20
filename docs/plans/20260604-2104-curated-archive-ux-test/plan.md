@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。本 plan 是一次性的 UX 契约端到端测试脚本，不是产品契约本身；执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 精选页「累积归档」的裁决见 [ADR-006](../../adr/006-curated-archive-mode.md)；正文测的数字页码形态已被无限滚动取代，当前权威见 [contracts/ux-contract.md](../../contracts/ux-contract.md) HP-1、HP-8。以下为原 plan 正文，未修改。
+
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式
 > - 进度状态：`./state.md`
 > - 决策日志：`./journal.md`

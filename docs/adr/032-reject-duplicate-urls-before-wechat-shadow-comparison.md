@@ -1,6 +1,6 @@
 # ADR-032: Reject duplicate URLs before WeChat shadow comparison
 
-Status: Accepted
+Status: Accepted; deprecated — the backend `appmsgpublish` family is unavailable at the platform level, see ADR-061
 
 Date: 2026-08-13
 

@@ -1,6 +1,8 @@
 # 服务清单
 
 > Mutable snapshot. ai-radar 长期运行的服务 + 自启机制 + 生命周期脚本 + Instructions 位置。
+>
+> **本目录（`docs/operations/`）是维护者产线 runbook，绑定这套具体实机拓扑**（主机名、端口、路径、外部账号都按本产线写）。fork 自己部署时按 [README](../../README.md) 走，本目录的读数只当参考。
 
 ## 服务
 
@@ -9,15 +11,20 @@
 | serve | launchd, KeepAlive=true | 已加载 | `./install.sh serve` / `./uninstall.sh serve` / `./status.sh serve` | [deploy/launchd/ai-radar-serve.plist.example](../../deploy/launchd/ai-radar-serve.plist.example) |
 | tunnel | launchd, KeepAlive=true | 已加载 | `./install.sh tunnel` / `./uninstall.sh tunnel` / `./status.sh tunnel` | [deploy/launchd/ai-radar-tunnel.plist.example](../../deploy/launchd/ai-radar-tunnel.plist.example) · [deploy/cloudflared/config.yml.example](../../deploy/cloudflared/config.yml.example) |
 | ai-radar pipeline (15min) | cron (`*/15 * * * *`) | 在 user crontab | `./install.sh pipeline` / `./uninstall.sh pipeline` / `./status.sh pipeline` | [deploy/cron/ai-radar-pipeline](../../deploy/cron/ai-radar-pipeline) · launchd 替代模板见 [ai-radar-pipeline.plist.example](../../deploy/launchd/ai-radar-pipeline.plist.example) |
-| alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1–A6 使用 per-severity lifecycle，D3 定价提醒独立去重 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
+| alert | launchd, StartInterval=300, RunAtLoad=true | 已加载；A1–A7 使用 per-severity lifecycle，D3 定价提醒独立去重 | `./install.sh alert` / `./uninstall.sh alert` / `./status.sh alert` | [deploy/launchd/ai-radar-alert.plist.example](../../deploy/launchd/ai-radar-alert.plist.example) · [monitoring-alerting.md](monitoring-alerting.md) |
 | performance probe (5min) | launchd, `StartInterval=300`, `RunAtLoad=true` | 当前未安装；旧 hourly cron 自 2026-07-24 起保持 PAUSED，等待 performance plan 收口 | `./install.sh performance-probe` / `./uninstall.sh performance-probe` / `./status.sh performance-probe` | [ai-radar-performance-probe.plist.example](../../deploy/launchd/ai-radar-performance-probe.plist.example) · [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 | LLM cost report | cron (`17 9 * * 1`) | 已在 user crontab；周一 09:17 经 `run-or-alert --key ai-radar-cost-report` 发送上一上海自然周 | `./install.sh cost-report` / `./uninstall.sh cost-report` / `./status.sh cost-report` | [deploy/cron/ai-radar-cost-report](../../deploy/cron/ai-radar-cost-report) |
-| performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**；启用 gate 与安装步骤见 runbook | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
+| performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**；启用 gate 与安装步骤的唯一全文在 [monitoring-alerting.md §安装 remediation cron](monitoring-alerting.md#用户旅程性能监控) | `./run.sh performance-remediate` | [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
+| wechat2rss | docker compose（`restart: unless-stopped`），随 OrbStack 开机自启 | 运行中；`wx_wechat2rss` 源消费 `127.0.0.1:8080` | `cd deploy/wechat2rss && docker compose up -d / down`；`deploy/wechat2rss/healthcheck.sh`、`logs.sh` | [deploy/wechat2rss/RUNBOOK.md](../../deploy/wechat2rss/RUNBOOK.md) |
+| wechat2rss healthcheck (20min) | cron (`11,31,51 * * * *`) | 在 user crontab | 手动跑：`deploy/wechat2rss/healthcheck.sh`（exit 0=健康，1=已发告警） | 外部探活：崩掉的服务发不出自己的告警。四类终态各有 dedup-key `wechat2rss-{unreachable,apierr,noaccount,login,riskctl}`，经 `im-notify --alert` 直发，**不写 `data/alert-events.jsonl`**（见 [monitoring-alerting.md §已送达通知历史](monitoring-alerting.md#已送达通知历史)） |
+| shadow-observe (每 30 分钟) | cron (`7,37 * * * *`) | 在 user crontab | 入口是本机 `plans/20260816-mp2rss-replacement/tools/shadow-observe.sh`（**未入 git**）；它调用的 `shadow_compare.py` 有归档副本 [docs/plans/20260816-mp2rss-replacement/tools/](../plans/20260816-mp2rss-replacement/tools/) | Mp2RSS ↔ Wechat2RSS 双跑覆盖率采样，直接读两个 feed、不读生产库。评估期临时项，路线定案后应移除该 cron |
 | DB sync → 腾讯服务器 (5h) | cron (`41 1,6,11,16,21 * * *`)，`run-or-alert --key ai-radar-db-sync` 包裹，失败经 im-notify 告警、成功自复位 | 已启用；这是公网副本持续新鲜的 Mac producer | 手动跑：`deploy/sync/sync-db-cron.sh`（完整 cron wrapper）或 `deploy/sync/sync-db-to-server.sh`（裸 producer） | [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) · [ADR-013](../adr/013-db-sync-cron-agent-socket-auth.md) · [ADR-014](../adr/014-ship-base-only-db-and-rebuild-fts.md) |
 
-`./install.sh` / `./uninstall.sh` / `./status.sh` 管理 serve、tunnel、pipeline、alert、performance-probe、cost-report 这 6 个服务。probe 的专属 plist 经 `./run.sh performance-probe` 启动；pipeline 和 cost-report 使用各自带精确 marker 的 user crontab 条目。remediation 与 DB sync 两条 cron 仍不在通用生命周期脚本管理范围内。
+probe 的专属 plist 经 `./run.sh performance-probe` 启动。crontab 条目的识别方式两种并存：**cost-report 用精确 marker**（行尾 `# ai-radar-cost-report`），**pipeline 没有 marker**——`install.sh` / `uninstall.sh` / `status.sh` 都按路径子串 `ai-radar/pipeline.sh` 匹配（三处 `grep`），所以同一台机器上有第二个 ai-radar checkout 时，卸载会连同名的另一行一起删掉。
 
-`./install.sh` 会逐服务检查脚本可判定的依赖。`alert` 要求两个 webhook；`cost-report` installer 只检查 notification webhook，尚不验证部署机的 `~/.local/bin/im-notify`、`run-or-alert` 与仓库 `run.sh` 可执行性（ISSUE-014）。cost-report 模板把 repo、命令和日志路径展开为绝对路径并显式设置 PATH；重复安装替换本条且保留无关 crontab，卸载只删除 `# ai-radar-cost-report` marker 条目。安装前置与 dry-run 见 [monitoring-alerting.md §LLM 成本报表与对账](monitoring-alerting.md#llm-成本报表与对账)。
+下面四条 cron 不在 `install.sh` / `uninstall.sh` / `status.sh` 的管理范围内，改动只能手工改 crontab：DB sync、performance-remediate、shadow-observe、wechat2rss healthcheck。
+
+`./install.sh` 会逐服务检查脚本可判定的依赖。`alert` 要求两个 webhook；`cost-report` installer 只检查 notification webhook，尚不验证部署机的 `~/.local/bin/im-notify`、`run-or-alert` 与仓库 `run.sh` 可执行性——**装完了也可能到点发不出周报**，先按 monitoring-alerting 的 preflight 手工验一遍（[ISSUE-014](../issues/cost-observability.md)）。cost-report 模板把 repo、命令和日志路径展开为绝对路径并显式设置 PATH；重复安装替换本条且保留无关 crontab，卸载只删除 `# ai-radar-cost-report` marker 条目。安装前置与 dry-run 见 [monitoring-alerting.md §LLM 成本报表与对账](monitoring-alerting.md#llm-成本报表与对账)。
 
 ## DB sync 职责、验证与故障证据
 
@@ -30,7 +37,9 @@
 | Server `ai-radar-db-apply.service` | oneshot consumer：claim base-only artifact，在 inactive candidate 上重建 FTS，做 SQLite/HTTP/route gates，切换、回滚或 quarantine，并只在 consumer gates 全过后推进 basis/receipt | 不 pull Mac 数据，不产生新 snapshot，不承担 freshness 排期 |
 | Server `ai-radar-db-apply.timer` | 安装但生产当前 disabled/inactive；若将来显式启用，只能 reconcile 已存在的 incoming/journal | 不是 producer，不能让公网数据自行变新 |
 
-当前 5 小时 Mac cron 是持续新鲜的唯一生产入口；单轮生产实测约 32–35 分钟。该排期已启用，但仍缺三轮连续自动成功证据，最终频率也尚未根据传输量、端到端耗时、陈旧度与资源成本完成确认；“cron 存在”本身不等于这些验证已完成。
+当前 5 小时 Mac cron 是持续新鲜的唯一生产入口。截至 2026-08-20，`logs/sync-cron.log` 里 2026-08-17 01:41 起的 **19 轮排期全部报 `sync OK`**，中途无失败轮；单轮耗时按同一轮 `sync start` 与 `sync OK` 的时间戳差算，最近 4 轮（08-20）为 **24–27 分钟**，最近 9 轮为 23–28 分钟（更早几轮到过 38 分钟）。
+
+这些都是 **producer 侧日志读数**：它只证明 producer 认为本轮已 committed，本轮**未**核实 server 侧 receipt/journal 的 identity 一致性（怎么核实见下面「成功终态必须同时满足」）。最终频率也尚未根据传输量、端到端耗时、陈旧度与资源成本完成确认。
 
 ### 只读验证入口
 
@@ -67,9 +76,9 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 
 ### Alert 判定与 lifecycle
 
-`alert` 服务负责 A1–A6，D3 定价提醒复用同一轮调度但不进入 page lifecycle。阈值、合并、degraded/in-progress 语义、severity 转换、投递与 ledger 的单一运行权威是 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则)；本服务清单只维护拓扑与生命周期入口，避免复制状态机细节后漂移。
+`alert` 服务负责 A1–A7（`src/airadar/admin/alerts.py` 的 `RULESET` 七条），D3 定价提醒复用同一轮调度但不进入 page lifecycle。阈值、合并、degraded/in-progress 语义、severity 转换、投递与 ledger 的单一运行权威是 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则)；本服务清单只维护拓扑与生命周期入口，避免复制状态机细节后漂移。
 
-> 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）。微信摄取走 Mp2RSS（见 [wechat-ingestion.md](wechat-ingestion.md)）。如需回滚到 WeWe RSS：`deploy/wewe-rss/`（docker-compose + RUNBOOK）仍在，launchd plist 与脚本 wiring 从 git 历史恢复（移除 commit 见 git log）。
+> 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）；其容器又于 **2026-08-20 手动停止**，当前为 `exited` 状态、**保留未删除**（其数据卷含已停用的微信读书登录态）。如需彻底清理，连同数据一起删除由用户执行，本仓不代劳。微信摄取现走 **Mp2RSS + Wechat2RSS 双跑取并集**（见 [wechat-ingestion.md](wechat-ingestion.md)）。如需回滚到 WeWe RSS：`deploy/wewe-rss/`（docker-compose + RUNBOOK）仍在，launchd plist 与脚本 wiring 从 git 历史恢复（移除 commit 见 git log）。
 
 调度方式选择：pipeline 在 cron 和 launchd 之间二选一，**不要同时启用**——详见 [experiences/deployment.md 2026-05-15 条目](../experiences/deployment.md)。当前生产用 cron。
 
@@ -79,10 +88,11 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 |---|---|---|
 | cron 守护 | macOS 自带，默认运行 | `pgrep cron` |
 | launchd | 系统自带，登录后自动运行 | `launchctl print gui/$UID` |
-| pipeline LLM key | `DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` 任一 | `./install.sh pipeline` summary 显示 installed |
+| pipeline LLM key | `DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` 任一 | 只读存在性：`grep -c '_API_KEY=.' .env ~/.claude/.env 2>/dev/null`（逐文件出计数，不回显值；`.env:0` 表示该文件里一个都没有）。**存在 ≠ 可用**：key 有效性只有真实调用才证明得了，日常由 A1 告警在生产调用上覆盖；要当场确认就实跑一次最小调用 `./run.sh prefilter --limit 1`（**会写一行 prefilter 结果，不是只读**），看它是否报 provider 错误。**不要**拿 `./install.sh pipeline` 当验证——它会写 crontab 与 `.env` |
 | alert 发送器 | `~/.local/bin/im-notify` + page 的 `FEISHU_GENERAL_ALERT_WEBHOOK` + notice 的 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`；两个 webhook 任缺一个都拒绝 alert 安装 | `test -x "$HOME/.local/bin/im-notify"` 后运行下文无发送 preflight；已安装时检查 plist 同时有两个 key |
 | Playwright Chromium | 微信原文抓取与默认 `performance-probe` | 部署前显式运行 `uv run playwright install chromium`；`install.sh` 不自动下载或校验 |
-| Cloudflare tunnel | `deploy/cloudflared/config.yml` | `test -f deploy/cloudflared/config.yml` |
+| Cloudflare tunnel | `deploy/cloudflared/config.yml` | 存在还不够，要判它不是 example 占位：`rg -c '^tunnel: [0-9a-f]{8}-' deploy/cloudflared/config.yml`（真实 tunnel UUID）与 `rg '^\s+- hostname: ' deploy/cloudflared/config.yml`（应列出实际托管的 hostname，不含 `example.com`） |
+| OrbStack（Docker daemon） | 必须设为**开机自启**（OrbStack → Settings → General → "Start at login"） | `orbctl status`。未自启时 `wechat2rss` 容器在重启后静默缺席——`restart: unless-stopped` 只管容器进程崩溃，管不了 daemon 不在 |
 | 图片出口代理（新加坡） | serve 主机 `.env` 的 `AI_RADAR_IMG_PROXY_URL`（现指 `127.0.0.1:39148`）+ 上海主机 systemd 服务 `ai-radar-img-tunnel`（SSH 隧道到 SG tinyproxy，见下节） | 走下节「诊断顺序」，**不要**只看公网 `/img` 的状态码——它对每种失败都回 404，读数区分不了故障层 |
 | Cloudflare Cache Rule | zone `aiplanet.live` 上的 `AI Radar short public pagination TTL`（见下节） | 当前生产旁路不适用；将来重新经 Cloudflare 代理后，同一 public 分页 URL 第二次请求应为 `CF-Cache-Status: HIT` |
 
@@ -100,7 +110,7 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 
 - 上海主机 systemd 服务 **`ai-radar-img-tunnel`**（`ssh -L 39148:127.0.0.1:39147 ubuntu@43.153.216.193`，`Restart=always`、开机自启）。用受限专用 key `~ubuntu/.ssh/sg_img_tunnel`，SG 侧 authorized_keys 前缀 `restrict,port-forwarding,permitopen="127.0.0.1:39147"`（纯隧道，无 shell）。
 - 上海 `.env` 的 `AI_RADAR_IMG_PROXY_URL` 指 `http://<user>:<pw>@127.0.0.1:39148`（tinyproxy 认证不变，只是 host:port 变本地隧道口）。
-- **SG 防火墙放行 39147 的入站规则已不再需要**（流量走 SSH 22），可移除；留着无害。
+- **SG 防火墙放行 39147 的入站规则（历史，已不承载流量）**：隧道化后流量走 SSH 22，该入站规则已不再被用到，可移除；留着无害。
 - 运维：`ssh tencent-webserver-china sudo systemctl status ai-radar-img-tunnel`；隧道断则 `journalctl -u ai-radar-img-tunnel`。
 
 tinyproxy 本身（在 SG）不由本仓的 `install.sh` / `status.sh` 管理，改动只在该主机上做。2026-08-18 读回的生效配置：
@@ -109,10 +119,10 @@ tinyproxy 本身（在 SG）不由本仓的 `install.sh` / `status.sh` 管理，
 |---|---|---|
 | 版本 / 服务 | tinyproxy 1.11.1，systemd `active` + `enabled`，`Restart=on-failure` | `Restart` 由 drop-in 显式设置——**默认是 `no`**，实测 `kill -9` 后服务停在 `failed` 不自愈；设置后验证 PID 979054 → 979086 自动重启 |
 | 端口 / 监听 | `Port 39147`，`Listen 0.0.0.0` | 现由 SSH 隧道经 SG 回环访问，实际到达的源是 `127.0.0.1`；绑 `0.0.0.0` 是历史（直连时代），可收窄到 `127.0.0.1` |
-| 入站 ACL | `Allow 111.229.134.9` + `Allow 127.0.0.1` | 隧道化后有效的是 **`Allow 127.0.0.1`**（SSH 转发在 SG 侧以回环发起）；`Allow 111.229.134.9` 已不再被用到，随直连防火墙规则一并可清 |
+| 入站 ACL | `Allow 111.229.134.9` + `Allow 127.0.0.1` | 隧道化后有效的是 **`Allow 127.0.0.1`**（SSH 转发在 SG 侧以回环发起）；`Allow 111.229.134.9`（历史，已不承载流量）随直连防火墙规则一并可清 |
 | 认证 | `BasicAuth`，口令只存在于该机 `/etc/tinyproxy/.credpw`（600 root:root）与 serve 主机 `.env`（600） | 口令不进仓库、不进对话 |
 | 出站限制 | `ConnectPort 443` + `Filter` + `FilterDefaultDeny Yes` + `FilterType ere`，名单仅 `^pbs\.twimg\.com$` | 默认拒绝、逐条放行：即使凭据泄露，它也只能连这一个域名的 443 |
-| 云防火墙（历史） | 两台主机是 **Lighthouse（轻量应用服务器）** 实例，同属控制台账号 `AppId 1424748107`（`webserver-singapore` = `lhins-3nxwyynb` / `43.153.216.193`；`webserver-china` = `111.229.134.9`）。曾在 SG 实例防火墙加入站 `111.229.134.9/32 → TCP 39147 允许`，**隧道化后已不需要**。（教训：早先从主机 metadata 读到 `app-id 1301555531` 就断言「属于另一个账号、需换登录」——那是误读，Lighthouse 实例跑在腾讯托管 VPC，metadata 的 app-id 是底层资源账号、非控制台归属账号；实际用个人微信登录即在同一账号看到两台机器。CVM `DescribeInstances` 全 0 也是同因——它们是 Lighthouse、不在 CVM 命名空间。） |
+| 云防火墙（历史） | 两台主机是 **Lighthouse（轻量应用服务器）** 实例，同属控制台账号 `AppId 1424748107`（`webserver-singapore` = `lhins-3nxwyynb` / `43.153.216.193`；`webserver-china` = `111.229.134.9`）。曾在 SG 实例防火墙加入站 `111.229.134.9/32 → TCP 39147 允许`（历史，已不承载流量：隧道化后不需要）。（查这两台机归属时的一条教训见 [experiences/deployment.md](../experiences/deployment.md) 2026-08-18 条目。） |
 
 **已知风险（已接受）**：tinyproxy 1.11.1 存在未修补的 CVE-2026-31842。接受依据是暴露面已收窄到单 IP + 认证 + 仅 CONNECT 443 + 单域名白名单，且该主机不承载其他服务。上游发版后应跟进升级。
 
@@ -190,7 +200,7 @@ curl -sS --compressed -D - -o /dev/null 'https://news.aiplanet.live/wechat?page=
 curl -sS --compressed -D - -o /dev/null 'https://news.aiplanet.live/wechat?q=OpenAI&page=1'
 ```
 
-第二次仍是 `DYNAMIC`/`BYPASS` 时，依次检查规则顺序、表达式、Edge TTL 模式与 origin header，再考虑动应用代码。命中效果反映在 `performance-probe` 的旅程延迟样本上（翻页 API 实测 3-5s → 0.5-1.4s），细节见 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控)。
+第二次仍是 `DYNAMIC`/`BYPASS` 时，依次检查规则顺序、表达式、Edge TTL 模式与 origin header，再考虑动应用代码。命中效果反映在 `performance-probe` 的旅程延迟样本上；实测数字与测量协议见 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控)。
 
 > 无法用 zone API 自动化：现有 `CLOUDFLARE_API_TOKEN` 能读 zone 但无 rulesets 权限（`/zones/<zone>/rulesets` → 403），故此规则只在 dashboard 手工维护；不要为此拓宽或替换该 token。
 
@@ -244,7 +254,7 @@ The `ai-radar` tunnel configuration still contains one retired AI Radar ingress 
 
 | Hostname | Local service | Owner repo | Notes |
 |---|---|---|---|
-| `aiplanet.live` | `http://127.0.0.1:8000` | `~/research/ai-radar` | **已退役入口**：Mac serve 已改绑 8010（本地 plist 明文禁止回绑 8000，仅限局域网/tailscale 预览），该 ingress 现回 502；域名下线待上游 P5。AI Radar 公网生产 = 腾讯服务器现存进程承载的 `news.aiplanet.live`；repo-owned 双槽 unit 当前未安装，服务清单缺口见 [docs-quality issue](../issues/docs-quality.md) |
+| `aiplanet.live` | `http://127.0.0.1:8000` | `~/research/ai-radar` | **已退役入口**：Mac serve 已改绑 8010（本地 plist 明文禁止回绑 8000，仅限局域网/tailscale 预览），该 ingress 现回 502；域名下线待上游 P5。AI Radar 公网生产 = 腾讯服务器现存进程承载的 `news.aiplanet.live`；repo-owned 双槽 unit 当前未安装——**本表因此描述不了腾讯服务器上真正在跑的那个进程**，缺口记在 [docs-quality issue](../issues/docs-quality.md) |
 | `sjtu.aiplanet.live` | `http://localhost:8100` | `~/research/sjtu-aaa` | SJTU 3A alumni site. `/admin` 门禁由 Cloudflare Access 承担（2026-08 起；**不得**在 tunnel 配置加回历史上的 `http_status:403` 规则——见 `~/research/sjtu-aaa/docs/operations/services.md` 的禁止说明，以该仓为权威）。 |
 
 Before editing, reinstalling, or removing this tunnel, inspect `~/research/sjtu-aaa/docs/operations/services.md` and preserve the SJTU ingress rules. A catch-all or rewritten tunnel config that only keeps `aiplanet.live` will silently take the SJTU site offline even if AI Radar still looks healthy. After any tunnel change, verify both:
@@ -264,14 +274,15 @@ Before editing, reinstalling, or removing this tunnel, inspect `~/research/sjtu-
 ```bash
 ./status.sh                                        # 受管服务总览
 curl -sf http://127.0.0.1:8010/api/v1/healthz && echo serve_ok   # 本产线 Mac serve 现绑 8010（generic fork 按自己的端口）
-curl -sf "https://${AI_RADAR_SITE_DOMAIN}/" -o /dev/null && echo tunnel_ok   # 仅适用于经本 tunnel 发布的 fork；本产线该检查已不适用（本机 env 的 SITE_DOMAIN 仍指向已退役的 aiplanet.live，公网核查用 https://news.aiplanet.live）
+curl -sf https://news.aiplanet.live/api/v1/healthz && echo public_ok      # 公网生产（腾讯服务器，不经 tunnel）
+# 本 tunnel 现只承载 SJTU 站，其验证组见 §Cloudflare tunnel shared ingress
 ./status.sh alert
 uv run pytest tests/test_admin_alerts.py -q -k 'send_alert_message_calls_im_notify_alert_without_dedup or send_alert_message_routes_notice_without_alert_flag'
 ./run.sh performance-probe --origin-url http://127.0.0.1:8010 --public-url https://news.aiplanet.live
 ./run.sh fetch                                      # pipeline + Mp2RSS feed 联通性；保留真实退出码
 ```
 
-alert 的双通道配置与无发送 preflight 以 [monitoring-alerting.md §im-notify 飞书双通道](monitoring-alerting.md#im-notify-飞书双通道) 为准；上述 pytest 只验证 mock 投递路由，不发送真实消息。`./run.sh admin alert-check` 不是无害 smoke：当前状态如果触发 firing / resolved，它会按 page/notice 实际调用 `im-notify`。
+alert 的双通道配置、无发送 preflight，以及「`./run.sh admin alert-check` 会发真实消息、不是无害 smoke」这条告诫，都以 [monitoring-alerting.md §im-notify 飞书双通道](monitoring-alerting.md#im-notify-飞书双通道) 为准；上述 pytest 只验证 mock 投递路由，不发送真实消息。
 
 当前不要把 `performance-remediate` 当 bring-up smoke 执行；启用 gate 与安装步骤以 [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) 为准。
 
@@ -280,39 +291,25 @@ alert 的双通道配置与无发送 preflight 以 [monitoring-alerting.md §im-
 ## 安装 / 卸载 / 切换
 
 ```bash
-./install.sh alert        # 单个
-
+./install.sh <服务>       # 安装，或对已装的服务重新生成配置并重载
+./uninstall.sh <服务>     # 单个
 ./uninstall.sh            # 全部
-./uninstall.sh alert      # 单个
-
 ./status.sh               # 只读面板
 ```
 
-当前不要运行无参数 `./install.sh`：它会同时安装仍应保持停用、且默认 origin 仍错误的 `performance-probe`（[ISSUE-017](../issues/cost-observability.md#issue-017--performance-probe-默认-origin-仍假定-serve-在-8000)）。显式逐个安装需要的服务。
+`./install.sh <服务>` 是**唯一**的「改配置后让它生效」入口：它重新生成 plist 并对已加载 job 执行 bootout/bootstrap。改了 alert 的任一 webhook 后**不要**只 `kickstart -k`——那不刷新 launchd 已烘焙的 `<EnvironmentVariables>`，旧 webhook 会继续用下去。
 
-重新生成配置并重载某个受管 launchd 服务，统一重跑其安装入口：
-
-```bash
-./install.sh serve
-./install.sh tunnel
-./install.sh alert
-```
+当前不要运行无参数 `./install.sh`：它会同时安装仍应保持停用、且默认 origin 仍错误的 `performance-probe`——**装上就会按错端口探测并可能误报**（[ISSUE-017](../issues/cost-observability.md#issue-017--performance-probe-默认-origin-仍假定-serve-在-8000)）。显式逐个安装需要的服务。
 
 告警的 severity、重试、去重与 ledger 语义以 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则) 为单一运行权威。
-
-⚠ 改了 alert 的任一 webhook 后，单独 `kickstart -k` 不会刷新 launchd 烘焙的 `<EnvironmentVariables>`。重跑 alert 安装会重新生成 plist，并对已加载 job 执行 bootout/bootstrap：
-
-```bash
-./install.sh alert
-```
 
 pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再手动 `launchctl bootstrap` launchd plist（暂未做成脚本——cron 是当前生产选择）。
 
 ## 相关参考
 
 - [README.md §服务](../../README.md#服务) — 用户视角的脚本入口表
-- [docs/operations/monitoring-alerting.md](monitoring-alerting.md) — `/admin` dashboard、A1–A6 与 D3 告警、周报、飞书 webhook 与旅程延迟
+- [docs/operations/monitoring-alerting.md](monitoring-alerting.md) — `/admin` dashboard、A1–A7 与 D3 告警、周报、飞书 webhook 与旅程延迟
 - [docs/experiences/deployment.md](../experiences/deployment.md) — 历史踩坑（env 不继承、cron/launchd 共存、tunnel region、docker compose 守护）
-- [docs/operations/wechat-ingestion.md](wechat-ingestion.md) — 微信公众号摄取（Mp2RSS 接入、`MP2RSS_FEED_URL` 配置、头像 backfill、迁移留尾记录）
+- [docs/operations/wechat-ingestion.md](wechat-ingestion.md) — 微信公众号摄取（Mp2RSS + Wechat2RSS 双跑与跨源去重、两个 feed URL 的配置、头像 backfill、迁移留尾记录）
 - [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 微信源添加流程（已停用，仅回滚参考）
 - [deploy/wewe-rss/RUNBOOK.md](../../deploy/wewe-rss/RUNBOOK.md) — 旧 WeWe RSS 详细运维手册（已停用）

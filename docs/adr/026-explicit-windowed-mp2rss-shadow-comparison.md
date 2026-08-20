@@ -1,6 +1,6 @@
 # ADR-026：以显式只读命令执行窗口化 Mp2RSS shadow 对比
 
-- 状态：Accepted
+- 状态：Accepted；持久状态演化由 ADR-027 supersede；deprecated——后台 family 平台级不可用，见 ADR-061
 - 日期：2026-08-13
 - 范围：默认关闭、单账号人工 probe 的 shadow 结果与生产 `wx_mp2rss` 基准对比
 

@@ -47,3 +47,7 @@
 - 本项目的 mobile 类名词汇表与参考站不同（用户已拍板"按测得值在我方 token/类名体系里重写"）：分类容器是 `.seg-list`/`.seg-item`（非 `.segmented`）、移动顶栏是 `.app-mobile-bar`（非 `.m-topbar`）、日期头是 `.timeline-day-head`。`.m-tabbar`/`.m-tab` 是有意保留的少数同名项。
 - 实施后实际只用了**两处**逃生口，均符合判据（文字语义不同而非纯几何）：① 标题「精选」/「最新精选」两个 span；② 日期的桌面绝对日名 / 移动相对日名两个 span（`.desktop-date-label` / `.mobile-date-label`）。
 - 副作用：桌面与移动共享同一 DOM，意味着移动专属几何必须靠 media query 覆盖而非独立规则集，`style.css` 的 `≤960px` 块因此较大。这是有意的取舍。
+
+## 修订记录
+
+**2026-08-20 — 引用文件已归档。** 上文两处引用的 `measured-tokens.md`（C.0 的双 DOM 结构事实、B.2 的 `.m-row*` 规则比对）已归档至 [`docs/plans/20260803-aihot-visual-parity/measured-tokens.md`](../plans/20260803-aihot-visual-parity/measured-tokens.md)（本轮并行归档中）。原文按裸文件名引用，读者无从定位；章节编号 C.0 / B.2 在归档件中不变。

@@ -1,6 +1,6 @@
 # ADR-025：公众号后台发现探测采用低频、小页的临时保守默认
 
-- 状态：Accepted
+- 状态：Accepted；deprecated——后台 family 平台级不可用，见 ADR-061
 - 日期：2026-08-13
 - 后续澄清：ADR-044 证明本 ADR 所依据的旧 `rate_limited` 记录没有保留 exact `ret`，不能证明微信官方存在 24 小时窗口；1440 分钟始终只是本项目 feasibility 阶段的本地保守默认
 - Supersedes：ADR-024 中“约每 2 小时请求一次”和人工 probe 默认抓取 20 篇的部分；不改变其 shadow、保留 Mp2RSS 和切换门槛

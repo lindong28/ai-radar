@@ -57,3 +57,7 @@
 - **不要并行化 interpret**：复用的 ai-assistant KB 写入器对 `index.json` + `vectors.npy`（顺序严格对应）是整文件读-改-写、非原子，并发 save 会互相覆盖导致 index/vectors 错位或损坏；且对 ai-assistant 是零拷贝复用（不 fork 不改其代码），故 runner 只能串行。稳态 cron 每轮只增量处理新增几篇，串行足够。安全的提速形态、上游修复方向详见 docs/issues/general.md（"interpret 回填无法并发"）。
 - 解读质量与推荐口径的演化绑定在 ai-assistant 的 summarizer 上——调整推荐评级 / 摘要风格应去 ai-assistant 改 prompt，ai-radar 侧只做展示渲染（markdown-it-py 渲染 + nh3 sanitize）。
 - `wechat_interpretations` 表（migration 009）在 `radar.db` 内保留 `summary_md` / `abstract` / `tags_json` 独立副本，Web 请求不读 ai-assistant 文件系统——KB 是写入目标与一致性来源，不是 Web 读路径。
+
+## 修订记录
+
+**2026-08-20 — 「interpret 回填无法并发」的 issue 指针已迁移。** 上面 Consequences 段指向 `docs/issues/general.md` 的那条 issue 已于 2026-06-15 判为 resolved（结论是**维持串行、wontfix-by-decision**：一次性历史回填已完成，稳态下 cron 每轮只增量处理新增几篇，串行足够，并发改造零长期收益；上游修复属 ai-assistant 侧），并已移入 [docs/issues/archive/closed.md](../issues/archive/closed.md)「interpret 回填无法并发——复用的 ai-assistant KB 写入器非并发安全」。按此路径去 `general.md` 找不到它。本决策的「不要并行化 interpret」结论不变，且已被那次裁决确认。

@@ -1,6 +1,6 @@
 # ADR-019：单篇解读成本只与自身可比前窗对照
 
-- 状态：Accepted
+- 状态：Accepted；interpret cache 精确覆盖 gate 由 ADR-020 supersede
 - 日期：2026-08-11
 - 范围：每周 LLM 成本报表的 `单篇解读` 行；不定义 P3 成本目标、解读质量或账单实付
 

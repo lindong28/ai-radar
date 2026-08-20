@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 正文采用的 WeWe RSS 发现层已被替换，微信摄取的当前接入方案、配置与双跑去重见 [operations/wechat-ingestion.md](../../operations/wechat-ingestion.md)「接入方案」「配置」「双跑」与「已移除的旧源」各节，跨源条目身份的裁决见 [ADR-059](../../adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md)。以下为原 plan 正文，未修改。
+
 # Plan — 微信公众号文章接入 ai-radar / your-domain.example
 
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式

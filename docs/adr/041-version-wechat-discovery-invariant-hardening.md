@@ -1,6 +1,6 @@
 # ADR-041: Version WeChat discovery invariant hardening as schema v8
 
-Status: Accepted
+Status: Accepted; the parts that depend on the backend `appmsgpublish` / `searchbiz` family have lost their implementation target, see ADR-061. The schema-evolution and evidence discipline it establishes still stands.
 
 Date: 2026-08-14
 

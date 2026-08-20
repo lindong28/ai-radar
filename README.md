@@ -1,6 +1,10 @@
 # AI Radar
 
-AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS、X 和微信公众号信源抓取 AI 相关内容，经过 LLM 筛选、评分、翻译后，以时间线形式呈现精选内容。
+AI Radar 是一个公开只读的 AI 信息流站点。它从 RSS、X 和微信公众号信源抓取 AI 相关内容，经过 LLM 筛选、评分、翻译后，以时间线形式呈现精选内容。维护者运行的实例在 <https://news.aiplanet.live>，可以先去看成品形态。
+
+**适合谁**：想自建一份个性化 AI 信息流的个人或小团队。信源池、筛选口径、评分权重、精选阈值都在你自己的仓库里，fork 后按自己的关注面改。它不是多租户 SaaS，也没有账号体系——一份部署服务一个信源口径，读者侧完全只读。
+
+UX 设计与信息架构参照 [AIHOT](http://aihot.virxact.com/)。差异在定位：AIHOT 是一个统一口径的公共站点，AI Radar 把信源、筛选和评分做成每个人都能按自己需求配置、自行部署的个性化信息消费工具。
 
 ## 快速开始
 
@@ -15,19 +19,31 @@ uv sync
 uv run playwright install chromium  # 微信抓取必需；启用 performance-probe 时也复用它
 ```
 
+装完验证浏览器真的能起来（只看 `playwright --version` 证明不了浏览器已下载）：
+
+```bash
+uv run python -c "from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    b = p.chromium.launch(); print('chromium ok', b.version); b.close()"
+```
+
+打印 `chromium ok <版本号>` 即可。
+
 ### 2. 配置环境变量
 
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env`，填入至少一个 LLM API Key（DeepSeek、OpenAI、GLM 或 ARK 任选其一）：
+编辑 `.env`，填入一个 LLM API Key——`prefilter` / `score` / `enrich` 的默认后端只认 `DEEPSEEK_API_KEY` 或 `ARK_API_KEY`（详见下文「LLM Provider」）：
 
 ```
 DEEPSEEK_API_KEY=sk-xxx
 ```
 
-其他配置项均有默认值，详见 `.env.example` 中的注释。抓取 `data/sources.toml` 中启用的 X API 信源时还需配置 `X_BEARER_TOKEN`；请求窗口和单轮上限见下文「信源池」。第一次本地试跑可以先保留站点身份默认值；微信公众号有两个可选来源，都不设置也能跑：`MP2RSS_FEED_URL`（托管的 Mp2RSS 合集）与 `WECHAT2RSS_FEED_URL`（自建 Wechat2RSS 合集）。任一未设置时 loader 会跳过对应来源并继续加载其他信源；两个都设置则**并行运行取并集**，同一篇文章只入库一次（按公众号 + 标题 + 发布时间窗去重）。为什么这样接、去重键怎么定的，见 [operations/wechat-ingestion.md](docs/operations/wechat-ingestion.md)。
+其他配置项都有可用的默认值，第一次本地试跑不用动（部署到公网前再按下文「站点身份与最小配置」改）。X 信源要 `X_BEARER_TOKEN`、微信信源要 `MP2RSS_FEED_URL` / `WECHAT2RSS_FEED_URL`，都可以先不填——不填时对应来源被跳过、其余信源照常加载，口径见下文「信源」。
+
+下面三个变量 `.env.example` **未收录，需要时手动新增**：`AI_RADAR_PUBLIC_URL`（公网站点地址，只被 `performance-probe` 用作 public 视角的测量目标，未设置时探针只测 origin）、`AI_RADAR_ADMIN_ALLOW_LOCAL`（设为 `1`/`true`/`yes` 时允许来自 `127.0.0.1`、`::1`、`localhost` 的请求直接访问 `/admin`，本地开发用；不设置则 `/admin` 要求请求带 Cloudflare Access header）、`AI_RADAR_PROXY_FILE`（指向一个记录出网代理地址的文件；`pipeline.sh` 运行时从中解析并导出代理，供 cron 这类拿不到交互式 shell 环境的场景使用）。
 
 ### 3. 初始化数据库
 
@@ -36,16 +52,22 @@ DEEPSEEK_API_KEY=sk-xxx
 ./run.sh admin sources reload
 ```
 
+成功读数：`migrate` 打印 `migrated <radar.db 路径>` 与 `migrated llm_usage <llm_usage.db 路径>` 两行；`reload` 打印 `reloaded <N> sources`，N 应等于 `data/sources.toml` 里启用的来源数。
+
 ### 4. 运行数据处理流水线
 
 ```bash
 ./run.sh fetch       # 从 RSS/X/微信公众号信源抓取内容
 ./run.sh prefilter   # LLM 筛选 AI 相关内容
-./run.sh score       # 五维评分
+./run.sh score       # 五维评分（relevance、density、recency、authority、engineering）
 ./run.sh enrich      # LLM 生成中文标题和摘要
-./run.sh curate      # 精选高价值内容
+./run.sh curate      # 精选高价值内容（默认阈值 6.5）
 ./run.sh interpret   # 可选：微信文章解读 + ai-assistant 兼容知识库回写（默认关闭）
 ```
+
+成功读数：`fetch` 逐源打印 `OK <source_id> fetched=… inserted=…`（失败的源打 `FAIL <source_id> <错误>`），末行汇总 `=== attempted=… inserted=… failed=…`——先看 `failed` 是不是 0，再看 `inserted` 是不是大于 0。`prefilter` / `score` 打印 `processed=… errors=…`，`enrich` 同形，`curate` 打印 `curate run_id=… selected=… threshold=…`，`interpret` 未启用时打印 `interpret skipped=true message=…` 并正常退出。
+
+**新库首轮 `curate` 很可能 `selected=0`，首页因此是空的，这是正常的**：默认阈值 6.5，而首轮抓到的多是普通条目。此时用 `/all`（完整时间线，不过阈值）确认数据确实进来了，或用 `./run.sh curate --threshold 3` 把阈值调低重跑一次，观察 `selected` 是否变大。阈值没有环境变量入口，只有这个命令行参数。
 
 ### 5. 启动 Web 服务
 
@@ -53,7 +75,7 @@ DEEPSEEK_API_KEY=sk-xxx
 ./run.sh serve --host 127.0.0.1 --port 8000
 ```
 
-访问 `http://localhost:8000` 查看站点。
+访问 `http://localhost:8000`：应看到左侧栏 + 精选时间线的首页；若精选为空（见上），改看 `http://localhost:8000/all` 应列出已入库的条目。`curl http://localhost:8000/api/v1/healthz` 返回 200 说明服务本身起来了。
 
 ## 自动化调度
 
@@ -68,33 +90,24 @@ cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调
 ./install.sh pipeline     # 注册到 user crontab，每 15 分钟一次
 ```
 
+`install.sh pipeline` 的成功读数：先打印 `✓ pipeline: installed in user crontab (every 15 min)`（已装过则是 `✓ pipeline: already in crontab`），末尾 `Install summary:` 块里 `installed:` 一行列出本次装上的服务、`skipped:` 列出因缺依赖跳过的服务及原因。装完再核一遍排期与产出：`crontab -l | grep pipeline.sh` 应见一条 `*/15` 开头的行；每轮结果写在 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
+
 调度方式详情、launchd 备选模板见 §服务 + [docs/operations/services.md](docs/operations/services.md)。
 
 不要把 `deploy/cron/ai-radar-pipeline` 或其展开结果直接送入 `crontab -`：这会替换该用户的整份 crontab，并删除 DB sync、cost-report 等无关排期。安装和更新 pipeline 排期统一使用 `./install.sh pipeline`。
 
 ### 用户旅程性能监控与候选修复
 
-`performance-probe` 每次用浏览器从同机 origin 与同机 public（由 `AI_RADAR_PUBLIC_URL` 环境变量配置；未配置时跳过 public 视角、仅测 origin）两个视角测量首页首卡、微信列表首卡、微信详情可读和微信翻页稳定四条旅程。探针只在单条旅程测量前后都确认 pipeline 空闲时保存该样本；pipeline 正在运行或负载状态不确定时跳过该次旅程尝试，不让 non-idle 输入进入 PERF 窗口。每个旅程/视角保留 20+3 确认窗，首个 confirmed firing 需要 22 条有效 idle 样本，超预算后以 `page` 投递。所有结果均为 **same-host provisional**，不代表区域 SLO。确认退化后，`performance-remediate` 会在隔离 worktree 中启动一个 fail-closed Codex worker，最多生成一个仅供人工审阅的本地候选 commit；它不会 push、deploy、调用 launchctl 或写生产数据库。
-
-先核对两个 CLI，并只手工运行 probe 来确认浏览器与两个站点视角可用；这不会证明告警 sender、webhook 或实际投递通道可用，告警配置的无发送 preflight 见 [监控与告警 runbook](docs/operations/monitoring-alerting.md#im-notify-飞书双通道)：
+`performance-probe` 是一个可选的同机探针：用浏览器从 origin 与 public 两个视角测量四条用户旅程（首页首卡、微信列表首卡、微信详情可读、微信翻页稳定），只在 pipeline 空闲时保存样本，确认退化后可由 `performance-remediate` 生成一个仅供人工审阅的本地候选 commit（不 push、不 deploy、不写生产库）。所有读数都是 same-host provisional，不代表区域 SLO。
 
 ```bash
 ./run.sh performance-probe --help
-./run.sh performance-remediate --help
-./run.sh performance-probe --origin-url http://127.0.0.1:8010 --public-url https://news.aiplanet.live
+./run.sh performance-probe --origin-url http://127.0.0.1:8000 --public-url https://your-site.example.com
 ```
 
-`performance-probe` 由 `install.sh` 管理：安装后，专属 per-file LaunchAgent 以 `StartInterval=300` 每 5 分钟经 `./run.sh performance-probe` 启动，因此外部超时 watchdog 始终位于启动路径；pipeline 自身仍保留既有 `*/15` user crontab。当前部署未安装 probe，旧 hourly cron 保持 PAUSED；安装、查询和卸载 probe：
+`--help` 只证明这个子命令存在，不证明探针能工作。**判活看真实运行的输出**：每条被测旅程会打印一行 `<journey> vantage=… latency_ms=… load_class=… provisional=true`，末行是 `stored=N alerts_sent=M`——`stored` 才是这一轮真正保存了几条样本，`stored=0` 表示所有旅程都被跳过（pipeline 非空闲、浏览器不可用或 public 视角未配置），此时它没有在监控任何东西。`--public-url` 未给且 `AI_RADAR_PUBLIC_URL` 未设置时只测 origin。
 
-```bash
-./install.sh performance-probe
-./status.sh performance-probe
-./uninstall.sh performance-probe
-```
-
-homepage `hard_failure=true` 的已知假阳性已修复。但 `performance-remediate` 仍不由 `install.sh` 管理并受运维 gate 约束：部署后按 [监控 runbook 的可执行 gate](docs/operations/monitoring-alerting.md#安装-5-分钟-launchd-调度) 确认 homepage 最新 idle 样本没有 hard failure、homepage `PERF:*` page lifecycle 不在 firing；同一 fail-fast 流程会先手工运行 remediation，成功后才安装它自己的 cron。
-
-规则、预算、证据保留和处置边界见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md#用户旅程性能监控)。
+窗口规则、告警预算、证据保留、安装/卸载步骤与 `performance-remediate` 的运维 gate 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md#用户旅程性能监控) 与 [`docs/operations/services.md`](docs/operations/services.md)；各服务当前是否安装以那两份文档为准。告警通道本身的无发送 preflight 见 [监控与告警 runbook](docs/operations/monitoring-alerting.md#im-notify-飞书双通道)。
 
 ## Web 页面
 
@@ -102,19 +115,17 @@ homepage `hard_failure=true` 的已知假阳性已修复。但 `performance-reme
 |------|-----|------|
 | 精选 | `/` | 高评分精选内容，按日期分组（可折叠），顶部为近 48 小时热点榜（2 条 + 「完整榜单 →」），无限下拉加载 |
 | 全部 AI 动态 | `/all` | 完整时间线，最新优先，无限下拉加载（搜索态用页码分页） |
-| 热点榜 | `/hot` | 近 48 小时热点完整榜单（热度 = 加权分×10 + 关联讨论×5）；桌面从侧栏进入，移动端从首页「完整榜单 →」进入 |
+| 热点榜 | `/hot` | 近 48 小时热点完整榜单（热度 = 加权分×10 + 关联讨论×5）；桌面从侧栏进入，移动端从首页「完整榜单 →」进入。serve 重启后的短窗内接口返回 503、页面显示「热点榜单正在生成」是预期行为（会自愈），见 [monitoring-alerting.md](docs/operations/monitoring-alerting.md#serve-重启后-apiv1hot-短暂-503预期非故障) |
 | 微信文章解读 | `/wechat` | 已订阅微信公众号文章的结构化总结，支持按标题、公众号、摘要和标签搜索；详情页为 `/wechat/<slug>` |
 | AI 日报 | `/daily` | 每日精选归档，按月份分组的可折叠归档栏 + 今日看点，支持 `?date=YYYY-MM-DD` |
 | 收藏 | `/bookmarks` | 本设备浏览器收藏的内容（localStorage），支持导出/导入 JSON |
 | 关于 | `/about` | 项目介绍和信源池 |
 | 更新日志 | `/changelog` | 渲染仓库根 `CHANGELOG.md` |
 | 更多 | `/more` | **仅 ≤960px 有入口**（底部 tab 栏第 4 项）：微信文章解读 / 收藏 / 关于 / 更新日志 |
-| 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警；公网需 Cloudflare Access |
-| LLM 已记录用量 | `/admin/usage` | 内部页面，展示最近 30 天 `llm_usage` 记录行的成本三态、来源单价、未定价清单和 cache 采集覆盖；公网需 Cloudflare Access |
+| 运维监控 | `/admin` | 用户量、文章摄取、pipeline 阶段健康与当前告警。本机可用 `AI_RADAR_ADMIN_ALLOW_LOCAL=1` 放行；公网侧的访问控制要求见下文「部署 → 运维监控」 |
+| LLM 已记录用量 | `/admin/usage` | 内部页面，展示最近 30 天 `llm_usage` 记录行的成本三态、来源单价、未定价清单和 cache 采集覆盖；访问控制同 `/admin` |
 
-**响应式**：断点 640 / 960 / 1200px。`>960px` 为侧栏 + 内容区的桌面布局，内容区填满可用宽度；日期分组头与卡片共用同一套网格轨道（日期右对齐落在时间列内，与下方时间戳共一条右边界），一条连续竖线贯穿同一日期分组的全部条目。
-
-`≤960px` 侧栏整体替换为底部 4 项 tab 栏（精选 / 全部 / 日报 / 更多），分类筛选改横向滚动药丸 chip，卡片全出血，日期分组头吸顶并分两段呈现（主段更大更重）。该档信息密度向紧凑收敛：行首只有时间 + 信源（左）与分数（右），不显示精选标记与收藏按钮（两者在桌面档保留）；日期分组头不提供折叠控件；顶部紧凑条在首页出现，`/all`、`/hot`、`/daily`、`/changelog` 无顶部条。**首页与 `/all` 卡片上的收藏按钮只在 `>960px` 显示**——`≤960px` 可经「更多 → 收藏」查看、取消、导出与导入（导入在任何档位都能新增收藏），但列表卡片上没有收藏按钮。话题标签在主信息流中只出现于「全部 AI 动态」页。
+**响应式**：桌面（`>960px`）是侧栏 + 内容区，移动档（`≤960px`）侧栏换成底部 4 项 tab 栏、信息密度向紧凑收敛（列表卡片上不显示收藏按钮，改经「更多 → 收藏」）。完整的断点、布局与各档取舍是可验收契约，见 [`docs/contracts/ux-contract.md`](docs/contracts/ux-contract.md) 的 RS-* 节。
 
 主题支持浅色 / 深色 / 跟随系统三态，当前档由滑动选中底板指示。
 
@@ -124,14 +135,7 @@ homepage `hard_failure=true` 的已知假阳性已修复。但 `performance-reme
 RSS / X / 微信公众号源（Mp2RSS + 自建 Wechat2RSS，取并集） → fetch → prefilter → score → enrich → curate → interpret → web 展示 / ai-assistant KB
 ```
 
-各阶段说明：
-
-- **fetch** — 从 `data/sources.toml` 中配置的 RSS/X/微信公众号信源抓取内容
-- **prefilter** — 使用 LLM 或规则引擎过滤 AI 相关内容
-- **score** — 五维评分（relevance、density、recency、authority、engineering）
-- **enrich** — LLM 生成中文标题和摘要
-- **curate** — 按阈值精选高价值内容（默认阈值 6.5）
-- **interpret** — 可选阶段，默认关闭；启用后对微信公众号文章调用 ai-assistant 兼容的 summary-agent 脚本，保存独立网站解读数据，并把值得阅读的文章回写外部知识库
+各阶段做什么见「快速开始 → 4. 运行数据处理流水线」的命令注释；`interpret` 是可选阶段，启用后对微信公众号文章调用 ai-assistant 兼容的 summary-agent 脚本，保存独立解读数据并把值得阅读的文章回写外部知识库（见下文「微信文章解读」）。
 
 ### 数据库维护
 
@@ -142,17 +146,17 @@ RSS / X / 微信公众号源（Mp2RSS + 自建 Wechat2RSS，取并集） → fet
 ./run.sh admin db slim   [--keep-days N] [--dry-run]  # 清缓存 + VACUUM 回收磁盘（仅低频磁盘维护）
 ```
 
-`--dry-run` 零写、只报待清行数与字节。`slim` 显式返回 `retained`/`compacted` 两阶段结果；它只服务本机低频磁盘回收，独立于 DB sync——同步链路自行从 live 库取一致快照做逻辑增量，对 live DB 手动 VACUUM 不会改善它。瘦身细节见 [docs/operations/db-slimming.md](docs/operations/db-slimming.md)；同步机制、职责与故障证据见 [docs/operations/services.md](docs/operations/services.md#db-sync-职责验证与故障证据) 与 [docs/architecture.md](docs/architecture.md)。
+`--dry-run` 零写、只报待清行数与字节。这两条命令的语义边界、`slim` 与 DB sync 的关系、以及回滚步骤见 [docs/operations/db-slimming.md](docs/operations/db-slimming.md)。
 
 ## 配置
 
-### 从零部署最小配置
+### 站点身份与最小配置
 
-`cp .env.example .env` 后，最少需要：
+`cp .env.example .env` 后，最少需要下面这些。前五个是**站点身份**：它们决定 `/about` 页展示什么、CORS 允许谁、以及 RSS 抓取时发出的 User-Agent，默认值适合 fork 后本地开发。
 
 ```bash
 DEEPSEEK_API_KEY=sk-xxx
-AI_RADAR_SITE_DOMAIN=                  # 本地开发可留空
+AI_RADAR_SITE_DOMAIN=                  # 未设置时仅允许 localhost CORS，User-Agent 为 ai-radar/0.1
 AI_RADAR_SITE_REPO_URL=https://github.com/your-org/ai-radar
 AI_RADAR_SITE_MAINTAINER=your-name
 AI_RADAR_SITE_MAINTAINER_URL=
@@ -162,21 +166,7 @@ AI_ASSISTANT_ROOT=
 AI_RADAR_INTERPRET_USER=default
 ```
 
-公网部署时把 `AI_RADAR_SITE_DOMAIN`、仓库链接和维护者链接改成你自己的值。微信文章解读是可选外部集成，默认关闭；只有在你提供 ai-assistant 兼容实现时才设置 `AI_RADAR_ENABLE_INTERPRET=true` 和 `AI_ASSISTANT_ROOT`。
-
-### 站点身份与域名
-
-`/about`、CORS 和 RSS 抓取 User-Agent 由以下环境变量控制，默认值适合 fork 后本地开发：
-
-```bash
-AI_RADAR_SITE_DOMAIN=                 # 未设置时仅允许 localhost CORS，User-Agent 为 ai-radar/0.1
-AI_RADAR_SITE_REPO_URL=https://github.com/your-org/ai-radar
-AI_RADAR_SITE_MAINTAINER=your-name
-AI_RADAR_SITE_MAINTAINER_URL=
-AI_RADAR_SITE_X_URL=
-```
-
-部署到公网时，将 `AI_RADAR_SITE_DOMAIN` 设置为你的域名（不带协议即可，例如 `example.com`）。此时 CORS 会允许 `https://example.com`，抓取 User-Agent 会变为 `ai-radar/0.1 (+https://example.com)`。
+部署到公网时把 `AI_RADAR_SITE_DOMAIN` 设为你的域名（不带协议，例如 `example.com`），仓库链接与维护者链接改成你自己的：此时 CORS 会允许 `https://example.com`，抓取 User-Agent 会变为 `ai-radar/0.1 (+https://example.com)`。微信文章解读是可选外部集成，默认关闭；只有在你提供 ai-assistant 兼容实现时才设置 `AI_RADAR_ENABLE_INTERPRET=true` 和 `AI_ASSISTANT_ROOT`。
 
 ### 信源
 
@@ -185,68 +175,49 @@ AI_RADAR_SITE_X_URL=
 - `feed`：普通 RSS/Atom 信源
 - `web`：没有可用原始 RSS/Atom 的官方网页或列表 API；每个来源使用代码登记的确定性解析器和允许范围，不做任意链接抓取
 - `x`：X/Twitter 信源。`meta.adapter="x_api"` 的源通过 X API 读取原创帖子，不抓回复或转推；首次只看最近 20 分钟，之后以 checkpoint 增量读取，每轮每源只请求一页、`max_results=5`，繁忙账号通过持久 cursor 在后续轮次逐页排空，不做接入前历史回填；需要 `X_BEARER_TOKEN`。X RSS 源推荐显式声明 `meta.adapter="rss"`，未声明 adapter 的历史配置继续按 RSS 兼容读取
-- `wechat`：微信公众号源，生产链路当前仍通过托管的 [Mp2RSS](https://mp2rss.bugcode.dev/) 合集 feed 接入（已替代自建 WeWe RSS）。合集源 `wx_mp2rss` 的 URL 用环境变量占位符 `${MP2RSS_FEED_URL}`（feed URL 含专属密钥，不入库；loader 用 `os.path.expandvars` 展开）。未设置或设置为空时，loader 会记录 warning、跳过该源，并继续加载其他信源；设置 `MP2RSS_FEED_URL` 后该源自动启用。文章卡片按 author 显示真实公众号名与头像。仓库另含一个默认关闭的公众号后台发现候选：它只做私有 shadow 验证，未接入 `fetch`/pipeline，也不替代当前 Mp2RSS。配置、试跑与切换门槛见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
+- `wechat`：微信公众号源。**两个来源并行运行、取并集**：托管的 [Mp2RSS](https://mp2rss.bugcode.dev/) 合集（源 `wx_mp2rss`，URL 用占位符 `${MP2RSS_FEED_URL}`）与自建的 Wechat2RSS 合集（源 `wx_wechat2rss`，占位符 `${WECHAT2RSS_FEED_URL}`）。feed URL 含专属密钥、不入库，loader 用 `os.path.expandvars` 展开；任一未设置时记录 warning、跳过该源并继续加载其余信源，两个都不设置也能跑。同一篇文章只入库一次（按公众号 + 归一化标题 + 5 分钟发布时间窗跨源去重）。文章卡片按 author 显示真实公众号名与头像。配置、跨源去重口径与运维见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
 
-公众号后台发现候选的安全起点是只读状态检查；默认应显示 `DISABLED` 和当前配置的账号数：
+维护者实例当前配置了 161 个主站来源（109 个 X 账号、34 个原始 Feed、18 个原始 Web/API 列表）；两个微信来源另计，它们只服务「微信文章解读」，不进入精选、全部动态、搜索或策展。fork 后按自己的关注面增删即可，来源数量不是硬性契约。
 
-```bash
-./run.sh admin wechat-discovery status
-```
-
-`status` 与后面的 `compare` 都以只读方式打开私有 shadow DB，不会隐式升级旧 schema；若它们提示 schema 需要迁移，先对该私有库做精确备份，再显式运行 `./run.sh admin wechat-discovery migrate`，随后重新执行原只读命令。
-
-只有在操作者确认拥有获授权的公众号后台账号后，才运行 `login` 打开 headed 浏览器扫码。首次后台请求还需把 config v3 的 `manual_backend_requests_enabled` 显式改为 `true`，并只能选择已有经复核公开 seed 身份记录的账号；公开文章身份字段明确命名为 `public_biz` 与 `identity.observed_public_biz`。`resolve` 只凭唯一规范化名称匹配取得一次性 provisional `fakeid` mapping，不把它称为已验证身份；全局冷却结束后，`probe` 才能把该 mapping 分配给一次 reservation，并仅在所有返回文章 URL 的 `__biz` 都匹配配置账号时形成可比较的身份验证证据。公开 `biz` 永远不能直接当作后台 `fakeid`。这些命令不会启用定时 canary，也不会写生产 `items`：
+X 的 20 分钟窗口只用于首次接入；空窗口提交时间 checkpoint，有帖子后改用 post ID checkpoint，积压由 cursor 按上述单轮上限排空——不做接入前历史回填，所以刚接入时 X 来源看起来「没产出」是预期行为。**不要用全量账号抓取做连通性测试**，先跑单源探针：
 
 ```bash
-./run.sh admin wechat-discovery login
-./run.sh admin wechat-discovery resolve --account '歸藏的AI工具箱'
-./run.sh admin wechat-discovery probe --account '歸藏的AI工具箱'
+uv run python scripts/probe_x_source.py --source x_openai --db <全新临时数据库> --output <持久收据>
 ```
-
-取得成功 probe 后，使用显式只读命令把该 attempt 与同账号、同观察窗的生产 Mp2RSS URL 对比；证据不足会返回 `NOT_COMPARABLE`，不会伪装成覆盖成功。单次后台响应内重复 URL 会被视为 `RESPONSE_INVALID`，不会静默去重后进入比较：
-
-```bash
-./run.sh admin wechat-discovery compare --account '歸藏的AI工具箱' --attempt ATTEMPT_ID --since '2026-08-13T00:00:00+08:00'
-```
-
-已在可见浏览器中完成获授权后台登录与二次登录，并验证项目会话格式可加载、只保存 12 个适用域 Cookie、权限为 `0600`。旧程序把若干后台非成功响应记录成 `AUTH_REQUIRED` 或 `RATE_LIMITED`，但当时没有持久化 exact `ret`；这些历史记录不能证明微信官方存在 24 小时频控。2026-08-14 和 2026-08-16 各有一次 `searchbiz` 成功取得“歸藏的AI工具箱”的唯一规范化名称匹配和私有 provisional mapping；两次后续 probe 均未取得文章候选，其中 2026-08-16 one-shot 仍由旧 parser 写成宽泛的 `RATE_LIMITED`。shadow ledger 当前 schema v10 完整保留 3 条 resolution、4 条 probe 和 0 条 candidate；所有旧平台失败明确标为 exact ret 未记录且不再触发特殊次日冷却，今后的整数 `200013` 才作为可证明频控，整数 `200002` 等其他拒绝单列为 `PLATFORM_REJECTED`。默认配置保持关闭，不能据此取消 Mp2RSS。详见运维文档、ADR-024 至 ADR-032、ADR-040、ADR-041、ADR-043 至 ADR-045。
-
-第二条默认关闭的微信读书只读 canary 也已在获授权的可见登录态 Chrome 中生成真实 schema v7 evidence：书架请求得到 HTTP 200 成功响应，但目标 `MP_WXS_3540975510` 不在书架，因此 canary 按契约停在 `BLOCKED_NO_SHELF_ENTRY`，没有发 article-list 请求、没有观察动态头，也没有修改书架。该结果证明登录态书架边界可用，不证明文章发现路线可用；任何单账号书架变更仍需另行取得明确许可，生产 `wx_mp2rss` 保持不变。
-
-当前机器契约配置了 AIHOT 已审核滚动观察并集中的 161 个主站来源：109 个 X 账号、34 个原始 Feed 和 18 个原始 Web/API 列表；另有一个可选的 `wx_mp2rss`，只服务「微信文章解读」，不进入精选、全部动态、搜索或策展。当前验收证据包括一次覆盖 2,020 条内容、174 个可见来源且 reconciliation 零缺口的 AIHOT 完整滚动观察，全部 52 个 non-X 来源的两轮 live 读取与一次 immutable replay，以及 `x_openai` 的一次身份请求和一次最近 20 分钟 timeline 请求（均为 HTTP 200，并提交合法的空窗口 checkpoint）。空窗口没有提供实际 X 帖子读取证据，109 个 X 账号也没有逐一 live 验证；这里的“对齐”只指来源成员集合、原始读取实现和上述受限验收，不表示清理、筛选、标签、排序、评分、摘要或策展结果与 AIHOT 等价。
-
-X 的 20 分钟窗口只用于首次接入；空窗口会提交时间 checkpoint，有帖子后改用 post ID checkpoint，积压则由 cursor 按上述单轮上限排空，但仍不证明接入前历史召回已经与 AIHOT 对齐。正常 15 分钟调度按启用的 X API 账号数发起请求。不要用全量账号抓取来做连通性测试；先运行 `uv run python scripts/probe_x_source.py --source x_openai --db <全新临时数据库> --output <持久收据>`，它把身份解析和 timeline 分轮、每次最多一个远端请求。当前离线状态机和受限真实连通性均已验证；本次真实空窗口只证明身份、timeline 与 checkpoint 链路可用，不证明实际帖子或全部账号均已读取成功。
 
 ### 信源维护与验证
 
-信源变更不是只改 `data/sources.toml`。`tests/fixtures/aihot_sources.json` 是完整机器契约；新增、改名或退休来源时必须同步稳定 `derived_aihot_identity`/显式 aliases、原始入口、解析器/规则、正反 fixture、公开投影、数量锚点与文档。Web/API 来源还必须同步 `src/airadar/fetcher/web.py` 的登记与解析边界。
+改信源不是只改 `data/sources.toml`——还牵动机器契约 fixture、Web/API 解析器登记、退休来源的身份连续性检查与几个审计脚本。完整规则与命令见 [docs/references/source-maintenance.md](docs/references/source-maintenance.md)。
 
-- `uv run python scripts/audit_aihot_sources.py --output <plans/.../artifacts/aihot-observation-final.json>`：遍历 AIHOT 滚动 API，输出 comparison-only 观测；成功记录追加到 `artifacts/observations/index.json`，ambiguous/unmapped/conflict 会失败而不会自动改契约。
-- `uv run python scripts/check_aihot_membership_transition.py --previous <旧契约或基线> --next tests/fixtures/aihot_sources.json --retirements data/aihot_retirements.json`：拒绝没有官方迁移、30 天观察加显式复核或用户决定依据的来源删除。
-- `uv run python scripts/audit_non_x_retrieval.py --config data/sources.toml --db <全新临时数据库> --output <持久收据>`：两轮实读 34 Feed + 18 Web/API，并比较独立 oracle、生产解析和 SQLite 持久集合；收据中的代码哈希变化后必须重跑。
-- 上述 `probe_x_source.py`：只验证 `x_openai`，使用全新临时库，绝不回填或全量扫 109 个账号；missing token、401、draining 和 terminal 分别出具不含凭据的结果。
-
-配置 reload 只禁用已移除来源、保留历史 SQLite 行；所有公开 source/timeline/search/selected/wechat 消费面会过滤 disabled 行。合法退休仍须经 transition checker，不能靠一次安静窗口或改展示名绕过身份连续性。
+配置 reload 只禁用已移除来源、保留历史 SQLite 行；所有公开 source/timeline/search/selected/wechat 消费面会过滤 disabled 行。
 
 ### 微信文章解读
 
-`interpret` 阶段只处理启用的微信公众号源（当前 `wx_mp2rss`）。该外部集成默认关闭：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时，`./run.sh interpret` 会输出 skipped 并成功退出，不读取任何外部路径。
+`interpret` 阶段只处理启用的微信公众号源。**该外部集成默认关闭**：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时，`./run.sh interpret` 打印 `interpret skipped=true` 并成功退出，不读取任何外部路径。
 
-启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，并可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。AI Radar 会调用 `$AI_ASSISTANT_ROOT/agents/summary-agent/summarize.sh` / `run.sh`，调用 summarizer 时显式传入 `--model ai-radar-interpret-deepseek`，以便 interpret 单独走 ARK 优先、DeepSeek 官方 fallback 的路由；`save_decision=1` 的文章展示到 `/wechat` 并回写外部知识库；`save_decision=0` 的文章只在 `radar.db` 留处理记录，不上站点、不写 KB。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态。网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约见 [`docs/operations/ai-assistant-integration.md`](docs/operations/ai-assistant-integration.md)，运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
+启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。被判定值得保存的文章展示到 `/wechat` 并回写外部知识库，其余只在 `radar.db` 留处理记录。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态；网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约与启用条件见 [`docs/references/ai-assistant-contract.md`](docs/references/ai-assistant-contract.md)，运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
 
 ### LLM Provider
 
 通过环境变量选择使用的 LLM 后端：
 
 ```bash
-AI_RADAR_PREFILTER=deepseek_v32   # prefilter 阶段
-AI_RADAR_SCORER=deepseek_v4_pro   # scoring 阶段
-AI_RADAR_ENRICHER=deepseek_v4_pro # enrichment 阶段
+AI_RADAR_PREFILTER=deepseek_v32     # prefilter 阶段（默认值）
+AI_RADAR_SCORER=deepseek_v4_flash   # scoring 阶段（默认值；另可选 deepseek_v4_pro）
+AI_RADAR_ENRICHER=deepseek_v4_pro   # enrichment 阶段（默认值）
 ```
 
-也支持 `heuristics` 作为无 LLM 的纯规则后备方案。
+上面写的就是各阶段不设置时的默认后端，**三个默认后端都只认 `DEEPSEEK_API_KEY` 或 `ARK_API_KEY`**（两个都设置时先试 ARK、失败再落回 DeepSeek）。`OPENAI_API_KEY` 与 `GLM_API_KEY` 只服务特定备选后端，必须显式改变量才会被读到：`AI_RADAR_SCORER=codex_gpt_mini` 用 `OPENAI_API_KEY`，`AI_RADAR_PREFILTER=glm` 用 `GLM_API_KEY`。`enrich` 只有 deepseek 系实现，缺 key 时该阶段直接失败（`DEEPSEEK_API_KEY or ARK_API_KEY is required for DeepSeek provider`）。
 
-LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）的 `llm_usage` 表。页面、周报和告警中的金额是按已加载 tariff 在查询时派生的记录行估算，不是 provider 账单或实际付款；调用数、token 合计与同一计价口径的金额合计是全部相关付费调用对应总量的下界，均值、占比和环比只描述 recorded cohort，不能推断相对全部调用真值的偏差方向。`/admin/usage`、`./run.sh admin cost-report --dry-run` 与 `./run.sh admin cost-audit [--format=kv|json]` 都携带或展示这项 scope。完整运行口径与命令见 [监控与告警 runbook 的 LLM 成本段](docs/operations/monitoring-alerting.md#llm-成本报表与对账)，规范 owner 见 [ADR-023](docs/adr/023-define-recorded-row-measurement-scope.md)；ARK tariff/订阅权威性与付费 attempt 漏行分别由 [ISSUE-004](docs/issues/cost-observability.md#issue-004--ark-挂牌价来源非权威而它占已知成本的-876) 和 [ISSUE-021](docs/issues/cost-observability.md#issue-021--interpret-usage-只记录下游成功样本漏掉已计费的失败响应) 保持开放。
+**`prefilter` 与 `score` 缺 key 时不会失败，而是逐条静默退回内置的纯规则打分**（也可用 `AI_RADAR_FORCE_HEURISTIC=1` 强制），质量不代表启用 LLM 的结果。它的输出读数（`processed=… errors=…`）与走 LLM 时完全相同，日志里也没有区分标记——**要判断这一轮是不是真的走了 LLM，只能确认 key 存在**：
+
+```bash
+grep -c '^DEEPSEEK_API_KEY=.\|^ARK_API_KEY=.' .env   # 返回 0 表示这两个阶段跑的是纯规则
+```
+
+（key 也可能来自进程环境或 `~/.claude/.env`，这几处都要看过才算确认。）
+
+LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）的 `llm_usage` 表。**页面、周报和告警里的金额是按已加载 tariff 派生的记录行估算，不是账单**，各项合计只是全部付费调用的下界。这项口径的完整定义、命令与当前已知缺口见 [监控与告警 runbook 的 LLM 成本段](docs/operations/monitoring-alerting.md#llm-成本报表与对账)，规范 owner 见 [ADR-023](docs/adr/023-define-recorded-row-measurement-scope.md)。
 
 ## 测试
 
@@ -254,20 +225,33 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 ./test.sh
 ```
 
+`test.sh` 就是 `uv run python -m pytest tests -v`（额外参数会透传），只跑 Python 测试；仓内当前收集到约 1800 条用例（2026-08-20 的 `--collect-only` 读数为 1835），预期全绿。
+
+套件里带 `integration` 标记的用例会访问外部服务，无网或未配 key 时会失败（当前 2 条）——排除它们跑：
+
+```bash
+./test.sh -m 'not integration'
+```
+
 ## 服务
 
 下表只列**长期在后台运行**的服务（一次性 CLI 不在此列）。
 
-| 服务 | Supervisor | 作用 |
-|---|---|---|
-| `serve` | launchd | FastAPI web server（fork 默认 :8000；本产线 Mac 实例绑 8010 仅作局域网预览，公网生产由腾讯服务器上的现存进程承载 `news.aiplanet.live`；repo-owned 双槽 unit 当前未安装，服务所有权清单仍待补齐） |
-| `tunnel` | launchd | Cloudflare tunnel 到你的公网域名（本产线旧 `aiplanet.live` 入口已退役待域名下线；tunnel 仍承载同机其他站点） |
-| `pipeline` | cron | 每 15 分钟增量 fetch / prefilter / score / enrich / curate / interpret |
-| `alert` | launchd, StartInterval=300 | 每 5 分钟执行 `admin alert-check`；A1–A6 使用 severity lifecycle，D3 定价提醒独立去重 |
-| `performance-probe` | launchd, StartInterval=300 | 当前未安装、旧 hourly cron 保持 PAUSED；恢复前先处理 [ISSUE-017](docs/issues/cost-observability.md#issue-017--performance-probe-默认-origin-仍假定-serve-在-8000)，安装后才每 5 分钟运行 |
-| `cost-report` | cron (`17 9 * * 1`) | 周一 09:17 经 `run-or-alert` 发送上一上海自然周 LLM 成本报表 |
-| `performance-remediate` | cron（建议每小时 :25） | 候选修复功能已交付；homepage 误标缺陷已修复，但仍须在部署后确认 `hard_failure=false` 且 homepage `PERF:*` 非 firing，才可在 probe 后启用 |
-| `DB sync → 腾讯服务器` | cron（当前 5 小时级，最终频率待验证） | Mac producer 同步 base-only 副本并等服务器重建/验证到 `committed`；公网副本新鲜度的生产入口，排期与细节见 [services.md](docs/operations/services.md#db-sync-职责验证与故障证据) |
+| 服务 | 作用 |
+|---|---|
+| `serve` | FastAPI web server，默认 :8000 |
+| `tunnel` | Cloudflare tunnel，把本机 serve 暴露到你的公网域名 |
+| `pipeline` | 增量 fetch / prefilter / score / enrich / curate / interpret |
+| `alert` | 定期执行 `admin alert-check`；A1–A7 使用 severity lifecycle，D3 定价提醒独立去重 |
+| `performance-probe` | 可选的同机用户旅程性能探针（见上文） |
+| `cost-report` | 定期发送上一自然周的 LLM 成本报表 |
+| `performance-remediate` | 探针确认退化后生成仅供人工审阅的候选修复 commit |
+| DB sync | 把主库同步到只读副本主机（维护者实例用；单机部署不需要） |
+| Wechat2RSS | 自建微信公众号 feed 服务，用 `docker compose` 起在 `127.0.0.1:8080`，供 `WECHAT2RSS_FEED_URL` 消费；**配这个变量前先把它起起来**。bring-up 与运维见 [`deploy/wechat2rss/RUNBOOK.md`](deploy/wechat2rss/RUNBOOK.md) |
+
+**每个服务当前装没装、跑在哪个端口、排期是多少，权威在 [`docs/operations/services.md`](docs/operations/services.md)**——这张表只说明各服务是干什么的。
+
+X 的图片还需要一条出口代理：`.env` 未配 `AI_RADAR_IMG_PROXY_URL` 时 `/img` 对 `pbs.twimg.com` 直接返回 404（这是有意的快速失败，退回直连会让每张图挂满超时）。维护者实例的产线拓扑与诊断顺序见 [`docs/operations/services.md`](docs/operations/services.md)。
 
 ### 部署 / 移除 / 查状态
 
@@ -277,24 +261,11 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）。脚本本身仍支持不带参数作用于全部，但当前 `performance-probe` 因 [ISSUE-017](docs/issues/cost-observability.md#issue-017--performance-probe-默认-origin-仍假定-serve-在-8000) 保持停用，所以不要使用无参数全量安装；显式逐个安装需要的服务。单服务安装幂等——重复跑不报错。
+服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）。**显式逐个安装你需要的服务**，不要用无参数全量安装。单服务安装幂等——重复跑不报错。DB sync 与 Wechat2RSS 不由这三个脚本管理。
 
-DB sync cron 不由上述三个通用生命周期脚本管理；用 `crontab -l` 核对排期，以 `deploy/sync/sync-db-cron.sh` 手动走完整 cron wrapper。详见 [服务清单的 DB sync runbook](docs/operations/services.md#db-sync-职责验证与故障证据)。
+`./install.sh` 会先检查该服务脚本可判定的依赖（LLM key、飞书 webhook、`im-notify`、tunnel 配置文件等），缺失时在交互式终端询问并追加到 `./.env`、非交互环境自动跳过，跳过原因列在命令末尾的 summary 里。变量按当前进程环境、项目 `./.env`、`~/.claude/.env` 依次查找。Playwright Chromium 是 `install.sh` **不会**自动下载或校验的运行时前置，按快速开始那一步先装好。逐服务的依赖清单、隐含依赖与验证命令见 [`docs/operations/services.md`](docs/operations/services.md)。
 
-`./install.sh` 会检查各服务能由脚本判定的依赖；Playwright Chromium 是需按快速开始步骤显式安装的运行时前置：
-
-| 服务 | 依赖 | 缺失时 |
-|---|---|---|
-| `serve` | 无 | 始终安装 |
-| `pipeline` | 至少一个 LLM key：`DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` | 交互式终端会询问 `DEEPSEEK_API_KEY` 并追加到 `./.env`；非交互环境自动跳过 |
-| `alert` | `~/.local/bin/im-notify` + `FEISHU_GENERAL_ALERT_WEBHOOK` + `FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | 先从 `ai-agent-config` 安装 `im-notify`；两个 webhook 分别承接 page/notice，任缺一个都拒绝部分安装。交互式终端逐个询问并追加到 `./.env`，非交互环境自动跳过 |
-| `tunnel` | `deploy/cloudflared/config.yml` | 提示从 `deploy/cloudflared/config.yml.example` 创建自己的 Cloudflare tunnel 配置，本次跳过 |
-| `performance-probe` | Playwright Chromium | 安装服务前先显式运行 `uv run playwright install chromium`；该浏览器同时供微信抓取使用，`install.sh` 不自动下载或校验 |
-| `cost-report` | `im-notify`、`run-or-alert`、`FEISHU_GENERAL_NOTIFICATION_WEBHOOK` | installer 只检查 webhook；当前不验证两个可执行文件，安装前按 [runbook](docs/operations/monitoring-alerting.md#llm-成本报表与对账) 的 preflight 核对（ISSUE-014） |
-
-脚本可判定的环境变量依赖按当前进程环境、项目 `./.env`、`~/.claude/.env` 查找。因此已有密钥放在 `~/.claude/.env` 的本机部署不会出现提示。任何自动跳过都会在命令末尾的 summary 中列出原因。
-
-完整运维细节（验证命令、隐含依赖、各服务 instructions 链接）见 [`docs/operations/services.md`](docs/operations/services.md)。`/admin`、A1–A6 与 D3 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号源（Mp2RSS 接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)；旧 WeWe RSS 桥接已从服务层移除，不再作为发布快照的一部分维护。
+`/admin`、A1–A7 与 D3 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号摄取（两个来源的接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)。架构、设计决策记录与待办清单等开发者细节都在 [`docs/`](docs/)。
 
 ## 部署
 
@@ -307,25 +278,36 @@ cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 # 编辑 config.yml 填入 tunnel UUID 和域名
 ```
 
+起完之后按 [`docs/operations/services.md`](docs/operations/services.md) 的「验证（新机器 bring-up / 大改动后跑一遍）」一节确认公网入口确实打得开本机 serve，而不是只看 tunnel 进程活着。同一台机器上的 tunnel 常同时承载别的站点，ingress 规则的写法见同文档「Cloudflare tunnel shared ingress」。
+
 ### 运维监控
 
-目标拓扑中的公网 `/admin` 需要 Cloudflare Access application + policy；当前生产 hostname 直达 origin，伪造非空 Access header 可绕过存在性检查，因此尚未具备这条认证边界，开放修复见 [deploy issue](docs/issues/deploy.md#open-2026-08-12当前生产-admin-入口绕过-cloudflare-access)。飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 同时配置 `FEISHU_GENERAL_ALERT_WEBHOOK`（page → `ALERT`）与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`（notice → `NOTIFICATION`）。告警状态机按 severity 分别负责 debounce、cooldown 与恢复通知。具体步骤及无真实发送的配置 preflight 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。
+公网 `/admin` 需要一层边缘访问控制（Cloudflare Access application + policy 之类）。**origin 只检查 Access header 存在、不验签**，所以这条边界必须由边缘提供；当前维护者实例的已知限制记在 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 同时配置 `FEISHU_GENERAL_ALERT_WEBHOOK`（page → `ALERT`）与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`（notice → `NOTIFICATION`）。具体步骤及无真实发送的配置 preflight 见同一份 runbook。
 
-### Cloudflare 边缘缓存（可选）
+### 边缘缓存与前端资源版本串
 
-serve 会自动对公开分页路径（`/`、`/wechat` 及其 API）的安全变体（HTML 只认 `page`，API 认 `page`+`limit`）发 `Cache-Control` 缓存头——无需任何配置。要让翻页真正从 Cloudflare 边缘直接命中而非每次回源，还需在 Cloudflare dashboard 手动建一条名为 `AI Radar short public pagination TTL` 的 Cache Rule（origin 头是它的配套，缺一则边缘缓存不生效）。（前端 app.js 另会自动预取下一页，这是纯客户端优化，与 Cloudflare 缓存独立、同样无需配置。）规则表达式、Edge TTL 设置和 `CF-Cache-Status: HIT` 验证步骤见 [`docs/operations/services.md`](docs/operations/services.md) 的「Cloudflare Cache Rule」节。
+serve 会自动对公开分页路径（`/`、`/wechat` 及其 API）的安全变体发 `Cache-Control` 缓存头——无需任何配置。是否真的从边缘命中，取决于你在前面挂了什么。
 
-### Docker / 其他平台
+维护者实例当前的边缘层是 **EdgeOne**（`news.aiplanet.live` 以 DNS-only CNAME 接入，见 [ADR-039](docs/adr/039-route-news-through-edgeone-dns-only-cname.md)）。它对 `/app.js` 与 `/style.css` 两个精确路径强制节点缓存 7 天。
 
-项目本身是标准 FastAPI 应用，可不走 launchd 直接起：
+因此改前端资产（`web/static/app.js` / `web/static/style.css`）后必须重算 `?v=` 版本串（`uv run python scripts/bump_frontend_assets.py`），并在部署前用 `./run.sh admin edgeone check` 核对边缘强制缓存规则有没有漂移——它的退出码 `0`=无漂移、`1`=有漂移、`2`=**未核实（不等于通过）**。漏做就是「部署了但线上不生效」；完整纪律见项目 [`CLAUDE.md`](CLAUDE.md) 的「Frontend Asset Cache Busting」，凭据配置与 purge 步骤见 [`docs/operations/services.md`](docs/operations/services.md) 的「EdgeOne 节点缓存规则对账与 purge」。
+
+（前端 app.js 会自动预取下一页，这是纯客户端优化，与任何边缘缓存独立。）
+
+Cloudflare Cache Rule 是一条**旁路拓扑**——当前生产不在它的路径上。若你把站点挂在 Cloudflare 后面，规则表达式、Edge TTL 设置和 `CF-Cache-Status: HIT` 验证步骤见 [`docs/operations/services.md`](docs/operations/services.md) 的「Cloudflare Cache Rule」节。
+
+### 直接用 uvicorn 运行
+
+项目本身是标准 FastAPI 应用，可不走 launchd 直接起（仓库不提供应用镜像或 Dockerfile，容器化需要自己写）：
 
 ```bash
 uv run uvicorn airadar.web.app:app --host 0.0.0.0 --port 8000
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/v1/healthz   # 期望 200
 ```
 
 ## 致谢
 
-AI Radar 的 UX 设计和创意灵感来自 [AIHOT](http://aihot.virxact.com/)（[项目介绍](https://mp.weixin.qq.com/s/r6CE2U3Y0-pU05wF3_PuTQ)）。本项目在时间线、精选和日报的形态上借鉴了 AIHOT 的设计理念，并计划将项目改造为每个人都可以根据自己的需求进行配置和部署的的个性化信息消费工具。
+AI Radar 的 UX 设计和创意灵感来自 [AIHOT](http://aihot.virxact.com/)（[项目介绍](https://mp.weixin.qq.com/s/r6CE2U3Y0-pU05wF3_PuTQ)）。本项目在时间线、精选和日报的形态上借鉴了 AIHOT 的设计理念。
 
 ## License
 

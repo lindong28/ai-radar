@@ -1,3 +1,6 @@
+> **Archive status**: 已归档并上线。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> `/wechat` 搜索的当前字段范围、LIKE/简繁/空格不敏感口径与上下文保留见 [operations/wechat-ingestion.md](../../operations/wechat-ingestion.md)「微信文章解读与知识库回写」节，用户可见验收见 [contracts/ux-contract.md](../../contracts/ux-contract.md) WX-4 与「微信文章解读页（`/wechat`）」节。以下为原 plan 正文，未修改。
+
 # Plan：微信文章解读页（/wechat）支持搜索
 
 > **Long-task mode** — 本 plan 启用状态外部化协议。implementer 必读 `~/.claude/references/long-task-protocol.md`：

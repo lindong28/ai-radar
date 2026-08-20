@@ -109,18 +109,14 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 
 **用户侧动作**（不由 agent 代做：对第三方账号的对外、不可逆操作）：轮换这两个 webhook。建议在上述机制修好之后再轮换，否则新值会以同样方式再次散落。
 
-- [pending] EdgeOne 从不缓存 `/img`，每个访客每张图都跨洋回源，并偶发 404
-  - 背景：2026-08-18 排查"某条推文的第二张图在浏览器里消失、curl 同 URL 却 200"时发现。根因取证已闭合，见下。
-  - **直接证据**：生产日志里那张图确实 404 过一次——`serve-8000.log` 的 `2026-08-18T18:47:48+0800 "GET /img?url=...HP94k8hXoAAcZgM.jpg" 404 Not Found`，同一秒另一张图（`HP91Z3iWcAEGZxD.jpg`）也 404，来自不同边缘 IP。同一个 URL 在其余 9 次请求里都是 200。槽 8000 共 1044 次 `/img` 请求、3 次 404（0.29%）；槽 8001 的 1858 次全部 200。
-  - **机制（已核实的部分）**：`src/airadar/web/routes/media.py` 把**每一种**失败都映射成 404——主机不在允许名单、上游非 200、重定向越界、以及 `httpx.HTTPError`（含超时），全部走同一个 `return Response(status_code=404)`（ADR-057 的有意设计：宁可快速失败）。前端 `onerror` 随即隐藏该图，于是任何失败在页面上都表现为"这张图不存在"，没有可见错误。
-  - **未核实：那两次 404 到底是不是超时。** 上面那条正是原因——404 是所有失败的共同出口，日志里的状态码**区分不了**超时与"twimg 当时就返 404/403"。而 `/img` 的失败路径**不写任何日志**（异常被吞），`serve-8000.err.log` 586 行里与 img/timeout/httpx 相关的为 0 行。故服务端不存在能区分二者的读数，超时只是**待验怀疑**，不是结论。旁证（不足以定案）：18:47 那一分钟有 10 次 `/img` 请求，是相邻几分钟里最密的（18:40 为 4 次、18:48/18:49 各 1 次）；且并发压测下 p90 已达 9.2s、逼近 10s 读超时。若要定案，需要给 `/img` 的失败路径加上区分性日志（记下异常类型与上游状态码），那是一个独立改动。
-  - **注意本条的行动项不依赖上面那个未核实点**：加边缘缓存的理由是延迟读数本身（p50 约 5s、p90 9.2s，而源站只用 0.5-0.7s），与 404 归因无关。
-  - **为什么会慢到撞超时**：`/img` 源站已发 `Cache-Control: public, immutable, max-age=604800`，但**边缘一次都不缓存**——同一 URL 连测三次全是 `eo-cache-status: MISS`；`./run.sh admin edgeone check` 列出的两条缓存规则（`/wechat`+`/api/v1/wechat`、`/style.css`+`/app.js`）都不覆盖 `/img`。故每个访客每次刷新都要为每张图跨洋回源一次。实测 `server-timing: app;dur≈0.5-0.7s`（源站取图其实很快），而端到端 p50 约 5s、并发 24 时 p90 9.2s / max 11.9s——与 10s 读超时同一量级。
-  - **缓存键风险已排除**（本来是这条最大的坑）：担心默认缓存键忽略 `?url=` 查询串、导致全站图片串到同一个缓存条目。实证否定——`/api/v1/wechat?page=1` 与 `?page=2` 返回不同内容且各自独立 MISS→HIT，说明 EdgeOne 默认缓存键**包含**查询串。且现有规则里没有任何 `CacheKeyParameters`（全为 null），即微信那条正是靠默认键工作的。
-  - **建议的规则**（照搬现有 `news public lists follow origin cache` 的形状，只换条件）：
-    - Condition：`${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/img']`
-    - Action：`CacheParameters.FollowOrigin = {Switch: on, DefaultCache: on, DefaultCacheStrategy: on, DefaultCacheTime: 0}` —— 跟随源站已有的 7 天 immutable，不另设 CustomTime
-  - 落地路径：仓内工具 `admin edgeone` 只有 `check` 与 `purge`，**没有写规则的能力**（ADR-039 把控制台定为仓外权威、仓内只镜像快照并查漂移）。SDK 侧 `CreateL7AccRulesRequest` 存在，但新增写能力本身是一个独立决策。规则加好后须跑 `./run.sh admin edgeone check --update-snapshot` 刷新 `web/edgeone-cache-rules.json`，否则下次 check 会报漂移。
-  - **已落地（2026-08-19）**：规则 `news img proxy follow origin cache`（`rule-3tzlygp68ka0`）已在控制台创建并发布，仓内快照已用 `--update-snapshot` 同步。实测改善——同一 URL 由 3/3 `MISS` 变为 `MISS→HIT`，单次 2.7-4.0s → 0.60-0.68s；并发 16 全量 38 张在热缓存下 p50/p90/max 由 8.61/13.84/22.32s 降到 1.64/2.33/2.48s；37/37 命中（第 38 条因取证脚本末行无换行被 `while read` 漏读，非数据问题）。
-  - **该规则引入了一个新风险，已修**：`/img` 的 404 不带 `Cache-Control`，而 FollowOrigin 在缺该头时套用「默认缓存策略」，于是**失败被负缓存**——发布后实测同一个必然失败的 URL `MISS` 一次后连续三次 `HIT`。这比原本的偶发失败更坏：一次瞬时超时会固化成"这张图不存在"直到 TTL 过期。修法是源站显式声明 `Cache-Control: no-store`（commit `0f0a6fd`），成功路径仍保留 7 天 immutable。**该修复须部署后才生效**；在部署前，边缘仍可能缓存住失败。
-  - 仍未验证：负缓存的实际 TTL 有多长（未等待过期）；`no-store` 修复上线后的负缓存消除（待部署后复测）。
+## [open] `/img` 负缓存的两个未验证点 + `0f0a6fd` 生产部署未核实
+
+**状态**：open · **优先级**：medium · **发现**：2026-08-19 EdgeOne `/img` 缓存改造收尾时留下的未闭合项（主体已 resolved 并归档，见 `archive/closed.md` 的「EdgeOne 从不缓存 `/img`」条）
+
+给 `/img` 加 FollowOrigin 缓存规则后引入过一个负缓存风险：404 不带 `Cache-Control`，边缘按默认策略把失败也缓存住，实测同一个必然失败的 URL `MISS` 一次后连续三次 `HIT`。修法是源站对失败路径显式声明 `Cache-Control: no-store`（commit `0f0a6fd`），成功路径保留 7 天 immutable。三个点仍未闭合：
+
+- **负缓存的实际 TTL 未实测**——当时没等它过期，所以"一次瞬时超时会把这张图钉成不存在多久"这个量级至今没有读数。
+- **`no-store` 上线后未复测负缓存已消除**——修复的验收读数缺失。判据是：对一个必然失败的 `/img?url=` 连续请求，`eo-cache-status` 不应出现 `HIT`。
+- **`0f0a6fd` 是否已在生产 serve 上生效未核实**——本地 `tencent/main` 这个 remote-tracking ref 包含该 commit（其后还有 `5039988`），但 ref 里有 ≠ 服务器已 checkout 并重启 serve。核实要从生产侧取读数（如对一个必然失败的 `/img` URL 观察响应头里有没有 `Cache-Control: no-store`），不能只看 git。
+
+前两点都要**从真实公网**取读数：源站与边缘的行为在本地和 curl 直连源站时读数相同，看不出差别。

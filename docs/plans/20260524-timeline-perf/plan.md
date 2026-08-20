@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 优化范围与计数策略的最终裁决见 [ADR-004](../../adr/004-n-plus-one-optimization-scope.md) 与 [ADR-005](../../adr/005-timeline-exact-count-with-cached-cte.md)，实测教训见 [experiences/performance.md](../../experiences/performance.md)「2026-05-24 SQLite 表达式索引消除 dedup 和排序瓶颈」节；当前索引清单见 [architecture.md](../../architecture.md)「Database」的「索引」表。以下为原 plan 正文，未修改。
+
 # Timeline API 性能优化
 
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式

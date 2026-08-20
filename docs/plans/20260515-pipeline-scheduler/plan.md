@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 定时流水线的当前形态（cron 表达式、生命周期脚本、marker）见 [operations/services.md](../../operations/services.md)「服务」表的 `ai-radar pipeline (15min)` 行；本 plan 未覆盖的并发互斥最终裁决见 [ADR-052](../../adr/052-hold-pipeline-mutex-with-kernel-flock.md)。以下为原 plan 正文，未修改。
+
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式
 > - 进度状态：`./state.md`
 > - 决策日志：`./journal.md`

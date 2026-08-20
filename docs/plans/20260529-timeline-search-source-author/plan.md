@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 搜索索引覆盖面与短查询兜底的当前口径见 [architecture.md](../../architecture.md)「Database」的「关键设计」节（「搜索索引」「短查询兜底」两条），信源可见性与 FTS oracle 的一致性裁决见 [ADR-051](../../adr/051-share-timeline-source-visibility-with-the-fts-oracle.md)，用户可见验收见 [contracts/ux-contract.md](../../contracts/ux-contract.md) TL-3。以下为原 plan 正文，未修改。
+
 # Plan — timeline/curated 搜索覆盖来源名+作者+中文标题（混合 FTS+LIKE，改 003/004）
 
 > ⚠️ **Long-task mode** — 进度 `./state.md`，决策日志 `./journal.md`，协议 `~/.claude/references/long-task-protocol.md`。

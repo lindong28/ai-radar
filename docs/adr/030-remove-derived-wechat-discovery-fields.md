@@ -1,6 +1,6 @@
 # ADR-030: Remove derived WeChat discovery fields and make public-biz names explicit
 
-Status: Accepted
+Status: Accepted; deprecated — the backend `appmsgpublish` family is unavailable at the platform level, see ADR-061
 
 Date: 2026-08-13
 

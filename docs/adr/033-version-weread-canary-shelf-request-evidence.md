@@ -1,6 +1,6 @@
 # ADR-033: Version WeRead canary shelf-request evidence
 
-Status: Accepted
+Status: Accepted; superseded by ADR-034 for newly generated evidence. Version 1 and version 2 artifacts remain frozen historical observations. Deprecated — the WeRead canary line stopped together with the Mp2RSS replacement plan it explored, see ADR-061.
 
 Date: 2026-08-13
 

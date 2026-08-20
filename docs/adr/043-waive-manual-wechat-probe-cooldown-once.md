@@ -1,6 +1,6 @@
 # ADR-043：对一次获授权的微信后台 shadow probe 豁免本地冷却
 
-- 状态：Accepted
+- 状态：Accepted；其中依赖后台 `appmsgpublish` / `searchbiz` family 的部分已随 ADR-061 失去实施对象；「豁免必须一次性、有范围、可追溯」这条纪律仍成立
 - 日期：2026-08-16
 - 范围：账号“歸藏的AI工具箱”、provisional resolution 3、一次 `probe --count 5`
 - 关系：仅对此次请求局部豁免 ADR-025 的 1440 分钟本地冷却；不改变 ADR-025 的持久默认，也不改变 ADR-040、ADR-041 的身份验证与 ledger 不变量

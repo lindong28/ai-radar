@@ -1,6 +1,6 @@
 # ADR-045：平台错误码必须是整数，特殊冷却只由已记录频控证据触发
 
-- 状态：Accepted
+- 状态：Accepted；其中依赖后台 `appmsgpublish` / `searchbiz` family 的部分已随 ADR-061 失去实施对象；schema 演化与「特殊冷却只由已记录的频控证据触发」这条约束仍成立
 - 日期：2026-08-16
 - Clarifies：ADR-025 的本地冷却语义与 ADR-044 的 exact-ret 契约
 

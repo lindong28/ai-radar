@@ -1,3 +1,6 @@
+> **Archive status**: 已归档并上线。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 告警规则、dashboard、投递与抑制的当前权威是 [operations/monitoring-alerting.md](../../operations/monitoring-alerting.md)（「告警规则」「Dashboard 怎么看」「Cloudflare Access」各节），severity 生命周期与通知台账的裁决见 [ADR-008](../../adr/008-alert-severity-lifecycles.md)、[ADR-009](../../adr/009-alert-notification-ledger.md)、[ADR-021](../../adr/021-audit-alert-delivery-and-suppression-decisions.md)，服务安装形态见 [operations/services.md](../../operations/services.md)「服务」表的 `alert` 行。以下为原 plan 正文，未修改。
+
 # AI Radar 运维监控 + 告警 MVP
 
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式

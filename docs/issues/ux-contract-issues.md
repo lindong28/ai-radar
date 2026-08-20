@@ -1,13 +1,51 @@
 # UX Contract Issues
 
-> append-only queue. test-ux 跑测中发现的、与 ux-contract / aihot-parity-contract 演化相关的观察。owner sweep 后决定是否升级为契约修订。
+> Mutable。test-ux 跑测中发现的、与 ux-contract 演化相关的观察。domain 文件只存 **open** 条目；判定 resolved / wontfix 时整条移入 [archive/closed.md](archive/closed.md)。owner sweep 后决定是否升级为契约修订。
 >
-> 协议：`~/.claude/references/ux-test-protocol.md` §4。
+> 协议：`~/.claude/references/docs-organization-protocol.md` §4.8——该节同时承载「ux-issues.md 与本文件只能由真实端到端产品观察写入」这条约束。
 > type 语义：`drift`（契约声 X 实际 Y）/ `expansion`（未覆盖但合理的扩展候选）/ `redesign`（契约结构本身改进建议）。
+>
+> 契约演化候选**不由 agent 直写契约**（协议 §4.6 fallback）：本文件的条目由用户经 `/custom:create-ux-contract` 处理。
 
 ---
 
-## 2026-08-18 [drift] HP-7 与首页 L1 的媒体条目未反映 ADR-058 的点击手势
+## [open] 2026-08-20 [drift] 契约通篇钉 `aiplanet.live`，生产公开域名是 `news.aiplanet.live`
+
+- Discovered: 2026-08-20 sync-docs 审查逐条核对契约与生产实况时发现（本条属文档核对，不是端到端观察结论——见下方 Recommendation 里的 L2 验证条件）。
+- Description: `ux-contract.md` 有 4 处写死 `https://aiplanet.live`：L10「产品形态」、L225（精选页 HP-1 的验证步骤入口）、L562 与 L576（Quality Bar 的适用面与可用性判据）。而当前公开站点是 `https://news.aiplanet.live`（经 EdgeOne DNS-only CNAME 接入，见 [ADR-039](../adr/039-route-news-through-edgeone-dns-only-cname.md)），旧域名待下线且已知返回 502。照契约字面执行验收，会在一个不再服务的域名上取读数——失败形态是「契约测试红了，但产品是好的」，或更坏地把 502 当成产品故障。
+- Recommendation: 4 处全量改写为 `https://news.aiplanet.live`；旧域名如需保留，只作为「已下线的历史域名」在一处注明，不出现在任何验证步骤里。**L2 验证条件**：浏览器打开 `https://news.aiplanet.live` 首页返回 200 且渲染出 `.item-row`；同时确认契约内不再有任何裸 `https://aiplanet.live` 的验收入口。
+
+## [open] 2026-08-20 [drift] 信源数量三处口径互相矛盾，且都与 `sources.toml` 实数不符
+
+- Discovered: 2026-08-20 sync-docs 审查交叉核对 L20 / L308 / L417 / L595 与 `data/sources.toml`。
+- Description: 契约里同一个事实有三个不同取值：L20「40+ 个信源」、L595 的 Quality Bar 表「当前约 41 个信源，20 为保守下限」、L308 与 AB-1（L417）「精确 161 个：109 个 X、34 个原始 Feed、18 个原始 Web/API 列表」。实测 `data/sources.toml` 当前 **163 条、全部 enabled**（`tomllib` 计数，2026-08-20）。「约 41」是 AIHOT 来源对齐（ADR-047 那一轮）之前的旧数，早已失效；而 161 与 163 的差恰是 [ADR-059](../adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) 双跑引入的两个微信源。AB-1 把「精确 161 行」写成 hard contract，意味着每加一个源契约就红一次——这类断言的维护成本会持续把注意力从真问题上引开。
+- Recommendation: 单点化并去精确数字：L20 与 L595 改为「百余个信源」一类不随增删漂移的措辞，把可核数字交给命令而非散文；AB-1 改为断言「About 页展示的主站来源行数等于 `sources.toml` 中主时间线来源的数量」这一**关系**，而不是某个具体常数。**L2 验证条件**：`python3 -c "import tomllib;d=tomllib.load(open('data/sources.toml','rb'));print(len(d['source']))"` 的输出与 `/about` 页面实际渲染的来源行数相等；契约内不再有互相矛盾的信源常数。
+
+## [open] 2026-08-20 [drift] 契约假设单一微信来源，ADR-059 后是双源并集 + 跨源去重
+
+- Discovered: 2026-08-20 sync-docs 审查核对 [ADR-059](../adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) 与契约措辞。
+- Description: 契约多处把微信摄取写成单一 Mp2RSS 聚合源：L179 与 L455 的搜索契约明确排除聚合来源名「微信公众号（Mp2RSS 合集）」，L308 与 L417 的 About 页契约写「配置后另显示**一行** WeChat 来源」。ADR-059 之后实际是 Mp2RSS 与 Wechat2RSS **两个源并行取并集**（`data/sources.toml` 中 `kind = "wechat"` 两条，其一 slug `wx_wechat2rss`），按「账号 + 归一化标题 + 5 分钟发布窗」跨源去重。契约照旧读会产生两类误判：About 行数对不上被判回归；双源期间同一篇若真出现两张卡，反而因为契约没写过这个不变量而无人拦。
+- Recommendation: 把 About 页那条改为「每个已配置的微信来源各一行」，搜索契约里的聚合来源名改为按来源集合表述；并新增一条跨源去重的可观察承诺：「同一公众号文章在双源期间只出现一张卡片」。**L2 验证条件**：在两个微信源都启用的窗口内，于 `/wechat` 搜索一篇已知双源都收录的文章标题，结果只有一条；`/about` 的 WeChat 来源行数等于已配置的微信源数。
+
+## [open] 2026-08-20 [expansion] 评分标签形态（`AI 评分 n` / 窄屏 `AI n`）已上线，契约只写「数字分数」
+
+- Discovered: 2026-08-20 sync-docs 审查核对 [ADR-056](../adr/056-label-the-score-instead-of-showing-a-bare-number.md) 与契约措辞。
+- Description: 契约 L38 写「分数标签：独立位于卡片右上（数字分数，颜色编码：≥80 高分、65-79 中等、<65 低调）」，L68、L230、L233、L299 同样只说「分数标签」。实际实现（`web/static/app.js:336` 与 `web/templates/_prepaint_list.html:35`）渲染的是 `<span class="timeline-score-label">AI<span class="timeline-score-label-rest"> 评分</span></span> {score}`——桌面读作「AI 评分 89」，≤960px 时 `-rest` 被收起、视觉上只剩「AI 89」，而「评分」二字仍留在可访问性树里。契约没记这个形态，于是「裸数字」这个已被明确否决的旧形态在契约上仍然合法，下一轮重构可以合规地退回去。
+- Recommendation: 在 L38 补写标签形态与其窄屏收起规则，并明确「不写死分母」（ADR-056 的另一半决策，理由见 `ux-issues.md` 里 T1 条目 weighted_score 超 10 的实测）。**L2 验证条件**：桌面视口下列表卡片的评分元素文本匹配「AI 评分 <数字>」；≤960px 下可见文本为「AI <数字>」而其可访问名仍含「评分」。
+
+## [open] 2026-08-20 [expansion] RS-5 未记「新访客默认跟随系统主题」
+
+- Discovered: 2026-08-20 sync-docs 审查核对 [ADR-055](../adr/055-default-new-visitors-to-system-theme.md) 与 RS-5。
+- Description: RS-5「主题三态」只承诺三态切换、localStorage 持久、滑动底板指示与无闪烁，**没有说没有 localStorage 时默认落哪一档**。实现（`web/templates/index.html:8` 的 head 内联脚本）在读不到 `ai-radar:theme` 时取 `"system"`，再按 `prefers-color-scheme` 决定明暗；ADR-055 正是为此改的默认值。契约缺这一条，意味着「新访客默认深色」这个改动前的行为在契约上依然合法。
+- Recommendation: RS-5 补一条：「无持久化偏好的首次访问默认为『跟随系统』档，实际明暗由 `prefers-color-scheme` 决定。」**L2 验证条件**：清空该站 localStorage 后首次访问，`data-theme-mode` 为 `system`，且 `data-theme` 与操作系统当前明暗一致（切换系统外观后刷新，`data-theme` 随之变化）。
+
+## [open] 2026-08-20 [expansion] HT-1 / HP-10 无「榜单尚未就绪」态，会把 ADR-060 的正确行为判成空态缺失
+
+- Discovered: 2026-08-20 sync-docs 审查核对 [ADR-060](../adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md) 与 HT-1 / HP-10。
+- Description: ADR-060 之后热点榜由后台刷新的候选缓存供给、请求路径永不同步计算：缓存未就绪时 `/hot` 返回 **503**（`src/airadar/web/routes/curated.py:171`）而非 200 + 空列表，页面显示「热点榜单正在生成，稍后自动刷新」并有界自动重载（`web/templates/hot.html:98`）；首页 HP-10 的热点块在冷态下退避而不是渲染空模块。契约只有两态——HT-1 的「渲染 API 全部响应项」与「榜单为空时显示显式空状态」，HP-10 的「严格显示前 2 条」。第三态（未就绪）没有位置，于是**每次重启后的冷窗口都会被验收判成 FAIL**：503 不是 200，「正在生成」也不是空状态文案。这类误判最坏的走向是驱动把 ADR-060 刚拆掉的同步计算改回去。
+- Recommendation: HT-1 与 HP-10 各补一条未就绪态：`/hot` 在候选缓存未就绪时返回 503 并显示「正在生成」提示与自动重载，**且该态必须自愈**；首页热点块在该态下不渲染空模块。同时把「空」与「未就绪」在契约措辞上分开——两者的正确产品行为不同。**L2 验证条件**：重启 serve 后立即访问 `/hot`，观察到 503 与「热点榜单正在生成」提示；不做任何操作，在后台刷新完成后页面自动恢复为正常榜单（同一次访问内自愈，无需手动刷新）。
+
+## [open] 2026-08-18 [drift] HP-7 与首页 L1 的媒体条目未反映 ADR-058 的点击手势
 
 - Discovered: 用户对比 aihot.virxact.com 后指出我方列表图片居中且有大片灰底空档（实测 945×811 的图在 1072×210 的盒子里只画出 245×210，左右各约 413px），以及截图缩略图信息不全。ADR-058 据此把媒体盒改为收缩包裹左对齐，并把点击改为「lightbox 增强原生链接」。
 - 契约现状：`ux-contract.md` HP-7 仍写「点击图片在新标签页打开大图（查看原图；进入原文走标题链接）」，首页 L1（`ux-contract.md:39`）仍写「媒体资产（文章配图，可点击查看原图）」。后者还残留 ADR-054 之前的「文章配图」措辞——列表早已只渲染 X 推文自带媒体。
@@ -25,103 +63,22 @@
   9. 首页 `/` 上带媒体的卡片，其媒体元素只来自 `source_kind === "x"` 的条目——RSS 条目卡片不出现媒体元素（这条同时是 ADR-054 的回归哨兵）。
 - 未覆盖轴（不写进契约、如实留白）：125/150/200% 缩放档、断点两侧取点（959/960/961）、Windows/Linux 上 Ctrl+左键的语义。
 
-## 2026-08-14 [expansion] ux-contract 未覆盖 `/wechat` 冷连接首屏性能
+## [open] 2026-08-14 [expansion] ux-contract 未覆盖 `/wechat` 冷连接首屏性能
 
 - Discovered: 用户从 MacBook 打开 `https://news.aiplanet.live/wechat` 时经历数秒白屏，并明确要求同条件体感不弱于 AIHOT；EdgeOne 接入与 render-blocking CSS 优化据此实施。
 - Description: 现行契约约束 `/wechat` 的 SSR 内容、搜索、分页与详情行为，但没有约束真正冷连接下 HTML 首包与首次内容绘制。缺少这一层时，功能测试与热连接读数都可能通过，用户仍会在首次访问时看到明显白屏。
 - Recommendation: 在微信文章解读页的 L1 承诺中补充「真正冷连接下首屏等待不得显著慢于 AIHOT 对照」；配套 L2 固定为用户 MacBook 可见浏览器中交替测试 `/wechat` 与 AIHOT 首页，每方至少 5 次新浏览器 profile / 新连接，分别比较 median TTFB 与 FCP，二者均须不超过 AIHOT 的 110%。搜索、分页和详情只做功能与非回归验证，不为没有 AIHOT 对应面的路径制造替代性能指标。
 
----
+## [open] 2026-08-20 [drift] 契约称站内详情页「唯一」，而 `/item.html` 是可达的第二个详情页，NG-1 也没把它列进负向断言
 
-## 2026-06-07 [expansion] ux-contract §微信文章解读页 未覆盖新增的搜索功能
+- Discovered: 2026-08-20 sync-docs 审查核对契约与路由表时发现。**来源是代码核对，不是端到端观察**——本条按本文件的写入约束标注取证等级，L2 是端到端确认它，不是重复这次核对。
+- Description: 契约两处把站内详情页写成独占：L189「产品中唯一的站内条目详情页（其余页面点标题跳原文）」、L200「**唯一例外**是微信文章解读」。而 `web/static/item.html` 是一个完整的独立页面（自带侧栏、主题内联脚本、`/style.css?v=` 引用），由 StaticFiles 隐式提供于 `/item.html`，`web/static/app.js` 里有配套的 `GET /api/v1/items/<id>` 取数逻辑；`docs/architecture.md` 的路由表也把它列为「单条详情页」。仓内核对（`git grep item\.html` 于 `web/templates/`、`web/static/*.js`、`src/airadar/web/`）显示**没有任何页面链接到它**——它是一个孤立但可直接访问的入口。
+- 两个后果：契约的「唯一」在字面上是假的；而 NG-1「明确不提供的入口与路由」只点了 `/topics`、`/agent`、`/feedback`，没有对 `/item.html` 表态——于是它既不算承诺的功能，也不算明确不提供，处在契约的盲区里。盲区的坏处是双向的：删掉它不会红任何断言，留着它也没有任何可验收的行为。
+- Recommendation: 先由用户裁决它的去留，再择一入契约——(a) 认可它是产品面，把它写进 Surfaces 并给出 L1 承诺（至少：无导航入口、仅凭 URL 可达、渲染哪些字段、条目不存在时的行为），同时把 L189/L200 的「唯一」改为「唯一由卡片点击进入的站内详情页」；(b) 判定它是历史遗留，从 `web/static/` 移除并在 NG-1 补一行。**L2 验证条件**：取一个真实条目 id，浏览器访问 `/item.html?id=<id>` 并记录实际渲染结果（选 (a) 时断言它符合新写的 L1；选 (b) 时断言该路径返回 404 且站内无任何链接指向它）；同时断言契约内不再有与之矛盾的「唯一」措辞。
 
-- Resolution (2026-06-15): 已在 ux-contract.md `/wechat` 页面描述与 WX-4 写入 WeChat 专属搜索字段、LIKE/繁简/2 字行为、URL/分页/详情/404 上下文和空态，修正"v1 无搜索"旧描述。
-- Discovered: execute-plan 实施 `20260607-wechat-interpretation-search`（/wechat 新增搜索框）后的 supervisor 收尾核查 + test-ux 验收。已上线公开站点 `/wechat`。
-- Description: 契约 §微信文章解读页 当前只描述"列表卡片 + 站内详情"、无搜索；但 `/wechat` 已新增搜索框，且语义**刻意不同于**精选/全部页（后者匹配 标题/正文/来源名/作者/中文标题、≥3 字走 FTS）：
-  - 匹配字段：原文标题 / 公众号名(作者) / 摘要(abstract) / 标签(tags)——**不搜正文、不搜结构化解读全文 summary_md、不匹配聚合 feed 来源名 s.name「微信公众号（Mp2RSS 合集）」**（匹配 s.name 会让全部条目命中）。
-  - 一律 LIKE（无 ≥3 字 FTS 分支），繁简互通，2 字专名可搜。
-  - 排序：公众号名(作者)命中优先于其他字段命中，其余按发布时间倒序。
-  - 行为：debounce 即时收敛；翻页保持 `q`；URL `?q=` 同步、刷新/分享保持；清空恢复全量；详情页与 404 页的站内返回链接保持搜索态（`/wechat?q=...&page=...`）；无匹配显示空状态；placeholder = `搜索标题/公众号/摘要/标签…`。
-- Recommendation: 在 §微信文章解读页 增「搜索」契约段，写明上述匹配维度与语义，**特别标注与精选/全部页搜索的差异**（不搜正文/解读全文、不匹配聚合来源名、按公众号作者优先），并补 URL `?q=` 同步、清空恢复、详情/404 返回保持搜索态、空状态文案 这些可验证行为，供下游 test-ux 据以验收。
+## [open] 2026-08-20 [expansion] ICP 备案页脚在 10 个页面上渲染，契约零覆盖
 
----
-
-## 2026-06-01 [expansion] ux-contract 未明确搜来源名时的排序承诺
-
-- Resolution (2026-06-15): 已在 HP-4/TL-3 写入 `q` 生效时来源名/作者命中优先、同层按 `source_id` 轮转进入分页结果、无 `q` 保持时间倒序。
-- Discovered: 中文/微信公众号源搜索可用性修复（#6）落地后，产品实现已在搜索态将 source name / author 命中的条目排在内容命中之前，并在同名来源之间用 source_id 轮转，避免高产同名源淹没低产公众号源。
-- Description: `ux-contract.md` HP-4 已承诺"搜源名返回该源内容"，但未定义首屏排序语义。没有排序契约时，未来重构可能回退到纯时间序，导致 `歸藏` 这类同名 X + 微信公众号场景再次让公众号在首屏外。
-- Recommendation: 在搜索契约中补充：有 `q` 时，source name / author 命中优先于 title/content-only 命中；同一命中层内按来源轮转保证每个命中来源首条在 page1 可见；无 `q` 时保留原时间/日期排序。
-
----
-
-## 2026-05-28 19:20 [expansion] ux-contract 未明确 `/` 和 `/all` 首屏应 SSR 预载且不显示 loading spinner
-
-- Resolution (2026-06-15): 已在 HP-1/TL-1/RS-3 写入 `/` 与 `/all` 首屏 SSR preload、HTML 到达即有 `.item-row`、不依赖初始 `/api/v1/*` fetch、无可感知 spinner。
-- Discovered: SSR preload plan production verification for the public site after comparing the existing CSR loading behavior with AIHOT-style inline/preloaded content.
-- Description: 当前实现已让 `/`、`/all` 和三个常见 deep link 在生产环境首屏直出 `.item-row`，Playwright gate 结果为 spinner 0、initial API 0，FCP median 均低于 1.5s。但 ux-contract 还没有把"主 feed 首屏应在 HTML/preload 阶段可见，不依赖初始 API fetch，也不出现可感知 loading spinner"作为行为契约写死。
-- Recommendation: 在对应 Feed Reading / Initial Load contract 中补充：`/` 与 `/all` 的首屏内容必须通过 SSR preload 或等价机制在 HTML 到达后即可渲染；生产验证以 spinner 出现次数、首个 `.item-row` 时间、initial `/api/v1/*` 请求数为指标。
-
----
-
-## 2026-05-29 [expansion] ux-contract 未约定图片加载行为（图床可达性 / 不阻塞首屏 / 懒加载），与 AIHOT 实现存在 parity gap
-
-- Resolution (2026-06-15): 已在 HP-7 写入当前 shipped 图片 lazy loading 与失败隔离契约；未改变产品行为，未引入图片代理或额外属性。
-- Discovered: 对比 `https://aihot.virxact.com/all` 加载机制的讨论收尾。AIHOT 首屏初次加载发起 26 个 `/api/img-proxy?u=<encoded-image-url>` 请求代理外部图床（主要是 X `pbs.twimg.com` 头像），并行下载且不阻塞 HTML 首屏渲染。AI Planet 现状是 `app.js` 渲染卡片时直接引用原始外部图床 URL（X `pbs.twimg.com`、各家 OG image 等），无服务端代理、无懒加载属性。
-- Description: 现行 `ux-contract.md` Feed Reading 段只约束文本/标签/分数的首屏可见性，对图片只字未提。实际后果至少三条：(a) X 图床在国内网络不稳定，图片偶发失败/超时但 contract 未声明"图片失败不应影响阅读"或"图片必须可达"；(b) 大量并行图片请求与文本首屏共享 HTTP 连接预算，理论上可能拖累 `.item-row` 渲染（已通过 SSR prepaint 缓解但未量化）；(c) Off-screen 图片随 HTML 一并加载，浪费首屏带宽。AIHOT 通过 `/api/img-proxy` 同源代理把图床可达性收敛到自家 CF/服务器，并隐式启用浏览器 connection coalescing。
-- Recommendation: 三选一或组合：
-  - (a) **快胜**：现有 `<img>` 加 `loading="lazy" decoding="async"`，约束 contract："首屏外可视区域的图片不应在初次 HTML 加载阶段下载完成；图片失败不应影响 `.item-row` 文本可读性。" 工作量极低，立刻可做。
-  - (b) **中期**：实现 `/api/img-proxy?u=<url>` 同源代理 + 服务端缓存（参照 AIHOT 命名约定保持 parity），契约约束图片源可达性 SLO（如 p95 < 500ms）。涉及缓存层与带宽成本，需要单独 plan 评估。
-  - (c) **观测先行**：在做 (a)/(b) 之前，加一次 Playwright 性能 probe 测量当前生产 X 图床失败率与首屏阻塞情况，用数据决定优先级。
-  推荐顺序：(c) probe → (a) 快胜立刻做 → (b) 视 probe 结果决定是否独立 plan。
-
----
-
-## 2026-05-18 22:30 [drift] aihot-parity-contract §SourceParity-AboutSurfaceReflection 假设 AIHOT 通过 /about 暴露 source pool，实际 AIHOT /about 是个人介绍页 + 公众号 QR
-
-- Resolution (2026-06-15): Obsolete/resolved：`aihot-parity-contract.md` 已在开源清理中移除，目标契约不存在，不再需要修订该 parity 条目。
-- Discovered: 2026-05-18-r1 / s3-parity-auditor / Layer 1 跑测时对照 AIHOT `/about`
-- Description: `aihot-parity-contract.md §SourceParity-AboutSurfaceReflection` 暗含"两端 /about 都暴露 source table"的假设；实测 AIHOT `/about` (`evidence/s3/aihot-about.png`) 是"嗨,我是数字生命卡兹克 / 这个站是我做的,免费给大家用" + 公众号 QR，不暴露任何 source pool。AIHOT 的源池只能从 `/all` / `/curated` 卡片头像 + handle 推断。AI Planet `/about` 暴露 41 行 source table 是设计差异，不算 issue（VISION §6 透明原则），但当前契约措辞会让下游 test-ux 误以为可以两端 `/about` 直接对照。
-- Recommendation: 修改 §0 参照锚点表中 `信源池真值` 一栏，对 AIHOT 改为 "公开站点暴露源（卡片头像 + handle，不通过 /about）"；并把 §SourceParity-AboutSurfaceReflection 改为 AI Planet 内部一致性测试（`sources.toml` ↔ `/about table`），不再要求与 AIHOT 对照。
-
----
-
-## 2026-05-18 22:30 [drift] ux-contract §Feature-DailyNav 与 §Feature-DailySections 在"合法日期 + 无内容"上承诺重叠/冲突
-
-- Resolution (2026-06-15): 已在 DY-2 拆分边界：非法/不可解析日期切最近一期并显示 fallback banner；合法但无数据日期保留该日期并显示明确空态。
-- Discovered: 2026-05-18-r1 / s4-responsive-and-edges / Issue 6（也被 s1-first-time-visitor Issue 2 在 `/daily/1999-01-01` 上独立交叉验证）
-- Description: §Feature-DailyNav 边界承诺：「访问 `/daily/<无效或无内容日期>` 时静默切到最近一期，并显示 fallback banner」；§Feature-DailySections 边界承诺：「某日全节皆空时整个 sections 区显示明确空态文案而非白屏」。两条边界在"合法日期格式但无数据"上重叠：当前实现是 `/daily/9999-99-99`（非法格式）走 §Feature-DailyNav fallback banner，`/daily/2000-01-01` 或 `/daily/1999-01-01`（合法格式 + 无数据）走 §Feature-DailySections 空态文案。契约没区分"非法格式 vs 合法 + 无内容"两种情形，导致同样是无内容用户拿到两种不同体验。
-- Recommendation: 拆分边界承诺。建议措辞：
-  - §Feature-DailyNav 边界："访问 `/daily/<非法日期格式>` 时静默切到最近一期 + fallback banner。"
-  - §Feature-DailySections 边界（保留）："某日全节皆空时显式空态文案，不白屏。"
-  - 或者反之：合法 + 无内容也走 fallback。两选一并写死。
-
----
-
-## 2026-05-18 22:30 [drift] ux-contract §Feature-Pagination 措辞"超范围 page 返回空列表"，实现是 clamp 到 max page
-
-- Resolution (2026-06-15): Resolved：ux-contract.md HP-8/TL-4/WX-4 现均明确越界页码 clamp 到最后一页，契约已与实现对齐。
-- Discovered: 2026-05-18-r1 / s4-responsive-and-edges Issue 5 + Issue 8（s2-returning-power-user Issue 5 也在 `?page=999` 上看到了长 loading 后才发生 clamp）
-- Description: §Feature-Pagination 边界："超范围 page 返回空列表，分页器仍可回退；page<1 或非数字按 1 处理。" 实测 `/all?page=999` 经过 ~9s loading 后 URL 被前端改写为 `/all?page=16`（最后一页），渲染该页内容；`/all?category=ai-models&page=2`（超范围因为 ai-models 只 1 页）则 URL 被改写为 `/all?category=ai-models`（直接剥掉 page 参数）。两种行为都不是契约措辞的"返回空列表"。
-- Recommendation: 二选一并写死：
-  - (a) 实现回到契约："超范围 page = 空列表 + 分页器可回退 + URL 保留"；
-  - (b) 契约跟实现："超范围 page = clamp 到 max page，URL 同步改写为 max；带 filter 且总页数 1 时剥掉 page 参数。"
-  目前的混合行为让深链复用 / monitoring / 用户预期都不稳定。
-
----
-
-## 2026-05-29 07:15 [expansion] ux-contract 未覆盖 wechat（微信公众号）源类型及其"未 enrich 时抑制正文预览"的展示规则
-
-- Resolution (2026-06-15): 已在 TL-2 写入微信公众号来源归入"资讯"、未 enrich 时抑制正文预览、enrich 后显示中文摘要、标题回链 mp.weixin 原文。
-- Discovered: execute-plan 实施 `20260528-wechat-oa-ingestion`（新增 `kind="wechat"` 源）后的 supervisor 收尾核查。
-- Description: 新增 wechat 源（首批 歸藏的AI工具箱 / 十字路口Crossing）归入"资讯"频道（`kind != "x"`），在 `/` 与 `/all` 同普通 feed 源一并展示。但有一处 wechat 特有的展示规则未写入 ux-contract：出于合规（不公开转载公众号正文），wechat item 在 web 层**抑制 `content_preview`**——未 enrich 的 wechat 卡片正文区为空（仅中文标题 + 回链 mp.weixin），enrich 后才显示 `summary_zh`；而普通 feed 源未 enrich 时仍显示 `content_preview`（正文前 320 字）。当前 ux-contract（§TL-2 信源类型筛选只列 一手信源/资讯/推文；卡片展示默认有 preview/摘要）未反映这点，下游 test-ux 可能把"未 enrich 的 wechat 卡片无正文预览"误判为 bug。
-- Recommendation: 在 ux-contract 补充 wechat 源的展示契约：(a) wechat 源归入"资讯"类型（feed/x/wechat 三类信源）；(b) 卡片正文：enrich 后显示中文摘要，未 enrich 时仅标题 + 回链（正文不对外公开，合规要求）；(c) 点击标题回链到 `mp.weixin.qq.com` 原文。
-
----
-
-## 2026-05-18 22:30 [expansion] ux-contract §Feature-CategoryFilter 未明确"无效 slug 静默回退时是否清掉 URL 上的脏参数"
-
-- Resolution (2026-06-15): 已在 HP-3 写入 `/?category=<无效 slug>` 静默回退到"全部"并由客户端剥除无效 `category` 参数。
-- Discovered: 2026-05-18-r1 / s2-returning-power-user Issue 9（深链 `/?category=invalid-slug` 测试）
-- Description: §Feature-CategoryFilter 边界："无效 slug 静默回退到「全部」（不报错）。" 实测 `/?category=invalid-slug` 行为：列表正确渲染全部精选 ≈5s 后地址栏被改写为公开站点根路径（脏参数被剥）。契约没说要清也没说要保留。两种行为各有理由：清 → 防止用户把坏链发出去再次复制；保留 → 让 admin / monitoring 看到误配。
-- Recommendation: 在 §Feature-CategoryFilter 边界条目补一句明确，例如：「URL 保留无效参数以便排错」或「URL 清掉无效参数防止扩散」。同理 §Feature-ChannelFilter 也需补；§Feature-Pagination 的 page<1 / 非数字行为同样未说 URL 是否清——可以一并归类为"无效 query 参数的 URL 处理策略"统一段落。
+- Discovered: 2026-08-20 sync-docs 审查核对模板与契约时发现。**来源是代码核对，不是端到端观察**——L2 是端到端确认它。
+- Description: `web/templates/_icp_footer.html` 由 10 个模板 include（`index` / `all` / `hot` / `wechat` / `wechat_detail` / `wechat_404` / `about` / `bookmarks` / `changelog` / `more`），在配置了 `icp_beian` 时渲染一个指向备案查询站的外链页脚。仓内核对：`ux-contract.md` 内 `ICP|备案` 命中 **0**。于是一个出现在几乎全部公开页面、且带合规含义的元素，没有任何可观察承诺——它渲染错了、链错了、或在某个页面漏了，都不会红任何断言。
+- 与前一条的区别: 那条是契约说了假话，这条是契约没说话。合规性元素属于「漏掉比说错更危险」的一类——它的缺席在页面上看起来完全正常。
+- Recommendation: 在全站层（NG-1 同级的全站断言处）补一条：「配置了备案号时，全部公开页面底部渲染备案号，且链接指向备案查询站并以新标签页打开；未配置时该页脚整体不渲染，不留空盒。」注意 fork 部署者通常不配备案号，所以「未配置时不渲染」和「配置时渲染」同等重要，契约要覆盖两侧。**L2 验证条件**：配置 `icp_beian` 后逐一访问上述 10 个页面，各断言底部存在备案链接且 `target="_blank"`、`rel` 含 `noopener`；清空该配置后重复一遍，断言 10 个页面均无 `.icp-footer` 节点（而非渲染为空）。

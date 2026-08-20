@@ -2,7 +2,7 @@
 
 > Agent 驱动的轻量 issue tracker，按 domain 分文件。
 >
-> 协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
+> 协议：`~/.claude/references/docs-organization-protocol.md` §4.8。domain 文件**只存 open 条目**；判定 resolved / wontfix 的同一步把整条（含证据与不修理由）移入 [archive/closed.md](archive/closed.md)，不留在原文件、不删除。
 
 | 文件 | Scope |
 |---|---|
@@ -13,5 +13,5 @@
 | [alerting.md](alerting.md) | 服务故障告警的设计质量债（值不值得 page、严重度、消息说什么、要不要合并、基线可行性、留痕） |
 | [cost-observability.md](cost-observability.md) | LLM 成本计量、定价、报告与告警消费面的未闭合项；金额口径只覆盖 `llm_usage` 记录行 |
 | [general.md](general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
-| [harness-issues.md](harness-issues.md) | Agent harness、wrapper、hook、plugin 或 skill 行为问题 |
+| [harness-issues.md](harness-issues.md) | Agent harness、wrapper、hook、plugin 或 skill 行为问题——**限牵涉本项目的那些**；纯 user-scope 的按协议 §4.8 写入路由归 harness 仓 |
 | [archive/closed.md](archive/closed.md) | 已 resolved / wontfix 的历史 issue 归档 |

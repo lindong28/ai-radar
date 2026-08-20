@@ -70,3 +70,13 @@
 - 来源契约放开了「只能有一个微信来源、且必须是 Mp2RSS」的硬编码，改为按 `required_env` 与 `fetch_url` 自洽配对逐个校验，并禁止两个微信来源复用同一个环境变量。同时收窄一处相关行为：未设置的环境变量**只对显式声明 `optional = true` 的来源**才静默跳过，其余仍报错中断加载——此前这个跳过是按环境变量的名字硬编码的。
 - **停用其中一个源有两面代价**，取舍与重新启用前的清重步骤见 [operations/wechat-ingestion.md](../operations/wechat-ingestion.md)「停用其中一个微信源时会发生什么」，取舍本身记在 [issues/general.md](../issues/general.md)。
 - 停用 Mp2RSS 仍被两件事挡着，都记在该 plan 的 ISSUE-015：自建源的持续漏文，以及 Mp2RSS 实际供稿 21 个公众号而自建部署只订阅了 14 个。
+
+## 修订记录
+
+**2026-08-20 — 引用路径、编号命名空间与后台线结局。**
+
+上文按 `plans/20260816-mp2rss-replacement/` 引用的那份 plan 已归档至 [`docs/plans/20260816-mp2rss-replacement/`](../plans/20260816-mp2rss-replacement/)（本轮并行归档中），其中包括正文引用的 `tools/shadow_compare.py`。
+
+上文出现的 ISSUE-015 与 TASK-008 都是**该 plan 内部的编号**，与 [`docs/issues/cost-observability.md`](../issues/cost-observability.md) 里的 ISSUE-015 无关——两处编号各自独立计数，不构成同一条记录。
+
+本决策把发现层改为双跑之后，原来那条公众号后台发现线（ADR-024 至 ADR-030）的结局已定：后台 `appmsg` / `appmsgpublish` family 对第三方账号平台级不可用，该线整体 deprecated，见 [ADR-061](./061-deprecate-wechat-admin-discovery-line.md)。

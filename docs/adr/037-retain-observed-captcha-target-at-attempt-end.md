@@ -1,6 +1,6 @@
 # ADR-037: Retain an observed captcha target at canary attempt end
 
-Status: Accepted
+Status: Accepted; superseded by ADR-038 for newly generated evidence. Versions 1 through 6 remain frozen historical observations. Deprecated — the WeRead canary line stopped together with the Mp2RSS replacement plan it explored, see ADR-061.
 
 Date: 2026-08-13
 

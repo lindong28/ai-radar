@@ -1,6 +1,6 @@
 # ADR-004: N+1 优化仅限 timeline 路由
 
-- Status: accepted
+- Status: accepted；前提部分失效——热点榜已改为复用 curated archive 路径，见 ADR-060
 - Date: 2026-05-24
 
 ## Context

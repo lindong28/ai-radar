@@ -4,9 +4,9 @@
 
 ## Overview
 
-AI Radar 是一个 AI 信息流聚合站点。从 RSS 信源抓取内容，经 LLM 多阶段处理（筛选、评分、翻译富化、精选），以时间线和日报形式通过 Web 展示。
+AI Radar 是一个 AI 信息流聚合站点。信源不止 RSS：`data/sources.toml` 当前 163 条全部 enabled，按 `kind` 分为 `x` 109（X/推文，官方 API 或 RSS adapter）、`feed` 34（RSS/Atom）、`web` 18（原始 Web/API 抓取）、`wechat` 2（微信公众号合集 feed，Mp2RSS + Wechat2RSS 双跑）。抓取后经 LLM 多阶段处理（筛选、评分、翻译富化、精选），以时间线和日报形式通过 Web 展示。
 
-技术栈：Python 3.12+ / FastAPI / SQLite (WAL) / Jinja2 页面模板 / 多 LLM Provider（DeepSeek、GLM、OpenAI）。包管理使用 uv。
+技术栈：Python 3.12+ / FastAPI / SQLite (WAL) / Jinja2 页面模板 / 多 LLM Provider。包管理使用 uv。prefilter/score/enrich 三阶段的默认 provider 都是 DeepSeek 系（`deepseek_v32` / `deepseek_v4_flash` / `deepseek_v4_pro`），同一封装按 key 走官方 DeepSeek 或火山 ARK（`DEEPSEEK_API_KEY` / `ARK_API_KEY`，ARK 侧另有 `provider/ark_breaker.py` 熔断）；GLM（prefilter）与 OpenAI 兼容的 `codex_gpt_mini`（score）是需显式设 `AI_RADAR_PREFILTER` / `AI_RADAR_SCORER` 才启用的备选。
 
 ## Modules
 
@@ -24,9 +24,14 @@ src/airadar/
 ├── wechat_text.py      # 微信标题文本归一化
 ├── migrations/         # 编号递增的幂等 SQL 迁移；016/017 负责 deprecated cost carrier 清理
 │
+├── pipeline_lock.py    # pipeline 互斥锁的只读探针（非阻塞共享 flock，ADR-052）
+├── runtime_env.py      # 共享 dotenv 加载：进程 env > 项目 .env > ~/.claude/.env（ADR-003）
+│
 ├── sources/            # 信源管理
 │   ├── loader.py       #   解析 data/sources.toml -> SourceConfig
-│   └── sync.py         #   同步信源配置到数据库
+│   ├── sync.py         #   同步信源配置到数据库
+│   ├── contract.py     #   机器契约（schema v2）校验：kind/tier/slug 形状与 union 收据
+│   └── x_state.py      #   X runtime metadata（cursor/checkpoint）的共享验证器
 │
 ├── fetcher/            # 内容抓取
 │   ├── runner.py       #   fetch_all 主流程
@@ -75,9 +80,31 @@ src/airadar/
 ├── interpret/          # 阶段 5：微信公众号文章解读
 │   └── runner.py       #   调 ai-assistant summarize-article，写 wechat_interpretations + KB
 │
+├── wechat_discovery/   # 默认关闭的私有微信公众号发现层（ADR-024 起）
+│   ├── config.py       #   解析 data/wechat-discovery.toml -> DiscoveryConfig
+│   ├── models.py       #   DiscoveryState/AccountConfig/DiscoveryArticle 等值对象
+│   ├── protocol.py     #   后台响应解析与分类错误（auth/rate-limit/platform-rejected）
+│   ├── login.py        #   Playwright 登录态捕获与凭据落盘（admin token 提取）
+│   ├── provider.py     #   DiscoveryProvider Protocol + ProviderAccount/ProviderPage
+│   ├── provider_store.py #  provider attempt/cursor checkpoint 与文章身份账本
+│   ├── tikhub.py       #   TikHub provider 客户端与页面解析
+│   ├── shadow.py       #   shadow 与 Mp2RSS 的窗口化比较（不可比较时显式失败）
+│   ├── store.py        #   发现 ledger 单一权威（schema 版本、冷却、平台错误码）
+│   └── status.py       #   手动 probe / 后台请求的有效冷却与可用状态判定
+│
+├── audit/              # 来源读取的完整性 oracle 与收据
+│   ├── completeness_oracle.py # 从原始 feed/web 响应枚举 (slug,url) 全集
+│   └── receipts.py     #   收据规范化哈希、字段与代码哈希校验、AIHOT 对账
+│
 ├── performance/        # 用户旅程性能监控与候选修复
 │   ├── browser_probe.py #  Chromium 四旅程测量
+│   ├── http_probe.py   #   HTTP 层旅程测量 + 返回体身份匹配
 │   ├── journey_monitor.py # idle-only 样本、PERF:* 规则与 14 天保留
+│   ├── budgets.py      #   LocalBudget 与样本 P75/P95 判定
+│   ├── config.py       #   config/performance.toml 加载与校验
+│   ├── context.py      #   探针前后的 pipeline 活动上下文采集
+│   ├── stage_ledger.py #   pipeline stage 账本与 idle/busy 区间分类
+│   ├── runner.py       #   探针 adapter 入口：runtime 规范化 + 观测 payload 组装
 │   └── remediation.py  #   fail-closed 隔离 worktree candidate worker
 │
 ├── eval/               # 质量评估（与 AIHOT 对比）
@@ -102,20 +129,29 @@ src/airadar/
 │       ├── request_db.py # 请求级 SQLite 连接生命周期
 │       ├── pagination.py # 版本化 LRU 计数缓存 + 页码 clamp
 │       ├── timeline.py #   GET /api/v1/timeline — 全量时间线
-│       ├── curated.py  #   GET /api/v1/curated — archive/digest 路由分派
+│       ├── curated.py  #   GET /api/v1/curated — archive/digest 路由分派 + GET /api/v1/hot
 │       ├── curated_archive.py # 跨 run 去重归档、按日归档与真实计数
 │       ├── curated_digest.py # 指定 run 的单轮 digest
+│       ├── hot_cache.py #   热点候选后台缓存：版本键、窗口下推 SQL 与热度排序（ADR-060）
+│       ├── daily_metrics.py # 日报页头部指标（事件数、一手源、新模型、信源数）
 │       ├── items.py    #   GET /api/v1/items/{id} — 单条详情
 │       ├── sources.py  #   GET /api/v1/sources（兼容投影）+ /api/v2/sources（完整公开 inventory）
 │       ├── wechat.py   #   GET /api/v1/wechat — 微信文章解读列表 + markdown sanitize helper
-│       ├── media.py    #   GET /img — 受限微信 CDN 同源图片代理
+│       ├── media.py    #   GET /img — 受限图片同源代理：微信 CDN 直取、twimg 经出口代理（ADR-057）
 │       └── health.py   #   GET /api/v1/healthz — 健康检查
 │
 └── admin/              # 运维聚合
     ├── usage.py        #   记录行用量、查询时成本、measurement_scope 与分组/跨窗聚合
     ├── cost_report.py  #   周报、暴露量核对与 recorded-cohort 比较
     ├── cost_audit.py   #   raw catalog、派生成本、anchor 与 residue 对账
-    └── alerts.py       #   A1–A6、D3、投递与 lifecycle
+    ├── alerts.py       #   A1–A7、D3、投递与 lifecycle
+    ├── thresholds.py   #   A1–A7 告警阈值常量表（窗口、最小样本、比率）
+    ├── calibration.py  #   从评估/访问日志/pipeline 历史基线校准上述阈值
+    ├── access_log.py   #   uvicorn access log 行解析与按路径/状态聚合
+    ├── metrics.py      #   /admin dashboard 指标聚合（pipeline 轮次、阶段、分位）
+    ├── performance.py  #   performance 面板数据与 launchd 期望清单状态
+    ├── edgeone.py      #   EdgeOne 规则引擎与仓内 pinned 快照逐条对账（ADR-039）
+    └── x_media_backfill.py # 对已入库 item 一次性回填 X 媒体元数据，不动 checkpoint
 
 web/asset-pins.json     # /app.js 与 /style.css 的内容摘要与 ?v= 版本串（刻意放在 static/ 之外，避免成为公开 URL）
 
@@ -126,14 +162,28 @@ web/static/             # 前端静态文件（根目录 web/，非 src 内）
 ├── item.html           #   单条详情页
 ├── app.js              #   前端 JS
 ├── style.css           #   样式
+├── wechat-icon.svg     #   微信入口图标
 └── daily-overrides-20260514c.css  #  日报页样式覆盖
 
-web/templates/          # Jinja2 SSR 页面模板
-├── index.html          #   精选首页 SSR + preload
+web/templates/          # Jinja2 SSR 页面模板（目录在仓库根 web/，非 src 内）
+├── index.html          #   精选首页 SSR + preload（含热点块）
 ├── all.html            #   全量时间线 SSR + preload
+├── hot.html            #   热点榜页 SSR；含未就绪态与有界自动重载脚本
 ├── about.html          #   关于页 Jinja2 模板
-├── wechat.html         #   微信文章解读列表 SSR + preload
-└── wechat_detail.html  #   微信文章解读详情页（sanitized markdown HTML）
+├── bookmarks.html      #   收藏页外壳（条目存 localStorage，由 app.js 渲染）
+├── changelog.html      #   CHANGELOG.md 请求时渲染
+├── more.html           #   移动端「更多」入口页
+├── wechat.html         #   微信文章解读列表 SSR + preload（内联 CSS，ADR-039）
+├── wechat_detail.html  #   微信文章解读详情页（sanitized markdown HTML）
+├── wechat_404.html     #   微信 slug 未命中的 404 页（带回列表链接）
+├── admin.html          #   内部运维 dashboard
+├── admin_usage.html    #   内部 LLM 成本视图
+├── _hot_topics.html    #   首页热点块 partial（与 app.js renderHotTopics 逐节点同形）
+├── _prepaint_list.html #   首屏前 12 条 .item-row 服务端直出
+├── _mobile_topbar.html #   ≤960px 顶栏
+├── _mobile_tabbar.html #   ≤960px 底部 tab 栏
+├── _icp_footer.html    #   ICP 备案页脚
+└── _wechat_inline_style.css # /wechat 内联进 SSR HTML 的样式（无 ?v= 可 bump）
 ```
 
 仓库级验证工具：`scripts/web_contract_golden.py` 提供可复用的 Web contract capture、manifest 校验、JSON/HTML 比较和 SQLite 逻辑摘要。任务专用请求、adapter、快照与冻结库仅由执行工作区临时持有；任务完成后删除，只有最小且可独立维护的行为契约才提升到测试。使用触发与生命周期见 [Web Contract Golden 验证](references/web-contract-golden.md)。
@@ -226,7 +276,9 @@ data/sources.toml
 
 `kind="x"` 且 `meta.adapter="x_api"` 的源由 `fetcher/x_api.py` 走 X 官方 API；X RSS 源推荐显式使用 `meta.adapter="rss"`，无 adapter 的 v1 历史配置仍走 RSS。尚无 `x_user_id` 时只做 username identity lookup 并持久化首次时间边界，下一轮才读 user timeline；因此每源每轮仍至多一个远端请求。空页提交 `x_since_time`，拿到帖子后以 `x_since_id` 为 high-water mark；若响应有下一页，只把 cursor 与本批 high-water mark 写入 source runtime metadata，下一轮继续该 cursor，直到排空才推进 committed checkpoint。timeline 每次最多 5 条并排除 replies/retweets；runtime state 在写入、reload 与读取处共享同一验证器，配置文件不能伪造内部 cursor，runner 通过 identity + runtime snapshot + SQL CAS 拒绝陈旧覆盖。冷启动窗口不追接入前历史，因此不代表历史召回对齐。详细取舍见 ADR-046。
 
-`kind="wechat"` 源的 URL 指向托管 Mp2RSS 合集 feed。fetch 阶段通过 RSS 发现新文章链接，再只对尚未入库的 `mp.weixin.qq.com/s/...` 原文用 Playwright 抓全文；抓取失败时降级保留 RSS 裸条目，后续 Web 层仍只公开中文摘要与原文回链。`interpret` 阶段只读取启用的 wechat 源 item，调用 ai-assistant `summarize-article` 逻辑生成结构化总结；`save_decision=1` 的条目展示在 `/wechat` 并回写 ai-assistant KB，`save_decision=0` 只在本库留处理记录。X API 接入不读取或替换 `wx_mp2rss`。
+`kind="wechat"` 生产源有两个并行运行、取并集：`wx_mp2rss`（托管 Mp2RSS 合集 feed，`MP2RSS_FEED_URL`）与 `wx_wechat2rss`（本机自建 Wechat2RSS，`WECHAT2RSS_FEED_URL`）。两者互有漏文、谁都不是对方的超集，所以并行而非切换（[ADR-059](adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md)）。既有去重按 URL / 正文哈希且作用域限于单个 `source_id`，识别不出跨源重复——两个源给同一篇文章的 URL 没有公共子串（短链 `/s/<token>` vs 长链 `?__biz=…&mid=…&idx=…&sn=…`），正文也来自不同渲染方。因此 `fetcher/dedup.py` 另加一层**跨源身份**，只对 `kind='wechat'` 且 enabled 的来源在 INSERT 前判定：账号（`items.author`）+ 归一化标题（`wechat_text.wechat_identity_title`）+ 发布时间差 ≤ `WECHAT_IDENTITY_WINDOW`（5 分钟），命中即丢弃后到的一条，谁先到留谁。
+
+fetch 阶段通过 RSS 发现新文章链接，再只对尚未入库的 `mp.weixin.qq.com/s/...` 原文用 Playwright 抓全文；抓取失败时降级保留 RSS 裸条目，后续 Web 层仍只公开中文摘要与原文回链。`interpret` 阶段只读取启用的 wechat 源 item，调用 ai-assistant `summarize-article` 逻辑生成结构化总结；`save_decision=1` 的条目展示在 `/wechat` 并回写 ai-assistant KB，`save_decision=0` 只在本库留处理记录。X API 接入不读取或替换 `wx_mp2rss`。
 
 每个阶段只处理尚未完成对应评估的新条目。`pipeline.sh` 按顺序调度全部阶段，`interpret` 位于最后且 preflight 缺 ai-assistant 依赖时跳过，不阻断前置抓取/精选。
 
@@ -273,7 +325,7 @@ Server `apply_db_update.py` 是 consumer：claim 后保留 immutable base-only a
 ### Alert state → delivery → ledger → remediation
 
 ```text
-A1–A6 / PERF results
+A1–A7 / PERF results
         │
         ▼
 per-rule lifecycles.page|notice   ──真源──▶ severity-aware sender
@@ -309,6 +361,8 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 | `llm_usage` | DeepSeek/ARK `chat_json` 的 per-call token 用量、模型、阶段与输入归因；存放在独立 `llm_usage.db` | `id` (INTEGER, 自增) |
 | `wechat_interpretations` | 微信文章解读结果（summary_md、tags、save_decision、KB 同步状态） | `item_id` |
 | `items_fts` | FTS5 搜索虚拟表（trigram 分词），列为 `item_id/title/content_text/source_name/author/title_zh` | -- |
+| `wechat_account_avatars` | 公众号真名头像缓存（`avatar_url`、`checked_at`、`updated_at`）；migration `007` 建表，`008` 把 `mmbiz.qpic.cn` 的 http 改写成 https | `account` (TEXT) |
+| `archive_cache_generations` | 归档计数缓存的双计数器（`archive_generation` / `category_generation`），由 migration `013` 的一组 trigger 维护；单行表 | `id` (INTEGER, CHECK id=1) |
 | `feedback` | 用户反馈（预留） | `id` (INTEGER, 自增) |
 | `airadar_migrations` | 迁移记录 | `id` (TEXT) |
 
@@ -354,7 +408,7 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 
 ## Web Layer
 
-FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS：`/`、`/all` 与 `/about` 使用 Jinja2 模板（前两者 SSR 预载首屏数据，后续交互继续通过 API 获取数据）；`/daily` 与 `/item.html` 仍由静态文件提供，`/about.html` 308 重定向到 `/about`。
+FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS：`/`、`/all`、`/hot`、`/wechat`、`/wechat/{slug}`、`/bookmarks`、`/more`、`/changelog`、`/about` 以及门控的 `/admin`、`/admin/usage` 都由 Jinja2 模板渲染（`/`、`/all`、`/wechat` SSR 预载首屏数据，后续交互继续通过 API 获取数据）；`/daily` 与 `/item.html` 仍由静态文件提供，`/about.html` 308 重定向到 `/about`、`/curated.html` 308 重定向到 `/`。
 
 **响应式分层**（断点 640/960px）：`>960px` 为侧栏 + 内容区；`≤960px` 侧栏整体隐藏、由常驻 HTML 的 `.m-tabbar`（`web/templates/_mobile_tabbar.html`）与 `.app-mobile-bar`（`_mobile_topbar.html`）接管导航。**内容区不做 DOM 双份**——同一套卡片 DOM 由 media query 重塑几何（见 [ADR-012](adr/012-single-dom-mobile-layer.md)），只有桌面无对应物的 chrome 才是独立节点。
 
@@ -367,7 +421,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/api/v1/timeline` | GET | 全量时间线，支持页码分页（返回真实总数 COUNT）、channel 过滤（x/news/firstParty）、category 过滤、混合 FTS/LIKE 搜索 |
 | `/api/v1/curated` | GET | 精选内容。无 `run_id`/`date` 时返回跨 run 去重的累积归档（页码分页 + 真实总数）；仅带 `date` 时返回该日的跨 run 归档（`/daily` 复用），带 `run_id` 时才返回单轮 digest（可再用 `date` 筛选）。支持 category、混合 FTS/LIKE 搜索 |
 | `/api/v1/curated/daily-archive` | GET | 日报归档全集（单次 SQLite 读快照，按 Asia/Shanghai 日期分桶并计数）。**排除晚于今天的桶**——feed 的 `published_at` 不受信任，未来日期若入档会被前端当成「最近一期」 |
-| `/api/v1/hot` | GET | 近 N 小时热点榜（默认 48h）。`heat = round(加权分×10 + 关联讨论数×5)`；响应级 `generated_at`，逐条含 `published_at`/`fetched_at`/`event_time`/`source_kind`/`author`/`related_discussions`。`event_time` 取可解析且不晚于 `generated_at` 的 `published_at`，否则回退 `fetched_at`（页面相对时间只用它）。先取最近 600 条归档再算热度——48h 现实量约 4 倍富余，超出即截断属可接受近似 |
+| `/api/v1/hot` | GET | 近 N 小时热点榜（`hours` 默认 48、范围 6–168；`limit` 默认 5、上限 10）。`heat = round(加权分×10 + 关联讨论数×5)`；响应级 `generated_at`，逐条含 `published_at`/`fetched_at`/`event_time`/`source_kind`/`author`/`related_discussions`。`event_time` 取可解析且不晚于 `generated_at` 的 `published_at`，否则回退 `fetched_at`（页面相对时间只用它）。候选集由后台缓存供给、无固定条数截断；缓存未就绪时返回 **503 + `Retry-After: 2`**，绝不用 200 + 空 items 冒充（见下） |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url |
 | `/api/v1/sources` | GET | 兼容信源投影，仅公开既有 `feed` / `x` / `wechat` kind；不会把新增 `web` kind 静默加入已发布 v1 集合 |
@@ -378,19 +432,35 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 `/api/v1/curated?run_id=X` 的历史 run digest 有 **TTL 语义**：常驻保留会把超过 `keep_days`（默认 7 天）且非最新 run 的 `curated_items.summary_json` 预计算缓存清空，此后该 run 的 digest 改由 `_compute_items` live 现算，内容反映**当前** enrichment 而非 curation 时的快照。最新 run 的 summary 永不清、字节一致；HTML 用户页只服务最新 run，不受影响。瘦身机制见 [operations/db-slimming.md](operations/db-slimming.md)。
 
+### 热点榜的后台候选缓存
+
+`/api/v1/hot`、`/hot` 页面与首页热点块都从 `web/routes/hot_cache.py` 的单条目候选缓存取数，**请求路径只 peek、从不计算也从不等待**（[ADR-060](adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md)）。缓存只保存 hydrate 过的候选行（含 related discussions），不保存成品 payload——`generated_at`、相对时间与「是否已滑出窗口」全部由 `rank_hot_items()` 按调用方时钟现算，缓存住成品会把这三者一起冻住。
+
+填充只发生在后台：`create_app()` 的 lifespan 调 `prewarm_hot_candidates()` 起一次异步 prewarm（刻意不同步——一次冷 hydration 要数秒，而 readiness 门控部署健康检查），此后由 daemon 线程 `hot-candidate-refresh` 用自己的 SQLite 连接刷新。候选集按 `WINDOW_HOURS_MAX=168` 小时下推 SQL 窗口取全量（`limit=-1`，无 600 条截断），因为每个更小的 `hours` 都是它的子集，一个 key 就能服务全部窗口。缓存版本键 `candidate_version()` = 归档 data version + `curation_runs` 的 `COUNT` 与 `MAX(id)`；版本不符按 miss 处理而非陈旧命中。条目超过 `REFRESH_AFTER_SECONDS=120` 触发后台刷新，超过 `MAX_STALE_SECONDS=180` 即不可用——后者不是调参旋钮，而是替代「证明 generation trigger 覆盖了所有会改变 payload 的写入」（`_batch_related_discussions` 读全部 items，而 `archive_cache_items_ai` 只对已精选的 bump）。
+
+三个消费面因此各有一个**未就绪态**，与「确实没有热点」严格区分：
+
+| 消费面 | 未就绪时的行为 |
+|---|---|
+| `/api/v1/hot` | 503 + `Retry-After: 2`；非 200 被中间件强制 `private, no-store`，冷态不会被边缘缓存放大 |
+| `/hot` 页面 | 渲染「热点榜单正在生成，稍后自动刷新」（`hot_ready=False`）+ `no-store`；页内脚本按 4s/6s/10s 有界自动重载，计数存 sessionStorage 防死循环 |
+| 首页热点块 | SSR 只读已热的缓存，读不到就不渲染该块；由 `app.js` 的 `renderHotTopics()` 兜底 fetch，遇 503 按 2s/4s/8s 退避重试并保持骨架占位 |
+
 ### 页面路由
 
 | URL | 渲染方式 | 说明 |
 |---|---|---|
 | `/` | `web/templates/index.html` | 精选累积归档首页（跨 run 去重，**无限滚动**，首屏为最新精选），Jinja2 SSR，内联 `/api/v1/curated` 归档形状的 preload JSON |
 | `/all` | `web/templates/all.html` | 全量时间线，**无限滚动**（搜索态仍用页码分页——timeline API 搜索时忽略 cursor），Jinja2 SSR，内联 `/api/v1/timeline` 形状的 preload JSON |
-| `/hot` | `web/templates/hot.html` | 热点榜页，SSR 渲染 `/api/v1/hot?limit=10` 全量响应；桌面侧栏可达，移动端从首页「完整榜单 →」进入 |
+| `/hot` | `web/templates/hot.html` | 热点榜页，SSR 渲染 `limit=10, hours=48` 的热点 payload；桌面侧栏可达，移动端从首页「完整榜单 →」进入。候选缓存未就绪时改渲染「榜单正在生成」态（`no-store` + 有界自动重载），不冒充「暂无热点」 |
 | `/changelog` | `web/templates/changelog.html` | 渲染仓库根 `CHANGELOG.md`（markdown-it-py 逐 token 赋 `.cl-*` class 后渲染），**请求时读取**故编辑源文件即时生效 |
+| `/bookmarks` | `web/templates/bookmarks.html` | 收藏页；条目存浏览器 `localStorage`（`ai-radar:bookmarks:v1`），模板只出外壳与导入/导出工具条，列表由 `app.js` 渲染，无服务端读写 |
 | `/more` | `web/templates/more.html` | 移动端「更多」页，只含 `/wechat`、`/bookmarks`、`/about`、`/changelog` 四个入口；**桌面无导航入口**，仅 ≤960px 底部 tab 栏第 4 项指向它 |
 | `/wechat` | `web/templates/wechat.html` | 微信文章解读列表，Jinja2 SSR，内联 `/api/v1/wechat` 形状的 preload JSON |
 | `/wechat/{slug}` | `web/templates/wechat_detail.html` | 微信文章解读详情页，`summary_md` 经 markdown-it-py 渲染后用 nh3 sanitize |
 | `/daily` | `web/static/daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
 | `/about` | `web/templates/about.html` | 关于页 Jinja2 模板；`/about.html` 308 重定向到此路由 |
+| `/curated` | `web/templates/index.html` | 首页别名——直接复用 `index_page()` 同一渲染（同样支持 `category`/`q`/`page`/`limit`），不是重定向；`/curated.html` 则 308 重定向到 `/` |
 | `/admin` | `web/templates/admin.html` | 内部运维 dashboard；需 Cloudflare Access 或显式本地 bypass |
 | `/admin/usage` | `web/templates/admin_usage.html` | 内部 LLM 成本最小视图：窗口总额三态、来源单价、未定价清单与 cache 采集覆盖；需 Cloudflare Access 或显式本地 bypass，不挂公开导航 |
 | `/item.html` | `web/static/item.html` | 单条详情页（StaticFiles 隐式提供） |
@@ -411,7 +481,7 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 `_prepaint_list.html` 服务端直出前 12 条首屏 `.item-row`，让浏览器解析到 feed 区域时立即有内容；`web/static/app.js` 的页面初始化函数随后调用 `readPreload()` 做权威渲染和交互绑定。preload 存在且 `items` 为数组时不显示 `正在加载` spinner；无 preload 时保留原 CSR fetch fallback，保证 `web/static/{index,all}.html` 仍可作为回滚文件使用。
 
-SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"` 加载，避免远端字体 CSS 抵消 preload 收益。`/`、`/all` 的动态路由定义必须在 `app.mount("/", StaticFiles(...))` 之前。
+`/`、`/all` 的动态路由定义必须在 `app.mount("/", StaticFiles(...))` 之前。
 
 ### 分类系统
 
@@ -435,7 +505,11 @@ SSR 模板中的 Google Fonts 样式必须用非阻塞 `rel="preload" as="style"
 
 ### 公开分页的边缘缓存
 
-上面的进程内计数缓存之外，公开分页路径还叠了一层**边缘缓存**：`web/app.py` 的响应中间件对白名单路径（`/`、`/wechat`、`/api/v1/curated`、`/api/v1/wechat`）发 `Cache-Control`。判据 fail-closed——仅当请求是 GET/HEAD、响应 200、且查询参数是安全分页变体（子集 ⊆ `{page}`，API 再允许 `limit`）时发 `public, max-age=90, stale-while-revalidate=30`；带 `q=`/过滤/未知参数或非 200 一律回落 `private, no-store`，保证个性化与搜索结果不进共享缓存。据此 Cloudflare 侧配 respect-origin 模式的 Cache Rule 在边缘缓存 HTML/JSON（规则配置见 `operations/services.md` 的 Cloudflare Cache Rule 节，runbook 见 `operations/monitoring-alerting.md`）。前端 `web/static/app.js` 在 SSR preload 后预取下一页 API 并在点击时复用同一 promise，命中同一 90s 边缘窗口；search/category 请求绕过该 memo。
+上面的进程内计数缓存之外，公开分页路径还叠了一层**边缘缓存**：`web/app.py` 的响应中间件对白名单路径（`/`、`/wechat`、`/api/v1/curated`、`/api/v1/wechat`）发 `Cache-Control`。判据 fail-closed——仅当请求是 GET/HEAD、响应 200、且查询参数是安全分页变体（子集 ⊆ `{page}`，API 再允许 `limit`）时发 `public, max-age=90, stale-while-revalidate=30`；带 `q=`/过滤/未知参数或非 200 一律回落 `private, no-store`，保证个性化与搜索结果不进共享缓存。**当前生产边缘是 EdgeOne**：`news.aiplanet.live` 经 DNS-only CNAME 接入腾讯云 EdgeOne（[ADR-039](adr/039-route-news-through-edgeone-dns-only-cname.md)），上面这套 `Cache-Control` 由它 respect-origin 消费。Cloudflare 的 respect-origin Cache Rule 属**历史/旁路**配置（旧域名链路），不是当前公网热路径；其规则记录见 [operations/services.md](operations/services.md)，runbook 见 [operations/monitoring-alerting.md](operations/monitoring-alerting.md)。
+
+EdgeOne 另对 `/app.js` 与 `/style.css` 两个精确路径强制节点缓存 7 天，因此这两个资源改动后必须跑 `scripts/bump_frontend_assets.py`——它按内容摘要重算 `?v=` 版本串、改写全部 HTML 引用并更新 `web/asset-pins.json`；漏 bump 就是「部署了但线上不生效」。`/wechat` 把 style.css 内联进 SSR HTML（同一 ADR），没有 `?v=` 可 bump，改 CSS 时改为在缓存窗口后从真实公网验证内联内容。强制缓存规则本身住在腾讯云控制台、是仓外权威，由 `admin/edgeone.py` 拉取规则并与仓内 pinned 快照逐条对账（`./run.sh admin edgeone check`，exit 0=无漂移 / 1=有漂移 / 2=未核实）。
+
+前端 `web/static/app.js` 在 SSR preload 后预取下一页 API 并在点击时复用同一 promise，命中同一 90s 边缘窗口；search/category 请求绕过该 memo。
 
 ## Key Abstractions
 
@@ -477,7 +551,10 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | trafilatura | HTML 正文提取 |
 | beautifulsoup4 | 微信公众号 HTML 解析 |
 | Playwright + Chromium | 微信公众号原文抓取 + 默认 `performance-probe` 四旅程测量的浏览器运行时 |
-| Mp2RSS | 当前生产微信公众号发现层，将已订阅公众号暴露为 RSS/Atom |
+| Mp2RSS | 生产微信公众号发现层之一（托管付费服务），将已订阅公众号暴露为 RSS/Atom；`MP2RSS_FEED_URL` |
+| Wechat2RSS | 生产微信公众号发现层之二（自建，`deploy/wechat2rss/` 下 docker-compose 拉起 `ttttmr/wechat2rss` 容器）；`WECHAT2RSS_FEED_URL`，与 Mp2RSS 双跑取并集（ADR-059） |
+| X 官方 API | `kind="x"` 且 `meta.adapter="x_api"` 源的主路径：`fetcher/x_api.py` 走 `https://api.x.com/2`，需 `X_BEARER_TOKEN` |
+| 图片出口代理（repo 外常驻） | `AI_RADAR_IMG_PROXY_URL` 指向的 HTTP 正向代理，`/img` 取 `pbs.twimg.com` 时**强制**走它（serve 主机到 twimg 的连接被上游阻断）；未配置即直接 404，绝不退化成直连（[ADR-057](adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md)）。产线实机拓扑（新加坡 tinyproxy + SSH 隧道）与诊断顺序见 [operations/services.md](operations/services.md) |
 | 微信公众号后台（候选） | 默认关闭的 shadow 发现路径；私有登录态只供显式单账号 probe，尚未进入 pipeline |
 | markdown-it-py | 微信文章解读详情页 markdown 渲染 |
 | nh3 | 微信文章解读详情页 HTML sanitizer |
@@ -489,7 +566,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 
 | 任务 | 关键文件 |
 |---|---|
-| 添加新信源 | 更新 `tests/fixtures/aihot_sources.json` 机器契约并生成 `data/sources.toml`；生产 wechat 源仍通过 Mp2RSS 合集 feed 配置；后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
+| 添加新信源 | 更新 `tests/fixtures/aihot_sources.json` 机器契约并生成 `data/sources.toml`；生产 wechat 源是 `wx_mp2rss` + `wx_wechat2rss` 两个合集 feed 并行（`MP2RSS_FEED_URL` / `WECHAT2RSS_FEED_URL`，ADR-059），改动要同时考虑跨源去重键；后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
 | 维护 AIHOT 对齐信源 | `tests/fixtures/aihot_sources.json` + README「信源维护与验证」四个命令；稳定 identity/aliases、retirement ledger、解析器/规则、公开投影和收据必须同步，不能只改 TOML |
 | 添加原始 Web/API 信源 | `src/airadar/fetcher/web.py` 登记确定性 fetch/item 边界与 parser + 正反 fixture + 真实 `audit_non_x_retrieval.py` 收据 |
 | 调整微信发现候选 | `wechat_discovery/`、`data/wechat-discovery.toml`、[ADR-024](adr/024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md) 至 [ADR-032](adr/032-reject-duplicate-urls-before-wechat-shadow-comparison.md)、[ADR-040](adr/040-verify-provisional-searchbiz-mapping-with-article-url-biz.md)、[ADR-041](adr/041-version-wechat-discovery-invariant-hardening.md)、[摄取 runbook](operations/wechat-ingestion.md) |
@@ -501,6 +578,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | 修改展示摘要、媒体或关联讨论 | `presentation/summary.py`, `presentation/media.py`, `presentation/related.py` |
 | 添加新 API 端点 | `web/routes/` 下新建路由文件 + `web/app.py` 注册 |
 | 修改精选 API 模式分派 | `web/routes/curated.py`, `web/routes/curated_archive.py`, `web/routes/curated_digest.py` |
+| 改热点榜（口径、缓存或未就绪态） | `web/routes/hot_cache.py`（候选缓存与热度公式）、`web/routes/curated.py`（`hot_payload`/`/api/v1/hot`）、`web/templates/hot.html`、`web/templates/_hot_topics.html`、`web/static/app.js`（`renderHotTopics`）+ [ADR-060](adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md)；SSR partial 与 CSR 渲染必须逐节点同形 |
 | 修改分类契约 | `web/routes/categories.py`（`CATEGORY_CONTRACT`） |
 | 修改 timeline/curated/wechat 搜索 | `web/routes/search.py` + 对应路由的查询字段 |
 | 修改真实计数缓存或页码 clamp | `web/routes/pagination.py`, `web/routes/timeline.py`, `web/routes/curated_archive.py`, `web/routes/wechat.py` |

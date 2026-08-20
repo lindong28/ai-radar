@@ -1,6 +1,6 @@
 # ADR-044：持久化微信后台错误码并区分平台拒绝与频控
 
-- 状态：Accepted
+- 状态：Accepted；其中依赖后台 `appmsgpublish` / `searchbiz` family 的部分已随 ADR-061 失去实施对象；schema 演化与「平台拒绝必须与频控可区分」的证据纪律仍成立
 - 日期：2026-08-16
 - 范围：微信公众号后台 shadow discovery 的 resolution/probe ledger、状态机和人读 CLI
 - 关系：clarifies ADR-025 的失败状态与冷却语义；不改变 ADR-025 的 1440 分钟一般默认、`rate_limited` 次日规则、ADR-043 的 one-shot 范围或 Mp2RSS 生产链路

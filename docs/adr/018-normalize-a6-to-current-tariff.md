@@ -1,6 +1,6 @@
 # ADR-018：A6 只比较现行可报价 cohort 的量结构成本
 
-- 状态：Accepted
+- 状态：Accepted；cache 精确覆盖 gate 与「过渡期」判断由 ADR-020 supersede
 - 日期：2026-08-11
 - 范围：A6 近 24 小时成本突变；不改变周报与 `/admin/usage` 的历史定价口径
 

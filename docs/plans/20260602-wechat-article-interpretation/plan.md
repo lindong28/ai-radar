@@ -1,3 +1,6 @@
+> **Archive status**: 已归档并上线。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 解读流水线、KB 回写与展示闸门的当前运行口径见 [operations/wechat-ingestion.md](../../operations/wechat-ingestion.md)「微信文章解读与知识库回写」节与 [architecture.md](../../architecture.md)「Database」「关键设计」的「微信解读闸门」条，复用 ai-assistant summarizer 的裁决见 [ADR-007](../../adr/007-interpret-via-ai-assistant-summarizer.md)，跨仓契约见 [references/ai-assistant-contract.md](../../references/ai-assistant-contract.md)。以下为原 plan 正文，未修改。
+
 # Plan — 微信文章解读（your-domain.example 新 tab + summarize-article 复用 + KB 回写）
 
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式

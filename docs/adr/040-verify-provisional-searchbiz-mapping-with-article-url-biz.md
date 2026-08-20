@@ -1,6 +1,6 @@
 # ADR-040: Verify provisional searchbiz mappings with returned article URL public biz
 
-Status: Accepted
+Status: Accepted; deprecated — the backend `appmsgpublish` family is unavailable at the platform level, see ADR-061 (the supersede of ADR-028 below still stands as a historical relation)
 
 Date: 2026-08-14
 

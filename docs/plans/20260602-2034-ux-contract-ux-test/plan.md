@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。本 plan 是一次性的 UX 契约端到端测试脚本，不是产品契约本身；执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 被测契约的当前权威是 [contracts/ux-contract.md](../../contracts/ux-contract.md)「微信文章解读页（`/wechat`）」「解读详情页（`/wechat/<slug>`）」两节与 WX-1～WX-9，正文中的验收措辞可能已被后续演进取代。以下为原 plan 正文，未修改。
+
 # UX Contract Test Plan — 微信文章解读
 
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式

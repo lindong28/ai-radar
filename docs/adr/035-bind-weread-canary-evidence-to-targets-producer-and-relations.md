@@ -1,6 +1,6 @@
 # ADR-035: Bind WeRead canary evidence to request targets, producer source, and verified relations
 
-Status: Accepted; superseded by ADR-036 for newly generated evidence
+Status: Accepted; superseded by ADR-036 for newly generated evidence; deprecated — the WeRead canary line stopped together with the Mp2RSS replacement plan it explored, see ADR-061
 
 Date: 2026-08-13
 
