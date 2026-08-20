@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from .. import db
 from ..llm_usage import (
@@ -222,20 +223,34 @@ def _unique_slug(conn: sqlite3.Connection, base_slug: str, item_id: str) -> str:
         suffix += 1
 
 
+def _index_cannot_distinguish(url: str) -> bool:
+    """True for URLs the external summary index provably answers wrongly for.
+
+    Long-form WeChat article links all have the path ``/s`` and differ only in
+    the query, which that index drops. Short links carry their identity in the
+    path and are keyed correctly.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.netloc.lower() != "mp.weixin.qq.com":
+        return False
+    return "__biz" in parse_qs(parts.query)
+
+
 def _check_url_hit(payload: dict[str, Any], *, title: object = None) -> dict[str, Any] | None:
     """The cached summary for this URL, or None to summarize it fresh.
 
-    A hit is only accepted when the cached entry names the same article. The
-    lookup is keyed on URL by an index we do not own, and it has been observed
-    answering for URLs it cannot tell apart: every long-form WeChat article
-    link shares the path ``/s``, so all of them — including a fabricated one —
-    resolved to whichever article was summarized first. Reusing that hit
-    republishes one article's summary under ten other headlines, and nothing
-    downstream can tell. The observed bad hits do carry a title — the wrong
-    article's — so a hit is rejected when its title names a different article.
-    A hit that states no title is left alone: that shape has always been
-    accepted, and rejecting it would re-summarize at the model's expense
-    without addressing anything seen here.
+    Callers must not ask about a URL the index cannot key — see
+    ``_index_cannot_distinguish``; this function is only reached for links it
+    can tell apart.
+
+    Even then a hit is rejected when its title names a different article. The
+    index is not ours, and it has been observed answering for URLs it cannot
+    distinguish. A hit that states no title is left alone: that
+    shape is part of the documented contract, and rejecting it would
+    re-summarize at the model's expense without addressing anything measured.
     """
     candidates: list[dict[str, Any]] = [payload]
     for key in ("dedup", "result", "data"):
@@ -553,8 +568,14 @@ def _summarize_item(
     row: sqlite3.Row,
 ) -> dict[str, Any]:
     input_path = _write_input_file(tmp_root, row)
-    check_payload = _run_json([str(run_script), "--check-url", row["url"], "--user", user], cwd=root)
-    hit = _check_url_hit(check_payload, title=row["title"])
+    # Skip the lookup itself, not just its answer: `_run_json` runs with
+    # check=True, so a non-zero exit from a query whose result we would discard
+    # anyway would still stop this article from being summarized.
+    if _index_cannot_distinguish(str(row["url"] or "")):
+        hit = None
+    else:
+        check_payload = _run_json([str(run_script), "--check-url", row["url"], "--user", user], cwd=root)
+        hit = _check_url_hit(check_payload, title=row["title"])
     if hit:
         summary_file = hit.get("summary_file_path") or hit.get("summary_file")
         if summary_file:

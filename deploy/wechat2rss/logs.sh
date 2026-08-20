@@ -12,4 +12,9 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 docker compose logs "$@" 2>&1 | sed -E \
   -e 's/(msg="Token: )[^"]*"/\1<redacted>"/g' \
-  -e 's/([?&]k=)[A-Za-z0-9_.~-]+/\1<redacted>/g'
+  -e 's/([?&]k=)[^[:space:]"&]*/\1<redacted>/g'
+# The token charset is not constrained anywhere, so redact to the end of the
+# value rather than to a guessed alphabet: `k=abc+def/ghi=` against a
+# `[A-Za-z0-9_.~-]+` pattern leaves `+def/ghi=` in the terminal, and a leaked
+# credential cannot be un-disclosed — only rotated. Stop at `&` so the query
+# fields after the token survive: they are what the log is read for.

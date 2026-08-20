@@ -38,7 +38,9 @@ WECHAT2RSS_FEED_URL=http://127.0.0.1:8080/feed/all.xml?k=<RSS_TOKEN>
 
 ### 去重键：账号 + 归一化标题 + 5 分钟发布窗
 
-两个源给同一篇文章的 URL 没有公共子串——Mp2RSS 出短链 `/s/<token>`，Wechat2RSS 出长链 `?__biz=…&mid=…&idx=…&sn=…`——所以既有的按 URL / content hash 去重（`src/airadar/fetcher/dedup.py`，作用域是单个 source）看不出它们是同一篇。跨源去重改用**账号 + 归一化标题**，并要求两侧发布时间相差不超过 5 分钟。
+两个源给同一篇文章的 URL 没有公共子串——Mp2RSS 出短链 `/s/<token>`，Wechat2RSS 出长链 `?__biz=…&mid=…&idx=…&sn=…`——所以既有的按 URL / content hash 去重（`src/airadar/fetcher/dedup.py`，作用域是单个 source）看不出它们是同一篇。跨源去重改用**账号 + 归一化标题**，并要求两侧发布时间相差不超过 5 分钟；只匹配 enabled 的来源，且排除条目自己所属的 source（同源身份由上面那两条既有路径裁定，它们按"文章是什么"判而不是按"它叫什么"判）。
+
+归一化只做 **NFKC + 空白折叠 + casefold**，不剥离标点——两侧都出现的 126 篇里 125 篇原始标题逐字相同，唯一例外只差一个 U+00A0，标点差异为 0。多剥一层标点会让 `报告：1.0！` 与 `报告10` 塌成同一个键。
 
 这个窗口是量出来的：
 
@@ -63,9 +65,40 @@ URL 规范化原本会重建 query 串，把长链里 base64 的 `__biz=…==` �
 
 interpret 在总结一篇文章前，会拿它的 URL 问外部 summary-agent 的索引"这篇是不是已经总结过"。**那个索引按 URL 建键，而所有长链的路径都是 `/s`**，因此长链彼此之间它一个也分不开。判别性对照：用一个 `__biz` 完全虚构的 URL 去查，同样返回 `found: true` 并给出某篇既有文章的 slug 与摘要文件路径。
 
-2026-08-20 双跑首批 10 篇因此全部复用了同一篇文章的摘要（见 CHANGELOG 同日条目）。现在的判据是**校验它的答案**：缓存条目自带 `title`，与本篇标题不符即判为未命中、重新总结；条目没有标题时保持原行为（观察到的错误命中都带着错标题，对无标题收紧只会多花模型钱）。
+2026-08-20 双跑首批 10 篇因此全部复用了同一篇文章的摘要（见 CHANGELOG 同日条目）。
+
+现在**长链根本不去问它**，连请求都不发。比标题救不了这个洞：这个索引对每个长链都会答"某一篇"，而同账号同标题重发是常态（生产历史 26 对），同标题命中照样把 A 的摘要发给 B；而且那次查询用 `check=True`，即便丢弃答案，它非零退出仍会挡住这篇文章被总结。短链的路径唯一、索引能正确建键，仍走缓存，但命中条目的标题与本篇不符时判为未命中。
 
 排查同类问题时注意：**错误的摘要在库里和页面上都长得完全正常**——标题对、正文非空、标签齐全、`interpret processed=N errors=0`。可用的读数是 `wechat_interpretations.slug` 与 `items.title` 是否对应，以及同一 slug 基名下是否挂了一串 `-2`/`-3` 后缀却分属不同标题。
+
+### 停用其中一个微信源时会发生什么
+
+跨源去重只匹配 **enabled** 的来源。这是一个取舍，两面都实测过：
+
+- **停用后**，该源独有的文章立刻从 `/wechat` 消失——页面按同一个 `s.enabled=1` 过滤。落在另一个源当前 feed 窗口内的（Mp2RSS 一次给 100 条）会在随后几轮被它补回并重新可见；已经滚出窗口的补不回来。
+- **重新启用后**，被补回的那一篇会与原来那一行同时可见，即**同一篇文章出现两张卡**。
+
+选择匹配 enabled 而不是匹配全部行，是因为另一种写法下隐藏行会持续拦住每一次插入，那些文章**永久补不回来**。重复只在"停用后又重新启用"这一条路径上出现。
+
+**所以重新启用一个曾被停用的微信源之前，先清一次重**：
+
+```bash
+uv run python - <<'EOF'
+import sqlite3, unicodedata, re, collections
+c = sqlite3.connect('data/radar.db'); c.row_factory = sqlite3.Row
+n = lambda t: unicodedata.normalize('NFKC', re.sub(r'\s+', ' ', str(t or '')).strip()).casefold()
+rows = c.execute("""SELECT i.id, i.author, i.title, i.published_at, i.source_id
+FROM items i JOIN sources s ON s.id=i.source_id WHERE COALESCE(s.kind,'feed')='wechat'""").fetchall()
+seen = collections.defaultdict(list)
+for r in rows:
+    seen[(r['author'], n(r['title']), r['published_at'][:16])].append(r)
+for key, group in seen.items():
+    if len(group) > 1:
+        print(key[1][:40], '->', [(g['source_id'], g['id']) for g in group])
+EOF
+```
+
+打印出来的每一组都是同一篇文章的多份；决定保留哪一份后再删另一份的 `items` 行与其 `wechat_interpretations` 行。
 
 ### 对告警与计数的影响
 

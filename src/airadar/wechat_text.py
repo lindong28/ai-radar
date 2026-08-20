@@ -5,8 +5,6 @@ import unicodedata
 
 _LITERAL_NEWLINE_RE = re.compile(r"(?:\\r\\n|\\n|\\r)+")
 _REAL_NEWLINE_RE = re.compile(r"[\r\n]+")
-# Formatting noise that differs between feed renderers serving the same article.
-_IDENTITY_NOISE_RE = re.compile(r"[\s　|｜\-–—_,，.。!！?？:：;；'\"“”‘’()（）\[\]【】]+")
 
 
 def normalize_wechat_title(value: object) -> str:
@@ -28,13 +26,18 @@ def wechat_identity_title(value: object) -> str:
 
     Mp2RSS and Wechat2RSS serve the same article under URLs with no shared
     substring (short ``/s/<token>`` versus long ``?__biz&mid&idx&sn``), so a
-    cross-source identity has to come from account plus title. The two
-    renderers differ only in punctuation and full/half-width forms, which this
-    strips; it deliberately does not stem or truncate, because two genuinely
-    different articles from one account routinely share a topic.
+    cross-source identity has to come from account plus title.
+
+    Fold only what the two renderers were measured to disagree on. Over 126
+    articles both carried, 125 titles were byte-identical and the one exception
+    differed by a single U+00A0 where the other had a space — zero punctuation
+    differences. NFKC settles that case and the width variants; whitespace
+    collapse and casefold cost nothing. Stripping punctuation on top of that
+    was folding noise nobody generates, and it merges titles that are genuinely
+    different: ``报告：1.0！`` and ``报告10`` both flatten to ``报告10``, and a
+    merge here silently drops an article for good.
     """
-    folded = unicodedata.normalize("NFKC", normalize_wechat_title(value)).casefold()
-    return _IDENTITY_NOISE_RE.sub("", folded)
+    return unicodedata.normalize("NFKC", normalize_wechat_title(value)).casefold()
 
 
 def has_wechat_title_artifacts(value: object) -> bool:

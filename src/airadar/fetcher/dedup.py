@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ from ..wechat_text import wechat_identity_title
 # apart (measured: 26 such pairs across 3272 production items). The window sits
 # in that gap, far from both edges.
 WECHAT_IDENTITY_WINDOW = timedelta(minutes=5)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,11 +72,38 @@ def wechat_duplicate_id(conn: sqlite3.Connection, item: FetchedItem) -> str | No
     inside a short publish-time window can. Returns None when this article is
     new to every WeChat source, which is what makes the dual-run a union rather
     than a duplication.
+
+    Two restrictions keep this from suppressing articles it should not:
+
+    ``s.enabled=1`` — a disabled source's rows are already invisible on
+    ``/wechat``, which filters on the same flag. Matching against them would
+    mean that switching a feed off both hides everything it found first *and*
+    blocks the remaining feed from bringing those articles back, since every
+    later insert would keep matching the hidden row.
+
+    ``i.source_id <> ?`` — within one source the URL and content-hash paths
+    above already settle identity, and they settle it from what the article
+    *is* rather than from what it is called. An account reposting a distinct
+    article under a repeated title is ordinary behaviour; letting a title match
+    override same-source identity would drop the second one.
     """
     account = (item.author or "").strip()
     published = _parse_utc(item.published_at)
     wanted = wechat_identity_title(item.title)
     if not account or published is None or not wanted:
+        # Both feeds supply an account and a publish time on every item today,
+        # so this branch should never be taken. Say so when it is: the identity
+        # rests on those two fields, and without them the other feed's copy of
+        # this article will be stored a second time. Silence here would make a
+        # feed changing shape look like an article being posted twice.
+        logger.warning(
+            "WeChat item cannot be identified across sources; a duplicate may follow: "
+            "source_id=%s url=%s author=%r published_at=%r",
+            item.source_id,
+            item.url,
+            item.author,
+            item.published_at,
+        )
         return None
     rows = conn.execute(
         """
@@ -81,10 +111,13 @@ def wechat_duplicate_id(conn: sqlite3.Connection, item: FetchedItem) -> str | No
         FROM items i
         JOIN sources s ON s.id = i.source_id
         WHERE COALESCE(s.kind, 'feed')='wechat'
+          AND s.enabled = 1
+          AND i.source_id <> ?
           AND i.author = ?
           AND i.published_at BETWEEN ? AND ?
         """,
         (
+            item.source_id,
             account,
             _iso_z(published - WECHAT_IDENTITY_WINDOW),
             _iso_z(published + WECHAT_IDENTITY_WINDOW),

@@ -4,6 +4,27 @@
 
 ---
 
+## [open] 停用一个微信源会藏起它独有的文章，重新启用又会让同一篇出现两次
+
+- Type: reliability
+- Priority: medium
+- Discovered: 2026-08-20 双跑改动的 review-gate（独立 Codex reviewer，session 01a01dd3）；用户裁决保持现状、记 issue。
+- Description: 跨源去重（`src/airadar/fetcher/dedup.py` 的 `wechat_duplicate_id`）只匹配 `s.enabled=1` 的来源，`/wechat` 也按同一个 flag 过滤。实测四步：候选源先发现一篇 → `items=1` 可见 1；停用该源 → 可见 0（文章从站上消失）；另一源随后带来同一篇 → `items=2` 可见 1；重新启用候选源 → **可见 2，同一篇两张卡**。
+- 为什么不改成匹配全部行: 那样隐藏行会持续拦住每一次插入，停用源独有的文章**永久补不回来**（这是 reviewer 报的原 HIGH-1）。当前取舍选了"补得回来"这一面，重复只出现在"停用后又重新启用"这一条路径上，而当前方向是停掉后不再启用。
+- Fix 方向: 命中的行属于已停用来源时，不插新行而是把该行改归属到新来源（`source_id` / `url` / 正文一并更新），始终只保留一行；需处理 `items` 上的唯一索引冲突，并另走一轮评审。
+- 缓解: 重新启用前先跑 [operations/wechat-ingestion.md](../operations/wechat-ingestion.md)「停用其中一个微信源时会发生什么」里的清重查询。
+
+---
+
+## [open] 未配置的 optional source 在校验之前就被跳过
+
+- Type: reliability
+- Priority: low
+- Discovered: 2026-08-20 双跑改动的 review-gate（独立 Codex reviewer，session 01a01dd3）；用户裁决保持现状、记 issue。
+- Description: `src/airadar/sources/loader.py` 的 `load_sources` 对"`fetch_url` 是未设置的单一 env 占位符"的 optional source 直接 `continue`，发生在 `_validate_source` 之前。因此该行若同时还有别的错误（重复 slug、错 kind、缺 `public_url_override`），未配置时看起来一切正常，等到某天设上环境变量，整个 163 源的 load 一起失败。
+- 为什么优先级低: `data/sources.toml` 由 `tests/fixtures/aihot_sources.json` 生成，而 contract 校验覆盖这些字段。实测：往 fixture 里注入一个坏配置（`wechat_only` 改 false），`tests/test_source_contract.py` 立刻 **10 个测试变红**。从"坏配置"到"潜伏至设环境变量那天"的路径在 contract 层已被先拦住。
+- Fix 方向: 在决定跳过之前，先校验该行中不依赖 URL 展开的字段。改动落在全部 163 个 source 共用的加载路径上，需权衡新增的回归面。
+
 ## [open] feed URL 无 scheme 白名单，`javascript:` 等非 http(s) 协议可进入卡片与热点榜的 `href`
 
 - Type: security-hardening
