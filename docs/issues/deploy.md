@@ -121,4 +121,6 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
     - Condition：`${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/img']`
     - Action：`CacheParameters.FollowOrigin = {Switch: on, DefaultCache: on, DefaultCacheStrategy: on, DefaultCacheTime: 0}` —— 跟随源站已有的 7 天 immutable，不另设 CustomTime
   - 落地路径：仓内工具 `admin edgeone` 只有 `check` 与 `purge`，**没有写规则的能力**（ADR-039 把控制台定为仓外权威、仓内只镜像快照并查漂移）。SDK 侧 `CreateL7AccRulesRequest` 存在，但新增写能力本身是一个独立决策。规则加好后须跑 `./run.sh admin edgeone check --update-snapshot` 刷新 `web/edgeone-cache-rules.json`，否则下次 check 会报漂移。
-  - 未验证：加规则后的实际命中率与延迟改善（预期，非实测）；以及 `/img` 的 404 响应会不会被边缘缓存住（负缓存），若会则需要额外确认 404 不被长期缓存。
+  - **已落地（2026-08-19）**：规则 `news img proxy follow origin cache`（`rule-3tzlygp68ka0`）已在控制台创建并发布，仓内快照已用 `--update-snapshot` 同步。实测改善——同一 URL 由 3/3 `MISS` 变为 `MISS→HIT`，单次 2.7-4.0s → 0.60-0.68s；并发 16 全量 38 张在热缓存下 p50/p90/max 由 8.61/13.84/22.32s 降到 1.64/2.33/2.48s；37/37 命中（第 38 条因取证脚本末行无换行被 `while read` 漏读，非数据问题）。
+  - **该规则引入了一个新风险，已修**：`/img` 的 404 不带 `Cache-Control`，而 FollowOrigin 在缺该头时套用「默认缓存策略」，于是**失败被负缓存**——发布后实测同一个必然失败的 URL `MISS` 一次后连续三次 `HIT`。这比原本的偶发失败更坏：一次瞬时超时会固化成"这张图不存在"直到 TTL 过期。修法是源站显式声明 `Cache-Control: no-store`（commit `0f0a6fd`），成功路径仍保留 7 天 immutable。**该修复须部署后才生效**；在部署前，边缘仍可能缓存住失败。
+  - 仍未验证：负缓存的实际 TTL 有多长（未等待过期）；`no-store` 修复上线后的负缓存消除（待部署后复测）。
