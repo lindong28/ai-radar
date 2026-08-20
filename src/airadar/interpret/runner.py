@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -17,7 +18,12 @@ from ..llm_usage import (
     record_llm_usage_best_effort,
     usage_int,
 )
-from ..wechat_text import has_wechat_title_artifacts, normalize_wechat_title, wechat_slug_seed
+from ..wechat_text import (
+    has_wechat_title_artifacts,
+    normalize_wechat_title,
+    wechat_identity_title,
+    wechat_slug_seed,
+)
 
 DEFAULT_INTERPRET_USER = "default"
 ERROR_RETRY_MAX = 8
@@ -26,6 +32,8 @@ DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
 MISSING_ROOT_MESSAGE = "interpret enabled but AI_ASSISTANT_ROOT is not set"
 SUMMARY_AGENT_DIR = Path("agents") / "summary-agent"
 SUMMARY_AGENT_INTERPRET_MODEL = "ai-radar-interpret-deepseek"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -214,18 +222,42 @@ def _unique_slug(conn: sqlite3.Connection, base_slug: str, item_id: str) -> str:
         suffix += 1
 
 
-def _check_url_hit(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _check_url_hit(payload: dict[str, Any], *, title: object = None) -> dict[str, Any] | None:
+    """The cached summary for this URL, or None to summarize it fresh.
+
+    A hit is only accepted when the cached entry names the same article. The
+    lookup is keyed on URL by an index we do not own, and it has been observed
+    answering for URLs it cannot tell apart: every long-form WeChat article
+    link shares the path ``/s``, so all of them — including a fabricated one —
+    resolved to whichever article was summarized first. Reusing that hit
+    republishes one article's summary under ten other headlines, and nothing
+    downstream can tell. The observed bad hits do carry a title — the wrong
+    article's — so a hit is rejected when its title names a different article.
+    A hit that states no title is left alone: that shape has always been
+    accepted, and rejecting it would re-summarize at the model's expense
+    without addressing anything seen here.
+    """
     candidates: list[dict[str, Any]] = [payload]
     for key in ("dedup", "result", "data"):
         value = payload.get(key)
         if isinstance(value, dict):
             candidates.append(value)
+    wanted = wechat_identity_title(title) if title is not None else ""
     for candidate in candidates:
         summary_path = candidate.get("summary_file_path") or candidate.get("summary_file")
         slug = candidate.get("slug")
         exists = candidate.get("exists") is True or candidate.get("found") is True
-        if exists or (summary_path and slug):
-            return candidate
+        if not (exists or (summary_path and slug)):
+            continue
+        cached_title = wechat_identity_title(candidate.get("title"))
+        if wanted and cached_title and cached_title != wanted:
+            logger.warning(
+                "Ignoring a cached summary for a different article: cached=%r wanted=%r",
+                str(candidate.get("title"))[:80],
+                str(title)[:80],
+            )
+            continue
+        return candidate
     return None
 
 
@@ -522,7 +554,7 @@ def _summarize_item(
 ) -> dict[str, Any]:
     input_path = _write_input_file(tmp_root, row)
     check_payload = _run_json([str(run_script), "--check-url", row["url"], "--user", user], cwd=root)
-    hit = _check_url_hit(check_payload)
+    hit = _check_url_hit(check_payload, title=row["title"])
     if hit:
         summary_file = hit.get("summary_file_path") or hit.get("summary_file")
         if summary_file:

@@ -49,8 +49,8 @@ logs/
 .pipeline.flock
 .pipeline.activity
 
-# Execution-plan workspace (audit trail is promoted to docs/plans/ after completion)
-/plans/
-
 # Wechat2RSS container runtime state (subscriptions DB, recreated by the service).
 deploy/wechat2rss/data/
+
+# Execution-plan workspace (audit trail is promoted to docs/plans/ after completion)
+/plans/

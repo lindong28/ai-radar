@@ -1781,3 +1781,81 @@ def test_interpret_runner_eighth_retry_failure_reaches_cap_and_stops(
 
     assert summary.processed == 0
     assert summary.errors == 0
+
+
+def test_interpret_runner_rejects_a_cached_hit_for_a_different_article(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The KB index answers by URL, and it cannot tell long-form WeChat links
+    apart — every one of them shares the path ``/s``. A hit that names another
+    article must not be reused, or one summary gets republished under every
+    other headline with nothing downstream able to notice."""
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    other_summary = tmp_path / "someone-elses_output.md"
+    other_summary.write_text(SUMMARY_MD, encoding="utf-8")
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    (batch_dir / "fresh-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
+    (batch_dir / "fresh-slug_meta.json").write_text(
+        json.dumps({"slug": "fresh-slug"}, ensure_ascii=False), encoding="utf-8"
+    )
+    summarize_calls = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal summarize_calls
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "found": True,
+                        "title": "两个数字都是真的：94%的人回来了",
+                        "slug": "两个数字都是真的-94-的人回来了",
+                        "summary_file_path": str(other_summary),
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        if "summarize.sh" in str(cmd[0]):
+            summarize_calls += 1
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "batch_dir": str(batch_dir),
+                        "result": {
+                            "slug": "fresh-slug",
+                            "save_decision": True,
+                            "save_reason": "有实践价值",
+                            "recommendation": "值得一看",
+                            "tags": ["Agent"],
+                            "model": "fake-model",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        if "--save-from-batch" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps({"ok": True, "summary_file_path": "/kb/fresh-slug_output.md"}), stderr=""
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    assert summarize_calls == 1, "a hit naming another article must not short-circuit summarization"
+    assert "两个数字都是真的" not in row["slug"]
