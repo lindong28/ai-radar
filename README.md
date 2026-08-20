@@ -27,7 +27,7 @@ cp .env.example .env
 DEEPSEEK_API_KEY=sk-xxx
 ```
 
-其他配置项均有默认值，详见 `.env.example` 中的注释。抓取 `data/sources.toml` 中启用的 X API 信源时还需配置 `X_BEARER_TOKEN`；请求窗口和单轮上限见下文「信源池」。第一次本地试跑可以先保留站点身份默认值；如果暂时没有 Mp2RSS 合集 feed，可以不设置 `MP2RSS_FEED_URL`，loader 会跳过 `wx_mp2rss` 并继续加载其他信源。
+其他配置项均有默认值，详见 `.env.example` 中的注释。抓取 `data/sources.toml` 中启用的 X API 信源时还需配置 `X_BEARER_TOKEN`；请求窗口和单轮上限见下文「信源池」。第一次本地试跑可以先保留站点身份默认值；微信公众号有两个可选来源，都不设置也能跑：`MP2RSS_FEED_URL`（托管的 Mp2RSS 合集）与 `WECHAT2RSS_FEED_URL`（自建 Wechat2RSS 合集）。任一未设置时 loader 会跳过对应来源并继续加载其他信源；两个都设置则**并行运行取并集**，同一篇文章只入库一次（按公众号 + 标题 + 发布时间窗去重）。为什么这样接、去重键怎么定的，见 [operations/wechat-ingestion.md](docs/operations/wechat-ingestion.md)。
 
 ### 3. 初始化数据库
 
@@ -121,7 +121,7 @@ homepage `hard_failure=true` 的已知假阳性已修复。但 `performance-reme
 ## 数据流水线
 
 ```
-RSS / X / Mp2RSS 微信公众号源 → fetch → prefilter → score → enrich → curate → interpret → web 展示 / ai-assistant KB
+RSS / X / 微信公众号源（Mp2RSS + 自建 Wechat2RSS，取并集） → fetch → prefilter → score → enrich → curate → interpret → web 展示 / ai-assistant KB
 ```
 
 各阶段说明：

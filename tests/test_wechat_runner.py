@@ -348,3 +348,110 @@ def test_fetch_source_preserves_existing_full_text_when_repeat_fetch_degrades(tm
         "<div id='js_content'>Full article body</div>",
         repeat_item.fetched_at,
     )
+
+
+LONG_FORM_URL = (
+    "https://mp.weixin.qq.com/s?__biz=MzIzNjc1NzUzMw==&mid=2247913187&idx=1&sn=5389abc"
+)
+
+
+def _second_wechat_source() -> SourceConfig:
+    return SourceConfig(
+        slug="wx_selfhosted",
+        name="Self-hosted WeChat feed",
+        url="http://127.0.0.1:8080/feed/all.xml",
+        tier="T2",
+        kind="wechat",
+        homepage_url="https://mp.weixin.qq.com/",
+    )
+
+
+def _dual_conn(tmp_path: Path) -> sqlite3.Connection:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    sync_to_db([_source(), _second_wechat_source()], conn)
+    return conn
+
+
+def _stored_urls(conn: sqlite3.Connection) -> list[str]:
+    return [row[0] for row in conn.execute("SELECT url FROM items ORDER BY url")]
+
+
+def test_second_wechat_feed_does_not_duplicate_an_article_the_first_already_carried(
+    tmp_path: Path,
+) -> None:
+    conn = _dual_conn(tmp_path)
+    incumbent = replace(_item(), author="量子位", title="世界模型进入“有声时代”：24FPS画面")
+    assert upsert_item(conn, incumbent, wechat=True) is True
+
+    # Same article from the other feed: unrelated URL, its own body, a title
+    # differing only in the whitespace and full/half-width punctuation two
+    # renderers disagree on, and a publish time seconds apart.
+    candidate = replace(
+        incumbent,
+        source_id="wx_selfhosted",
+        url=LONG_FORM_URL,
+        title=" 世界模型进入“有声时代”:24FPS画面 ",
+        published_at="2026-05-28T01:02:58Z",
+        content_text="Full body served by the self-hosted feed",
+    )
+    assert upsert_item(conn, candidate, wechat=True) is False
+    assert _stored_urls(conn) == [incumbent.url]
+
+
+def test_second_wechat_feed_still_inserts_an_article_the_first_missed(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    assert upsert_item(conn, replace(_item(), author="量子位", title="第一篇"), wechat=True) is True
+
+    missed = replace(
+        _item(),
+        source_id="wx_selfhosted",
+        url=LONG_FORM_URL,
+        author="量子位",
+        title="只有自建源发现的第二篇",
+    )
+    assert upsert_item(conn, missed, wechat=True) is True
+    assert len(_stored_urls(conn)) == 2
+
+
+def test_wechat_dedup_keeps_a_genuine_repost_of_the_same_title(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    original = replace(_item(), author="量子位", title="量子位编辑作者招聘")
+    assert upsert_item(conn, original, wechat=True) is True
+
+    # The closest genuine repost measured in production is 3.3 hours later; the
+    # dedup window must not reach it.
+    repost = replace(
+        original,
+        source_id="wx_selfhosted",
+        url=LONG_FORM_URL,
+        published_at="2026-05-28T04:22:03Z",
+    )
+    assert upsert_item(conn, repost, wechat=True) is True
+    assert len(_stored_urls(conn)) == 2
+
+
+def test_non_wechat_sources_keep_their_per_source_dedup(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    first = replace(_item(), author="量子位", title="同题")
+    assert upsert_item(conn, first, wechat=True) is True
+    # A feed source is not asked to dedup against WeChat rows at all.
+    assert upsert_item(conn, replace(first, source_id="wx_selfhosted", url=LONG_FORM_URL)) is True
+
+
+def test_long_form_wechat_urls_are_not_sent_to_the_scraper(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    item = replace(_item(), source_id="wx_selfhosted", url=LONG_FORM_URL, author="量子位")
+
+    # Assert on the call itself: the scraper runs inside a thread pool that
+    # turns any exception into a failed-article dict, so a raising sentinel
+    # would be swallowed and the test would pass either way.
+    with patch(
+        "airadar.fetcher.runner.scrape_article",
+        return_value={"success": False, "error": "captcha"},
+    ) as scrape:
+        enriched = _enrich_wechat_bodies(conn, [item])
+
+    scrape.assert_not_called()
+    assert enriched == [item]

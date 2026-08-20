@@ -16,8 +16,11 @@ VALID_KINDS = {"feed", "web", "x", "wechat"}
 WEB_RUNTIME_META_KEYS = {"parser", "selector", "minimum_items", "allowed_host", "allowed_path"}
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_]*[a-z0-9]$")
 LOGGER = logging.getLogger(__name__)
-MP2RSS_FEED_PLACEHOLDER = "${MP2RSS_FEED_URL}"
-MP2RSS_FEED_ENV = "MP2RSS_FEED_URL"
+# A WeChat feed URL always carries a subscription token, so it is configured as
+# a single env-var placeholder rather than a literal. Which env var is per
+# source: running two WeChat feeds side by side is how a replacement is proven
+# against the incumbent before either is switched off.
+ENV_PLACEHOLDER_RE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
 
 
 @dataclass(frozen=True)
@@ -88,8 +91,16 @@ def _validate_source(
     wechat_only = bool(raw.get("wechat_only", False)) if schema_version >= 2 else False
     override_raw = raw.get("public_url_override") if schema_version >= 2 else None
     public_url_override = _validate_http_url(slug, "public_url_override", str(override_raw) if override_raw is not None else None)
-    if kind == "wechat" and schema_version >= 2 and (not optional or required_env != MP2RSS_FEED_ENV or not wechat_only or public_url_override is None):
-        raise ValueError(f"invalid optional WeChat configuration for {slug}")
+    if kind == "wechat" and schema_version >= 2:
+        placeholder = ENV_PLACEHOLDER_RE.match(str(raw[url_field]))
+        if (
+            not optional
+            or not wechat_only
+            or public_url_override is None
+            or placeholder is None
+            or placeholder.group(1) != required_env
+        ):
+            raise ValueError(f"invalid optional WeChat configuration for {slug}")
     if schema_version >= 2 and kind == "x":
         adapter = meta.get("adapter")
         if adapter is None:
@@ -147,11 +158,24 @@ def _validate_source(
     )
 
 
-def _should_skip_unconfigured_mp2rss(raw: dict[str, Any], *, schema_version: int) -> bool:
-    raw_url = raw.get("fetch_url" if schema_version >= 2 else "url")
-    if raw_url is None or MP2RSS_FEED_PLACEHOLDER not in str(raw_url):
-        return False
-    return not os.environ.get(MP2RSS_FEED_ENV, "").strip()
+def _unconfigured_placeholder_env(raw: dict[str, Any], *, schema_version: int) -> str | None:
+    """The env var this source needs, when it is a placeholder URL and unset.
+
+    An *optional* source whose feed URL is entirely one env-var placeholder is
+    skipped rather than failing the whole load, so a checkout without that
+    subscription still runs every other source. A source that is not declared
+    optional keeps failing loudly, because there nothing else would notice.
+    """
+    if schema_version < 2 or raw.get("optional") is not True:
+        return None
+    raw_url = raw.get("fetch_url")
+    if raw_url is None:
+        return None
+    match = ENV_PLACEHOLDER_RE.match(str(raw_url))
+    if match is None:
+        return None
+    env_name = match.group(1)
+    return None if os.environ.get(env_name, "").strip() else env_name
 
 
 def load_sources(path: Path) -> list[SourceConfig]:
@@ -165,11 +189,12 @@ def load_sources(path: Path) -> list[SourceConfig]:
 
     sources: list[SourceConfig] = []
     for raw in raw_sources:
-        if _should_skip_unconfigured_mp2rss(raw, schema_version=schema_version):
+        unset_env = _unconfigured_placeholder_env(raw, schema_version=schema_version)
+        if unset_env is not None:
             LOGGER.warning(
-                "source %s skipped: %s is not set; set it to enable the Mp2RSS WeChat feed",
+                "source %s skipped: %s is not set; set it to enable that feed",
                 raw.get("slug", "<unknown>"),
-                MP2RSS_FEED_ENV,
+                unset_env,
             )
             continue
         sources.append(

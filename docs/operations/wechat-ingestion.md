@@ -26,6 +26,43 @@ sources loader 用 `os.path.expandvars` 展开占位符（`src/airadar/sources/l
 
 cron / launchd 不继承交互式 shell 的 `export`。需要启用微信公众号摄取时，自动调度前确认 `.env` 或 `~/.claude/.env` 已落该变量（与 LLM API Key 同处理，见 README §自动化调度）；暂不启用时可以保持为空。
 
+## 双跑：`WECHAT2RSS_FEED_URL` 与跨源去重
+
+自建的 Wechat2RSS（部署见 `deploy/wechat2rss/RUNBOOK.md`）作为第二个生产微信源 `wx_wechat2rss` 与 Mp2RSS **并行运行**，生产取两者并集。这是替换 Mp2RSS 之前的一步：只有真正同时跑过，才知道停掉 Mp2RSS 会丢什么。**Mp2RSS 不因此停用**，停用是另一个需要单独决定的动作。
+
+```bash
+WECHAT2RSS_FEED_URL=http://127.0.0.1:8080/feed/all.xml?k=<RSS_TOKEN>
+```
+
+该地址是 loopback 加本部署的 token，只在跑着那个容器的机器上有效，因此放**项目根 `.env`**，不要放跨机器共享的 `~/.claude/.env`。`/feed/all.xml` 是合集端点，全局上限 50 条（各账号自己的 feed 各 20 条）。缺 `k` 参数时它返回 `HTTP 200` 加 `{"err":"k param is empty..."}`，所以判断它是否可用要看返回体、不能只看状态码。
+
+### 去重键：账号 + 归一化标题 + 5 分钟发布窗
+
+两个源给同一篇文章的 URL 没有公共子串——Mp2RSS 出短链 `/s/<token>`，Wechat2RSS 出长链 `?__biz=…&mid=…&idx=…&sn=…`——所以既有的按 URL / content hash 去重（`src/airadar/fetcher/dedup.py`，作用域是单个 source）看不出它们是同一篇。跨源去重改用**账号 + 归一化标题**，并要求两侧发布时间相差不超过 5 分钟。
+
+这个窗口是量出来的：
+
+| 读数 | 值 | 样本 |
+|---|---|---|
+| 同一篇文章在两侧的发布时间差 | 中位 13 秒，最大 **58 秒** | 118 篇两侧都出现的文章 |
+| 同一账号真实重发同标题的最近间隔 | **3.33 小时** | 生产库 3272 条微信条目中的 26 对 |
+
+5 分钟落在这两者之间，离两边都很远。**不带时间窗的纯标题键会误并约 0.8% 的条目**——真实的同标题重发（招聘启事、会议推广隔几小时再发一次）会被当成重复丢掉，那是真丢文章。
+
+上线前对生产库做的只读预演：合集 feed 的 50 条中 40 条判为 Mp2RSS 已有、10 条为并集新增（虎嗅 8、量子位 2，均为近两日文章），不是深度回填。
+
+### 长链不送去抓正文
+
+Wechat2RSS 的 feed 自带 `content:encoded` 全文（实测 50/50 条都有，正文 5–11k 字符），而内置 Playwright 抓 `?__biz=` 长链会被导到 `wappoc_appmsgcaptcha`、三次有界重试后一无所获。所以长链形态的微信 URL 直接跳过抓取（`_is_unscrapable_wechat_url`）：正文本来就在 feed 里，跳过只省掉验证码的开销、不损失文本。
+
+### 长链的 URL 原样保留
+
+URL 规范化原本会重建 query 串，把长链里 base64 的 `__biz=…==` 编码成 `%3D%3D`。微信的解析器接不接受这种形态**没有证据**——`curl` 对两种形态给出相同读数（都 302 到「未知错误」页），区分不了。这个 URL 是读者在 `/wechat` 上点的那个链接，所以对 `mp.weixin.qq.com` 改为**原样保留发布方给出的 query**（`VERBATIM_QUERY_HOSTS`），只有确实需要剔除 `utm_` 参数时才重建。既有 3278 条微信条目的 URL 全部无 query，因此该改动不影响任何已存条目、不会产生重复行。
+
+### 对告警与计数的影响
+
+A7「来源静默」逐源判定，阈值取该源近 30 天平均出稿间隔的两倍。`wx_wechat2rss` 入库的只是 Mp2RSS 漏掉的那部分，入库速率天然低于 Mp2RSS；近 30 天不足 5 条期间它计入「无法评估」而不是「健康」。**两个源的入库量不能互相比较**——先到的那个源建条目、后到的被去重丢弃，所以计数反映的是抢到手的次数而不是覆盖率。覆盖率仍由 `plans/20260816-mp2rss-replacement/tools/shadow_compare.py` 直接从两个 feed 测量，它不读生产库，因而不受去重影响。
+
 ## 公众号后台发现候选（默认关闭）
 
 [ADR-024](../adr/024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md) 选择在 AI Radar 内维护一个最小发现适配器，[ADR-025](../adr/025-conservative-wechat-discovery-probe-defaults.md) 把人工 probe 的本地临时默认收紧为每次 5 篇、两次后台请求至少间隔 1440 分钟；这不是微信官方公布的配额或冷却窗口。[ADR-028](../adr/028-resolve-wechat-fakeid-before-shadow-probe.md) 否定“公开 `biz` 可直接作为后台 `fakeid`”这一通用假设，[ADR-029](../adr/029-single-source-wechat-discovery-ledgers.md) 将 reservation、身份 provenance 与候选快照改为单一权威，[ADR-030](../adr/030-remove-derived-wechat-discovery-fields.md) 移除可派生字段并把人读配置升级为明确的 `public_biz` 命名，[ADR-031](../adr/031-preserve-only-provable-wechat-migration-facts.md) 规定旧 ledger 只迁移可证明事实，[ADR-040](../adr/040-verify-provisional-searchbiz-mapping-with-article-url-biz.md) 将 searchbiz 名称匹配降为 provisional mapping、改由返回文章 URL 的 public biz 完成验证，[ADR-041](../adr/041-version-wechat-discovery-invariant-hardening.md) 以 schema v8 加固 active mapping、不可变 candidate snapshot 与统一 consumer gate，[ADR-043](../adr/043-waive-manual-wechat-probe-cooldown-once.md) 只对一次获授权 one-shot 局部豁免本地冷却，[ADR-044](../adr/044-persist-wechat-platform-error-ret.md) 以 schema v9 保存 exact 平台错误码并区分拒绝与频控，[ADR-045](../adr/045-require-integer-platform-ret-and-evidence-backed-cooldown.md) 以 schema v10 拒绝非整数错误码并让特殊冷却只消费已记录频控证据。它当前只是 Mp2RSS 的条件式替代候选：`data/wechat-discovery.toml` 记录当前配置公众号的名称与非敏感 `public_biz`，`manual_backend_requests_enabled=false`；`data/wechat-discovery-session.json`、原子写入临时文件、`data/wechat-discovery-browser/` 和独立的 `data/wechat-discovery.db*` 全部 gitignore。候选不会被 `fetch_all` 或 pipeline 调用，单账号 probe 的候选 URL 只写独立 shadow DB，不写生产 `items`，因此不会与 `wx_mp2rss` 产生跨 source 重复。

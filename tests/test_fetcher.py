@@ -163,7 +163,7 @@ def test_fetch_all_fetches_source_feeds_in_parallel_and_writes_on_main_thread(
             with lock:
                 active -= 1
 
-    def fake_upsert_item(conn: sqlite3.Connection, item: FetchedItem) -> bool:
+    def fake_upsert_item(conn: sqlite3.Connection, item: FetchedItem, *, wechat: bool = False) -> bool:
         assert threading.get_ident() == main_thread
         assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == len(source_slugs)
         upsert_threads.append(threading.get_ident())
@@ -225,7 +225,7 @@ def test_fetch_all_continues_after_parallel_source_fetch_error(monkeypatch, tmp_
         )
 
     monkeypatch.setattr(runner, "_fetch_source_feed", fake_fetch_source_feed)
-    monkeypatch.setattr(runner, "upsert_item", lambda conn, item: True)  # noqa: ARG005
+    monkeypatch.setattr(runner, "upsert_item", lambda conn, item, *, wechat=False: True)  # noqa: ARG005
     monkeypatch.setattr(runner.db, "checkpoint_db", lambda path: None)
 
     summary = fetch_all(sources_path, db_path)

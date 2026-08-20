@@ -2703,6 +2703,26 @@
       "required_env": "MP2RSS_FEED_URL",
       "wechat_only": true,
       "public_url_override": "https://mp.weixin.qq.com/"
+    },
+    {
+      "aihot_aliases": [
+        "WeChat Wechat2RSS"
+      ],
+      "derived_aihot_identity": "extra:wx_wechat2rss",
+      "enabled": true,
+      "fetch_url": "${WECHAT2RSS_FEED_URL}",
+      "homepage_url": "https://mp.weixin.qq.com/",
+      "icon_url": "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64",
+      "kind": "wechat",
+      "ai_radar_main_timeline_member": false,
+      "meta": {},
+      "name": "微信公众号（Wechat2RSS 自建）",
+      "slug": "wx_wechat2rss",
+      "tier": "T2",
+      "optional": true,
+      "required_env": "WECHAT2RSS_FEED_URL",
+      "wechat_only": true,
+      "public_url_override": "https://mp.weixin.qq.com/"
     }
   ]
 }

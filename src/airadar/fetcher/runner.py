@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
@@ -283,11 +284,12 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
                 http_status_code=response.status_code,
             )
         items = result.items
-        if source.kind == "wechat":
+        is_wechat = source.kind == "wechat"
+        if is_wechat:
             items = _enrich_wechat_bodies(conn, items)
         inserted = 0
         for item in items:
-            inserted += 1 if upsert_item(conn, item) else 0
+            inserted += 1 if upsert_item(conn, item, wechat=is_wechat) else 0
         conn.commit()
         return SourceFetchSummary(
             source_id=source.slug,
@@ -335,6 +337,23 @@ def _stored_wechat_body(conn: sqlite3.Connection, item: FetchedItem) -> tuple[st
     if row is None:
         return None
     return str(row[0] or ""), row[1]
+
+
+def _is_unscrapable_wechat_url(url: str) -> bool:
+    """True for the long ``?__biz=`` article form, which the scraper cannot read.
+
+    Opening one in the headless browser lands on ``wappoc_appmsgcaptcha`` rather
+    than the article, so each attempt costs three bounded retries and returns
+    nothing. Feeds that serve this form carry the article body themselves, so
+    skipping the scrape loses no text — it only stops paying for the captcha.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.netloc.lower() != "mp.weixin.qq.com":
+        return False
+    return "__biz" in parse_qs(parts.query)
 
 
 def _utc_now() -> str:
@@ -509,7 +528,10 @@ def _plan_wechat_body_enrichment(conn: sqlite3.Connection, items: list[FetchedIt
                 stored_html=stored_html,
                 use_stored_body=use_stored_body,
                 avatar_account=avatar_account,
-                needs_scrape=not (use_stored_body and avatar_account is None),
+                needs_scrape=(
+                    not (use_stored_body and avatar_account is None)
+                    and not _is_unscrapable_wechat_url(item.url)
+                ),
             )
         )
     return plans

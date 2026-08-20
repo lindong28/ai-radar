@@ -141,6 +141,8 @@
 | [055-default-new-visitors-to-system-theme.md](adr/055-default-new-visitors-to-system-theme.md) | 新访客默认主题改为跟随系统 |
 | [056-label-the-score-instead-of-showing-a-bare-number.md](adr/056-label-the-score-instead-of-showing-a-bare-number.md) | 评分显示语义标签，且不写死分母 |
 | [057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md](adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md) | X 推文媒体经新加坡出口代理取回，RSS 正文图仍不展示 |
+| [058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md](adr/058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md) | X 媒体缩略图改为收缩包裹左对齐，lightbox 增强而非取代原生链接 |
+| [059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md](adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) | 两个微信来源并行取并集，按账号+归一化标题+5 分钟发布窗跨源去重 |
 
 ### docs/experiences/ [Agent]
 

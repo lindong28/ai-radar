@@ -429,7 +429,7 @@ def test_wechat_public_override_projects_contract_through_config_db_and_v2(tmp_p
     assert wx["retrieval_entrypoint_url"] is None
     assert wx["public_landing_url"] == "https://mp.weixin.qq.com/"
     assert payload["counts"] == {
-        "declared_contract_source_count": 162,
+        "declared_contract_source_count": 163,
         "declared_main_timeline_source_count": 161,
         "enabled_loaded_source_count": 162,
         "enabled_loaded_main_timeline_source_count": 161,

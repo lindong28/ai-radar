@@ -30,20 +30,23 @@ def _project(source: object) -> dict[str, object]:
     }
 
 
-def _expected(row: dict[str, object], resolved_mp2rss: str | None = None) -> dict[str, object]:
+OPTIONAL_WECHAT_SLUGS = ["wx_mp2rss", "wx_wechat2rss"]
+
+
+def _expected(row: dict[str, object], resolved: dict[str, str] | None = None) -> dict[str, object]:
     fetch_url = row["fetch_url"]
-    if row["slug"] == "wx_mp2rss" and resolved_mp2rss:
-        fetch_url = resolved_mp2rss
+    if resolved:
+        fetch_url = resolved.get(str(row["slug"]), fetch_url)
     return {key: row[key] for key in ("slug", "name", "kind", "tier", "enabled", "homepage_url", "icon_url", "meta")} | {"fetch_url": fetch_url}
 
 
 def test_contract_has_exact_complete_identity_classes() -> None:
     rows = _contract()
     main = [row for row in rows if row["ai_radar_main_timeline_member"]]
-    assert len(rows) == 162
+    assert len(rows) == 163
     assert len(main) == 161
     assert Counter(row["kind"] for row in main) == {"x": 109, "feed": 34, "web": 18}
-    assert [row["slug"] for row in rows if not row["ai_radar_main_timeline_member"]] == ["wx_mp2rss"]
+    assert [row["slug"] for row in rows if not row["ai_radar_main_timeline_member"]] == OPTIONAL_WECHAT_SLUGS
     assert len({row["slug"] for row in rows}) == len(rows)
     assert len({row["derived_aihot_identity"] for row in rows}) == len(rows)
     assert len({str(row["meta"]["username"]).casefold() for row in rows if row["kind"] == "x"}) == 109
@@ -55,14 +58,19 @@ def test_contract_has_exact_complete_identity_classes() -> None:
 
 def test_config_matches_contract_without_optional_mp2rss(monkeypatch) -> None:
     monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
+    monkeypatch.delenv("WECHAT2RSS_FEED_URL", raising=False)
     actual = load_sources(CONFIG_PATH)
     expected = [row for row in _contract() if row["ai_radar_main_timeline_member"]]
     assert {_project(row)["slug"]: _project(row) for row in actual} == {str(row["slug"]): _expected(row) for row in expected}
 
 
 def test_config_matches_contract_with_optional_mp2rss(monkeypatch) -> None:
-    resolved = "https://paid.example.test/private-mp2rss.xml"
-    monkeypatch.setenv("MP2RSS_FEED_URL", resolved)
+    resolved = {
+        "wx_mp2rss": "https://paid.example.test/private-mp2rss.xml",
+        "wx_wechat2rss": "http://127.0.0.1:8080/feed/all.xml?k=example-token",
+    }
+    monkeypatch.setenv("MP2RSS_FEED_URL", resolved["wx_mp2rss"])
+    monkeypatch.setenv("WECHAT2RSS_FEED_URL", resolved["wx_wechat2rss"])
     actual = load_sources(CONFIG_PATH)
     expected = _contract()
     assert {_project(row)["slug"]: _project(row) for row in actual} == {str(row["slug"]): _expected(row, resolved) for row in expected}
