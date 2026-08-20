@@ -226,3 +226,13 @@
 **当前判别法（写进 README 的那条）**：确认 `.env` 中 `DEEPSEEK_API_KEY` / `ARK_API_KEY` 非空（`grep -c`），不能靠 pipeline 输出判。
 
 **Fix 方向**：回退发生时打一行结构化日志（stage / provider / 原因：`missing_key` vs `AI_RADAR_FORCE_HEURISTIC`），并在 stage 汇总里带一个 `fallback=N` 计数，使「本轮走没走 LLM」在正常输出里就分得开。`glm.py` 另需单独裁决——它当前是无条件回退，即这个 provider 名义上是 LLM 实现、实际从不调用，属另一层的名实不符。
+
+## 热点候选缓存：keeper 可在换库后发布上一个库的行
+
+**状态**：open · **优先级**：low
+
+`HotCandidateCache.bind()` 换库时会清空候选（ADR-060），但那只覆盖**顺序调用**。并发时序仍有一个缺口：keeper 已在旧库上开始水合 → `bind(db-b)` 清空 → 旧那轮水合返回并**无条件发布**它从 db-a 读到的行。只读探针实测：`after_bind` 为 `None`，`after_old_publish` 为 `[{'id': 'db-a'}]`，而此时 `_db_path` 已是 `db-b`。
+
+**触发前提**：同一进程内换库，且恰好与一轮旧库水合重叠。生产是单 app 单库、`bind` 只在 lifespan 调用一次，碰不到；进程内 lifespan 重启、同进程嵌入第二个 app、以及测试套件会碰到（表现为偶发的跨库串数据）。
+
+**闭合方向**：`_refresh_if_needed` 在水合开始时把 `_db_path` 取快照，发布前在锁内比对，不一致就丢弃这轮结果并记一行日志。约四行，但它是并发不变量，值得单独过一次 review 而不是顺手塞进别的改动里——本轮 review-gate 的 MEDIUM 就地修轮次已用尽，故留账。

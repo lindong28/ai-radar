@@ -6,7 +6,7 @@ from datetime import date as date_cls
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..envelope import ok
-from . import curated_archive, curated_digest, daily_metrics
+from . import curated_archive, curated_digest, daily_metrics, hot_cache
 from .categories import CATEGORY_TAGS
 from .request_db import conn_from_request
 
@@ -34,18 +34,6 @@ def daily_archive(request: Request) -> dict[str, object]:
     with conn_from_request(request) as conn:
         days = curated_archive._compute_daily_archive(conn)
     return ok({"days": days, "count": len(days)})
-
-
-def _hot_datetime(value: object) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 @router.get("/curated")
@@ -137,62 +125,46 @@ def curated(
         }
     )
 
+
+def hot_payload(*, limit: int, hours: int) -> dict[str, object] | None:
+    """近 N 小时内按热度排序的头条：热度 = 加权分×10 + 关联讨论数×5。
+
+    ``None`` 表示**候选缓存尚未就绪**，与"确实没有热点"（返回 items 为空的
+    payload）是两回事——调用方必须把两者区分开，理由见 ADR-060：把未就绪
+    编码成空结果会被公共缓存放大、前端不会重试、`/hot` 还会渲染出假话。
+
+    排序、切片与 ``generated_at`` 全部按**本次调用的时钟**现算，缓存只提供
+    候选集。
+    """
+    generated_at = datetime.now(UTC)
+    candidates = hot_cache.HOT_CANDIDATE_CACHE.peek()
+    if candidates is None:
+        return None
+    return ok(
+        {
+            "items": hot_cache.rank_hot_items(
+                candidates, now=generated_at, hours=hours, limit=limit
+            ),
+            "hours": hours,
+            "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        }
+    )
+
+
 @router.get("/hot")
 def hot(
     request: Request,
     limit: int = Query(default=5, ge=1, le=10),
     hours: int = Query(default=48, ge=6, le=168),
 ) -> dict[str, object]:
-    """近 N 小时内按热度排序的头条：热度 = 加权分×10 + 关联讨论数×5。"""
-    generated_at = datetime.now(UTC)
-    # 单次调用取一致快照（跨页会因采集管线并发写入产生 offset 漂移）；
-    # 600 = 48h 现实归档量（约 160 条）的近 4 倍富余，超出即截断属可接受近似
-    with conn_from_request(request) as conn:
-        items, _total, _page = curated_archive._compute_archive_page(
-            conn,
-            page=1,
-            limit=600,
-            normalized_category=None,
-            q=None,
+    payload = hot_payload(limit=limit, hours=hours)
+    if payload is None:
+        # 503（而不是 200 + 空 items）：`_public_pagination_cache_control` 对非
+        # 200 一律发 `private, no-store`，所以这一次冷态不会被边缘缓存放大成
+        # 约 120 秒的空结果。前端据此重试，见 app.js 的 renderHotTopics。
+        raise HTTPException(
+            status_code=503,
+            detail="hot topics are still being prepared",
+            headers={"Retry-After": "2"},
         )
-    ranked: list[dict[str, object]] = []
-    for item in items:
-        published_at = item.get("published_at")
-        fetched_at = item.get("fetched_at")
-        published_ts = _hot_datetime(published_at)
-        use_published = published_ts is not None and published_ts <= generated_at
-        event_time = published_at if use_published else fetched_at
-        event_ts = published_ts if use_published else _hot_datetime(fetched_at)
-        if event_ts is None:
-            continue
-        age_seconds = (generated_at - event_ts).total_seconds()
-        if age_seconds < 0 or age_seconds > hours * 3600:
-            continue
-        score = float(str(item.get("weighted_score") or 0.0))
-        related = item.get("related_discussions")
-        related_discussions = related if isinstance(related, list) else []
-        related_count = len(related_discussions)
-        heat = round(score * 10 + related_count * 5)
-        ranked.append(
-            {
-                "id": item.get("id"),
-                "title": item.get("title_zh") or item.get("title"),
-                "url": item.get("url"),
-                "source_name": item.get("source_name"),
-                "published_at": published_at,
-                "fetched_at": fetched_at,
-                "event_time": event_time,
-                "source_kind": item.get("source_kind"),
-                "author": item.get("author"),
-                "related_discussions": related_discussions,
-                "heat": heat,
-            }
-        )
-    ranked.sort(key=lambda entry: (-int(str(entry["heat"] or 0)), str(entry["id"])))
-    return ok(
-        {
-            "items": ranked[:limit],
-            "hours": hours,
-            "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
-        }
-    )
+    return payload

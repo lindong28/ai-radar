@@ -1,0 +1,18 @@
+{# SSR 对偶：这里的 DOM 必须与 app.js 的 renderHotTopics() 逐节点同形。
+   ADR-012 把"同一 surface 的 SSR/CSR 成对同步"定为硬契约，改一边就要改另一边，
+   否则首屏会在 CSR 接管时结构跳变。守这条的是 tests/test_hot_page.py 里的
+   test_hot_topics_ssr_partial_and_csr_renderer_stay_structurally_paired 及其后两个。 #}
+      <div class="hot-topics-head">
+        <h2 class="hot-topics-title">
+          <span class="hot-topics-title-desktop">当前热点</span>
+          <span class="hot-topics-title-mobile">今日热点</span>
+        </h2>
+        <a class="hot-topics-more" href="/hot">完整榜单 →</a>
+      </div>
+      <ol class="hot-topics-list">
+        {% for item in hot_topics %}<li class="hot-topics-row">
+          <span class="hot-topics-rank hot-topics-rank-{% if loop.index0 < 3 %}{{ loop.index }}{% else %}rest{% endif %}" aria-hidden="true">{{ loop.index }}</span>
+          <a class="hot-topics-link" href="{{ item.url or '#' }}" target="_blank" rel="noopener noreferrer">{{ item.title or '' }}</a>
+          <span class="hot-topics-meta hot-topics-heat">{{ item.heat if item.heat is not none else '' }} 热度</span>
+        </li>{% endfor %}
+      </ol>
