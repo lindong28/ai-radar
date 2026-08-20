@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import re
+import subprocess
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -17,6 +18,7 @@ from typing import Any, Literal, Protocol
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 MINIMUM_REQUEST_INTERVAL_SECONDS = 2.0
@@ -1189,12 +1191,26 @@ def _retry_delay(response: HttpResponse) -> float:
         raise DatasetContractError("retry_after_invalid", "Retry-After is neither seconds nor an HTTP date") from error
 
 
+def _is_json_media_type(media_type: str) -> bool:
+    if media_type == "application/json":
+        return True
+    top_level, separator, subtype = media_type.partition("/")
+    structured_suffix = "+json"
+    return bool(
+        separator
+        and top_level
+        and subtype.endswith(structured_suffix)
+        and len(subtype) > len(structured_suffix)
+    )
+
+
 def request_with_policy(
     send: Callable[[], HttpResponse],
     *,
     surface: str,
     limiter: GlobalRateLimiter,
     max_attempts: int = 3,
+    accepted_media_types: Sequence[str] = ("application/json",),
 ) -> HttpResponse:
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
@@ -1207,8 +1223,14 @@ def request_with_policy(
             raise DatasetContractError("transport_failed", "request transport failed") from error
         if 200 <= response.status < 300:
             content_type = _header(response.headers, "Content-Type")
-            if content_type is None or content_type.split(";", 1)[0].strip().lower() != "application/json":
-                raise DatasetContractError("content_type_invalid", "successful response must be application/json")
+            media_type = content_type.split(";", 1)[0].strip().lower() if content_type is not None else ""
+            accepts_json_family = "application/*+json" in accepted_media_types and _is_json_media_type(media_type)
+            if media_type not in accepted_media_types and not accepts_json_family:
+                expected = ", ".join(accepted_media_types)
+                raise DatasetContractError(
+                    "content_type_invalid",
+                    f"successful {surface} response must use one of: {expected}",
+                )
             return response
         if response.status in {429, 503}:
             if attempt == max_attempts:
@@ -1951,7 +1973,7 @@ def _validate_public_surface_content_type(surface: Literal["rss", "openapi"], va
     if surface == "rss":
         accepted = media_type in {"application/rss+xml", "application/atom+xml", "application/xml", "text/xml"}
     else:
-        accepted = media_type == "application/json" or media_type.endswith("+json")
+        accepted = _is_json_media_type(media_type)
     if not accepted:
         raise DatasetContractError(
             "content_type_invalid",
@@ -2818,3 +2840,827 @@ def slice_offline(
 ) -> bytes:
     _ = network_transport
     return serialize_items_jsonl(filter_window(items, start=start, end=end))
+
+
+@dataclass(frozen=True)
+class GitCheckout:
+    root: Path
+    commit: str | None
+    dirty: bool
+
+
+class SubprocessGitProvider:
+    def checkout(self, path: Path) -> GitCheckout:
+        requested = path.resolve()
+        root_result = subprocess.run(
+            ["git", "-C", str(requested), "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if root_result.returncode != 0 or not root_result.stdout.strip():
+            raise DatasetContractError("git_checkout_invalid", "path is not inside a Git worktree")
+        root = Path(root_result.stdout.strip()).resolve()
+        head_result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        commit = head_result.stdout.strip() if head_result.returncode == 0 else None
+        status_result = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if status_result.returncode != 0:
+            raise DatasetContractError("git_checkout_invalid", "Git worktree status could not be read")
+        return GitCheckout(root=root, commit=commit, dirty=bool(status_result.stdout))
+
+
+class CaptureHttpTransport(Protocol):
+    def get(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, str | int | float | bool | None] | None,
+        headers: Mapping[str, str],
+    ) -> HttpResponse: ...
+
+
+class HttpxTransport:
+    def __init__(self, *, timeout_seconds: float, user_agent: str) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self._timeout_seconds = timeout_seconds
+        self._user_agent = _non_empty_string(user_agent, field_name="user_agent")
+        self._client = httpx.Client(
+            trust_env=False,
+            timeout=self._timeout_seconds,
+            headers={"User-Agent": self._user_agent},
+        )
+
+    def get(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, str | int | float | bool | None] | None,
+        headers: Mapping[str, str],
+    ) -> HttpResponse:
+        response = self._client.get(url, params=params, headers=headers)
+        return HttpResponse(
+            status=response.status_code,
+            headers=dict(response.headers),
+            body=response.content,
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+
+@dataclass(frozen=True)
+class CaptureResult:
+    capture_path: str
+    window_manifest_paths: tuple[str, str]
+    request_starts: tuple[RequestStart, ...]
+
+
+def _required_header(response: HttpResponse, name: str) -> str:
+    value = _header(response.headers, name)
+    if value is None or not value.strip():
+        raise DatasetContractError("identity_anchor_missing", f"successful response is missing {name}")
+    return value
+
+
+def _optional_non_empty_header(response: HttpResponse, name: str) -> str | None:
+    value = _header(response.headers, name)
+    if value is None:
+        return None
+    if not value.strip():
+        raise DatasetContractError("identity_anchor_missing", f"observed {name} header is blank")
+    return value
+
+
+def _write_staged(root: Path, relative_path: str, value: bytes) -> None:
+    _validate_relative_path(relative_path)
+    target = root.joinpath(*PurePosixPath(relative_path).parts)
+    if target.exists() or target.is_symlink():
+        raise DatasetContractError("target_exists", f"staged artifact already exists: {relative_path}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(value)
+
+
+def _remove_exact_tree(root: Path, *, allowed_parent: Path) -> None:
+    if not root.exists() and not root.is_symlink():
+        return
+    resolved_parent = allowed_parent.resolve()
+    try:
+        root.resolve().relative_to(resolved_parent)
+    except ValueError as error:
+        raise DatasetContractError("cleanup_refused", "cleanup target is outside the allowed staging parent") from error
+    if root.is_symlink() or root.is_file():
+        root.unlink()
+        return
+    for child in root.iterdir():
+        _remove_exact_tree(child, allowed_parent=allowed_parent)
+    root.rmdir()
+
+
+def _response_reference_payload(response: HttpResponse, *, raw_path: str) -> dict[str, object]:
+    compressed = deterministic_gzip(response.body)
+    return {
+        "raw_path": raw_path,
+        "compressed_raw_sha256": sha256_hex(compressed),
+        "response_body_sha256": sha256_hex(response.body),
+        "status": response.status,
+        "content_type": _required_header(response, "Content-Type"),
+        "date": _required_header(response, "Date"),
+        "etag": _optional_non_empty_header(response, "ETag"),
+        "cache_control": _optional_non_empty_header(response, "Cache-Control"),
+    }
+
+
+def _ssr_response_reference_payload(
+    response: HttpResponse,
+    *,
+    request_url: str,
+    raw_path: str,
+) -> dict[str, object]:
+    compressed = deterministic_gzip(response.body)
+    return {
+        "request_url": request_url,
+        "response_raw_path": raw_path,
+        "compressed_raw_sha256": sha256_hex(compressed),
+        "response_body_sha256": sha256_hex(response.body),
+        "status": response.status,
+        "content_type": _required_header(response, "Content-Type"),
+    }
+
+
+class CaptureWriter:
+    def __init__(
+        self,
+        *,
+        tool_repo_root: str | Path,
+        output_root: str | Path,
+        base_url: str,
+        user_agent: str,
+        transport: CaptureHttpTransport,
+        limiter: GlobalRateLimiter,
+        now: Callable[[], datetime],
+        capture_id: str,
+        schema_bytes: bytes,
+    ) -> None:
+        self.tool_repo_root = Path(tool_repo_root).resolve()
+        self.output_root = Path(output_root).resolve()
+        self.base_url = SourceIdentity(base_url=base_url).base_url.rstrip("/")
+        self.user_agent = _non_empty_string(user_agent, field_name="user_agent")
+        self.transport = transport
+        self.limiter = limiter
+        self.now = now
+        self.capture_id = _non_empty_string(capture_id, field_name="capture_id")
+        self.schema_bytes = schema_bytes
+
+    def _send(
+        self,
+        *,
+        url: str,
+        params: Mapping[str, str | int | float | bool | None] | None,
+        surface: str,
+        accepted_media_types: Sequence[str],
+    ) -> HttpResponse:
+        return request_with_policy(
+            lambda: self.transport.get(
+                url,
+                params=params,
+                headers={"User-Agent": self.user_agent},
+            ),
+            surface=surface,
+            limiter=self.limiter,
+            accepted_media_types=accepted_media_types,
+        )
+
+    def _preflight(self) -> str:
+        git_provider = SubprocessGitProvider()
+        tool = git_provider.checkout(self.tool_repo_root)
+        if tool.root.resolve() != self.tool_repo_root:
+            raise DatasetContractError("tool_checkout_invalid", "tool_repo_root is not the Git worktree root")
+        if tool.dirty:
+            raise DatasetContractError("tool_checkout_dirty", "capture requires a clean tool checkout")
+        if tool.commit is None or GIT_COMMIT_PATTERN.fullmatch(tool.commit) is None:
+            raise DatasetContractError("tool_commit_invalid", "tool checkout HEAD is not a valid Git object id")
+        output = git_provider.checkout(self.output_root)
+        if output.root.resolve() != self.output_root:
+            raise DatasetContractError("output_root_invalid", "capture output root must be the data-repo worktree root")
+        capture_target = self.output_root / "captures" / self.capture_id
+        staging_target = self.output_root / ".staging" / self.capture_id
+        if capture_target.exists() or capture_target.is_symlink() or staging_target.exists() or staging_target.is_symlink():
+            raise DatasetContractError("target_exists", "capture target or staging target already exists")
+        return tool.commit
+
+    def _store_raw(
+        self,
+        staging_root: Path,
+        raw_files: dict[str, bytes],
+        *,
+        raw_path: str,
+        body: bytes,
+    ) -> bytes:
+        compressed = deterministic_gzip(body)
+        _write_staged(staging_root, raw_path, compressed)
+        raw_files[raw_path] = compressed
+        return compressed
+
+    def _capture_public_responses(
+        self,
+        staging_root: Path,
+        raw_files: dict[str, bytes],
+    ) -> list[dict[str, object]]:
+        definitions = (
+            (
+                "rss",
+                f"{self.base_url}/rss",
+                f"captures/{self.capture_id}/raw/probes/00-rss.xml.gz",
+                ("application/rss+xml", "application/atom+xml", "application/xml", "text/xml"),
+            ),
+            (
+                "openapi",
+                f"{self.base_url}/openapi-v1.json",
+                f"captures/{self.capture_id}/raw/probes/01-openapi.json.gz",
+                ("application/json", "application/*+json"),
+            ),
+        )
+        references: list[dict[str, object]] = []
+        for surface, request_url, raw_path, accepted_media_types in definitions:
+            response = self._send(
+                url=request_url,
+                params=None,
+                surface=surface,
+                accepted_media_types=accepted_media_types,
+            )
+            compressed = self._store_raw(
+                staging_root,
+                raw_files,
+                raw_path=raw_path,
+                body=response.body,
+            )
+            references.append(
+                {
+                    "surface": surface,
+                    "request_url": request_url,
+                    "raw_path": raw_path,
+                    "compressed_raw_sha256": sha256_hex(compressed),
+                    "response_body_sha256": sha256_hex(response.body),
+                    "status": response.status,
+                    "content_type": _required_header(response, "Content-Type"),
+                    "date": _required_header(response, "Date"),
+                    "etag": _optional_non_empty_header(response, "ETag"),
+                    "cache_control": _optional_non_empty_header(response, "Cache-Control"),
+                }
+            )
+        return references
+
+    def _capture_pass(
+        self,
+        pass_index: int,
+        staging_root: Path,
+        raw_files: dict[str, bytes],
+    ) -> tuple[TraversalResult, dict[str, object], PassObservation]:
+        api_url = f"{self.base_url}/api/v1/items"
+
+        def fetch(cursor: str | None) -> HttpResponse:
+            return self.transport.get(
+                api_url,
+                params={
+                    "mode": "all",
+                    "by": "timeline",
+                    "window": "7d",
+                    "limit": 100,
+                    "cursor": cursor,
+                },
+                headers={"User-Agent": self.user_agent},
+            )
+
+        traversal = traverse_api_pages(fetch, limiter=self.limiter)
+        raw_pages: list[dict[str, object]] = []
+        for page_index, page in enumerate(traversal.pages):
+            raw_path = (
+                f"captures/{self.capture_id}/raw/api/pass-{pass_index:02d}/"
+                f"page-{page_index:03d}.json.gz"
+            )
+            compressed = self._store_raw(
+                staging_root,
+                raw_files,
+                raw_path=raw_path,
+                body=page.response.body,
+            )
+            raw_pages.append(
+                {
+                    "raw_path": raw_path,
+                    "compressed_raw_sha256": sha256_hex(compressed),
+                    "response_body_sha256": sha256_hex(page.response.body),
+                    "status": page.response.status,
+                    "content_type": _required_header(page.response, "Content-Type"),
+                    "date": _required_header(page.response, "Date"),
+                    "etag": _optional_non_empty_header(page.response, "ETag"),
+                    "cache_control": _optional_non_empty_header(page.response, "Cache-Control"),
+                    "canonical_query": {
+                        "mode": "all",
+                        "by": "timeline",
+                        "window": "7d",
+                        "limit": 100,
+                        "cursor": page.request_cursor,
+                    },
+                }
+            )
+        first_date = str(raw_pages[0]["date"])
+        last_date = str(raw_pages[-1]["date"])
+        windows = formal_day_pair(first_date)
+        target_sets: list[frozenset[str]] = []
+        formal_windows: list[dict[str, object]] = []
+        for start, end in windows:
+            ensure_window_covered(
+                start=start,
+                end=end,
+                first_response_date=first_date,
+                last_response_date=last_date,
+            )
+            targets = filter_window(traversal.items, start=start, end=end)
+            target_ids = [item.id for item in targets]
+            target_sets.append(frozenset(target_ids))
+            formal_windows.append(
+                {
+                    "start_inclusive": start,
+                    "end_exclusive": end,
+                    "target_item_id_count": len(target_ids),
+                    "target_item_id_sha256": _target_digest(target_ids),
+                }
+            )
+        pass_payload = {
+            "reached_has_more_false": traversal.terminal,
+            "formal_windows": formal_windows,
+            "raw_pages": raw_pages,
+        }
+        observation = PassObservation(
+            index=pass_index,
+            terminal=traversal.terminal,
+            first_response_date=first_date,
+            last_response_date=last_date,
+            target_ids_by_window=(target_sets[0], target_sets[1]),
+        )
+        return traversal, pass_payload, observation
+
+    def _capture_ssr_observations(
+        self,
+        *,
+        target_items: Sequence[UnreconciledApiItem],
+        staging_root: Path,
+        raw_files: dict[str, bytes],
+    ) -> tuple[dict[str, TagObservation], dict[str, dict[str, object]]]:
+        targets = {item.id: item for item in target_items}
+        observations: dict[str, TagObservation] = {}
+        reference_by_item: dict[str, dict[str, object]] = {}
+        for page in range(1, 51):
+            request_url = f"{self.base_url}/all?page={page}"
+            response = self._send(
+                url=f"{self.base_url}/all",
+                params={"page": page},
+                surface="ssr",
+                accepted_media_types=("text/html",),
+            )
+            raw_path = f"captures/{self.capture_id}/raw/ssr/list-page-{page:03d}.html.gz"
+            self._store_raw(staging_root, raw_files, raw_path=raw_path, body=response.body)
+            reference = _ssr_response_reference_payload(
+                response,
+                request_url=request_url,
+                raw_path=raw_path,
+            )
+            for observation in _parse_ssr_tag_observations(response.body, channel="list"):
+                if observation.item_id not in targets:
+                    continue
+                if observation.item_id in observations:
+                    raise DatasetContractError(
+                        "tag_observation_duplicate",
+                        f"SSR list pages repeated target item {observation.item_id!r}",
+                    )
+                observations[observation.item_id] = observation
+                reference_by_item[observation.item_id] = reference
+
+        for item in target_items:
+            if item.id in observations:
+                continue
+            request_url = item.aihot_url
+            response = self._send(
+                url=request_url,
+                params=None,
+                surface="ssr",
+                accepted_media_types=("text/html",),
+            )
+            raw_path = f"captures/{self.capture_id}/raw/ssr/detail-{sha256_hex(item.id.encode())[:16]}.html.gz"
+            self._store_raw(staging_root, raw_files, raw_path=raw_path, body=response.body)
+            parsed = [
+                observation
+                for observation in _parse_ssr_tag_observations(response.body, channel="detail")
+                if observation.item_id == item.id
+            ]
+            if not parsed:
+                raise DatasetContractError("tag_observation_missing", f"detail page did not contain target {item.id!r}")
+            if len(parsed) != 1:
+                raise DatasetContractError("tag_observation_duplicate", f"detail page repeated target {item.id!r}")
+            observations[item.id] = parsed[0]
+            reference_by_item[item.id] = _ssr_response_reference_payload(
+                response,
+                request_url=request_url,
+                raw_path=raw_path,
+            )
+        return observations, reference_by_item
+
+    def _window_payload(
+        self,
+        *,
+        start: str,
+        end: str,
+        capture_path: str,
+        capture_bytes: bytes,
+        items: Sequence[UnreconciledApiItem],
+        observations: Mapping[str, TagObservation],
+        references: Mapping[str, dict[str, object]],
+    ) -> tuple[dict[str, object], str, bytes]:
+        ordered_observations = [observations[item.id] for item in items]
+        reconciliation = reconcile_tags(items, ordered_observations)
+        items_bytes = serialize_items_jsonl(reconciliation.items)
+        window_root = _window_root(start, end)
+        items_path = f"{window_root}/items.jsonl"
+        seen_paths: set[str] = set()
+        response_references: list[dict[str, object]] = []
+        bindings: list[dict[str, object]] = []
+        for item in items:
+            reference = references[item.id]
+            response_raw_path = str(reference["response_raw_path"])
+            if response_raw_path not in seen_paths:
+                response_references.append(reference)
+                seen_paths.add(response_raw_path)
+            bindings.append({"item_id": item.id, "response_raw_path": response_raw_path})
+        payload: dict[str, object] = {
+            "artifact_type": "aihot_window_v1",
+            "window": {
+                "start_inclusive": start,
+                "end_exclusive": end,
+                "time_basis": "aihot_timeline_v1",
+            },
+            "capture": {"path": capture_path, "sha256": sha256_hex(capture_bytes)},
+            "items": {"path": items_path, "sha256": sha256_hex(items_bytes)},
+            "canonical_pass_target_item_id_sha256_projection": _target_digest(
+                [item.id for item in items]
+            ),
+            "tag_observation_responses": response_references,
+            "tag_observation_bindings": bindings,
+            "tag_reconciliation_counts": reconciliation.counts.model_dump(mode="json"),
+        }
+        return payload, items_path, items_bytes
+
+    def capture(self, *, start: str, end: str) -> CaptureResult:
+        tool_commit = self._preflight()
+        _timestamp(start)
+        _timestamp(end)
+        staging_parent = self.output_root / ".staging"
+        staging_root = staging_parent / self.capture_id
+        staging_root.mkdir(parents=True)
+        raw_files: dict[str, bytes] = {}
+        try:
+            started_at = _format_rfc3339(self.now().astimezone(UTC))
+            public_responses = self._capture_public_responses(staging_root, raw_files)
+            traversals: list[TraversalResult] = []
+            pass_payloads: list[dict[str, object]] = []
+            observations: list[PassObservation] = []
+            decision: StabilityDecision | None = None
+            for pass_index in range(3):
+                traversal, pass_payload, observation = self._capture_pass(
+                    pass_index,
+                    staging_root,
+                    raw_files,
+                )
+                traversals.append(traversal)
+                pass_payloads.append(pass_payload)
+                observations.append(observation)
+                if len(observations) >= 2:
+                    try:
+                        decision = select_canonical_pass(observations)
+                    except DatasetContractError as error:
+                        if error.code != "capture_unstable" or len(observations) == 3:
+                            raise
+                    else:
+                        break
+            if decision is None:
+                raise DatasetContractError("capture_unstable", "capture did not produce a stable adjacent pass pair")
+            canonical = observations[decision.canonical_pass_index]
+            formal_windows = canonical.formal_windows
+            if (start, end) != (formal_windows[0][0], formal_windows[1][1]):
+                raise DatasetContractError(
+                    "window_invalid",
+                    "capture start/end must span the canonical two complete UTC days",
+                )
+            canonical_items = list(traversals[decision.canonical_pass_index].items)
+            target_items = [
+                item
+                for bounds in formal_windows
+                for item in filter_window(canonical_items, start=bounds[0], end=bounds[1])
+            ]
+            ssr_observations, ssr_references = self._capture_ssr_observations(
+                target_items=target_items,
+                staging_root=staging_root,
+                raw_files=raw_files,
+            )
+            capture_path = f"captures/{self.capture_id}/capture.json"
+            capture_payload: dict[str, object] = {
+                "artifact_type": "aihot_capture_v1",
+                "capture_id": self.capture_id,
+                "started_at": started_at,
+                "finished_at": _format_rfc3339(self.now().astimezone(UTC)),
+                "source": {"base_url": self.base_url},
+                "public_responses": public_responses,
+                "user_agent": self.user_agent,
+                "rate_policy": {
+                    "max_requests_per_minute": MAX_REQUESTS_PER_MINUTE,
+                    "minimum_interval_seconds": MINIMUM_REQUEST_INTERVAL_SECONDS,
+                },
+                "tool": {"commit": tool_commit, "dirty": False},
+                "schema": {
+                    "path": "src/airadar/eval/schemas/aihot-item-v1.schema.json",
+                    "sha256": sha256_hex(self.schema_bytes),
+                },
+                "canonical_pass_index": decision.canonical_pass_index,
+                "passes": pass_payloads,
+            }
+            capture_bytes = canonical_json_bytes(capture_payload)
+            _write_staged(staging_root, capture_path, capture_bytes)
+
+            window_payloads: list[tuple[str, dict[str, object], str, bytes]] = []
+            for window_start, window_end in formal_windows:
+                window_items = filter_window(
+                    canonical_items,
+                    start=window_start,
+                    end=window_end,
+                )
+                window_payload, items_path, items_bytes = self._window_payload(
+                    start=window_start,
+                    end=window_end,
+                    capture_path=capture_path,
+                    capture_bytes=capture_bytes,
+                    items=window_items,
+                    observations=ssr_observations,
+                    references=ssr_references,
+                )
+                manifest_path = f"{_window_root(window_start, window_end)}/manifest.json"
+                _write_staged(staging_root, items_path, items_bytes)
+                _write_staged(staging_root, manifest_path, canonical_json_bytes(window_payload))
+                window_payloads.append((manifest_path, window_payload, items_path, items_bytes))
+
+            validate_capture_manifest(
+                capture_payload,
+                manifest_path=capture_path,
+                raw_files=raw_files,
+                schema_bytes=self.schema_bytes,
+            )
+            for manifest_path, window_payload, items_path, items_bytes in window_payloads:
+                validate_window_projection(
+                    window_payload,
+                    manifest_path=manifest_path,
+                    capture_manifest=capture_payload,
+                    files={
+                        capture_path: capture_bytes,
+                        "src/airadar/eval/schemas/aihot-item-v1.schema.json": self.schema_bytes,
+                        items_path: items_bytes,
+                    },
+                    raw_files=raw_files,
+                )
+
+            publish_roots = [
+                f"captures/{self.capture_id}",
+                *[str(PurePosixPath(path).parent) for path, *_rest in window_payloads],
+            ]
+            for relative_root in publish_roots:
+                target = self.output_root.joinpath(*PurePosixPath(relative_root).parts)
+                if target.exists() or target.is_symlink():
+                    raise DatasetContractError("target_exists", f"refusing to overwrite {relative_root}")
+            published_targets: list[Path] = []
+            created_parents: list[Path] = []
+            try:
+                for relative_root in publish_roots:
+                    source = staging_root.joinpath(*PurePosixPath(relative_root).parts)
+                    target = self.output_root.joinpath(*PurePosixPath(relative_root).parts)
+                    if not target.parent.exists():
+                        target.parent.mkdir(parents=True)
+                        created_parents.append(target.parent)
+                    source.rename(target)
+                    published_targets.append(target)
+            except Exception:
+                for target in reversed(published_targets):
+                    _remove_exact_tree(target, allowed_parent=self.output_root)
+                for parent in reversed(created_parents):
+                    if parent.is_dir() and not any(parent.iterdir()):
+                        parent.rmdir()
+                raise
+            _remove_exact_tree(staging_root, allowed_parent=staging_parent)
+            return CaptureResult(
+                capture_path=capture_path,
+                window_manifest_paths=(window_payloads[0][0], window_payloads[1][0]),
+                request_starts=tuple(self.limiter.request_starts),
+            )
+        except Exception:
+            _remove_exact_tree(staging_root, allowed_parent=staging_parent)
+            raise
+
+
+def _persisted_artifact_maps(
+    output_root: str | Path,
+    *,
+    schema_bytes: bytes | None = None,
+) -> tuple[dict[str, bytes], dict[str, bytes]]:
+    root = Path(output_root).resolve()
+    files: dict[str, bytes] = {}
+    raw_files: dict[str, bytes] = {}
+    for top_level in ("captures", "windows"):
+        directory = root / top_level
+        if not directory.is_dir():
+            continue
+        for path in sorted(candidate for candidate in directory.rglob("*") if candidate.is_file()):
+            try:
+                relative_path = path.resolve().relative_to(root).as_posix()
+            except ValueError as error:
+                raise DatasetContractError("reference_invalid", "persisted artifact escaped output root") from error
+            _validate_relative_path(relative_path)
+            value = path.read_bytes()
+            if relative_path.endswith(".gz"):
+                raw_files[relative_path] = value
+            else:
+                files[relative_path] = value
+    schema = schema_bytes
+    if schema is None:
+        schema = (Path(__file__).resolve().parent / "schemas" / "aihot-item-v1.schema.json").read_bytes()
+    files["src/airadar/eval/schemas/aihot-item-v1.schema.json"] = schema
+    return files, raw_files
+
+
+def validate_persisted_artifact(
+    output_root: str | Path,
+    subject_path: str,
+    *,
+    schema_bytes: bytes | None = None,
+) -> dict[str, object]:
+    _validate_relative_path(subject_path)
+    files, raw_files = _persisted_artifact_maps(output_root, schema_bytes=schema_bytes)
+    return build_validation_report_v1(
+        subject_path=subject_path,
+        files=files,
+        raw_files=raw_files,
+    )
+
+
+def slice_persisted_capture(
+    output_root: str | Path,
+    *,
+    capture_path: str,
+    start: str,
+    end: str,
+    network_transport: NetworkTransport | None = None,
+    schema_bytes: bytes | None = None,
+) -> bytes:
+    _ = network_transport
+    root = Path(output_root).resolve()
+    schema = schema_bytes
+    if schema is None:
+        schema = (Path(__file__).resolve().parent / "schemas" / "aihot-item-v1.schema.json").read_bytes()
+
+    initial_capture_files = load_persisted_artifacts(root, [capture_path])
+    initial_capture_payload = load_canonical_json_object(
+        initial_capture_files[capture_path],
+        artifact_name="capture.json",
+    )
+    try:
+        initial_capture = CaptureManifest.model_validate(initial_capture_payload)
+    except ValidationError as error:
+        raise DatasetContractError(
+            "manifest_invalid",
+            "persisted capture does not match the v1 contract",
+        ) from error
+    capture_raw_paths = [
+        *(reference.raw_path for reference in initial_capture.public_responses),
+        *(page.raw_path for capture_pass in initial_capture.passes for page in capture_pass.raw_pages),
+    ]
+    initial_raw_files = load_persisted_artifacts(root, sorted(set(capture_raw_paths)))
+    initial_files = {
+        **initial_capture_files,
+        "src/airadar/eval/schemas/aihot-item-v1.schema.json": schema,
+    }
+    capture_payload, capture = _load_report_capture(
+        capture_path,
+        files=initial_files,
+        raw_files=initial_raw_files,
+    )
+    canonical_pass = capture.passes[capture.canonical_pass_index]
+    ensure_window_covered(
+        start=start,
+        end=end,
+        first_response_date=canonical_pass.raw_pages[0].date,
+        last_response_date=canonical_pass.raw_pages[-1].date,
+    )
+    expected_manifest_paths = [
+        f"{_window_root(window.start_inclusive, window.end_exclusive)}/manifest.json"
+        for window in canonical_pass.formal_windows
+    ]
+    if len(expected_manifest_paths) != 2 or len(set(expected_manifest_paths)) != 2:
+        raise DatasetContractError("window_missing", "capture must identify two distinct formal windows")
+    manifest_files = load_persisted_artifacts(root, expected_manifest_paths)
+    manifest_payloads: dict[str, dict[str, object]] = {}
+    manifest_shapes: dict[str, WindowManifest] = {}
+    referenced_paths: set[str] = set()
+    for manifest_path in expected_manifest_paths:
+        payload = load_canonical_json_object(
+            manifest_files[manifest_path],
+            artifact_name="window manifest",
+        )
+        try:
+            window = WindowManifest.model_validate(payload)
+        except ValidationError as error:
+            raise DatasetContractError("window_integrity_failed", "persisted window manifest is invalid") from error
+        manifest_payloads[manifest_path] = payload
+        manifest_shapes[manifest_path] = window
+        referenced_paths.add(window.items.path)
+        referenced_paths.update(reference.response_raw_path for reference in window.tag_observation_responses)
+
+    all_persisted_paths = sorted(
+        {
+            capture_path,
+            *capture_raw_paths,
+            *expected_manifest_paths,
+            *referenced_paths,
+        }
+    )
+    persisted = load_persisted_artifacts(root, all_persisted_paths)
+    raw_path_set = set(capture_raw_paths) | {
+        reference.response_raw_path
+        for window in manifest_shapes.values()
+        for reference in window.tag_observation_responses
+    }
+    raw_files = {path: persisted[path] for path in raw_path_set}
+    files = {path: value for path, value in persisted.items() if path not in raw_path_set}
+    files["src/airadar/eval/schemas/aihot-item-v1.schema.json"] = schema
+    capture_payload, capture = _load_report_capture(
+        capture_path,
+        files=files,
+        raw_files=raw_files,
+    )
+    validated_windows: list[tuple[WindowManifest, list[AihotItemV1]]] = []
+    for manifest_path in expected_manifest_paths:
+        payload = manifest_payloads[manifest_path]
+        window = manifest_shapes[manifest_path]
+        items = validate_window_projection(
+            payload,
+            manifest_path=manifest_path,
+            capture_manifest=capture_payload,
+            files=files,
+            raw_files=raw_files,
+        )
+        validated_windows.append((window, items))
+    ordered_windows = sorted(validated_windows, key=lambda candidate: candidate[0].window.start_inclusive)
+    coverage_start = ordered_windows[0][0].window.start_inclusive
+    coverage_end = ordered_windows[-1][0].window.end_exclusive
+    if _timestamp(start) < _timestamp(coverage_start) or _timestamp(end) > _timestamp(coverage_end):
+        raise DatasetContractError("window_out_of_coverage", "offline slice is outside persisted normalized coverage")
+    records_by_id: dict[str, AihotItemV1] = {}
+    for _window, items in ordered_windows:
+        for item in items:
+            if item.id in records_by_id:
+                raise DatasetContractError("item_duplicate", "persisted formal windows repeat an item id")
+            records_by_id[item.id] = item
+    return slice_offline(list(records_by_id.values()), start=start, end=end)
+
+
+def capture_dataset(
+    *,
+    start: str,
+    end: str,
+    output_root: str | Path = "benchmarks/aihot",
+) -> CaptureResult:
+    tool_root = Path(__file__).resolve().parents[3]
+    observed_at = datetime.now(UTC)
+    capture_id = f"aihot-{observed_at.strftime('%Y%m%dT%H%M%SZ')}"
+    user_agent = "AI-Radar-AIHOT-Dataset-Capture/1.0"
+    transport = HttpxTransport(timeout_seconds=30.0, user_agent=user_agent)
+    writer = CaptureWriter(
+        tool_repo_root=tool_root,
+        output_root=output_root,
+        base_url="https://aihot.virxact.com",
+        user_agent=user_agent,
+        transport=transport,
+        limiter=GlobalRateLimiter(),
+        now=lambda: datetime.now(UTC),
+        capture_id=capture_id,
+        schema_bytes=(Path(__file__).resolve().parent / "schemas" / "aihot-item-v1.schema.json").read_bytes(),
+    )
+    try:
+        return writer.capture(start=start, end=end)
+    finally:
+        transport.close()

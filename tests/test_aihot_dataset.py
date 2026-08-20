@@ -3,9 +3,14 @@ from __future__ import annotations
 import copy
 import gzip
 import hashlib
+import importlib.util
 import json
+import os
 import re
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -3752,3 +3757,1122 @@ def test_generated_synthetic_artifacts_keep_all_upstream_authorities_fictional(d
         (urlparse(url).hostname or "").endswith(".invalid")
         for url in upstream_urls
     )
+
+
+class FakeGitProvider:
+    def __init__(
+        self,
+        *,
+        tool_root: Path,
+        output_root: Path,
+        commit: str = "c" * 40,
+        dirty: bool = False,
+        output_repo_root: Path | None = None,
+    ) -> None:
+        self.tool_root = tool_root.resolve()
+        self.output_root = output_root.resolve()
+        self.commit = commit
+        self.dirty = dirty
+        self.output_repo_root = (output_repo_root or output_root).resolve()
+
+    def checkout(self, path: Path) -> object:
+        resolved = path.resolve()
+        if resolved == self.tool_root:
+            return dataset_module.GitCheckout(
+                root=self.tool_root,
+                commit=self.commit,
+                dirty=self.dirty,
+            )
+        if resolved == self.output_root:
+            return dataset_module.GitCheckout(
+                root=self.output_repo_root,
+                commit="d" * 40,
+                dirty=False,
+            )
+        raise AssertionError(f"unexpected Git checkout lookup: {resolved}")
+
+
+class FakeCaptureTransport:
+    def __init__(
+        self,
+        ds: Any,
+        *,
+        clock: FakeClock,
+        output_root: Path,
+        capture_id: str,
+        pass_item_ids: list[list[str]] | None = None,
+        retry_ssr: bool = True,
+    ) -> None:
+        self.ds = ds
+        self.clock = clock
+        self.output_root = output_root
+        self.capture_id = capture_id
+        self.pass_item_ids = pass_item_ids or [
+            ["fiction-item-alpha", "fiction-item-beta"],
+            ["fiction-item-alpha", "fiction-item-beta"],
+        ]
+        self.retry_ssr = retry_ssr
+        self.calls: list[dict[str, object]] = []
+        self.api_page_index = 0
+        self.list_page_one_attempts = 0
+        self.detail_attempts = 0
+
+    def _headers(self, content_type: str, *, date_offset: int) -> dict[str, str]:
+        return {
+            "Content-Type": content_type,
+            "Date": f"Thu, 20 Aug 2026 12:00:{date_offset:02d} GMT",
+            "ETag": '"fictional-etag"',
+            "Cache-Control": "public, max-age=60",
+        }
+
+    def get(
+        self,
+        url: str,
+        *,
+        params: dict[str, object] | None,
+        headers: dict[str, str],
+    ) -> object:
+        parsed = urlparse(url)
+        self.calls.append(
+            {
+                "url": url,
+                "path": parsed.path,
+                "params": dict(params or {}),
+                "started_at": self.clock.monotonic(),
+                "user_agent": headers.get("User-Agent"),
+            }
+        )
+        call_index = len(self.calls) - 1
+        if parsed.path == "/rss":
+            assert params in (None, {})
+            return self.ds.HttpResponse(
+                status=200,
+                headers=self._headers("application/rss+xml; charset=utf-8", date_offset=0),
+                body=b"<rss><channel><title>Fictional Capture Feed</title></channel></rss>",
+            )
+        if parsed.path == "/openapi-v1.json":
+            staged_rss = (
+                self.output_root
+                / ".staging"
+                / self.capture_id
+                / "captures"
+                / self.capture_id
+                / "raw"
+                / "probes"
+                / "00-rss.xml.gz"
+            )
+            assert staged_rss.is_file(), "RSS raw must be persisted before the OpenAPI request starts"
+            return self.ds.HttpResponse(
+                status=200,
+                headers=self._headers("application/json; charset=utf-8", date_offset=2),
+                body=self.ds.canonical_json_bytes(
+                    {"openapi": "3.1.0", "info": {"title": "Fictional Capture API"}}
+                ),
+            )
+        if parsed.path == "/api/v1/items":
+            assert params is not None
+            pass_index, page_index = divmod(self.api_page_index, 2)
+            self.api_page_index += 1
+            assert pass_index < len(self.pass_item_ids)
+            assert params == {
+                "mode": "all",
+                "by": "timeline",
+                "window": "7d",
+                "limit": 100,
+                "cursor": None if page_index == 0 else f"fiction-cursor-{pass_index}",
+            }
+            item_id = self.pass_item_ids[pass_index][page_index]
+            on_second_day = item_id != "fiction-item-alpha"
+            item = synthetic_api_item(
+                item_id,
+                published_at=(
+                    "2026-08-19T07:00:00Z" if on_second_day else "2026-08-18T07:00:00Z"
+                ),
+                discovered_at=(
+                    "2026-08-19T08:00:00Z" if on_second_day else "2026-08-18T08:00:00Z"
+                ),
+            )
+            return response(
+                self.ds,
+                page_payload(
+                    [item],
+                    has_more=page_index == 0,
+                    next_cursor=f"fiction-cursor-{pass_index}" if page_index == 0 else None,
+                ),
+                headers={"Date": f"Thu, 20 Aug 2026 12:00:{4 + call_index:02d} GMT"},
+            )
+        if parsed.path == "/all":
+            assert params is not None
+            page = params["page"]
+            if page == 1:
+                self.list_page_one_attempts += 1
+                if self.retry_ssr and self.list_page_one_attempts == 1:
+                    return self.ds.HttpResponse(
+                        status=429,
+                        headers={"Retry-After": "5", "Date": "Thu, 20 Aug 2026 12:01:00 GMT"},
+                        body=b"",
+                    )
+                body = (
+                    b'<html><body><article class="timeline-item" '
+                    b'data-aihot-id="fiction-item-alpha" '
+                    b'data-aihot-url="https://aihot.invalid/items/fiction-item-alpha">'
+                    b'<span class="topic-tag">fictional-list-tag</span></article></body></html>'
+                )
+            else:
+                body = b"<html><body></body></html>"
+            return self.ds.HttpResponse(
+                status=200,
+                headers=self._headers("text/html; charset=utf-8", date_offset=20),
+                body=body,
+            )
+        if parsed.path.startswith("/items/"):
+            item_id = parsed.path.removeprefix("/items/")
+            self.detail_attempts += 1
+            if self.retry_ssr and self.detail_attempts == 1:
+                return self.ds.HttpResponse(
+                    status=503,
+                    headers={"Retry-After": "6", "Date": "Thu, 20 Aug 2026 12:02:00 GMT"},
+                    body=b"",
+                )
+            body = (
+                f'<html><body><article class="timeline-item" data-aihot-id="{item_id}" '
+                f'data-aihot-url="https://aihot.invalid/items/{item_id}">'
+                '<span class="topic-tag">fictional-detail-tag</span></article></body></html>'
+            ).encode()
+            return self.ds.HttpResponse(
+                status=200,
+                headers=self._headers("text/html; charset=utf-8", date_offset=30),
+                body=body,
+            )
+        raise AssertionError(f"unexpected synthetic request: {url}")
+
+
+def make_capture_writer(
+    ds: Any,
+    tmp_path: Path,
+    *,
+    pass_item_ids: list[list[str]] | None = None,
+    dirty: bool = False,
+    output_repo_root: Path | None = None,
+    retry_ssr: bool = True,
+) -> tuple[object, FakeCaptureTransport, FakeClock, Path, Path]:
+    tool_root = tmp_path / "tool"
+    output_root = tmp_path / "data"
+    initialize_fictional_git_repo(tool_root)
+    if dirty:
+        (tool_root / "tracked-fiction.txt").write_text("dirty fictional content\n", encoding="utf-8")
+    output_git_root = (output_repo_root or output_root).resolve()
+    initialize_fictional_git_repo(output_git_root, create_commit=False)
+    output_root.mkdir(parents=True, exist_ok=True)
+    clock = FakeClock()
+    capture_id = "fictional-capture-phase2"
+    transport = FakeCaptureTransport(
+        ds,
+        clock=clock,
+        output_root=output_root,
+        capture_id=capture_id,
+        pass_item_ids=pass_item_ids,
+        retry_ssr=retry_ssr,
+    )
+    writer = ds.CaptureWriter(
+        tool_repo_root=tool_root,
+        output_root=output_root,
+        base_url="https://aihot.invalid",
+        user_agent="AI-Radar-Fictional-Phase2-Test/1.0",
+        transport=transport,
+        limiter=ds.GlobalRateLimiter(monotonic=clock.monotonic, sleep=clock.sleep),
+        now=lambda: datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
+        capture_id=capture_id,
+        schema_bytes=SCHEMA_PATH.read_bytes(),
+    )
+    return writer, transport, clock, tool_root, output_root
+
+
+def test_capture_writer_runs_full_fake_transport_pipeline_and_offline_replay(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, transport, _clock, _tool_root, output_root = make_capture_writer(ds, tmp_path)
+
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+
+    assert [call["path"] for call in transport.calls[:2]] == ["/rss", "/openapi-v1.json"]
+    assert transport.api_page_index == 4
+    assert transport.list_page_one_attempts == 2
+    assert transport.detail_attempts == 2
+    assert [
+        call["params"]["page"]  # type: ignore[index]
+        for call in transport.calls
+        if call["path"] == "/all"
+    ] == [1, 1, *range(2, 51)]
+    starts = [float(call["started_at"]) for call in transport.calls]
+    assert all(current - previous >= 2.0 for previous, current in zip(starts, starts[1:], strict=False))
+    list_one_starts = [
+        float(call["started_at"])
+        for call in transport.calls
+        if call["path"] == "/all" and call["params"] == {"page": 1}
+    ]
+    detail_starts = [
+        float(call["started_at"])
+        for call in transport.calls
+        if str(call["path"]).startswith("/items/")
+    ]
+    assert list_one_starts[1] - list_one_starts[0] >= 5.0
+    assert detail_starts[1] - detail_starts[0] >= 6.0
+    assert result.capture_path == "captures/fictional-capture-phase2/capture.json"
+    assert result.window_manifest_paths == (
+        f"{synthetic_window_root(WINDOW_ONE)}/manifest.json",
+        f"{synthetic_window_root(WINDOW_TWO)}/manifest.json",
+    )
+    assert not (output_root / ".staging" / "fictional-capture-phase2").exists()
+
+    capture_report = ds.validate_persisted_artifact(output_root, result.capture_path)
+    window_reports = [
+        ds.validate_persisted_artifact(output_root, path)
+        for path in result.window_manifest_paths
+    ]
+    assert capture_report["result"] == "pass"
+    assert capture_report["stability"]["pass_count"] == 2  # type: ignore[index]
+    assert [report["window_validation"]["target_item_id_count"] for report in window_reports] == [1, 1]  # type: ignore[index]
+    assert window_reports[0]["window_validation"]["tag_reconciliation_counts"] == {  # type: ignore[index]
+        "api_target_item_id_count": 1,
+        "normalized_item_record_count": 1,
+        "ssr_list_matched_target_item_id_count": 1,
+        "detail_fallback_target_item_id_count": 0,
+        "explicit_empty_tags_target_item_id_count": 0,
+        "missing_tag_observation_target_item_id_count": 0,
+        "non_equivalent_tag_observation_target_item_id_count": 0,
+        "api_ssr_identity_conflict_target_item_id_count": 0,
+    }
+    assert window_reports[1]["window_validation"]["tag_reconciliation_counts"][  # type: ignore[index]
+        "detail_fallback_target_item_id_count"
+    ] == 1
+    sliced = ds.slice_persisted_capture(
+        output_root,
+        capture_path=result.capture_path,
+        start=WINDOW_ONE[0],
+        end=WINDOW_ONE[1],
+        network_transport=FailIfNetworkTransport(),
+    )
+    persisted_items = (
+        output_root / synthetic_window_root(WINDOW_ONE) / "items.jsonl"
+    ).read_bytes()
+    assert sliced == persisted_items
+
+
+def test_capture_writer_reads_clean_git_provenance_and_refuses_dirty_checkout(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, _transport, _clock, tool_root, output_root = make_capture_writer(ds, tmp_path)
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    manifest = json.loads((output_root / result.capture_path).read_bytes())
+    actual_head = initialize_fictional_git_repo(tool_root)
+    assert manifest["tool"] == {"commit": actual_head, "dirty": False}
+
+    dirty_writer, dirty_transport, _clock, _tool_root, dirty_output = make_capture_writer(
+        ds,
+        tmp_path / "dirty",
+        dirty=True,
+    )
+    assert (
+        error_code(
+            ds,
+            lambda: dirty_writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]),
+        )
+        == "tool_checkout_dirty"
+    )
+    assert dirty_transport.calls == []
+    assert not (dirty_output / "captures").exists()
+    assert not (dirty_output / "windows").exists()
+    assert not (dirty_output / ".staging").exists()
+
+
+def initialize_fictional_git_repo(path: Path, *, create_commit: bool = True) -> str | None:
+    path.mkdir(parents=True, exist_ok=True)
+    if (path / ".git").is_dir():
+        if not create_commit:
+            return None
+        return subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Fictional Test Author"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "fictional@example.invalid"],
+        check=True,
+    )
+    if not create_commit:
+        return None
+    (path / "tracked-fiction.txt").write_text("fictional tracked content\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "tracked-fiction.txt"], check=True)
+    git_environment = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": "2026-08-20T12:00:00Z",
+        "GIT_COMMITTER_DATE": "2026-08-20T12:00:00Z",
+    }
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-q", "-m", "test: fictional provenance"],
+        check=True,
+        env=git_environment,
+    )
+    return subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def test_capture_writer_uses_actual_tool_checkout_head_not_provider_claim(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, _transport, _clock, tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    actual_head = initialize_fictional_git_repo(tool_root)
+
+    with pytest.raises(TypeError, match="git_provider"):
+        ds.CaptureWriter(
+            tool_repo_root=tool_root,
+            output_root=output_root,
+            base_url=writer.base_url,
+            user_agent=writer.user_agent,
+            transport=writer.transport,
+            git_provider=FakeGitProvider(tool_root=tool_root, output_root=output_root),
+            limiter=writer.limiter,
+            now=writer.now,
+            capture_id=writer.capture_id,
+            schema_bytes=writer.schema_bytes,
+        )
+
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    manifest = json.loads((output_root / result.capture_path).read_bytes())
+
+    assert manifest["tool"] == {"commit": actual_head, "dirty": False}
+
+
+def test_capture_writer_rejects_actual_dirty_tool_checkout_despite_clean_provider_claim(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, transport, _clock, tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    initialize_fictional_git_repo(tool_root)
+    (tool_root / "tracked-fiction.txt").write_text("dirty fictional content\n", encoding="utf-8")
+
+    assert (
+        error_code(ds, lambda: writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]))
+        == "tool_checkout_dirty"
+    )
+    assert transport.calls == []
+    assert not (output_root / "captures").exists()
+    assert not (output_root / "windows").exists()
+    assert not (output_root / ".staging").exists()
+
+
+def test_capture_writer_refuses_non_repo_root_and_existing_capture(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    wrong_root = tmp_path / "different-data-root"
+    wrong_root.mkdir()
+    writer, transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path / "wrong-root",
+        output_repo_root=wrong_root,
+    )
+    assert error_code(ds, lambda: writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])) == "output_root_invalid"
+    assert transport.calls == []
+
+    overwrite_writer, overwrite_transport, _clock, _tool_root, overwrite_root = make_capture_writer(
+        ds,
+        tmp_path / "overwrite",
+    )
+    capture_target = overwrite_root / "captures" / "fictional-capture-phase2"
+    capture_target.mkdir(parents=True)
+    assert (
+        error_code(
+            ds,
+            lambda: overwrite_writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]),
+        )
+        == "target_exists"
+    )
+    assert overwrite_transport.calls == []
+
+
+def test_capture_writer_uses_third_pass_then_fails_closed_when_still_unstable(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    stable_third_writer, stable_transport, _clock, _tool_root, stable_root = make_capture_writer(
+        ds,
+        tmp_path / "stable-third",
+        pass_item_ids=[
+            ["fiction-item-alpha", "fiction-item-beta"],
+            ["fiction-item-alpha", "fiction-item-gamma"],
+            ["fiction-item-alpha", "fiction-item-gamma"],
+        ],
+        retry_ssr=False,
+    )
+    result = stable_third_writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    report = ds.validate_persisted_artifact(stable_root, result.capture_path)
+    assert report["stability"]["pass_count"] == 3  # type: ignore[index]
+    assert report["stability"]["canonical_pass_index"] == 2  # type: ignore[index]
+    assert stable_transport.api_page_index == 6
+
+    unstable_writer, unstable_transport, _clock, _tool_root, unstable_root = make_capture_writer(
+        ds,
+        tmp_path / "unstable",
+        pass_item_ids=[
+            ["fiction-item-alpha", "fiction-item-beta"],
+            ["fiction-item-alpha", "fiction-item-gamma"],
+            ["fiction-item-alpha", "fiction-item-delta"],
+        ],
+        retry_ssr=False,
+    )
+    assert (
+        error_code(
+            ds,
+            lambda: unstable_writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]),
+        )
+        == "capture_unstable"
+    )
+    assert unstable_transport.api_page_index == 6
+    assert not (unstable_root / "windows").exists()
+    assert not (unstable_root / "captures" / "fictional-capture-phase2").exists()
+    assert not (unstable_root / ".staging" / "fictional-capture-phase2").exists()
+
+
+def test_capture_writer_validates_staged_artifacts_before_publish(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(ds, tmp_path)
+    real_validator = ds.validate_capture_manifest
+    calls = 0
+
+    def rejecting_validator(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        real_validator(*args, **kwargs)
+        raise ds.DatasetContractError("synthetic_staged_rejection", "fictional staged mutation")
+
+    monkeypatch.setattr(ds, "validate_capture_manifest", rejecting_validator)
+    assert (
+        error_code(
+            ds,
+            lambda: writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]),
+        )
+        == "synthetic_staged_rejection"
+    )
+    assert calls == 1
+    assert not (output_root / "captures" / "fictional-capture-phase2").exists()
+    assert not (output_root / "windows").exists()
+    assert not (output_root / ".staging" / "fictional-capture-phase2").exists()
+
+
+def test_capture_writer_invokes_both_staged_validators_before_successful_publish(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer, _transport, _clock, _tool_root, _output_root = make_capture_writer(ds, tmp_path)
+    real_capture_validator = ds.validate_capture_manifest
+    real_window_validator = ds.validate_window_projection
+    call_order: list[str] = []
+
+    def capture_validator(*args: object, **kwargs: object) -> object:
+        call_order.append("capture")
+        return real_capture_validator(*args, **kwargs)
+
+    def window_validator(*args: object, **kwargs: object) -> object:
+        call_order.append("window")
+        return real_window_validator(*args, **kwargs)
+
+    monkeypatch.setattr(ds, "validate_capture_manifest", capture_validator)
+    monkeypatch.setattr(ds, "validate_window_projection", window_validator)
+    writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    assert call_order == ["capture", "window", "capture", "window", "capture"]
+
+
+@pytest.mark.parametrize("fail_on_publish_number", [2, 3])
+def test_capture_writer_rolls_back_partial_publish_and_same_id_can_retry(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_on_publish_number: int,
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    real_rename = Path.rename
+    publish_count = 0
+
+    def failing_rename(source: Path, target: Path) -> Path:
+        nonlocal publish_count
+        if ".staging" in source.parts:
+            publish_count += 1
+            if publish_count == fail_on_publish_number:
+                raise OSError(f"fictional publish rename failure {fail_on_publish_number}")
+        return real_rename(source, target)
+
+    monkeypatch.setattr(Path, "rename", failing_rename)
+    with pytest.raises(OSError, match=f"fictional publish rename failure {fail_on_publish_number}"):
+        writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+
+    formal_roots = [
+        output_root / "captures" / "fictional-capture-phase2",
+        output_root.joinpath(*Path(synthetic_window_root(WINDOW_ONE)).parts),
+        output_root.joinpath(*Path(synthetic_window_root(WINDOW_TWO)).parts),
+    ]
+    assert all(not root.exists() for root in formal_roots)
+    assert not (output_root / ".staging" / "fictional-capture-phase2").exists()
+
+    monkeypatch.setattr(Path, "rename", real_rename)
+    writer.transport.calls.clear()
+    writer.transport.api_page_index = 0
+    writer.transport.list_page_one_attempts = 0
+    writer.transport.detail_attempts = 0
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    assert (output_root / result.capture_path).is_file()
+    assert all(root.is_dir() for root in formal_roots)
+
+
+def test_capture_writer_accepts_vendor_json_openapi_media_type(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    real_get = transport.get
+
+    def vendor_openapi_get(
+        url: str,
+        *,
+        params: dict[str, object] | None,
+        headers: dict[str, str],
+    ) -> object:
+        result = real_get(url, params=params, headers=headers)
+        if urlparse(url).path != "/openapi-v1.json":
+            return result
+        return ds.HttpResponse(
+            status=result.status,
+            headers={**result.headers, "Content-Type": "application/vnd.oai.openapi+json; charset=utf-8"},
+            body=result.body,
+        )
+
+    transport.get = vendor_openapi_get  # type: ignore[method-assign]
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    assert ds.validate_persisted_artifact(output_root, result.capture_path)["result"] == "pass"
+
+
+def test_capture_writer_rejects_empty_vendor_json_subtype(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    real_get = transport.get
+
+    def empty_vendor_subtype_get(
+        url: str,
+        *,
+        params: dict[str, object] | None,
+        headers: dict[str, str],
+    ) -> object:
+        result = real_get(url, params=params, headers=headers)
+        if urlparse(url).path != "/openapi-v1.json":
+            return result
+        return ds.HttpResponse(
+            status=result.status,
+            headers={**result.headers, "Content-Type": "application/+json"},
+            body=result.body,
+        )
+
+    transport.get = empty_vendor_subtype_get  # type: ignore[method-assign]
+    assert (
+        error_code(ds, lambda: writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]))
+        == "content_type_invalid"
+    )
+    assert not (output_root / "captures").exists()
+
+
+def test_slice_ignores_unrelated_malformed_historical_window(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    unrelated = output_root / "windows" / "1900-01-01T000000Z--1900-01-02T000000Z" / "manifest.json"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_bytes(b"{malformed fictional history")
+
+    sliced = ds.slice_persisted_capture(
+        output_root,
+        capture_path=result.capture_path,
+        start=WINDOW_ONE[0],
+        end=WINDOW_ONE[1],
+        network_transport=FailIfNetworkTransport(),
+    )
+
+    assert sliced == (output_root / synthetic_window_root(WINDOW_ONE) / "items.jsonl").read_bytes()
+
+
+def test_slice_requires_both_capture_scoped_formal_windows(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    missing_manifest = output_root / synthetic_window_root(WINDOW_TWO) / "manifest.json"
+    missing_manifest.unlink()
+
+    assert (
+        error_code(
+            ds,
+            lambda: ds.slice_persisted_capture(
+                output_root,
+                capture_path=result.capture_path,
+                start=WINDOW_ONE[0],
+                end=WINDOW_ONE[1],
+                network_transport=FailIfNetworkTransport(),
+            ),
+        )
+        == "reference_missing"
+    )
+
+
+def test_slice_rejects_capture_scoped_window_path_alias(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    first_manifest = output_root / synthetic_window_root(WINDOW_ONE) / "manifest.json"
+    second_manifest = output_root / synthetic_window_root(WINDOW_TWO) / "manifest.json"
+    second_manifest.unlink()
+    second_manifest.symlink_to(first_manifest)
+
+    assert (
+        error_code(
+            ds,
+            lambda: ds.slice_persisted_capture(
+                output_root,
+                capture_path=result.capture_path,
+                start=WINDOW_ONE[0],
+                end=WINDOW_ONE[1],
+                network_transport=FailIfNetworkTransport(),
+            ),
+        )
+        == "artifact_path_collision"
+    )
+
+
+def test_capture_writer_is_byte_deterministic_for_same_frozen_inputs(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    first_writer, _transport, _clock, _tool_root, first_root = make_capture_writer(
+        ds,
+        tmp_path / "first",
+        retry_ssr=False,
+    )
+    second_writer, _transport, _clock, _tool_root, second_root = make_capture_writer(
+        ds,
+        tmp_path / "second",
+        retry_ssr=False,
+    )
+    first_writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    second_writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+
+    def artifact_tree(root: Path) -> dict[str, bytes]:
+        return {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    assert artifact_tree(first_root) == artifact_tree(second_root)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        ("rss_403", "http_403"),
+        ("rss_content_type", "content_type_invalid"),
+        ("ssr_parse", "ssr_parse_failed"),
+        ("retry_exhausted", "retry_budget_exhausted"),
+    ],
+)
+def test_capture_writer_failure_paths_publish_nothing(
+    ds: Any,
+    tmp_path: Path,
+    failure: str,
+    expected_code: str,
+) -> None:
+    writer, transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    real_get = transport.get
+
+    def failing_get(
+        url: str,
+        *,
+        params: dict[str, object] | None,
+        headers: dict[str, str],
+    ) -> object:
+        parsed = urlparse(url)
+        if failure == "rss_403" and parsed.path == "/rss":
+            return ds.HttpResponse(status=403, headers={}, body=b"")
+        if failure == "rss_content_type" and parsed.path == "/rss":
+            return ds.HttpResponse(
+                status=200,
+                headers={
+                    "Content-Type": "text/html",
+                    "Date": "Thu, 20 Aug 2026 12:00:00 GMT",
+                },
+                body=b"<html></html>",
+            )
+        if failure == "ssr_parse" and parsed.path == "/all":
+            return ds.HttpResponse(
+                status=200,
+                headers={
+                    "Content-Type": "text/html",
+                    "Date": "Thu, 20 Aug 2026 12:01:00 GMT",
+                },
+                body=b'<article class="timeline-item">',
+            )
+        if failure == "retry_exhausted" and parsed.path == "/all":
+            return ds.HttpResponse(
+                status=429,
+                headers={
+                    "Retry-After": "2",
+                    "Date": "Thu, 20 Aug 2026 12:01:00 GMT",
+                },
+                body=b"",
+            )
+        return real_get(url, params=params, headers=headers)
+
+    transport.get = failing_get  # type: ignore[method-assign]
+    assert (
+        error_code(
+            ds,
+            lambda: writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]),
+        )
+        == expected_code
+    )
+    assert not (output_root / "captures" / "fictional-capture-phase2").exists()
+    assert not (output_root / "windows").exists()
+    assert not (output_root / ".staging" / "fictional-capture-phase2").exists()
+
+
+def test_capture_writer_interval_mutation_is_rejected_before_publish(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    monkeypatch.setattr(ds, "MINIMUM_REQUEST_INTERVAL_SECONDS", 1.9)
+    assert (
+        error_code(
+            ds,
+            lambda: writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1]),
+        )
+        == "manifest_invalid"
+    )
+    assert not (output_root / "captures" / "fictional-capture-phase2").exists()
+
+
+def test_httpx_transport_disables_environment_proxy_and_sets_timeout_and_user_agent(
+    ds: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeHttpxResponse:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        content = b"{}"
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs: object) -> None:
+            observed["client_kwargs"] = kwargs
+
+        def __enter__(self) -> object:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> object:
+            observed["url"] = url
+            observed["request_kwargs"] = kwargs
+            return FakeHttpxResponse()
+
+    monkeypatch.setattr(ds.httpx, "Client", FakeHttpxClient)
+    transport = ds.HttpxTransport(timeout_seconds=13.0, user_agent="Fictional-Test-UA/1.0")
+    result = transport.get("https://aihot.invalid/example", params={"fiction": "1"}, headers={})
+    assert observed["client_kwargs"] == {
+        "trust_env": False,
+        "timeout": 13.0,
+        "headers": {"User-Agent": "Fictional-Test-UA/1.0"},
+    }
+    assert observed["request_kwargs"] == {"params": {"fiction": "1"}, "headers": {}}
+    assert result == ds.HttpResponse(
+        status=200,
+        headers={"Content-Type": "application/json"},
+        body=b"{}",
+    )
+
+
+def load_capture_cli_module() -> Any:
+    script_path = REPO_ROOT / "scripts/capture_aihot_dataset.py"
+    spec = importlib.util.spec_from_file_location("capture_aihot_dataset_phase2_test", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_capture_cli_is_thin_and_dispatches_capture_slice_and_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli = load_capture_cli_module()
+    calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.chdir(tmp_path)
+
+    def fake_capture(**kwargs: object) -> object:
+        calls.append(("capture", kwargs))
+        return dataset_module.CaptureResult(
+            capture_path="captures/fictional/capture.json",
+            window_manifest_paths=("windows/one/manifest.json", "windows/two/manifest.json"),
+            request_starts=(),
+        )
+
+    monkeypatch.setattr(cli, "capture_dataset", fake_capture)
+    monkeypatch.setattr(
+        cli,
+        "slice_persisted_capture",
+        lambda *args, **kwargs: calls.append(("slice", {"args": args, **kwargs})) or b'{"fiction":true}\n',
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_persisted_artifact",
+        lambda *args, **kwargs: calls.append(("validate", {"args": args, **kwargs}))
+        or {"artifact_type": "aihot_validation_report_v1", "result": "pass"},
+    )
+
+    assert cli.main(
+        [
+            "capture",
+            "--start",
+            WINDOW_ONE[0],
+            "--end",
+            WINDOW_TWO[1],
+            "--output-root",
+            "fictional-data",
+        ]
+    ) == 0
+    assert calls[0] == (
+        "capture",
+        {
+            "start": WINDOW_ONE[0],
+            "end": WINDOW_TWO[1],
+            "output_root": Path("fictional-data"),
+        },
+    )
+
+    assert cli.main(
+        [
+            "slice",
+            "--capture",
+            "fictional-data/captures/fictional/capture.json",
+            "--start",
+            WINDOW_ONE[0],
+            "--end",
+            WINDOW_ONE[1],
+            "--output",
+            "fictional-slice.jsonl",
+        ]
+    ) == 0
+    assert (tmp_path / "fictional-slice.jsonl").read_bytes() == b'{"fiction":true}\n'
+    assert cli.main(
+        ["validate", "--report-json", "fictional-data/captures/fictional/capture.json"]
+    ) == 0
+    assert calls[1] == (
+        "slice",
+        {
+            "args": (Path("fictional-data"),),
+            "capture_path": "captures/fictional/capture.json",
+            "start": WINDOW_ONE[0],
+            "end": WINDOW_ONE[1],
+        },
+    )
+    assert calls[2] == (
+        "validate",
+        {
+            "args": (Path("fictional-data"), "captures/fictional/capture.json"),
+        },
+    )
+    report_line = capsys.readouterr().out.splitlines()[-1]
+    assert json.loads(report_line) == {
+        "artifact_type": "aihot_validation_report_v1",
+        "result": "pass",
+    }
+
+
+def test_capture_cli_errors_are_named_and_slice_refuses_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli = load_capture_cli_module()
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "existing.jsonl"
+    output.write_text("preserve me", encoding="utf-8")
+    slice_called = False
+
+    def forbidden_slice(*_args: object, **_kwargs: object) -> bytes:
+        nonlocal slice_called
+        slice_called = True
+        return b""
+
+    monkeypatch.setattr(cli, "slice_persisted_capture", forbidden_slice)
+    assert cli.main(
+        [
+            "slice",
+            "--capture",
+            "fictional-data/captures/fictional/capture.json",
+            "--start",
+            WINDOW_ONE[0],
+            "--end",
+            WINDOW_ONE[1],
+            "--output",
+            str(output),
+        ]
+    ) == 2
+    assert slice_called is False
+    assert output.read_text(encoding="utf-8") == "preserve me"
+    error_lines = capsys.readouterr().err.splitlines()
+    assert error_lines[0] == f"ERROR target_exists: refusing to overwrite slice output: {output}"
+    assert error_lines[1] == "Choose a new output path and retry; existing files are never overwritten."
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_action"),
+    [
+        (
+            "tool_checkout_dirty",
+            "Retry from a clean tool checkout; the capture records the checkout's exact HEAD.",
+        ),
+        (
+            "reference_missing",
+            "Check that the subject path and its referenced artifacts exist under the dataset root.",
+        ),
+    ],
+)
+def test_capture_cli_error_actions_are_specific(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    code: str,
+    expected_action: str,
+) -> None:
+    cli = load_capture_cli_module()
+    monkeypatch.chdir(tmp_path)
+
+    def fail_validation(*_args: object, **_kwargs: object) -> object:
+        raise cli.DatasetContractError(code, "fictional failure detail")
+
+    monkeypatch.setattr(cli, "validate_persisted_artifact", fail_validation)
+    assert cli.main(["validate", "fictional-data/captures/fictional/capture.json"]) == 2
+    error_lines = capsys.readouterr().err.splitlines()
+    assert error_lines == [f"ERROR {code}: fictional failure detail", expected_action]
+
+
+def test_capture_cli_validate_and_slice_replay_real_persisted_synthetic_artifacts(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    cli = load_capture_cli_module()
+    monkeypatch.chdir(output_root)
+
+    assert cli.main(["validate", "--report-json", result.capture_path]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["result"] == "pass"
+    assert report["subject"]["artifact_type"] == "aihot_capture_v1"
+
+    assert cli.main(
+        [
+            "slice",
+            "--capture",
+            result.capture_path,
+            "--start",
+            WINDOW_ONE[0],
+            "--end",
+            WINDOW_ONE[1],
+            "--output",
+            "offline-fictional-slice.jsonl",
+        ]
+    ) == 0
+    slice_output_lines = capsys.readouterr().out.splitlines()
+    assert slice_output_lines == [
+        "Offline slice written: output=offline-fictional-slice.jsonl; "
+        f"source_capture={result.capture_path}; "
+        f"window=[{WINDOW_ONE[0]}, {WINDOW_ONE[1]}); bytes="
+        f"{len((output_root / synthetic_window_root(WINDOW_ONE) / 'items.jsonl').read_bytes())}"
+    ]
+    assert (output_root / "offline-fictional-slice.jsonl").read_bytes() == (
+        output_root / synthetic_window_root(WINDOW_ONE) / "items.jsonl"
+    ).read_bytes()
