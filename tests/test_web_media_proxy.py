@@ -465,3 +465,25 @@ def test_application_logger_is_wired_to_a_timestamped_handler() -> None:
     assert config["loggers"]["airadar"]["propagate"] is False
     assert "%(asctime)s" in config["formatters"]["default"]["fmt"]
     assert config["formatters"]["default"]["datefmt"] == "%Y-%m-%dT%H:%M:%S%z"
+
+
+def test_failures_are_explicitly_uncacheable(monkeypatch) -> None:  # noqa: ANN001
+    """A 404 without Cache-Control gets negatively cached at the edge.
+
+    The EdgeOne rule for /img follows the origin's Cache-Control and applies its
+    default strategy when the header is absent. Measured minutes after that rule
+    went live: the same failing URL returned MISS once and then HIT three times.
+    That turns one transient timeout into a permanent-looking "image does not
+    exist" for every later visitor — strictly worse than the intermittent
+    failure the rule was meant to reduce. The success path keeps its long
+    immutable TTL; only failures opt out.
+    """
+    _install_client(monkeypatch, _fake_response(500, "text/html", b"boom"))
+    failed = proxy_image(url=WX)
+    assert failed.status_code == 404
+    assert failed.headers.get("cache-control") == "no-store"
+
+    _install_client(monkeypatch, _fake_response(200, "image/png", b"\x89PNG\r\n"))
+    served = proxy_image(url=WX)
+    assert served.status_code == 200
+    assert "immutable" in served.headers.get("cache-control", "")

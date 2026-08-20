@@ -15,6 +15,9 @@ router = APIRouter()
 
 _log = logging.getLogger(__name__)
 
+# Failures must never be cached — see _fail for what happens when they are.
+_NO_STORE = "no-store"
+
 
 # Anything a log reader could mistake for a line break. \r and \n are the
 # obvious ones and urlparse already strips those from a hostname, but several
@@ -64,7 +67,14 @@ def _fail(reason: str, host: str = "", **detail: object) -> Response:
     """
     extra = " ".join(f"{k}={_scrub(v)}" for k, v in detail.items() if v != "")
     _log.warning("img fetch failed reason=%s host=%s %s", reason, _scrub(host) or "?", extra)
-    return Response(status_code=404)
+    # no-store, and it has to be explicit: the EdgeOne rule for /img follows the
+    # origin's Cache-Control and applies its *default* strategy when the
+    # header is absent — which negatively caches the 404. Measured right after that rule
+    # went live: one 404 then three HITs on the same URL. Without this header a
+    # single transient timeout freezes into "this image does not exist" for
+    # every later visitor until the TTL lapses, which is strictly worse than
+    # the intermittent failure the rule was added to reduce.
+    return Response(status_code=404, headers={"Cache-Control": _NO_STORE})
 
 # Browser UA — some CDNs 403 default httpx/library agents.
 _USER_AGENT = (
