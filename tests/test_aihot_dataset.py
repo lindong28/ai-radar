@@ -847,7 +847,7 @@ def mutate_first_persisted_raw_api_page(
     elif mutation == "query_missing":
         del payload["query"]["q"]
     elif mutation == "item_wrong_type":
-        payload["items"][0]["originalTitle"] = None
+        payload["items"][0]["id"] = None
     elif mutation == "attribution_extra":
         payload["items"][0]["attribution"]["unknownNested"] = "forbidden"
     elif mutation == "page_wrong_type":
@@ -2011,13 +2011,9 @@ def test_api_item_rejects_each_missing_key(ds: Any, field: str) -> None:
     [
         ("id", 7),
         ("title", 7),
-        ("originalTitle", None),
-        ("summary", None),
         ("source", []),
         ("links", []),
-        ("publishedAt", None),
         ("discoveredAt", None),
-        ("category", None),
         ("score", "73"),
         ("selected", 1),
         ("reason", 7),
@@ -2035,6 +2031,50 @@ def test_api_item_score_is_strict_int_not_float_or_bool(ds: Any, wrong_score: ob
     item = synthetic_api_item()
     item["score"] = wrong_score
     assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+@pytest.mark.parametrize(
+    ("api_field", "projected_field"),
+    [
+        ("originalTitle", "original_title"),
+        ("summary", "aihot_summary"),
+        ("publishedAt", "published_at"),
+        ("category", "aihot_category_slug"),
+        ("score", "aihot_score_0_to_100"),
+    ],
+)
+def test_api_item_accepts_each_frozen_nullable_projection(
+    ds: Any,
+    api_field: str,
+    projected_field: str,
+) -> None:
+    item = synthetic_api_item()
+    item[api_field] = None
+
+    parsed = ds.parse_api_item(item)
+
+    assert getattr(parsed, projected_field) is None
+
+
+def test_api_page_accepts_item_with_all_frozen_nullable_projections(ds: Any) -> None:
+    item = synthetic_api_item()
+    for field in ("originalTitle", "summary", "publishedAt", "category", "score"):
+        item[field] = None
+
+    page = ds._parse_page_body(
+        ds.canonical_json_bytes(
+            page_payload([item], has_more=False, next_cursor=None)
+        )
+    )
+    parsed = ds.parse_api_item(page.items[0].model_dump())
+
+    assert (
+        parsed.original_title,
+        parsed.aihot_summary,
+        parsed.published_at,
+        parsed.aihot_category_slug,
+        parsed.aihot_score_0_to_100,
+    ) == (None, None, None, None, None)
 
 
 def test_api_item_accepts_nullable_reason_and_rejects_unknown_extra_key(ds: Any) -> None:

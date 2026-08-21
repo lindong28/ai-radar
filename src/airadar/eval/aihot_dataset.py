@@ -1064,33 +1064,40 @@ class _ApiAttribution(_StrictModel):
 class _ApiItem(_StrictModel):
     id: str
     title: str
-    originalTitle: str
-    summary: str
+    originalTitle: str | None
+    summary: str | None
     source: _ApiSource
     links: _ApiLinks
-    publishedAt: str
+    publishedAt: str | None
     discoveredAt: str
-    category: str
-    score: int = Field(ge=0, le=100)
+    category: str | None
+    score: int | None = Field(ge=0, le=100)
     selected: bool
     reason: str | None
     attribution: _ApiAttribution
 
-    @field_validator("id", "title", "originalTitle", "summary", "category")
+    @field_validator("id", "title")
     @classmethod
     def validate_required_text(cls, value: str, info: Any) -> str:
         return _non_empty_string(value, field_name=info.field_name)
 
-    @field_validator("reason")
+    @field_validator("originalTitle", "summary", "category", "reason")
     @classmethod
     def validate_nullable_text(cls, value: str | None, info: Any) -> str | None:
         if value is None:
             return None
         return _non_empty_string(value, field_name=info.field_name)
 
-    @field_validator("publishedAt", "discoveredAt")
+    @field_validator("publishedAt")
     @classmethod
-    def validate_timestamp(cls, value: str, info: Any) -> str:
+    def validate_nullable_timestamp(cls, value: str | None, info: Any) -> str | None:
+        if value is None:
+            return None
+        return _rfc3339(value, field_name=info.field_name)
+
+    @field_validator("discoveredAt")
+    @classmethod
+    def validate_required_timestamp(cls, value: str, info: Any) -> str:
         return _rfc3339(value, field_name=info.field_name)
 
     @model_validator(mode="after")
