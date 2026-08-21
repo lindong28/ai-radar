@@ -260,6 +260,23 @@ _PUBLIC_RESPONSE_V1_SEMANTICS = _closed_object_semantics(
     {
         "surface": {"type": "string", "enum": ["rss", "openapi"]},
         "request_url": {"type": "string", "format": "http-uri"},
+        "canonical_url_provenance": {
+            "anyOf": [
+                _closed_object_semantics(
+                    {
+                        "discovered_via_redirect_from_url": {
+                            "type": "string",
+                            "format": "http-uri",
+                        },
+                        "discovered_via_redirect_status": {
+                            "type": "integer",
+                            "const": 301,
+                        },
+                    }
+                ),
+                {"type": "null"},
+            ]
+        },
         "raw_path": {"type": "string", "format": "relative-path"},
         "compressed_raw_sha256": {"type": "string", "format": "sha256"},
         "response_body_sha256": {"type": "string", "format": "sha256"},
@@ -1774,9 +1791,23 @@ class RawPageReference(_ManifestModel):
         return _nullable_non_empty_string(value, field_name=info.field_name)
 
 
+class CanonicalUrlProvenance(_ManifestModel):
+    discovered_via_redirect_from_url: str
+    discovered_via_redirect_status: Literal[301]
+
+    @field_validator("discovered_via_redirect_from_url")
+    @classmethod
+    def validate_discovery_url(cls, value: str) -> str:
+        return _http_url(
+            value,
+            field_name="discovered_via_redirect_from_url",
+        )
+
+
 class PublicResponseReference(_ManifestModel):
     surface: Literal["rss", "openapi"]
     request_url: str
+    canonical_url_provenance: CanonicalUrlProvenance | None
     raw_path: str
     compressed_raw_sha256: str
     response_body_sha256: str
@@ -2118,7 +2149,7 @@ def validate_capture_manifest(
                 "public response Date values must be nondecreasing in RSS-to-OpenAPI order",
             )
         previous_public_response_date = public_response_date
-        expected_path = "/rss" if public_reference.surface == "rss" else "/openapi-v1.json"
+        expected_path = "/feed.xml" if public_reference.surface == "rss" else "/openapi-v1.json"
         _require_request_contract(
             public_reference.request_url,
             manifest.source.base_url,
@@ -2126,6 +2157,28 @@ def validate_capture_manifest(
             expected_path=expected_path,
             expected_query={},
         )
+        if public_reference.surface == "rss":
+            provenance = public_reference.canonical_url_provenance
+            if provenance is None:
+                raise DatasetContractError(
+                    "canonical_url_provenance_invalid",
+                    "RSS must retain its pre-capture canonical-URL discovery fact",
+                )
+            _require_request_contract(
+                provenance.discovered_via_redirect_from_url,
+                manifest.source.base_url,
+                field_name=(
+                    "public_responses[rss].canonical_url_provenance."
+                    "discovered_via_redirect_from_url"
+                ),
+                expected_path="/rss",
+                expected_query={},
+            )
+        elif public_reference.canonical_url_provenance is not None:
+            raise DatasetContractError(
+                "canonical_url_provenance_invalid",
+                "OpenAPI must not claim an independent canonical-URL discovery fact",
+            )
         _validate_relative_path(
             public_reference.raw_path,
             expected_prefix=f"captures/{manifest.capture_id}/raw/probes/",
@@ -2968,6 +3021,7 @@ class HttpxTransport:
         self._user_agent = _non_empty_string(user_agent, field_name="user_agent")
         self._client = httpx.Client(
             trust_env=False,
+            follow_redirects=False,
             timeout=self._timeout_seconds,
             headers={"User-Agent": self._user_agent},
         )
@@ -3151,19 +3205,30 @@ class CaptureWriter:
         definitions = (
             (
                 "rss",
-                f"{self.base_url}/rss",
+                f"{self.base_url}/feed.xml",
                 f"captures/{self.capture_id}/raw/probes/00-rss.xml.gz",
                 ("application/rss+xml", "application/atom+xml", "application/xml", "text/xml"),
+                {
+                    "discovered_via_redirect_from_url": f"{self.base_url}/rss",
+                    "discovered_via_redirect_status": 301,
+                },
             ),
             (
                 "openapi",
                 f"{self.base_url}/openapi-v1.json",
                 f"captures/{self.capture_id}/raw/probes/01-openapi.json.gz",
                 ("application/json", "application/*+json"),
+                None,
             ),
         )
         references: list[dict[str, object]] = []
-        for surface, request_url, raw_path, accepted_media_types in definitions:
+        for (
+            surface,
+            request_url,
+            raw_path,
+            accepted_media_types,
+            canonical_url_provenance,
+        ) in definitions:
             response = self._send(
                 url=request_url,
                 params=None,
@@ -3180,6 +3245,7 @@ class CaptureWriter:
                 {
                     "surface": surface,
                     "request_url": request_url,
+                    "canonical_url_provenance": canonical_url_provenance,
                     "raw_path": raw_path,
                     "compressed_raw_sha256": sha256_hex(compressed),
                     "response_body_sha256": sha256_hex(response.body),

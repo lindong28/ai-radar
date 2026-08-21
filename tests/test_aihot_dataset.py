@@ -248,9 +248,16 @@ def public_response_file(
     compressed = ds.deterministic_gzip(body)
     suffix = "xml" if surface == "rss" else "json"
     path = f"captures/{CAPTURE_ID}/raw/probes/{sequence:02d}-{surface}.{suffix}.gz"
+    canonical_url_provenance: dict[str, object] | None = None
+    if surface == "rss":
+        canonical_url_provenance = {
+            "discovered_via_redirect_from_url": "https://aihot.invalid/rss",
+            "discovered_via_redirect_status": 301,
+        }
     reference = {
         "surface": surface,
-        "request_url": f"https://aihot.invalid/{'rss' if surface == 'rss' else 'openapi-v1.json'}",
+        "request_url": f"https://aihot.invalid/{'feed.xml' if surface == 'rss' else 'openapi-v1.json'}",
+        "canonical_url_provenance": canonical_url_provenance,
         "raw_path": path,
         "compressed_raw_sha256": ds.sha256_hex(compressed),
         "response_body_sha256": ds.sha256_hex(body),
@@ -2345,6 +2352,93 @@ def test_capture_rejects_decreasing_public_response_dates(ds: Any) -> None:
     )
 
 
+def test_capture_accepts_closed_canonical_url_discovery_provenance(ds: Any) -> None:
+    manifest, raw_files = synthetic_capture_bundle(ds)
+
+    validated = ds.validate_capture_manifest(
+        manifest,
+        manifest_path=CAPTURE_PATH,
+        raw_files=raw_files,
+        schema_bytes=SCHEMA_PATH.read_bytes(),
+    )
+
+    rss, openapi = validated.public_responses
+    assert rss.request_url == "https://aihot.invalid/feed.xml"
+    assert rss.canonical_url_provenance.model_dump(mode="json") == {
+        "discovered_via_redirect_from_url": "https://aihot.invalid/rss",
+        "discovered_via_redirect_status": 301,
+    }
+    assert openapi.request_url == "https://aihot.invalid/openapi-v1.json"
+    assert openapi.canonical_url_provenance is None
+    assert rss.date == "Thu, 20 Aug 2026 12:00:00 GMT"
+    assert openapi.date == "Thu, 20 Aug 2026 12:00:02 GMT"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("rss_missing", "manifest_invalid"),
+        ("rss_extra", "manifest_invalid"),
+        ("rss_wrong_type", "manifest_invalid"),
+        ("rss_wrong_redirect_path", "request_contract_mismatch"),
+        ("rss_wrong_redirect_status", "manifest_invalid"),
+        ("rss_null", "canonical_url_provenance_invalid"),
+        ("openapi_missing", "manifest_invalid"),
+        ("openapi_object", "canonical_url_provenance_invalid"),
+    ],
+)
+def test_capture_rejects_canonical_url_discovery_provenance_mutations(
+    ds: Any,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    manifest, raw_files = synthetic_capture_bundle(ds)
+    ds.validate_capture_manifest(
+        manifest,
+        manifest_path=CAPTURE_PATH,
+        raw_files=raw_files,
+        schema_bytes=SCHEMA_PATH.read_bytes(),
+    )
+    rss, openapi = manifest["public_responses"]  # type: ignore[misc]
+    if mutation == "rss_missing":
+        del rss["canonical_url_provenance"]
+    elif mutation == "rss_extra":
+        rss["canonical_url_provenance"]["future"] = "fictional"  # type: ignore[index]
+    elif mutation == "rss_wrong_type":
+        rss["canonical_url_provenance"] = "fictional"
+    elif mutation == "rss_wrong_redirect_path":
+        rss["canonical_url_provenance"][  # type: ignore[index]
+            "discovered_via_redirect_from_url"
+        ] = "https://aihot.invalid/not-rss"
+    elif mutation == "rss_wrong_redirect_status":
+        rss["canonical_url_provenance"][  # type: ignore[index]
+            "discovered_via_redirect_status"
+        ] = 302
+    elif mutation == "rss_null":
+        rss["canonical_url_provenance"] = None
+    elif mutation == "openapi_missing":
+        del openapi["canonical_url_provenance"]
+    elif mutation == "openapi_object":
+        openapi["canonical_url_provenance"] = copy.deepcopy(
+            rss["canonical_url_provenance"]
+        )
+    else:
+        raise AssertionError(f"unknown mutation: {mutation}")
+
+    assert (
+        error_code(
+            ds,
+            lambda: ds.validate_capture_manifest(
+                manifest,
+                manifest_path=CAPTURE_PATH,
+                raw_files=raw_files,
+                schema_bytes=SCHEMA_PATH.read_bytes(),
+            ),
+        )
+        == expected_code
+    )
+
+
 def test_adr061_capture_shape_removes_same_payload_projections_and_binds_path(
     ds: Any,
 ) -> None:
@@ -2436,6 +2530,43 @@ def test_capture_and_window_v1_machine_semantics_are_literal_frozen(ds: Any) -> 
     }
     assert capture_properties["passes"]["minItems"] == 2
     assert capture_properties["passes"]["maxItems"] == 3
+    public_response_semantics = capture_properties["public_responses"]["items"]
+    assert tuple(public_response_semantics["required"]) == (
+        "surface",
+        "request_url",
+        "canonical_url_provenance",
+        "raw_path",
+        "compressed_raw_sha256",
+        "response_body_sha256",
+        "status",
+        "content_type",
+        "date",
+        "etag",
+        "cache_control",
+    )
+    assert public_response_semantics["properties"]["canonical_url_provenance"] == {
+        "anyOf": [
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "discovered_via_redirect_from_url",
+                    "discovered_via_redirect_status",
+                ],
+                "properties": {
+                    "discovered_via_redirect_from_url": {
+                        "type": "string",
+                        "format": "http-uri",
+                    },
+                    "discovered_via_redirect_status": {
+                        "type": "integer",
+                        "const": 301,
+                    },
+                },
+            },
+            {"type": "null"},
+        ]
+    }
     pass_properties = capture_properties["passes"]["items"]["properties"]
     assert "index" not in pass_properties
     assert "first_response_date" not in pass_properties
@@ -2812,7 +2943,7 @@ def test_capture_rejects_source_base_that_is_not_canonical_origin(ds: Any, base_
 
 def test_capture_rejects_request_host_outside_source_base(ds: Any) -> None:
     manifest, raw_files = synthetic_capture_bundle(ds)
-    manifest["public_responses"][0]["request_url"] = "https://other.invalid/rss"  # type: ignore[index]
+    manifest["public_responses"][0]["request_url"] = "https://other.invalid/feed.xml"  # type: ignore[index]
     assert (
         error_code(
             ds,
@@ -2825,7 +2956,7 @@ def test_capture_rejects_request_host_outside_source_base(ds: Any) -> None:
 @pytest.mark.parametrize(
     ("reference_kind", "wrong_url"),
     [
-        ("rss", "https://aihot.invalid/not-rss"),
+        ("rss", "https://aihot.invalid/rss"),
         ("openapi", "https://aihot.invalid/not-openapi.json"),
     ],
 )
@@ -4355,7 +4486,7 @@ class FakeCaptureTransport:
             }
         )
         call_index = len(self.calls) - 1
-        if parsed.path == "/rss":
+        if parsed.path == "/feed.xml":
             assert params in (None, {})
             return self.ds.HttpResponse(
                 status=200,
@@ -4510,7 +4641,8 @@ def test_capture_writer_runs_full_fake_transport_pipeline_and_offline_replay(
 
     result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
 
-    assert [call["path"] for call in transport.calls[:2]] == ["/rss", "/openapi-v1.json"]
+    assert [call["path"] for call in transport.calls[:2]] == ["/feed.xml", "/openapi-v1.json"]
+    assert all(call["path"] != "/rss" for call in transport.calls)
     assert transport.api_page_index == 4
     assert transport.list_page_one_attempts == 2
     assert transport.detail_attempts == 2
@@ -4538,6 +4670,15 @@ def test_capture_writer_runs_full_fake_transport_pipeline_and_offline_replay(
         f"{synthetic_window_root(WINDOW_ONE)}/manifest.json",
         f"{synthetic_window_root(WINDOW_TWO)}/manifest.json",
     )
+    capture_payload = json.loads((output_root / result.capture_path).read_bytes())
+    rss_reference, openapi_reference = capture_payload["public_responses"]
+    assert rss_reference["request_url"] == "https://aihot.invalid/feed.xml"
+    assert rss_reference["canonical_url_provenance"] == {
+        "discovered_via_redirect_from_url": "https://aihot.invalid/rss",
+        "discovered_via_redirect_status": 301,
+    }
+    assert openapi_reference["request_url"] == "https://aihot.invalid/openapi-v1.json"
+    assert openapi_reference["canonical_url_provenance"] is None
     assert not (output_root / ".staging" / "fictional-capture-phase2").exists()
 
     capture_report = ds.validate_persisted_artifact(output_root, result.capture_path)
@@ -5286,6 +5427,7 @@ def test_capture_writer_is_byte_deterministic_for_same_frozen_inputs(
 @pytest.mark.parametrize(
     ("failure", "expected_code"),
     [
+        ("rss_301", "http_301"),
         ("rss_403", "http_403"),
         ("rss_content_type", "content_type_invalid"),
         ("ssr_parse", "ssr_parse_failed"),
@@ -5312,9 +5454,15 @@ def test_capture_writer_failure_paths_publish_nothing(
         headers: dict[str, str],
     ) -> object:
         parsed = urlparse(url)
-        if failure == "rss_403" and parsed.path == "/rss":
+        if failure == "rss_301" and parsed.path == "/feed.xml":
+            return ds.HttpResponse(
+                status=301,
+                headers={"Location": "https://aihot.invalid/fictional-redirect"},
+                body=b"",
+            )
+        if failure == "rss_403" and parsed.path == "/feed.xml":
             return ds.HttpResponse(status=403, headers={}, body=b"")
-        if failure == "rss_content_type" and parsed.path == "/rss":
+        if failure == "rss_content_type" and parsed.path == "/feed.xml":
             return ds.HttpResponse(
                 status=200,
                 headers={
@@ -5408,6 +5556,7 @@ def test_httpx_transport_disables_environment_proxy_and_sets_timeout_and_user_ag
     result = transport.get("https://aihot.invalid/example", params={"fiction": "1"}, headers={})
     assert observed["client_kwargs"] == {
         "trust_env": False,
+        "follow_redirects": False,
         "timeout": 13.0,
         "headers": {"User-Agent": "Fictional-Test-UA/1.0"},
     }
