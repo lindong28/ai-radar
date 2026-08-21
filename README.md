@@ -49,10 +49,13 @@ DEEPSEEK_API_KEY=sk-xxx
 
 ```bash
 ./run.sh admin db migrate
+./run.sh admin db backfill-links
 ./run.sh admin sources reload
 ```
 
-成功读数：`migrate` 打印 `migrated <radar.db 路径>` 与 `migrated llm_usage <llm_usage.db 路径>` 两行；`reload` 打印 `reloaded <N> sources`，N 应等于 `data/sources.toml` 里启用的来源数。
+成功读数：`migrate` 打印 `migrated <radar.db 路径>` 与 `migrated llm_usage <llm_usage.db 路径>` 两行；`backfill-links` 打印 `item_links backfilled for <路径>: <N> links`；`reload` 打印 `reloaded <N> sources`，N 应等于 `data/sources.toml` 里启用的来源数。
+
+`backfill-links` 把文章正文里的外链抽成一张带索引的表，「关联讨论」靠它回答。**可续跑，也可以晚些再补**——没跑完之前该功能回落到旧的全表扫描：结果正确，但每次打开精选页会多花约 1 秒。只需在已有数据库上跑一次，此后由抓取流程自行维护；重跑是安全的。
 
 ### 4. 运行数据处理流水线
 

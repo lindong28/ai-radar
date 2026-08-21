@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ..presentation.links import replace_item_links
 from ..wechat_text import wechat_identity_title
 
 # Two providers serving the same WeChat article agree on its publish time to
@@ -180,6 +181,11 @@ def upsert_item(conn: sqlite3.Connection, item: FetchedItem, *, wechat: bool = F
                     existing_url[0],
                 ),
             )
+            # content_text was rewritten, so the outbound links derived from it
+            # are stale. Same transaction as the UPDATE: a link set that can
+            # disagree with the text it came from would surface as related
+            # discussions pointing at an article that no longer cites them.
+            replace_item_links(conn, existing_url[0], item.content_text)
         except sqlite3.IntegrityError:
             conn.execute(
                 """
@@ -189,9 +195,12 @@ def upsert_item(conn: sqlite3.Connection, item: FetchedItem, *, wechat: bool = F
                 """,
                 (item.fetched_at, extra_json, existing_url[0]),
             )
+            # This branch leaves content_text untouched, so the existing link
+            # rows still match it. Nothing to redo.
         return False
     if wechat and wechat_duplicate_id(conn, item) is not None:
         return False
+    new_item_id = _item_id(item)
     try:
         conn.execute(
             """
@@ -202,7 +211,7 @@ def upsert_item(conn: sqlite3.Connection, item: FetchedItem, *, wechat: bool = F
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                _item_id(item),
+                new_item_id,
                 item.source_id,
                 item.url,
                 item.title,
@@ -217,4 +226,5 @@ def upsert_item(conn: sqlite3.Connection, item: FetchedItem, *, wechat: bool = F
         )
     except sqlite3.IntegrityError:
         return False
+    replace_item_links(conn, new_item_id, item.content_text)
     return True

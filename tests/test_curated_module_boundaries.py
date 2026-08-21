@@ -78,7 +78,73 @@ def test_batch_related_discussions_queries_each_direction_once() -> None:
     assert [item["url"] for item in result["current-2"]] == ["https://example.com/reverse"]
     selects = [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
     assert sum("FROM items i" in statement and "items_fts" not in statement for statement in selects) == 1
+    # This schema has no item_links, so the reverse direction takes the
+    # pre-migration-019 scan. Still exactly one statement -- that is the
+    # one-statement-per-direction shape, and it has to hold on both branches.
     assert sum("FROM items_fts f" in statement for statement in selects) == 1
+    conn.close()
+
+
+def test_batch_related_discussions_uses_one_indexed_query_when_links_are_ready() -> None:
+    """Same contract on the item_links branch: one statement, and no FTS scan.
+
+    Guarding the count matters more here than on the fallback: `citing_item_ids`
+    is handed one URL per card (40 on `/`), and the obvious implementation --
+    a range query per URL -- reintroduces an N+1 while still passing every
+    correctness assertion. (ADR-004 is about the timeline route's enrichment
+    queries and explicitly left curated on its N+1; it does not govern this.)
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT, kind TEXT);
+        CREATE TABLE items (
+          id TEXT PRIMARY KEY, source_id TEXT, url TEXT, author TEXT,
+          content_text TEXT, published_at TEXT, fetched_at TEXT
+        );
+        CREATE TABLE items_fts (item_id TEXT, content_text TEXT);
+        CREATE TABLE item_links (
+          item_id TEXT NOT NULL, linked_url TEXT NOT NULL,
+          PRIMARY KEY (item_id, linked_url)
+        ) WITHOUT ROWID;
+        CREATE INDEX idx_item_links_url ON item_links(linked_url, item_id);
+        CREATE TABLE item_links_backfill (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          backfilled_through_id TEXT, completed_at TEXT
+        );
+        INSERT INTO item_links_backfill VALUES (1, 'zzz', '2026-08-20T00:00:00Z');
+        INSERT INTO sources VALUES ('s', 'Source', 'feed');
+        INSERT INTO items VALUES
+          ('current-1', 's', 'https://example.com/current-1', 'Ada',
+           'See https://example.com/linked', '2026-07-14T04:00:00Z', '2026-07-14T04:00:00Z'),
+          ('current-2', 's', 'https://example.com/current-2', 'Ben',
+           'No outgoing link', '2026-07-14T03:00:00Z', '2026-07-14T03:00:00Z'),
+          ('linked', 's', 'https://example.com/linked', 'Lin',
+           'Linked discussion', '2026-07-14T02:00:00Z', '2026-07-14T02:00:00Z'),
+          ('reverse', 's', 'https://example.com/reverse', 'Rin',
+           'Reply to https://example.com/current-2?utm_source=news',
+           '2026-07-14T01:00:00Z', '2026-07-14T01:00:00Z');
+        INSERT INTO item_links VALUES
+          ('current-1', 'https://example.com/linked'),
+          -- Stored with the tracking suffix the citing article actually wrote.
+          -- Equality against 'https://example.com/current-2' would miss it.
+          ('reverse', 'https://example.com/current-2?utm_source=news');
+        """
+    )
+    rows = conn.execute("SELECT * FROM items WHERE id LIKE 'current-%' ORDER BY id").fetchall()
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    result = related._batch_related_discussions(conn, rows)
+
+    assert [item["url"] for item in result["current-1"]] == ["https://example.com/linked"]
+    assert [item["url"] for item in result["current-2"]] == ["https://example.com/reverse"]
+    # Counted over every traced statement, not just the SELECT-prefixed ones:
+    # the item_links lookup opens with WITH, and filtering on "SELECT" would
+    # quietly count zero of them and assert nothing.
+    assert sum("FROM items_fts f" in statement for statement in statements) == 0
+    assert sum("FROM item_links l" in statement for statement in statements) == 1
     conn.close()
 
 

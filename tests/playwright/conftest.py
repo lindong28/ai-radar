@@ -424,7 +424,11 @@ def historical_date(playwright_db_path: Path | None, base_url: str) -> str:
             WHERE r.id = (
                 SELECT id
                 FROM curation_runs
-                ORDER BY created_at DESC
+                -- Same tie-break the application uses. Without it this fixture
+                -- and the page under test can disagree about which run is
+                -- latest whenever two share a created_at, and the resulting
+                -- failure would look like a product bug.
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
             )
             GROUP BY day

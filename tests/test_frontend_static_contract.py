@@ -368,7 +368,11 @@ def test_app_js_supports_wechat_search_url_state_and_empty_copy() -> None:
     assert 'updateFeedUrl("/wechat"' in init_wechat
     assert "debounceInput(search, runSearch);" in init_wechat
     assert 'search.closest("form")?.addEventListener("submit"' in init_wechat
-    assert 'window.addEventListener("popstate"' in init_wechat
+    # Was a bare window.addEventListener("popstate", ...). Page initializers now
+    # register through onPopState, which binds to the page lifetime so a
+    # client-side swap takes the listener down with the page that added it. The
+    # contract here is unchanged: initWechat reacts to back and forward.
+    assert "onPopState(" in init_wechat
     assert "renderWechatPagination(pagination, data, search.value.trim())" in init_wechat
     assert "没有匹配条目" in js
     assert "清空搜索后可回到默认列表。" in js

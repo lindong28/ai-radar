@@ -236,3 +236,24 @@
 **触发前提**：同一进程内换库，且恰好与一轮旧库水合重叠。生产是单 app 单库、`bind` 只在 lifespan 调用一次，碰不到；进程内 lifespan 重启、同进程嵌入第二个 app、以及测试套件会碰到（表现为偶发的跨库串数据）。
 
 **闭合方向**：`_refresh_if_needed` 在水合开始时把 `_db_path` 取快照，发布前在锁内比对，不一致就丢弃这轮结果并记一行日志。约四行，但它是并发不变量，值得单独过一次 review 而不是顺手塞进别的改动里——本轮 review-gate 的 MEDIUM 就地修轮次已用尽，故留账。
+## [open] 2026-08-20：`_timeline_data_version()` 漏掉三类会改变 `/all` 总数的写入，缓存因此可能发陈旧计数
+
+- Type: correctness · Priority: medium · Discovered: 2026-08-20 做 `/` 与 `/all` 的 TTFB 优化时，为决定该不该顺手改这个函数而逐维核对它的覆盖面。
+
+ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timeline_data_version()` 覆盖所有影响计数的数据维度」。逐项对照 `src/airadar/web/routes/timeline.py` 的当前实现，它取的六个维度是：最新 run 的 `id` / `ruleset_version` / `created_at`、`MAX(rowid) FROM items`、`COUNT(*) FROM items`、`MAX(id) FROM item_evaluations`。
+
+据此，下面三类写入会改变 `/all` 的真实总数、却**不会**推进这个 tuple：
+
+| 写入 | 为什么计数变了 | 为什么 tuple 不变 |
+| --- | --- | --- |
+| `UPDATE sources SET enabled=0`（或改 `kind`） | `TIMELINE_SOURCE_VISIBILITY_CLAUSES` 用 `s.enabled=1` 与 `kind != 'wechat'` 过滤，停用一个来源直接减少可见条目 | 六个维度全部只看 `items` / `item_evaluations` / `curation_runs`，没有一个看 `sources` |
+| 既有 item 的原地 `UPDATE`（`upsert_item` 的 existing_url 分支会改 `url` / `published_at`） | `deduped_item_clause` 按 `(source_id, 规范化 url)` 判重，改 url 会改变哪一条被判为重复 | 行数不变、`MAX(rowid)` 不变 |
+| 既有 evaluation 的原地 `UPDATE` | prefilter / scoring 的判定值变了，`_PREFILTER_SCORING_CLAUSE` 的结果随之变 | `MAX(id)` 只在**新增**行时前进 |
+
+失败形态是**静默且没有时间上界**：`/all` 的分页总数与末页号会对不上，而 `VersionedTotalCache`（`src/airadar/web/routes/pagination.py`）**没有 TTL**——它只是一个带锁的 `OrderedDict`。所以陈旧值会一直留到tuple 里某个维度真的变化（下一次 pipeline 写入新行、或新建一次 curation run）、被 LRU（maxsize 64）挤出、或进程重启为止。`PUBLIC_PAGINATION_CACHE_CONTROL` 那 90 秒是 HTTP / 边缘层的，管不到进程内这一份。
+
+（本条早先写的是「最长约 90 秒自愈」，把两层缓存混为一谈；当场读源确认该类无任何 TTL 字段。）
+
+**本轮刻意没有在这里改**：同一次改动里既动性能又动"哪些写入使缓存失效"，会让日后总数真的开始发陈旧时无法分辨是哪一半造成的。当前那次改动只给这三个 `curation_runs` 子查询加了索引与 `id DESC` tie-break，覆盖面一个维度没动。
+
+**Fix 方向**：items / evaluations 的原地更新需要一个随更新前进的信号（`updated_at` 列，或由触发器维护的 generation——`archive_cache_generations` 是现成的形态）。`sources` 那一维**没有现成范式可抄**：把 `COUNT(*)` / `SUM(enabled)` / `kind` 取值集合并进 tuple 是最直觉的写法，但它分不出「停用 A、同时启用 B」这种等量交换——三个聚合值都不变而可见集合已经变了。所以这一维要么按 `sources` 的 `MAX(rowid)` 加一个由触发器维护的 generation，要么把 enabled 集合的某种顺序无关摘要（如 `group_concat(id ORDER BY id)` 的哈希）并进去；两种都比三个聚合值贵，值不值得要连着「这个缺口实际造成过什么」一起判。

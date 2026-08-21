@@ -28,7 +28,7 @@ def display_score(weighted_score: float) -> int:
 
 
 def latest_run_id(conn: sqlite3.Connection) -> str | None:
-    row = conn.execute("SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+    row = conn.execute("SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
     return row[0] if row else None
 
 

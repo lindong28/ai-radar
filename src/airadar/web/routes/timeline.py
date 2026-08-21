@@ -74,13 +74,29 @@ AND (
 
 
 def _timeline_data_version(conn: sqlite3.Connection) -> tuple[Any, ...]:
+    """Cache key for the timeline total (ADR-005).
+
+    The three curation_runs subqueries below were 0.433s of `/all`'s 0.608s
+    before idx_curation_runs_created_at existed: each was a full scan of a
+    688MB table, so *checking* the cache cost more than the query it guarded.
+    They carry `id DESC` so they agree with `curated_archive._latest_run` about
+    which run is latest when two share a created_at.
+
+    The set of dimensions is deliberately unchanged here. It is also **not**
+    complete -- `sources.enabled` / `sources.kind` changes and in-place updates
+    to existing items and evaluations move the count without moving this tuple.
+    That gap predates this function's performance work and is tracked
+    separately; a latency fix is the wrong place to change which writes
+    invalidate a cache, because the two would then be impossible to tell apart
+    if the count started going stale.
+    """
     db_info = conn.execute("PRAGMA database_list").fetchone()
     row = conn.execute(
         """
         SELECT
-          COALESCE((SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1), '') AS latest_run_id,
-          COALESCE((SELECT ruleset_version FROM curation_runs ORDER BY created_at DESC LIMIT 1), '') AS latest_ruleset,
-          COALESCE((SELECT created_at FROM curation_runs ORDER BY created_at DESC LIMIT 1), '') AS latest_run_created_at,
+          COALESCE((SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1), '') AS latest_run_id,
+          COALESCE((SELECT ruleset_version FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1), '') AS latest_ruleset,
+          COALESCE((SELECT created_at FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1), '') AS latest_run_created_at,
           COALESCE((SELECT MAX(rowid) FROM items), 0) AS max_item_rowid,
           COALESCE((SELECT COUNT(*) FROM items), 0) AS item_count,
           COALESCE((SELECT MAX(id) FROM item_evaluations), 0) AS max_eval_id
@@ -300,7 +316,7 @@ def timeline(
                 AND latest_enrich.error IS NULL
             )
             LEFT JOIN curated_items c ON c.item_id = i.id
-              AND c.run_id = (SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1)
+              AND c.run_id = (SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1)
             {where}
             {order_by}
             LIMIT ? OFFSET ?

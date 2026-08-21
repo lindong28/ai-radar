@@ -1,3 +1,47 @@
+/* ---------- page lifetime ----------
+ *
+ * Every page used to be its own document, so the browser disposed its bindings
+ * for us. Client-side navigation between / and /all (initClientNavigation,
+ * below) keeps the document and swaps <main>, which disposes only what lives
+ * *inside* <main>. Anything bound to window, document, or the persistent
+ * chrome would survive that swap and then be bound a second time by the next
+ * page's initializer.
+ *
+ * The symptom of getting this wrong is not an error. It is a page that handles
+ * one popstate N times after N navigations -- so it surfaces several
+ * navigations in, far from its cause, and only for someone who used back and
+ * forward a few times.
+ *
+ * One AbortController per rendered page. Every listener that outlives <main>
+ * takes `{ signal: pageSignal() }`; observers and timers hang their teardown
+ * off the same signal. Starting a page aborts the previous one.
+ */
+let pageLifetime = null;
+
+export function beginPageLifetime() {
+  pageLifetime?.abort();
+  pageLifetime = new AbortController();
+  return pageLifetime.signal;
+}
+
+export function pageSignal() {
+  if (!pageLifetime) beginPageLifetime();
+  return pageLifetime.signal;
+}
+
+/** Run `dispose` when the current page is torn down. */
+export function onPageTeardown(dispose) {
+  pageSignal().addEventListener("abort", dispose, { once: true });
+}
+
+/* Every page initializer wants the same thing from history: react to back and
+ * forward *while this page is on screen*. Going through one helper is what
+ * keeps that true -- a bare window.addEventListener here is the exact call
+ * that accumulates, and it looks correct at the call site. */
+function onPopState(handler) {
+  window.addEventListener("popstate", handler, { signal: pageSignal() });
+}
+
 async function api(path) {
   const response = await fetch(path);
   /* 失败响应不保证是本站的 JSON 信封（网关的 502/503 页就不是），所以解析要能
@@ -855,6 +899,12 @@ function bindDateGroupCollapse(container) {
 function bindResponsiveTimeline(container, rerender) {
   if (!container || container.dataset.responsiveTimelineBound === "true") return;
   container.dataset.responsiveTimelineBound = "true";
+  // The guard above is per-container, and the container is #list *inside*
+  // <main> -- a client-side swap replaces it, so the next page binds again.
+  // The listener, though, lives on the MediaQueryList, which is document-scoped
+  // and outlives every swap while its closure pins the container it was built
+  // for. Left alone that leaks one detached container per navigation and runs
+  // stale rerenders on the next breakpoint change. Hence pageSignal().
   const media = window.matchMedia("(max-width: 960px)");
   let wasMobile = media.matches;
   const desktopCollapsedDates = new Set();
@@ -876,8 +926,14 @@ function bindResponsiveTimeline(container, rerender) {
       group.querySelectorAll(".timeline-entry").forEach((entry) => entry.classList.add("entry-hidden"));
     });
   };
-  if (media.addEventListener) media.addEventListener("change", rebuild);
-  else media.addListener(rebuild);
+  if (media.addEventListener) {
+    media.addEventListener("change", rebuild, { signal: pageSignal() });
+  } else {
+    // Safari < 14 has no addEventListener on MediaQueryList and therefore no
+    // signal support either; remove it by hand on the same teardown.
+    media.addListener(rebuild);
+    onPageTeardown(() => media.removeListener(rebuild));
+  }
 }
 
 function wechatCard(item) {
@@ -1014,6 +1070,237 @@ function initNavigation() {
 export function initNavigationOnly() {
   initNavigation();
   initThemeToggle();
+}
+
+/* ---------- client-side navigation between 精选 and 全部 AI 动态 ----------
+ *
+ * Scope is deliberately these two paths and nothing else. They are the pair
+ * readers alternate between, they render the same shell, and their
+ * initializers are the two this module knows how to re-run. Every other link
+ * -- /daily, /hot, /wechat, an article, a filtered or paginated view of these
+ * two -- keeps the browser's own navigation.
+ *
+ * Bindings here belong to the document, not to pageSignal(): they have to
+ * survive the very swap they perform. initClientNavigation is idempotent so a
+ * re-run after a swap is a no-op.
+ */
+const CLIENT_ROUTES = new Map([
+  ["/", { init: () => initCurated(), title: "AI Radar · 精选" }],
+  ["/all", { init: () => initTimeline(), title: "AI Radar · 全部 AI 动态" }],
+]);
+
+const PREFETCH_TTL_MS = 30_000;
+const prefetched = new Map();
+let inFlightNavigation = null;
+let renderedPath = null;
+
+function clientRouteFor(url) {
+  if (url.origin !== location.origin) return null;
+  // Only the bare path. A query string means a filter, a search or a page,
+  // and those carry state this swap does not attempt to reproduce.
+  if (url.search) return null;
+  // A fragment is the browser's job, not ours. The mobile search affordance on
+  // `/` links to `/all#search`; intercepting it would swallow the scroll-and-
+  // focus the reader asked for -- and this code then moves focus to <main>
+  // instead, so the control they were reaching for is not where they land.
+  if (url.hash) return null;
+  return CLIENT_ROUTES.get(url.pathname) || null;
+}
+
+function fetchPage(href) {
+  const cached = prefetched.get(href);
+  if (cached && cached.expiresAt > Date.now()) return cached.request;
+  // Deliberately not tied to any one navigation's AbortController. A cached
+  // entry outlives the navigation that created it, so binding it to that
+  // navigation's signal means superseding the first click poisons the entry
+  // the second one is about to reuse: it rejects with an abort the second
+  // navigation never asked for, the swap reports failure, and the browser does
+  // a full reload -- the exact outcome this whole feature exists to avoid.
+  // Cancellation belongs to the *caller*, which checks its own signal after
+  // awaiting and discards a result it no longer wants.
+  const request = fetch(href, { headers: { "X-Requested-With": "client-nav" } })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.text();
+    })
+    .catch((error) => {
+      prefetched.delete(href);
+      throw error;
+    });
+  prefetched.set(href, { request, expiresAt: Date.now() + PREFETCH_TTL_MS });
+  return request;
+}
+
+function markActiveNav(pathname) {
+  document.querySelectorAll(".side-link").forEach((link) => {
+    const active = new URL(link.href, location.origin).pathname === pathname;
+    link.classList.toggle("side-link-active", active);
+  });
+  document.querySelectorAll(".m-tab").forEach((tab) => {
+    const active = new URL(tab.href, location.origin).pathname === pathname;
+    tab.classList.toggle("m-tab-active", active);
+    if (active) tab.setAttribute("aria-current", "page");
+    else tab.removeAttribute("aria-current");
+  });
+}
+
+function applyDocument(html, pathname) {
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const nextMain = parsed.querySelector("main");
+  const currentMain = document.querySelector("main");
+  if (!nextMain || !currentMain) return false;
+  // A 200 is not the same as a usable page. A gateway, a CDN error page or a
+  // template regression can all return transport-level success carrying markup
+  // that has a <main> but none of the elements the initializer needs. Checking
+  // before the swap matters: afterwards the DOM and history are already
+  // replaced and the only recovery left is a reload, which fetches the same
+  // broken response again. Refusing here hands the URL back to the browser.
+  if (!parsed.querySelector("#__PRELOAD__") || !parsed.querySelector("#list")) return false;
+
+  // The preload blob is read by the initializers via #__PRELOAD__, so it has
+  // to be swapped with the markup it describes. Leaving the old one behind is
+  // the failure where the new page renders the previous page's items for a
+  // frame and then corrects itself.
+  const nextPreload = parsed.querySelector("#__PRELOAD__");
+  const currentPreload = document.querySelector("#__PRELOAD__");
+  if (nextPreload && currentPreload) currentPreload.textContent = nextPreload.textContent;
+
+  currentMain.replaceWith(nextMain);
+  document.title = parsed.title || CLIENT_ROUTES.get(pathname)?.title || document.title;
+  markActiveNav(pathname);
+  return true;
+}
+
+async function renderRoute(url, { push }) {
+  const route = clientRouteFor(url);
+  if (!route) return false;
+
+  inFlightNavigation?.abort();
+  const navigation = new AbortController();
+  inFlightNavigation = navigation;
+
+  let html;
+  try {
+    html = await fetchPage(url.href);
+  } catch (error) {
+    if (navigation.signal.aborted) return true; // superseded, not a failure
+    return false; // caller falls back to a real navigation
+  }
+  // Cancellation is applied here rather than to the request: the fetch is
+  // shared with the prefetch cache and with any later navigation to the same
+  // URL, so this navigation may only decide whether to *use* the result.
+  if (navigation.signal.aborted) return true;
+
+  if (push) {
+    // Remember where the outgoing page was, so going back lands where the
+    // reader left rather than at the top of a list they already scrolled.
+    history.replaceState({ ...history.state, scrollY: window.scrollY }, "");
+    history.pushState({ clientNav: true, scrollY: 0 }, "", url.href);
+  }
+  if (!applyDocument(html, url.pathname)) return false;
+  renderedPath = url.pathname;
+
+  beginPageLifetime();
+  try {
+    await route.init();
+  } catch (error) {
+    // The DOM and the history entry have already been replaced by this point,
+    // so there is no "leave it as it was" left to fall back to -- the page is
+    // half-built and the URL already claims to be the new one. Reloading is
+    // the only state that is coherent, and it is what a failed navigation
+    // would have produced anyway.
+    location.reload();
+    return true;
+  }
+
+  if (push) {
+    // A navigation starts at the top of the new page. With
+    // scrollRestoration set to "manual" the browser will not do this for us,
+    // and the pushed history entry already claims scrollY 0 -- leaving the
+    // old offset would make the entry disagree with the screen the moment the
+    // reader goes forward to it again.
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }
+
+  const main = document.querySelector("main");
+  if (main) {
+    // A real navigation moves focus to the new document. Without this, the
+    // next Tab press resumes from wherever the old page's focus was -- which
+    // no longer exists.
+    main.setAttribute("tabindex", "-1");
+    main.focus({ preventScroll: true });
+  }
+  return true;
+}
+
+function restoreScroll() {
+  const y = Number(history.state?.scrollY || 0);
+  window.scrollTo({ top: y, behavior: "auto" });
+}
+
+export function initClientNavigation() {
+  if (document.documentElement.dataset.clientNav === "on") return;
+  document.documentElement.dataset.clientNav = "on";
+  renderedPath = location.pathname;
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+
+  const prefetchLink = (event) => {
+    const link = event.target.closest?.("a[href]");
+    if (!link) return;
+    const url = new URL(link.href, location.origin);
+    if (!clientRouteFor(url) || url.pathname === renderedPath) return;
+    void fetchPage(url.href).catch(() => {});
+  };
+  document.addEventListener("mouseover", prefetchLink, { passive: true });
+  document.addEventListener("touchstart", prefetchLink, { passive: true });
+
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented) return;
+    // Modified clicks and non-primary buttons belong to the browser: they mean
+    // "open in a new tab/window", and swallowing them takes that away.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const link = event.target.closest?.("a[href]");
+    if (!link || link.target === "_blank" || link.hasAttribute("download")) return;
+    const url = new URL(link.href, location.origin);
+    if (!clientRouteFor(url) || url.pathname === renderedPath) return;
+
+    event.preventDefault();
+    void renderRoute(url, { push: true })
+      .then((handled) => {
+        // Any failure -- offline, a 5xx, markup this swap cannot apply -- goes
+        // to a real navigation rather than leaving the reader on a page whose
+        // sidebar now disagrees with what they clicked.
+        if (!handled) location.assign(url.href);
+      })
+      .catch(() => {
+        // preventDefault() already cancelled the browser's navigation, so an
+        // unexpected throw in here would strand the reader on the old page
+        // with nothing having happened and no error they can see.
+        location.assign(url.href);
+      });
+  });
+
+  window.addEventListener("popstate", (event) => {
+    const url = new URL(location.href);
+    if (url.pathname === renderedPath) return; // a filter change; the page owns it
+    // Past this line the address bar already shows a different page than the
+    // one rendered, because the browser applied the history entry before
+    // dispatching. Returning without acting would leave the two disagreeing --
+    // the reader sees /all under the URL of a filtered /. So every path from
+    // here either renders or reloads; none of them may fall through.
+    event.stopImmediatePropagation();
+    if (!clientRouteFor(url)) {
+      // A filtered or paginated entry, or a page outside the pair. This swap
+      // does not reproduce that state, and the browser has no bfcache entry to
+      // restore because the document never went away.
+      location.reload();
+      return;
+    }
+    void renderRoute(url, { push: false }).then((handled) => {
+      if (handled) restoreScroll();
+      else location.reload();
+    });
+  });
 }
 
 function queryPath(path, params) {
@@ -1288,7 +1575,7 @@ export async function initWechat() {
     event.preventDefault();
     load(Number(link.dataset.page || "1"), "push");
   });
-  window.addEventListener("popstate", () => {
+  onPopState(() => {
     search.value = searchFromUrl();
     currentPage = pageFromUrl();
     normalizeFeedUrl("/wechat", wechatUrlParams(currentPage));
@@ -1460,7 +1747,7 @@ export async function initTimeline() {
     event.preventDefault();
     runSearch();
   });
-  window.addEventListener("popstate", () => {
+  onPopState(() => {
     activeCategory = categoryFromUrl();
     activeChannel = channelFromUrl();
     search.value = searchFromUrl();
@@ -1625,7 +1912,7 @@ export async function initCurated() {
     event.preventDefault();
     runSearch();
   });
-  window.addEventListener("popstate", () => {
+  onPopState(() => {
     activeCategory = categoryFromUrl();
     search.value = searchFromUrl();
     currentPage = pageFromUrl();
@@ -2100,7 +2387,7 @@ export async function initDaily() {
     event.preventDefault();
     goToDate(addDays(activeDate, 1));
   });
-  window.addEventListener("popstate", async () => {
+  onPopState(async () => {
     const historyRequest = currentParams().get("date") || dailyDateFromPath();
     const historyResolution = resolveDailyRequest(historyRequest, latestAvailableDate);
     activeDate = historyResolution.activeDate;
@@ -2532,6 +2819,10 @@ function attachInfiniteFeed({ list, loadMore }) {
     if (entries.some((entry) => entry.isIntersecting)) void maybeLoad();
   }, { rootMargin: "600px 0px" });
   observer.observe(sentinel);
+  // The sentinel goes away with <main>, but the observer itself does not --
+  // and a live observer holding a detached node keeps the whole previous
+  // page's closure reachable.
+  onPageTeardown(() => observer.disconnect());
   return {
     reset(nextHasMore) {
       hasMore = Boolean(nextHasMore);
@@ -2562,5 +2853,9 @@ export function initBackToTop() {
       button.classList.toggle("visible", window.scrollY > 600);
       ticking = false;
     });
+    // Deliberately *not* on pageSignal(): this initializer is idempotent and
+    // returns early once .back-to-top exists, so a page-scoped listener would
+    // be aborted on the first client navigation and never re-registered --
+    // the button would simply stop appearing, with nothing logged.
   }, { passive: true });
 }

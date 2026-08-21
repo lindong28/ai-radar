@@ -26,6 +26,8 @@ def client(tmp_path) -> Iterator[TestClient]:  # noqa: ANN001
         "/",
         "/?page=2",
         "/api/v1/curated?page=2&limit=40",
+        "/all",
+        "/all?page=2",
     ],
 )
 def test_public_pagination_responses_emit_short_cache_control(client: TestClient, path: str) -> None:
@@ -47,6 +49,15 @@ def test_public_pagination_responses_emit_short_cache_control(client: TestClient
         "/wechat?theme=dark",
         "/wechat?limit=500",
         "/?limit=100",
+        # /all carries four filters that /'s parameter set does not. Each has to
+        # fall out of the shared cache on its own: the edge keys on the URL, so
+        # a filtered view leaking into the public entry would be served to the
+        # next visitor asking for the unfiltered one.
+        "/all?q=OpenAI",
+        "/all?category=ai-models",
+        "/all?channel=x",
+        "/all?cursor=2026-08-20T00%3A00%3A00Z%7C2026-08-20T00%3A00%3A00Z%7Cabc",
+        "/all?limit=100",
     ],
 )
 def test_search_and_other_response_variants_are_not_shared_cached(client: TestClient, path: str) -> None:
@@ -55,9 +66,15 @@ def test_search_and_other_response_variants_are_not_shared_cached(client: TestCl
     assert response.headers["cache-control"] == PRIVATE_CACHE_CONTROL
 
 
-def test_request_cookie_does_not_vary_public_pagination_response(client: TestClient) -> None:
-    without_cookie = client.get("/wechat?page=1")
-    with_cookie = client.get("/wechat?page=1", headers={"Cookie": "session=fixture"})
+@pytest.mark.parametrize("path", ["/wechat?page=1", "/", "/all"])
+def test_request_cookie_does_not_vary_public_pagination_response(
+    client: TestClient, path: str
+) -> None:
+    """Precondition for letting the edge hold these: one visitor's response is
+    every visitor's response. If any of them ever varied by cookie, a shared
+    cache would hand one reader another reader's page."""
+    without_cookie = client.get(path)
+    with_cookie = client.get(path, headers={"Cookie": "session=fixture"})
 
     assert with_cookie.status_code == 200
     assert with_cookie.text == without_cookie.text

@@ -41,6 +41,19 @@ probe 的专属 plist 经 `./run.sh performance-probe` 启动。crontab 条目�
 
 这些都是 **producer 侧日志读数**：它只证明 producer 认为本轮已 committed，本轮**未**核实 server 侧 receipt/journal 的 identity 一致性（怎么核实见下面「成功终态必须同时满足」）。最终频率也尚未根据传输量、端到端耗时、陈旧度与资源成本完成确认。
 
+### 引入新表 / 新索引时的发布顺序（migration 019 起适用）
+
+`deploy/sync/schema_gate.py` 在**代码部署**那一步用候选版本自己的 `migrate()` 去比对**活动库**，并要求它声明的每张表与索引在活动库中**已经存在**。所以顺序是单向的：
+
+1. 本地 `./run.sh admin db migrate` —— 表与索引落进 Mac 的 primary。
+2. 带回填的迁移要在这里跑完（如 `./run.sh admin db backfill-links`）。快照运的是**数据**，不是补数据的动作；服务器侧没有任何环节会替你回填。
+3. `deploy/sync/sync-db-cron.sh`，等本轮报 `terminal state committed`。
+4. 才能部署代码。
+
+顺序反了不会得到一个含糊的错误：schema gate 会**拒绝这次代码部署**，旧 release 继续服务。这比"部署成功但查询失败"好，但排查时容易被读成"部署系统坏了"。
+
+`item_links` 另有一层：它的账本（`item_links_backfill`）未标完成时，关联讨论会**回落到旧的全表扫描**——结果正确但慢。所以"忘了跑回填"的症状是页面变慢而不是报错，只能靠 `SELECT completed_at FROM item_links_backfill` 判。
+
 ### 只读验证入口
 
 ```bash
@@ -211,6 +224,17 @@ EdgeOne 对 `news.aiplanet.live` 下的精确路径 `/style.css` 与 `/app.js` �
 ### 凭据
 
 腾讯云 CAM 最小权限子账号密钥，只需两个 action：`teo:DescribeL7AccRules`（读规则）与 `teo:CreatePurgeTask`（清缓存）。三个值放进 gitignored `.env`：
+
+**这把密钥不能改规则，这是实测而非推断。** 2026-08-20 尝试 `teo:ModifyL7AccRule` 被拒：
+
+```
+AuthFailure.UnauthorizedOperation
+you are not authorized to perform operation (teo:ModifyL7AccRule)
+resource (qcs::teo:::zone/zone-3tqc1sj4x482) has no permission
+```
+
+调用在任何变更发生之前就被拒，事后读回确认线上规则与调用前**逐字相同**。所以规则变更只有两条路：在控制台改（ADR-039 本来就把控制台定为仓外权威），或先给该子账号加上 `teo:ModifyL7AccRule` ——后者会扩大这把密钥的爆炸半径，值不值得是一次单独的决定，不该顺手做。
+
 
 | 键 | 说明 |
 |---|---|

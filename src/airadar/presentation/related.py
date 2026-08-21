@@ -4,7 +4,8 @@ import re
 import sqlite3
 from typing import Any
 
-URL_RE = re.compile(r"https?://[^\s<>)\"']+")
+from .links import citing_item_ids, clean_url, links_ready, urls_in_text
+
 TERM_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_.-]{3,}")
 RELATED_STOPWORDS = {
     "https",
@@ -23,21 +24,11 @@ RELATED_STOPWORDS = {
 }
 
 
-def _clean_url(value: str) -> str:
-    return value.strip().rstrip(".,;:!?)»”'\"").rstrip("/").lower()
-
-
-def _urls_in_text(value: str | None) -> list[str]:
-    if not value:
-        return []
-    seen: set[str] = set()
-    urls: list[str] = []
-    for match in URL_RE.findall(value):
-        cleaned = _clean_url(match)
-        if cleaned and cleaned not in seen:
-            seen.add(cleaned)
-            urls.append(cleaned)
-    return urls
+# The normalization now lives in `links`, because the stored `item_links` rows
+# and the in-Python confirmation below have to agree on it exactly. These names
+# stay as the module's own spelling of it.
+_clean_url = clean_url
+_urls_in_text = urls_in_text
 
 
 def _important_terms(*values: str | None) -> list[str]:
@@ -136,6 +127,56 @@ def _related_payload(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+_CANDIDATE_COLUMNS = """
+    SELECT i.id, i.url, i.author, i.content_text, i.published_at, i.fetched_at,
+           s.id AS source_id, s.name AS source_name, s.kind AS source_kind
+    FROM items i
+    JOIN sources s ON s.id=i.source_id
+"""
+
+
+def _reverse_link_candidates(
+    conn: sqlite3.Connection,
+    current_urls: list[str],
+) -> list[sqlite3.Row]:
+    """Items whose text cites any of ``current_urls``.
+
+    Prefers the ``item_links`` index. Falls back to the original full scan over
+    ``items_fts`` while the backfill is still running, because a partly-filled
+    ``item_links`` returns *fewer* rows rather than failing -- readers would
+    just see related-discussion badges quietly go missing. The fallback is slow
+    (1.008s measured on the production origin) but correct, and it stops being
+    reachable once `backfill_item_links` records completion.
+    """
+    if not links_ready(conn):
+        reverse_where = " OR ".join("f.content_text LIKE ?" for _ in current_urls)
+        return conn.execute(
+            f"""
+            SELECT i.id, i.url, i.author, i.content_text, i.published_at, i.fetched_at,
+                   s.id AS source_id, s.name AS source_name, s.kind AS source_kind
+            FROM items_fts f
+            JOIN items i ON i.id=f.item_id
+            JOIN sources s ON s.id=i.source_id
+            WHERE {reverse_where}
+            ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
+            """,
+            [f"%{url}%" for url in current_urls],
+        ).fetchall()
+
+    item_ids = sorted(citing_item_ids(conn, current_urls))
+    if not item_ids:
+        return []
+    placeholders = ", ".join("?" for _ in item_ids)
+    return conn.execute(
+        f"""
+        {_CANDIDATE_COLUMNS}
+        WHERE i.id IN ({placeholders})
+        ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
+        """,
+        item_ids,
+    ).fetchall()
+
+
 def _batch_related_discussions(
     conn: sqlite3.Connection,
     rows: list[sqlite3.Row],
@@ -170,21 +211,7 @@ def _batch_related_discussions(
         )
     current_urls = list(current_url_by_id.values())
     if current_urls:
-        reverse_where = " OR ".join("f.content_text LIKE ?" for _ in current_urls)
-        candidates.extend(
-            conn.execute(
-                f"""
-                SELECT i.id, i.url, i.author, i.content_text, i.published_at, i.fetched_at,
-                       s.id AS source_id, s.name AS source_name, s.kind AS source_kind
-                FROM items_fts f
-                JOIN items i ON i.id=f.item_id
-                JOIN sources s ON s.id=i.source_id
-                WHERE {reverse_where}
-                ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
-                """,
-                [f"%{url}%" for url in current_urls],
-            ).fetchall()
-        )
+        candidates.extend(_reverse_link_candidates(conn, current_urls))
     if not candidates:
         return {}
     candidates.sort(key=lambda row: (row["published_at"], row["fetched_at"], row["id"]), reverse=True)
