@@ -4,6 +4,19 @@
 
 ---
 
+## [open] `curation_runs.input_eval_ids` 让主库超线性增长
+
+- Type: reliability / capacity
+- Priority: low
+- Discovered: 2026-08-21 服务器磁盘占用分析（tencent-webserver-china）
+- Description: `curation_runs` 每行把当轮涉及的全部 eval id 列表整体快照进 `input_eval_ids`。实测该列**平均 81,886 字节/行**，而 `output_curated_ids` 只有 761 字节。8,284 行占 **692MB**，是 2.6G 主库里最大的单表——超过 `items` 本身（407MB）和 FTS 索引（669MB）。
+- 为什么是超线性: 近 7 天跑了 519 轮（~74/天），按当前均值约 6MB/天；而 `input_eval_ids` 的长度随 eval 总量（当前 121,811 行）一起涨，所以行数与行宽同时增长。
+- 取证: `pragma freelist_count` 仅 438 页（1.8MB），**VACUUM 回收不到东西**——这 692MB 是真实存活数据，不是碎片。`dbstat` 分表读数：`curation_runs` 0.692G / `items_fts_data` 0.669G / `item_evaluations` 0.506G / `items` 0.407G / `curated_items` 0.272G。
+- 为什么优先级低: 6MB/天在 69G 盘上不构成近期压力，且蓝绿双槽让它以 2× 计入磁盘。真正的成本是它会顶着 [operations/db-slimming.md](../operations/db-slimming.md) 的瘦身收益一起长。
+- Fix 方向: `input_eval_ids` 存 id 列表是为了可复盘"这轮看了哪些 eval"。可改为存范围/游标（起止 eval id + 过滤条件）而非全量枚举，或对超过 N 天的 run 只保留 `output_curated_ids`。需确认没有消费端依赖逐 id 回放。
+
+---
+
 ## [open] 停用一个微信源会藏起它独有的文章，重新启用又会让同一篇出现两次
 
 - Type: reliability

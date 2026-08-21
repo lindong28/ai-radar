@@ -2,6 +2,24 @@
 
 > 部署与 DB 同步链路的运维问题跟踪（含影响其验收的测试基线）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
 
+## [open] 2026-08-21：quarantine 只写不收，每次切换失败沉淀两份全量 DB 且永不回收
+
+- Type: lifecycle gap · Priority: medium · Discovered: 2026-08-21 服务器磁盘占用分析
+
+`apply_db_update.py` 的失败路径把 base 库、candidate 库、manifest 与 failure 记录整套搬进 `data/quarantine/<snapshot_id>/`，并用 SHA-256 在 journal 里绑定，保证证据不可篡改、重放幂等。写入端设计完整，**生命周期的另一半从未实现**：全文件 grep `retain|retention|prune|cleanup|rmtree` 只命中前滚路径的 `unlink`（`_unlink_durable`、committed 后删 sidecar），没有任何一处回收 quarantine 目录。
+
+于是每次切换失败固定沉淀**两份全量 DB 副本**。2026-08-21 在 tencent-webserver-china 实测：两次失败（`failed_at` 2026-08-10T06:08Z 与 2026-08-17T05:50Z）共占 **7.8G**（3.7G + 4.1G），而同期 69G 根分区已用 82%。当前 `switch-journal.json` 状态是 `committed`，这两份证据已不被任何活跃 journal 绑定——即已成孤儿，却没有任何机制认得出这一点。
+
+单份成本随主库线性增长：当前单库 2.6G，一次失败即 ~5.2G。按 3 个月两次失败的观察频率，约 **2G/月**的无界增长，且斜率会随主库变大。
+
+修法方向（需另走决策评审——这是切换正确性的关键路径）：
+
+1. 保留最近 N 次失败证据，`_complete_quarantine` 成功后回收更早的；
+2. 或按 journal 状态回收——`state=committed` 且 snapshot 不再被任何 journal 引用时该组证据可删；
+3. 或只保留 failure/manifest JSON，DB 副本按天数过期（牺牲深度复盘能力换容量）。
+
+在此之前的缓解：容量告急时人工确认 journal 非 `quarantined` 后手删对应目录。
+
 ## [open] 2026-08-17：manifest 不携带 oracle 语义版本，新 consumer 无法拒绝旧语义 sidecar
 
 - Type: contract gap · Priority: medium · Discovered: 2026-08-17, ADR-051 的 review-gate（HIGH, INDEPENDENT）
