@@ -244,6 +244,124 @@ def test_structural_detail_parser_fails_closed_on_ambiguous_shape(ds: Any, body:
     )
 
 
+@pytest.mark.parametrize(
+    ("body", "request_url", "message"),
+    [
+        (
+            structural_detail_html().replace(
+                b"<div>",
+                (
+                    b'<article class="fictional-nested" '
+                    b'data-fictional-binding="fiction-item-alpha"><div>'
+                ),
+                1,
+            ),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "nested detail articles are invalid",
+        ),
+        (
+            structural_detail_html().replace(b"</article>", b""),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "SSR HTML ended inside a detail article",
+        ),
+        (
+            structural_detail_html().replace(
+                b"</body>",
+                (
+                    b'<article class="fictional-second" '
+                    b'data-fictional-binding="fiction-item-alpha"></article></body>'
+                ),
+            ),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "detail SSR must contain exactly one article",
+        ),
+        (
+            structural_detail_html(
+                article_attributes=(
+                    'class="fictional-card" '
+                    'data-fictional-binding="fiction-item-alpha" '
+                    'data-fictional-extra="fiction-item-alpha"'
+                )
+            ),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "detail article must contain exactly one structural identity attribute",
+        ),
+        (
+            structural_detail_html(
+                article_attributes=(
+                    'class="fictional-card" '
+                    'data-fictional-binding=" fiction-item-alpha "'
+                )
+            ),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "detail article identity must be normalized",
+        ),
+        (
+            structural_detail_html(),
+            None,
+            "detail parser request URL must bind the structural item identity",
+        ),
+        (
+            structural_detail_html(
+                identity_urls=(
+                    "/items/fiction-item-alpha?fictional=1",
+                    "/items/fiction-item-alpha?fictional=1",
+                )
+            ),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "detail canonical item URL must not contain params, query, or fragment",
+        ),
+        (
+            structural_detail_html(
+                identity_urls=(
+                    "https://aihot.invalid/items/fiction-item-alpha",
+                    "https://other.invalid/items/fiction-item-alpha",
+                )
+            ),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "detail canonical item URL must use the request origin",
+        ),
+        (
+            structural_detail_html(identity_urls=()),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "detail SSR must identify exactly one canonical public item URL",
+        ),
+        (
+            structural_detail_html(
+                tag_groups=(("fictional-one",), ("fictional-two",)),
+            ),
+            "https://aihot.invalid/items/fiction-item-alpha",
+            "detail SSR must contain exactly one structural tag group",
+        ),
+    ],
+    ids=(
+        "line-1585-nested-article",
+        "line-1626-unclosed-article",
+        "line-1651-multiple-articles",
+        "line-1666-article-identity-shape",
+        "line-1672-unnormalized-identity",
+        "line-1684-request-binding",
+        "line-1695-canonical-query",
+        "line-1704-foreign-origin",
+        "line-1717-missing-canonical-url",
+        "line-1776-ambiguous-tag-parent",
+    ),
+)
+def test_structural_detail_parser_hits_named_fail_closed_guard(
+    ds: Any,
+    body: bytes,
+    request_url: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ds.DatasetContractError, match=message) as raised:
+        ds._parse_ssr_tag_observations(
+            body,
+            channel="detail",
+            request_url=request_url,
+        )
+    assert raised.value.code == "ssr_parse_failed"
+
+
 def test_structural_detail_shape_is_not_accepted_for_list_channel(ds: Any) -> None:
     assert ds._parse_ssr_tag_observations(structural_detail_html(), channel="list") == []
 
