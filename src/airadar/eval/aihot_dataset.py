@@ -23,6 +23,24 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 MINIMUM_REQUEST_INTERVAL_SECONDS = 2.0
 MAX_REQUESTS_PER_MINUTE = 30
+AIHOT_API_SCHEMA_VERSION = 1
+AIHOT_API_BY_VALUES = ("timeline", "published")
+AIHOT_CAPTURE_QUERY_V1 = {
+    "mode": "all",
+    "category": None,
+    "window": "7d",
+    "q": None,
+    "by": "timeline",
+    "ordering": "timelineDesc",
+}
+AIHOT_OBSERVED_DEFAULT_QUERY_V1 = {
+    "mode": "selected",
+    "category": None,
+    "window": "24h",
+    "q": None,
+    "by": "timeline",
+    "ordering": "timelineDesc",
+}
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 GIT_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 FORBIDDEN_PROVENANCE_KEYS = frozenset({"release", "deploy", "config", "database_snapshot_id"})
@@ -1064,7 +1082,38 @@ class _PageMetadata(_StrictModel):
         return self
 
 
+class _ApiQuery(_StrictModel):
+    mode: str
+    category: str | None
+    window: str
+    q: str | None
+    by: str
+    ordering: str
+
+    @field_validator("mode", "window", "ordering")
+    @classmethod
+    def validate_required_text(cls, value: str, info: Any) -> str:
+        return _non_empty_string(value, field_name=f"query.{info.field_name}")
+
+    @field_validator("by")
+    @classmethod
+    def validate_by(cls, value: str) -> str:
+        if value not in AIHOT_API_BY_VALUES:
+            expected = "|".join(AIHOT_API_BY_VALUES)
+            raise ValueError(f"query.by must be one of: {expected}")
+        return value
+
+    @field_validator("category", "q")
+    @classmethod
+    def validate_nullable_text(cls, value: str | None, info: Any) -> str | None:
+        if value is None:
+            return None
+        return _non_empty_string(value, field_name=f"query.{info.field_name}")
+
+
 class _ApiPage(_StrictModel):
+    schemaVersion: Literal[1]
+    query: _ApiQuery
     items: list[_ApiItem]
     page: _PageMetadata
 
@@ -1260,7 +1309,11 @@ class TraversalResult:
     terminal: bool
 
 
-def _parse_page_body(body: bytes) -> _ApiPage:
+def _parse_page_body(
+    body: bytes,
+    *,
+    expected_query: Mapping[str, object] | None = None,
+) -> _ApiPage:
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -1268,7 +1321,7 @@ def _parse_page_body(body: bytes) -> _ApiPage:
     if not isinstance(payload, dict):
         raise DatasetContractError("page_invalid", "API page root must be an object")
     try:
-        return _ApiPage.model_validate(payload)
+        page = _ApiPage.model_validate(payload)
     except ValidationError as error:
         item_values = payload.get("items")
         if isinstance(item_values, list) and any(
@@ -1278,6 +1331,10 @@ def _parse_page_body(body: bytes) -> _ApiPage:
         if isinstance(payload.get("page"), dict) and payload["page"].get("hasMore") is True and not payload["page"].get("nextCursor"):
             raise DatasetContractError("cursor_missing", "nonterminal API page is missing nextCursor") from error
         raise DatasetContractError("page_invalid", "API page does not match the frozen v1 envelope") from error
+    frozen_query = AIHOT_CAPTURE_QUERY_V1 if expected_query is None else expected_query
+    if page.query.model_dump(mode="json") != dict(frozen_query):
+        raise DatasetContractError("page_invalid", "API page query does not match the requested frozen v1 query")
+    return page
 
 
 def _item_is_invalid(item: Mapping[str, object]) -> bool:

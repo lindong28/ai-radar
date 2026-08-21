@@ -120,8 +120,26 @@ def page_payload(
     *,
     has_more: bool,
     next_cursor: str | None,
+    mode: str = "all",
+    category: str | None = None,
+    window: str = "7d",
+    q: str | None = None,
+    by: str = "timeline",
+    ordering: str = "timelineDesc",
 ) -> dict[str, object]:
-    return {"items": items, "page": {"hasMore": has_more, "nextCursor": next_cursor}}
+    return {
+        "schemaVersion": 1,
+        "query": {
+            "mode": mode,
+            "category": category,
+            "window": window,
+            "q": q,
+            "by": by,
+            "ordering": ordering,
+        },
+        "items": items,
+        "page": {"hasMore": has_more, "nextCursor": next_cursor},
+    }
 
 
 def response(
@@ -531,6 +549,29 @@ def replace_first_api_item_field(
         raw_files[path] = compressed
         page_reference["compressed_raw_sha256"] = ds.sha256_hex(compressed)
         page_reference["response_body_sha256"] = ds.sha256_hex(encoded)
+
+
+def replace_first_raw_api_page_envelope(
+    ds: Any,
+    capture: dict[str, object],
+    raw_files: dict[str, bytes],
+    *,
+    mutation: str,
+) -> None:
+    page_reference = capture["passes"][0]["raw_pages"][0]  # type: ignore[index]
+    path = page_reference["raw_path"]
+    payload = json.loads(gzip.decompress(raw_files[path]))
+    if mutation == "legacy_items_page_only":
+        payload = {"items": payload["items"], "page": payload["page"]}
+    elif mutation == "wrong_schema_version":
+        payload["schemaVersion"] = 2
+    else:
+        payload["query"]["mode"] = "selected"
+    encoded = ds.canonical_json_bytes(payload)
+    compressed = ds.deterministic_gzip(encoded)
+    raw_files[path] = compressed
+    page_reference["compressed_raw_sha256"] = ds.sha256_hex(compressed)
+    page_reference["response_body_sha256"] = ds.sha256_hex(encoded)
 
 
 def move_all_capture_items_into_window_one(
@@ -1486,6 +1527,129 @@ def test_cursor_traversal_reaches_terminal_page(ds: Any) -> None:
     assert [record.started_at for record in limiter.request_starts] == [0.0, 2.0]
 
 
+def test_api_envelope_constants_freeze_capture_and_observed_default_queries(ds: Any) -> None:
+    assert ds.AIHOT_API_SCHEMA_VERSION == 1
+    assert ds.AIHOT_API_BY_VALUES == ("timeline", "published")
+    assert ds.AIHOT_CAPTURE_QUERY_V1 == {
+        "mode": "all",
+        "category": None,
+        "window": "7d",
+        "q": None,
+        "by": "timeline",
+        "ordering": "timelineDesc",
+    }
+    assert ds.AIHOT_OBSERVED_DEFAULT_QUERY_V1 == {
+        "mode": "selected",
+        "category": None,
+        "window": "24h",
+        "q": None,
+        "by": "timeline",
+        "ordering": "timelineDesc",
+    }
+
+
+def test_observed_default_api_envelope_is_accepted_only_with_its_expected_query(ds: Any) -> None:
+    payload = page_payload(
+        [synthetic_api_item()],
+        has_more=False,
+        next_cursor=None,
+        mode="selected",
+        window="24h",
+    )
+    page = ds._parse_page_body(
+        ds.canonical_json_bytes(payload),
+        expected_query=ds.AIHOT_OBSERVED_DEFAULT_QUERY_V1,
+    )
+    assert page.schemaVersion == 1
+    assert page.query.model_dump(mode="json") == ds.AIHOT_OBSERVED_DEFAULT_QUERY_V1
+
+
+def test_api_envelope_by_domain_accepts_only_timeline_or_published(ds: Any) -> None:
+    for by in ds.AIHOT_API_BY_VALUES:
+        payload = page_payload(
+            [synthetic_api_item()],
+            has_more=False,
+            next_cursor=None,
+            by=by,
+        )
+        expected_query = {**ds.AIHOT_CAPTURE_QUERY_V1, "by": by}
+        page = ds._parse_page_body(
+            ds.canonical_json_bytes(payload),
+            expected_query=expected_query,
+        )
+        assert page.query.by == by
+
+    unsupported_by = "fictionalLegacyBy"
+    payload = page_payload([], has_more=False, next_cursor=None, by=unsupported_by)
+    expected_query = {**ds.AIHOT_CAPTURE_QUERY_V1, "by": unsupported_by}
+    assert (
+        error_code(
+            ds,
+            lambda: ds._parse_page_body(
+                ds.canonical_json_bytes(payload),
+                expected_query=expected_query,
+            ),
+        )
+        == "page_invalid"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("missing_schema_version", "page_invalid"),
+        ("wrong_schema_version", "page_invalid"),
+        ("missing_query", "page_invalid"),
+        ("missing_items", "page_invalid"),
+        ("missing_page", "page_invalid"),
+        ("extra_envelope_key", "page_invalid"),
+        ("missing_query_key", "page_invalid"),
+        ("extra_query_key", "page_invalid"),
+        ("legacy_items_page_only", "page_invalid"),
+        ("wrong_mode", "page_invalid"),
+        ("wrong_window", "page_invalid"),
+        ("wrong_by", "page_invalid"),
+        ("wrong_ordering", "page_invalid"),
+    ],
+)
+def test_api_envelope_rejects_missing_wrong_legacy_and_query_semantic_mutations(
+    ds: Any,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    payload = page_payload([], has_more=False, next_cursor=None)
+    if mutation == "missing_schema_version":
+        del payload["schemaVersion"]
+    elif mutation == "wrong_schema_version":
+        payload["schemaVersion"] = 2
+    elif mutation == "missing_query":
+        del payload["query"]
+    elif mutation == "missing_items":
+        del payload["items"]
+    elif mutation == "missing_page":
+        del payload["page"]
+    elif mutation == "extra_envelope_key":
+        payload["fictionalLegacyEnvelope"] = True
+    elif mutation == "missing_query_key":
+        del payload["query"]["ordering"]  # type: ignore[index]
+    elif mutation == "extra_query_key":
+        payload["query"]["fictionalLegacySort"] = "timeline"  # type: ignore[index]
+    elif mutation == "legacy_items_page_only":
+        payload = {"items": payload["items"], "page": payload["page"]}
+    elif mutation == "wrong_mode":
+        payload["query"]["mode"] = "selected"  # type: ignore[index]
+    elif mutation == "wrong_window":
+        payload["query"]["window"] = "24h"  # type: ignore[index]
+    elif mutation == "wrong_by":
+        payload["query"]["by"] = "published"  # type: ignore[index]
+    else:
+        payload["query"]["ordering"] = "publishedDesc"  # type: ignore[index]
+    assert (
+        error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload)))
+        == expected_code
+    )
+
+
 @pytest.mark.parametrize(
     ("page", "expected_code"),
     [
@@ -1793,6 +1957,36 @@ def test_capture_manifest_validates_identity_raw_hashes_and_canonical_chain(ds: 
     )
     assert validated.canonical_pass_index == 1
     assert len(validated.passes) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["legacy_items_page_only", "wrong_schema_version", "wrong_query"],
+)
+def test_persisted_capture_replay_rejects_api_envelope_mutations(
+    ds: Any,
+    mutation: str,
+) -> None:
+    manifest, raw_files = synthetic_capture_bundle(ds)
+    replace_first_raw_api_page_envelope(
+        ds,
+        manifest,
+        raw_files,
+        mutation=mutation,
+    )
+
+    assert (
+        error_code(
+            ds,
+            lambda: ds.validate_capture_manifest(
+                manifest,
+                manifest_path=CAPTURE_PATH,
+                raw_files=raw_files,
+                schema_bytes=SCHEMA_PATH.read_bytes(),
+            ),
+        )
+        == "page_invalid"
+    )
 
 
 @pytest.mark.parametrize(
@@ -4061,6 +4255,41 @@ def test_capture_writer_runs_full_fake_transport_pipeline_and_offline_replay(
         output_root / synthetic_window_root(WINDOW_ONE) / "items.jsonl"
     ).read_bytes()
     assert sliced == persisted_items
+
+
+def test_capture_writer_sends_minimal_request_and_requires_normalized_response_query(
+    ds: Any,
+    tmp_path: Path,
+) -> None:
+    writer, transport, _clock, _tool_root, output_root = make_capture_writer(ds, tmp_path)
+
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+
+    api_calls = [call for call in transport.calls if call["path"] == "/api/v1/items"]
+    assert [call["params"] for call in api_calls] == [
+        {"mode": "all", "by": "timeline", "window": "7d", "limit": 100},
+        {
+            "mode": "all",
+            "by": "timeline",
+            "window": "7d",
+            "limit": 100,
+            "cursor": "fiction-cursor-0",
+        },
+        {"mode": "all", "by": "timeline", "window": "7d", "limit": 100},
+        {
+            "mode": "all",
+            "by": "timeline",
+            "window": "7d",
+            "limit": 100,
+            "cursor": "fiction-cursor-1",
+        },
+    ]
+    manifest = json.loads((output_root / result.capture_path).read_bytes())
+    for capture_pass in manifest["passes"]:
+        for page_reference in capture_pass["raw_pages"]:
+            raw_path = output_root / page_reference["raw_path"]
+            response_payload = json.loads(gzip.decompress(raw_path.read_bytes()))
+            assert response_payload["query"] == ds.AIHOT_CAPTURE_QUERY_V1
 
 
 def test_capture_writer_reads_clean_git_provenance_and_refuses_dirty_checkout(
