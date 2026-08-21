@@ -118,6 +118,136 @@ def synthetic_item_record(
     ).items[0]
 
 
+def structural_detail_html(
+    *,
+    article_attributes: str = 'class="fictional-card" data-fictional-binding="fiction-item-alpha"',
+    identity_urls: tuple[str, ...] = (
+        "https://aihot.invalid/items/fiction-item-alpha",
+        "https://aihot.invalid/items/fiction-item-alpha",
+    ),
+    tag_groups: tuple[tuple[str, ...], ...] = (("fictional-one", "fictional-two"),),
+) -> bytes:
+    identity_markup = "".join(
+        f'<meta content="{identity_url}">' for identity_url in identity_urls
+    )
+    group_markup = "".join(
+        "<div>"
+        + "".join(
+            '<a class="fictional-tag-link" '
+            f'href="/topics/{tag_slug}">Fictional tag {tag_slug}</a>'
+            for tag_slug in tag_group
+        )
+        + "</div>"
+        for tag_group in tag_groups
+    )
+    return (
+        f"<html><head>{identity_markup}</head><body>"
+        f"<article {article_attributes}>{group_markup}</article>"
+        "</body></html>"
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    "canonical_item_url",
+    [
+        "https://aihot.invalid/items/fiction-item-alpha",
+        "/items/fiction-item-alpha",
+    ],
+    ids=("absolute-same-origin", "relative-same-origin"),
+)
+def test_structural_detail_parser_recovers_identity_and_tags_without_legacy_selectors(
+    ds: Any, canonical_item_url: str
+) -> None:
+    observations = ds._parse_ssr_tag_observations(
+        structural_detail_html(identity_urls=(canonical_item_url, canonical_item_url)),
+        channel="detail",
+        request_url="https://aihot.invalid/items/fiction-item-alpha",
+    )
+
+    assert [observation.model_dump(mode="json") for observation in observations] == [
+        {
+            "item_id": "fiction-item-alpha",
+            "channel": "detail",
+            "tags": ["Fictional tag fictional-one", "Fictional tag fictional-two"],
+            "observed_aihot_url": "https://aihot.invalid/items/fiction-item-alpha",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        structural_detail_html(
+            article_attributes=(
+                'class="fictional-card" data-fictional-binding="fiction-item-alpha" '
+                'data-fictional-extra="fiction-item-alpha"'
+            )
+        ),
+        structural_detail_html(
+            article_attributes='data-fictional-binding="fiction-item-alpha"'
+        ),
+        structural_detail_html(
+            identity_urls=(
+                "https://aihot.invalid/items/fiction-item-alpha",
+                "https://other.invalid/items/fiction-item-alpha",
+            )
+        ),
+        structural_detail_html(
+            identity_urls=("/items/fiction-item-beta", "/items/fiction-item-beta")
+        ),
+        structural_detail_html(
+            identity_urls=(
+                "/items/fiction-item-alpha?fictional=1",
+                "/items/fiction-item-alpha?fictional=1",
+            )
+        ),
+        structural_detail_html(
+            identity_urls=(
+                "/items/fiction-item-alpha#fictional",
+                "/items/fiction-item-alpha#fictional",
+            )
+        ),
+        structural_detail_html(
+            tag_groups=(("fictional-one",), ("fictional-two",)),
+        ),
+        structural_detail_html(
+            tag_groups=(("fictional-one", "../fictional-two?fictional=1"),),
+        ),
+        structural_detail_html().replace(
+            b'href="/topics/fictional-one"',
+            b'href="/topics/fictional-one" href="/topics/fictional-one"',
+        ),
+    ],
+    ids=(
+        "ambiguous-article-identity",
+        "missing-article-class-token",
+        "ambiguous-canonical-url",
+        "non-item-canonical-path",
+        "canonical-url-query",
+        "canonical-url-fragment",
+        "ambiguous-tag-parent",
+        "mixed-tag-url-family",
+        "duplicate-anchor-attribute",
+    ),
+)
+def test_structural_detail_parser_fails_closed_on_ambiguous_shape(ds: Any, body: bytes) -> None:
+    assert (
+        error_code(
+            ds,
+            lambda: ds._parse_ssr_tag_observations(
+                body,
+                channel="detail",
+                request_url="https://aihot.invalid/items/fiction-item-alpha",
+            ),
+        )
+        == "ssr_parse_failed"
+    )
+
+
+def test_structural_detail_shape_is_not_accepted_for_list_channel(ds: Any) -> None:
+    assert ds._parse_ssr_tag_observations(structural_detail_html(), channel="list") == []
+
+
 def page_payload(
     items: list[dict[str, object]],
     *,

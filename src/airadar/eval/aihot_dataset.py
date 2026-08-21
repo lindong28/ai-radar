@@ -1536,7 +1536,256 @@ class _SsrTagHtmlParser(HTMLParser):
             raise DatasetContractError("ssr_parse_failed", "SSR HTML ended inside an observed item")
 
 
-def _parse_ssr_tag_observations(body: bytes, *, channel: Literal["list", "detail"]) -> list[TagObservation]:
+@dataclass
+class _StructuralDetailNode:
+    tag: str
+    attrs: tuple[tuple[str, str | None], ...]
+    children: list[_StructuralDetailNode]
+    text_parts: list[str]
+
+
+class _StructuralDetailHtmlParser(HTMLParser):
+    _VOID_ELEMENTS = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.article_roots: list[_StructuralDetailNode] = []
+        self.attribute_values: list[str] = []
+        self._active_stack: list[_StructuralDetailNode] = []
+
+    def _start_node(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+        *,
+        self_closing: bool,
+    ) -> None:
+        normalized_tag = tag.lower()
+        normalized_attrs = tuple((name.lower(), value) for name, value in attrs)
+        self.attribute_values.extend(value for _name, value in normalized_attrs if value is not None)
+        if normalized_tag == "article":
+            if self._active_stack:
+                raise DatasetContractError("ssr_parse_failed", "nested detail articles are invalid")
+            article = _StructuralDetailNode(normalized_tag, normalized_attrs, [], [])
+            self.article_roots.append(article)
+            if not self_closing:
+                self._active_stack.append(article)
+            return
+        if not self._active_stack:
+            return
+        node = _StructuralDetailNode(normalized_tag, normalized_attrs, [], [])
+        self._active_stack[-1].children.append(node)
+        if not self_closing and normalized_tag not in self._VOID_ELEMENTS:
+            self._active_stack.append(node)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._start_node(tag, attrs, self_closing=False)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._start_node(tag, attrs, self_closing=True)
+
+    def handle_data(self, data: str) -> None:
+        if self._active_stack:
+            self._active_stack[-1].text_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized_tag = tag.lower()
+        if not self._active_stack:
+            return
+        matching_index = next(
+            (
+                index
+                for index in range(len(self._active_stack) - 1, -1, -1)
+                if self._active_stack[index].tag == normalized_tag
+            ),
+            None,
+        )
+        if matching_index is not None:
+            del self._active_stack[matching_index:]
+
+    def close(self) -> None:
+        super().close()
+        if self._active_stack:
+            raise DatasetContractError("ssr_parse_failed", "SSR HTML ended inside a detail article")
+
+
+def _normalized_node_text(node: _StructuralDetailNode) -> str:
+    return " ".join("".join(node.text_parts).split())
+
+
+def _iter_structural_nodes(root: _StructuralDetailNode) -> list[_StructuralDetailNode]:
+    nodes = [root]
+    for child in root.children:
+        nodes.extend(_iter_structural_nodes(child))
+    return nodes
+
+
+def _parse_structural_detail_item(
+    markup: str,
+    *,
+    request_url: str | None,
+) -> tuple[str, str, list[str]] | None:
+    parser = _StructuralDetailHtmlParser()
+    parser.feed(markup)
+    parser.close()
+    if not parser.article_roots:
+        return None
+    if len(parser.article_roots) != 1:
+        raise DatasetContractError("ssr_parse_failed", "detail SSR must contain exactly one article")
+    article = parser.article_roots[0]
+    article_attributes = {name: value for name, value in article.attrs}
+    identity_attributes = [
+        value
+        for name, value in article.attrs
+        if name != "class" and name.startswith("data-") and value is not None and value.strip()
+    ]
+    other_attributes = [name for name, _value in article.attrs if name != "class"]
+    if (
+        len(article_attributes) != len(article.attrs)
+        or len(other_attributes) != 1
+        or len(identity_attributes) != 1
+        or not (article_attributes.get("class") or "").split()
+    ):
+        raise DatasetContractError(
+            "ssr_parse_failed",
+            "detail article must contain exactly one structural identity attribute",
+        )
+    item_id = identity_attributes[0].strip()
+    if item_id != identity_attributes[0]:
+        raise DatasetContractError("ssr_parse_failed", "detail article identity must be normalized")
+
+    parsed_request_url = urlparse(request_url or "")
+    expected_item_path = f"/items/{item_id}"
+    if (
+        parsed_request_url.scheme not in {"http", "https"}
+        or not parsed_request_url.netloc
+        or parsed_request_url.path != expected_item_path
+        or parsed_request_url.params
+        or parsed_request_url.query
+        or parsed_request_url.fragment
+    ):
+        raise DatasetContractError(
+            "ssr_parse_failed",
+            "detail parser request URL must bind the structural item identity",
+        )
+
+    matching_urls: set[str] = set()
+    for value in parser.attribute_values:
+        parsed = urlparse(value)
+        if parsed.path != expected_item_path:
+            continue
+        if parsed.params or parsed.query or parsed.fragment:
+            raise DatasetContractError(
+                "ssr_parse_failed",
+                "detail canonical item URL must not contain params, query, or fragment",
+            )
+        if parsed.scheme or parsed.netloc:
+            if (
+                parsed.scheme != parsed_request_url.scheme
+                or parsed.netloc != parsed_request_url.netloc
+            ):
+                raise DatasetContractError(
+                    "ssr_parse_failed",
+                    "detail canonical item URL must use the request origin",
+                )
+        elif not value.startswith("/"):
+            raise DatasetContractError(
+                "ssr_parse_failed",
+                "detail canonical item URL must be absolute or root-relative",
+            )
+        matching_urls.add(
+            f"{parsed_request_url.scheme}://{parsed_request_url.netloc}{expected_item_path}"
+        )
+    if len(matching_urls) != 1:
+        raise DatasetContractError(
+            "ssr_parse_failed",
+            "detail SSR must identify exactly one canonical public item URL",
+        )
+    observed_aihot_url = next(iter(matching_urls))
+    observed_authority = urlparse(observed_aihot_url).netloc
+
+    candidates: list[list[str]] = []
+    for node in _iter_structural_nodes(article):
+        if not node.children or _normalized_node_text(node):
+            continue
+        tags: list[str] = []
+        hrefs: list[str] = []
+        paths: list[tuple[str, str]] = []
+        valid = True
+        for child in node.children:
+            attributes = {name: value for name, value in child.attrs}
+            if (
+                child.tag != "a"
+                or child.children
+                or len(child.attrs) != 2
+                or len(attributes) != 2
+                or set(attributes) != {"class", "href"}
+                or not attributes["class"]
+                or not attributes["href"]
+            ):
+                valid = False
+                break
+            tag_text = _normalized_node_text(child)
+            href = attributes["href"]
+            assert href is not None
+            parsed_href = urlparse(href)
+            if (
+                not tag_text
+                or parsed_href.params
+                or parsed_href.query
+                or parsed_href.fragment
+                or (parsed_href.scheme and parsed_href.scheme not in {"http", "https"})
+                or (parsed_href.scheme and parsed_href.netloc != observed_authority)
+                or (not parsed_href.scheme and (parsed_href.netloc or not parsed_href.path.startswith("/")))
+            ):
+                valid = False
+                break
+            path_segments = tuple(segment for segment in parsed_href.path.split("/") if segment)
+            if len(path_segments) != 2 or path_segments[0] == "items":
+                valid = False
+                break
+            tags.append(tag_text)
+            hrefs.append(href)
+            paths.append((path_segments[0], path_segments[1]))
+        if (
+            valid
+            and len(set(tags)) == len(tags)
+            and len(set(hrefs)) == len(hrefs)
+            and len(set(paths)) == len(paths)
+            and len({path[0] for path in paths}) == 1
+        ):
+            candidates.append(tags)
+    if len(candidates) != 1:
+        raise DatasetContractError(
+            "ssr_parse_failed",
+            "detail SSR must contain exactly one structural tag group",
+        )
+    return item_id, observed_aihot_url, candidates[0]
+
+
+def _parse_ssr_tag_observations(
+    body: bytes,
+    *,
+    channel: Literal["list", "detail"],
+    request_url: str | None = None,
+) -> list[TagObservation]:
     try:
         markup = body.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -1544,6 +1793,11 @@ def _parse_ssr_tag_observations(body: bytes, *, channel: Literal["list", "detail
     parser = _SsrTagHtmlParser()
     parser.feed(markup)
     parser.close()
+    parsed_items = parser.items
+    if channel == "detail" and not parsed_items:
+        structural_item = _parse_structural_detail_item(markup, request_url=request_url)
+        if structural_item is not None:
+            parsed_items = [structural_item]
     try:
         return [
             TagObservation(
@@ -1552,7 +1806,7 @@ def _parse_ssr_tag_observations(body: bytes, *, channel: Literal["list", "detail
                 tags=tags,
                 observed_aihot_url=aihot_url,
             )
-            for item_id, aihot_url, tags in parser.items
+            for item_id, aihot_url, tags in parsed_items
         ]
     except ValidationError as error:
         raise DatasetContractError("ssr_parse_failed", "SSR tag observation is invalid") from error
@@ -2561,7 +2815,11 @@ def _load_ssr_tag_observations(
             expected_body_sha256=reference.response_body_sha256,
             raw_files=raw_files,
         )
-        parsed = _parse_ssr_tag_observations(body, channel=channel)
+        parsed = _parse_ssr_tag_observations(
+            body,
+            channel=channel,
+            request_url=reference.request_url,
+        )
         parsed_by_path[reference.response_raw_path] = (channel, parsed)
 
     target_id_set = set(target_item_ids)
@@ -3375,7 +3633,11 @@ class CaptureWriter:
                 request_url=request_url,
                 raw_path=raw_path,
             )
-            for observation in _parse_ssr_tag_observations(response.body, channel="list"):
+            for observation in _parse_ssr_tag_observations(
+                response.body,
+                channel="list",
+                request_url=request_url,
+            ):
                 if observation.item_id not in targets:
                     continue
                 if observation.item_id in observations:
@@ -3400,7 +3662,11 @@ class CaptureWriter:
             self._store_raw(staging_root, raw_files, raw_path=raw_path, body=response.body)
             parsed = [
                 observation
-                for observation in _parse_ssr_tag_observations(response.body, channel="detail")
+                for observation in _parse_ssr_tag_observations(
+                    response.body,
+                    channel="detail",
+                    request_url=request_url,
+                )
                 if observation.item_id == item.id
             ]
             if not parsed:
