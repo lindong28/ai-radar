@@ -60,7 +60,7 @@
               "WebSocketParameters": null
             }
           ],
-          "Condition": "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/wechat', '/api/v1/wechat', '/', '/all']",
+          "Condition": "${http.request.host} in ['news.aiplanet.live'] and ${http.request.uri.path} in ['/wechat', '/api/v1/wechat', '/', '/all', '/daily', '/bookmarks', '/more', '/about']",
           "SubRules": null
         }
       ],
