@@ -126,19 +126,27 @@ def structural_detail_html(
         "https://aihot.invalid/items/fiction-item-alpha",
     ),
     tag_groups: tuple[tuple[str, ...], ...] = (("fictional-one", "fictional-two"),),
+    tag_group_classes: tuple[str, ...] | None = None,
 ) -> bytes:
     identity_markup = "".join(
         f'<meta content="{identity_url}">' for identity_url in identity_urls
     )
+    if tag_group_classes is None:
+        group_openings = tuple("<div>" for _tag_group in tag_groups)
+    else:
+        assert len(tag_group_classes) == len(tag_groups)
+        group_openings = tuple(
+            f'<div class="{group_class}">' for group_class in tag_group_classes
+        )
     group_markup = "".join(
-        "<div>"
+        group_opening
         + "".join(
             '<a class="fictional-tag-link" '
             f'href="/topics/{tag_slug}">Fictional tag {tag_slug}</a>'
             for tag_slug in tag_group
         )
         + "</div>"
-        for tag_group in tag_groups
+        for tag_group, group_opening in zip(tag_groups, group_openings, strict=True)
     )
     return (
         f"<html><head>{identity_markup}</head><body>"
@@ -172,6 +180,52 @@ def test_structural_detail_parser_recovers_identity_and_tags_without_legacy_sele
             "observed_aihot_url": "https://aihot.invalid/items/fiction-item-alpha",
         }
     ]
+
+
+def test_structural_detail_parser_accepts_equal_duplicate_tag_sequences(ds: Any) -> None:
+    tags = ("fictional-one", "fictional-two", "fictional-three")
+    observations = ds._parse_ssr_tag_observations(
+        structural_detail_html(
+            tag_groups=(tags, tags),
+            tag_group_classes=(
+                "dt-tags m-detail-tags dt-aside-tags",
+                "dt-tags m-detail-tags dt-inline-tags detail-tail-tags",
+            ),
+        ),
+        channel="detail",
+        request_url="https://aihot.invalid/items/fiction-item-alpha",
+    )
+
+    assert [observation.tags for observation in observations] == [
+        [
+            "Fictional tag fictional-one",
+            "Fictional tag fictional-two",
+            "Fictional tag fictional-three",
+        ]
+    ]
+
+
+def test_structural_detail_parser_rejects_unequal_duplicate_tag_sequences(ds: Any) -> None:
+    assert (
+        error_code(
+            ds,
+            lambda: ds._parse_ssr_tag_observations(
+                structural_detail_html(
+                    tag_groups=(
+                        ("fictional-one", "fictional-two", "fictional-three"),
+                        ("fictional-one", "fictional-two", "fictional-four"),
+                    ),
+                    tag_group_classes=(
+                        "dt-tags m-detail-tags dt-aside-tags",
+                        "dt-tags m-detail-tags dt-inline-tags detail-tail-tags",
+                    ),
+                ),
+                channel="detail",
+                request_url="https://aihot.invalid/items/fiction-item-alpha",
+            ),
+        )
+        == "ssr_parse_failed"
+    )
 
 
 @pytest.mark.parametrize(

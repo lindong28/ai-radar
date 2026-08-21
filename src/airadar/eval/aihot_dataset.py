@@ -1779,7 +1779,7 @@ def _parse_structural_detail_item(
             and len({path[0] for path in paths}) == 1
         ):
             candidates.append(tags)
-    if len(candidates) != 1:
+    if not candidates or any(candidate != candidates[0] for candidate in candidates[1:]):
         raise DatasetContractError(
             "ssr_parse_failed",
             "detail SSR must contain exactly one structural tag group",
