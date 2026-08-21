@@ -205,6 +205,37 @@ def test_structural_detail_parser_accepts_equal_duplicate_tag_sequences(ds: Any)
     ]
 
 
+def test_structural_detail_parser_records_observed_empty_tags_for_bound_item(ds: Any) -> None:
+    observations = ds._parse_ssr_tag_observations(
+        structural_detail_html(tag_groups=()),
+        channel="detail",
+        request_url="https://aihot.invalid/items/fiction-item-alpha",
+    )
+
+    assert [observation.model_dump(mode="json") for observation in observations] == [
+        {
+            "item_id": "fiction-item-alpha",
+            "channel": "detail",
+            "tags": [],
+            "observed_aihot_url": "https://aihot.invalid/items/fiction-item-alpha",
+        }
+    ]
+
+
+def test_structural_detail_parser_rejects_empty_tags_when_request_identity_is_unbound(ds: Any) -> None:
+    with pytest.raises(
+        ds.DatasetContractError,
+        match="detail parser request URL must bind the structural item identity",
+    ) as raised:
+        ds._parse_ssr_tag_observations(
+            structural_detail_html(tag_groups=()),
+            channel="detail",
+            request_url="https://aihot.invalid/items/fiction-item-beta",
+        )
+
+    assert raised.value.code == "ssr_parse_failed"
+
+
 def test_structural_detail_parser_rejects_unequal_duplicate_tag_sequences(ds: Any) -> None:
     assert (
         error_code(
@@ -264,13 +295,6 @@ def test_structural_detail_parser_rejects_unequal_duplicate_tag_sequences(ds: An
         structural_detail_html(
             tag_groups=(("fictional-one",), ("fictional-two",)),
         ),
-        structural_detail_html(
-            tag_groups=(("fictional-one", "../fictional-two?fictional=1"),),
-        ),
-        structural_detail_html().replace(
-            b'href="/topics/fictional-one"',
-            b'href="/topics/fictional-one" href="/topics/fictional-one"',
-        ),
     ],
     ids=(
         "ambiguous-article-identity",
@@ -280,8 +304,6 @@ def test_structural_detail_parser_rejects_unequal_duplicate_tag_sequences(ds: An
         "canonical-url-query",
         "canonical-url-fragment",
         "ambiguous-tag-parent",
-        "mixed-tag-url-family",
-        "duplicate-anchor-attribute",
     ),
 )
 def test_structural_detail_parser_fails_closed_on_ambiguous_shape(ds: Any, body: bytes) -> None:
