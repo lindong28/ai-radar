@@ -93,12 +93,20 @@ def _wait_for_health(base_url: str, process: subprocess.Popen[str]) -> None:
     raise TimeoutError(f"AI Radar server did not become healthy\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
 
 
+WECHAT_FEED_ENVS = ("MP2RSS_FEED_URL", "WECHAT2RSS_FEED_URL")
+MAIN_SOURCE_COUNT = 161
+
+
+def _expected_source_count(feed_urls: dict[str, str] | None) -> int:
+    return MAIN_SOURCE_COUNT + (len(WECHAT_FEED_ENVS) if feed_urls else 0)
+
+
 class _Mp2RSSHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/healthz":
             body = b"ok"
             content_type = "text/plain"
-        elif self.path == "/paid-secret-feed":
+        elif self.path in {"/paid-secret-feed", "/self-hosted-feed"}:
             body = b'<?xml version="1.0"?><rss version="2.0"><channel><title>fixture</title></channel></rss>'
             content_type = "application/rss+xml"
         else:
@@ -115,7 +123,13 @@ class _Mp2RSSHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _mp2rss_fixture(enabled: bool) -> Iterator[str | None]:
+def _mp2rss_fixture(enabled: bool) -> Iterator[dict[str, str] | None]:
+    """Stand in for every optional WeChat feed, keyed by the env var it needs.
+
+    Each such feed URL embeds a subscription token, so the assertions below
+    check that none of them reaches a public surface; running more than one
+    keeps that check honest as feeds are added.
+    """
     if not enabled:
         yield None
         return
@@ -126,7 +140,10 @@ def _mp2rss_fixture(enabled: bool) -> Iterator[str | None]:
     with httpx.Client(trust_env=False, timeout=2) as client:
         assert client.get(f"{base}/healthz").status_code == 200
     try:
-        yield f"{base}/paid-secret-feed"
+        yield {
+            "MP2RSS_FEED_URL": f"{base}/paid-secret-feed",
+            "WECHAT2RSS_FEED_URL": f"{base}/self-hosted-feed",
+        }
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -305,16 +322,17 @@ def _insert_curated_relations(
 def _prepare_upgrade_db(
     db_path: Path,
     *,
-    paid_url: str | None,
+    feed_urls: dict[str, str] | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if paid_url is None:
-        monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
-    else:
-        monkeypatch.setenv("MP2RSS_FEED_URL", paid_url)
+    for env_name in WECHAT_FEED_ENVS:
+        if feed_urls is None:
+            monkeypatch.delenv(env_name, raising=False)
+        else:
+            monkeypatch.setenv(env_name, feed_urls[env_name])
     migrate(db_path)
     current_sources = load_sources(ROOT / "data" / "sources.toml")
-    assert len(current_sources) == (162 if paid_url else 161)
+    assert len(current_sources) == _expected_source_count(feed_urls)
     current_by_slug = {source.slug: source for source in current_sources}
     with sqlite3.connect(db_path) as conn:
         database_file = Path(conn.execute("PRAGMA database_list").fetchone()[2]).resolve()
@@ -397,7 +415,7 @@ def _prepare_upgrade_db(
                 url=url,
                 rank=len(REMOVED_SLUGS) + rank,
             )
-        if paid_url:
+        if feed_urls:
             wx_source = current_by_slug["wx_mp2rss"]
             _insert_config_source(conn, wx_source)
             _insert_item(
@@ -434,9 +452,9 @@ def _prepare_upgrade_db(
         conn.commit()
 
 
-def _sync_current_sources(db_path: Path, *, paid_url: str | None) -> None:
+def _sync_current_sources(db_path: Path, *, feed_urls: dict[str, str] | None) -> None:
     sources = load_sources(ROOT / "data" / "sources.toml")
-    assert len(sources) == (162 if paid_url else 161)
+    assert len(sources) == _expected_source_count(feed_urls)
     with sqlite3.connect(db_path) as conn:
         sync_to_db(sources, conn)
 
@@ -462,7 +480,7 @@ def _serve(db_path: Path) -> Iterator[str]:
         cwd=ROOT,
         env={
             "AI_RADAR_DB": str(db_path.resolve()),
-            "MP2RSS_FEED_URL": os.environ.get("MP2RSS_FEED_URL", ""),
+            **{name: os.environ.get(name, "") for name in WECHAT_FEED_ENVS},
             "PATH": os.environ.get("PATH", ""),
             "PYTHONPATH": str(ROOT / "src"),
             "TZ": "Asia/Shanghai",
@@ -749,8 +767,9 @@ def test_aihot_source_alignment_four_page_matrix(
     db_path = tmp_path / ("with-mp2rss.db" if with_mp2rss else "without-mp2rss.db")
     print(f"AIHOT alignment DB: {db_path.resolve()}")
 
-    with _mp2rss_fixture(with_mp2rss) as paid_url:
-        _prepare_upgrade_db(db_path, paid_url=paid_url, monkeypatch=monkeypatch)
+    with _mp2rss_fixture(with_mp2rss) as feed_urls:
+        secret_urls = sorted((feed_urls or {}).values())
+        _prepare_upgrade_db(db_path, feed_urls=feed_urls, monkeypatch=monkeypatch)
         with _serve(db_path) as pre_sync_base_url:
             pre_sync_context = browser.new_context(viewport={"width": 1366, "height": 900})
             pre_sync_requested_urls: list[str] = []
@@ -765,12 +784,12 @@ def test_aihot_source_alignment_four_page_matrix(
                     pre_sync_base_url,
                     evidence_dir,
                 )
-                if paid_url:
-                    assert paid_url not in pre_sync_page.content()
-                    assert paid_url not in (evidence_dir / "pre-sync-sources.json").read_text(
+                for secret_url in secret_urls:
+                    assert secret_url not in pre_sync_page.content()
+                    assert secret_url not in (evidence_dir / "pre-sync-sources.json").read_text(
                         encoding="utf-8"
                     )
-                    assert all(paid_url not in url for url in pre_sync_requested_urls)
+                    assert all(secret_url not in url for url in pre_sync_requested_urls)
                 (evidence_dir / "pre-sync-network-urls.json").write_text(
                     json.dumps(pre_sync_requested_urls, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
@@ -778,7 +797,7 @@ def test_aihot_source_alignment_four_page_matrix(
             finally:
                 pre_sync_context.close()
 
-        _sync_current_sources(db_path, paid_url=paid_url)
+        _sync_current_sources(db_path, feed_urls=feed_urls)
         _assert_preserved_upgrade_rows(db_path, with_mp2rss=with_mp2rss)
         with _serve(db_path) as base_url:
             context = browser.new_context(viewport={"width": 1366, "height": 900})
@@ -801,7 +820,7 @@ def test_aihot_source_alignment_four_page_matrix(
                     expect(page.locator(f'.timeline-card[data-source-id="{source_id}"]')).to_have_count(1)
 
                 page.goto(f"{base_url}/about", wait_until="domcontentloaded")
-                expected_count = 162 if with_mp2rss else 161
+                expected_count = _expected_source_count(feed_urls)
                 expect(page.locator("#sources-table tr")).to_have_count(expected_count, timeout=10_000)
                 page.screenshot(path=evidence_dir / "about.png", full_page=True)
 
@@ -853,10 +872,10 @@ def test_aihot_source_alignment_four_page_matrix(
                     expect(page.get_by_text(title, exact=True)).to_have_count(0)
                 page.screenshot(path=evidence_dir / "wechat.png", full_page=True)
 
-                if paid_url:
-                    assert paid_url not in page.content()
-                    assert paid_url not in response_text
-                    assert all(paid_url not in url for url in requested_urls)
+                for secret_url in secret_urls:
+                    assert secret_url not in page.content()
+                    assert secret_url not in response_text
+                    assert all(secret_url not in url for url in requested_urls)
                 (evidence_dir / "network-urls.json").write_text(
                     json.dumps(requested_urls, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
@@ -895,7 +914,7 @@ def test_aihot_source_alignment_four_page_matrix(
                         "wechat_source_isolation": "passed",
                         "public_projection_secret_boundary": "passed",
                         "paid_mp2rss_url_non_disclosure": (
-                            "passed" if paid_url else "not_applicable_no_paid_url_configured"
+                            "passed" if secret_urls else "not_applicable_no_paid_url_configured"
                         ),
                     },
                     "artifact_sha256_by_path_relative_to_branch_evidence_dir": artifact_hashes,

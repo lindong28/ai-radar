@@ -1,3 +1,6 @@
+> **Archive status**: 已归档并上线。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> SSR 首屏预载的当前契约见 [architecture.md](../../architecture.md)「Web Layer」的「SSR preload contract」节与同章「页面路由」表；边缘缓存对该路径的影响见 [architecture.md](../../architecture.md)「公开分页的边缘缓存」节；当前生产边缘是腾讯云 EdgeOne，对账口径见 [operations/services.md](../../operations/services.md)「EdgeOne 节点缓存规则对账与 purge」节（同文件的「Cloudflare Cache Rule」节属历史/旁路配置，不在当前公网热路径上）。以下为原 plan 正文，未修改。
+
 # Plan: SSR Preload 让 your-domain.example 首屏即时显示
 
 > **Long-task mode**: 实施过程遵循 `~/.claude/references/long-task-protocol.md`。

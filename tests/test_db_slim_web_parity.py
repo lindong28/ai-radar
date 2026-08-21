@@ -264,7 +264,7 @@ def test_db_slim_bounded_retain_and_real_curate_hook() -> None:
         item_id = str(conn.execute("SELECT id FROM items ORDER BY id LIMIT 1").fetchone()[0])
         latest_run = str(
             conn.execute(
-                "SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1"
+                "SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1"
             ).fetchone()[0]
         )
         evaluations_digest = _query_digest(
@@ -357,7 +357,7 @@ def test_db_slim_bounded_retain_and_real_curate_hook() -> None:
     with sqlite3.connect(db_path) as conn:
         new_run = str(
             conn.execute(
-                "SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1"
+                "SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1"
             ).fetchone()[0]
         )
         assert new_run not in {latest_run, "l2-bounded-within"}

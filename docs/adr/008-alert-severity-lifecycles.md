@@ -1,6 +1,6 @@
 # ADR-008: 告警按 severity 维护独立 lifecycle
 
-- Status: accepted
+- Status: accepted; PERF busy→idle gate (F1) 与 busy rollup (F4) 方向由 ADR-011 supersede，per-severity lifecycle 主体仍 accepted
 - Date: 2026-07-22
 
 ## Context

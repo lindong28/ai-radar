@@ -71,7 +71,9 @@ A1 样本少于 5、A3 最近 15 分钟 PV 少于 20 时，阈值分支不具备
 
 **状态**：open · **优先级**：medium
 
-P2 review 时 `logs/alert-check.log` 已为 6,358,058 bytes、约 11,503 次运行；5 分钟 cadence 会让它持续增长。当前 `status.sh alert` 只给日志路径，不检查大小或可写性。运维 runbook 已把这一限制写明；闭合仍需增加有界 rotation、超限/不可写状态暴露和真实轮转验证。
+本条是 alert-check 日志无界增长的**实体 owner**；告警侧的消费面（`status.sh alert` 不报大小、`alert-check.err.log` 是 ledger fail-open 的唯一证据通道）由 [alerting.md ISSUE-A11](alerting.md) 指回本条。
+
+P2 review 时 `logs/alert-check.log` 已为 6,358,058 bytes、约 11,503 次运行；5 分钟 cadence 会让它持续增长。**最新读数（2026-08-20 实测）：9,908,040 bytes / 80,516 行**——较 P2 时增长约 56%，仍在按 5 分钟 cadence 增长，读数取的那一刻之后就已经不准了。仓内**零 rotation**：`git grep` 覆盖 `deploy/`、`scripts/`、`install.sh`、`status.sh` 后，唯一命中 "rotate" 的是 `deploy/wechat2rss/logs.sh` 里关于凭据轮换的注释，与日志切分无关；launchd 的 `StandardOutPath`（`deploy/launchd/ai-radar-alert.plist.example:17`）直指该文件、只追加不切分。`status.sh alert` 只给日志路径（`status.sh:72`），不检查大小或可写性。运维 runbook 已把这一限制写明；闭合仍需增加有界 rotation、超限/不可写状态暴露和真实轮转验证。
 
 ## ISSUE-014 · cost-report install/status 不验证 cron command 的可执行依赖
 

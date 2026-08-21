@@ -102,7 +102,7 @@ def precompute_curated_summaries(conn: sqlite3.Connection, run_id: str) -> int:
 def precompute_latest(path: str | None = None) -> None:
     with db.get_conn(path) as conn:
         run = conn.execute(
-            "SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1"
+            "SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1"
         ).fetchone()
         if run is None:
             return

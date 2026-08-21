@@ -1,6 +1,6 @@
 # ADR-038: Observe WeRead dynamic header presence without replay
 
-Status: Accepted
+Status: Accepted; deprecated — the WeRead canary line stopped together with the Mp2RSS replacement plan it explored, see ADR-061
 
 Date: 2026-08-13
 

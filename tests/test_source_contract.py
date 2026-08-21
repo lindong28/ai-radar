@@ -19,7 +19,7 @@ def test_checked_in_contract_is_the_only_editable_source_authority() -> None:
     payload = load_source_contract(CONTRACT_PATH)
 
     assert payload["schema_version"] == 2
-    assert len(payload["sources"]) == 162
+    assert len(payload["sources"]) == 163
     assert render() == (ROOT / "data" / "sources.toml").read_text(encoding="utf-8")
     assert not (ROOT / "scripts" / "render_aihot_source_contract.py").exists()
 
@@ -42,12 +42,16 @@ def test_contract_has_no_convenience_copies() -> None:
 
 def test_contract_wechat_optional_boundary_is_explicit() -> None:
     payload = load_source_contract(CONTRACT_PATH)
-    [wechat] = [row for row in payload["sources"] if row["kind"] == "wechat"]
+    wechat_rows = [row for row in payload["sources"] if row["kind"] == "wechat"]
 
-    assert wechat["optional"] is True
-    assert wechat["required_env"] == "MP2RSS_FEED_URL"
-    assert wechat["wechat_only"] is True
-    assert wechat["public_url_override"] == "https://mp.weixin.qq.com/"
+    # More than one is the point: an incumbent WeChat feed and its candidate
+    # replacement run side by side until one of them is switched off.
+    assert {row["required_env"] for row in wechat_rows} == {"MP2RSS_FEED_URL", "WECHAT2RSS_FEED_URL"}
+    for wechat in wechat_rows:
+        assert wechat["optional"] is True
+        assert wechat["fetch_url"] == f"${{{wechat['required_env']}}}"
+        assert wechat["wechat_only"] is True
+        assert wechat["public_url_override"] == "https://mp.weixin.qq.com/"
 
 
 def test_fresh_aihot_delta_has_stable_contract_identities_and_observed_aliases() -> None:
@@ -69,6 +73,24 @@ def test_fresh_aihot_delta_has_stable_contract_identities_and_observed_aliases()
         }
 
 
+def _wechat_rows(payload: dict) -> list[dict]:
+    return [row for row in payload["sources"] if row["kind"] == "wechat"]
+
+
+def _point_both_wechat_feeds_at_one_env(payload: dict) -> None:
+    first, second = _wechat_rows(payload)[:2]
+    second["required_env"] = first["required_env"]
+    second["fetch_url"] = first["fetch_url"]
+
+
+def _drop_every_wechat_source(payload: dict) -> None:
+    payload["sources"] = [row for row in payload["sources"] if row["kind"] != "wechat"]
+
+
+def _break_wechat_env_placeholder_pairing(payload: dict) -> None:
+    _wechat_rows(payload)[0]["required_env"] = "SOME_OTHER_FEED_URL"
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -77,6 +99,11 @@ def test_fresh_aihot_delta_has_stable_contract_identities_and_observed_aliases()
         (lambda payload: payload["sources"][0]["aihot_aliases"].append(payload["sources"][0]["name"]), "public name"),
         (lambda payload: payload["sources"][0].update(optional=True), "optional fields"),
         (lambda payload: payload["sources"][0].update(derived_aihot_identity="feed:wrong"), "identity"),
+        # Two WeChat feeds pointed at one env var would silently fetch the same
+        # feed twice, which reads as "the replacement agrees with the incumbent".
+        (_point_both_wechat_feeds_at_one_env, "reuses required_env"),
+        (_drop_every_wechat_source, "at least one optional WeChat source"),
+        (_break_wechat_env_placeholder_pairing, "required_env and fetch_url must match"),
     ],
 )
 def test_contract_validator_rejects_semantically_invalid_records(mutation, message: str) -> None:  # noqa: ANN001

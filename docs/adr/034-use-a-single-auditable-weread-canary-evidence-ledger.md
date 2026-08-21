@@ -1,6 +1,6 @@
 # ADR-034: Use a single auditable WeRead canary evidence ledger
 
-Status: Accepted
+Status: Accepted; deprecated — the WeRead canary line stopped together with the Mp2RSS replacement plan it explored, see ADR-061.
 
 Date: 2026-08-13
 

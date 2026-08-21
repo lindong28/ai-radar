@@ -1,5 +1,5 @@
-> Archive status: completed on the isolated task branch in commit `451b33a`; execution-only `state.md` and `journal.md` are intentionally not archived.
-> Current behavior and evidence boundaries: see the README “信源” section, `docs/contracts/ux-contract.md` TL-2/AB-1, and `docs/architecture.md` ingestion/API sections. The body records the pre-integration ADR-024 path; it landed as ADR-047 after the current `main` had already assigned ADR-023 and concurrent work had reserved ADR-024 through ADR-045.
+> **Archive status**: 已归档，在一条独立 task 分支上执行完成；决策以 [ADR-047](../../adr/047-use-controlled-original-web-lists-for-aihot-source-alignment.md) 的形态落在 `main`，那是可定位的权威记录——原 task 分支的 commit 从 `main` 不可达。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 当前行为与取证边界：见 README「信源」节、[docs/contracts/ux-contract.md](../../contracts/ux-contract.md) 的 TL-2/AB-1，以及 [docs/architecture.md](../../architecture.md) 的摄取与 API 两节。**正文里的 ADR 编号是集成前的旧号（ADR-024）**：落盘时当前 `main` 已把 ADR-023 分配出去、并发工作又占了 ADR-024–045，故最终编号为 ADR-047。以下为原 plan 正文，未修改。
 
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式
 > - 进度状态：`./state.md`

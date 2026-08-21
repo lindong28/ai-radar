@@ -1,6 +1,6 @@
 {
   "artifact_type": "aihot_source_union",
-  "contract_sha256": "b25437cd7f5ccf1f58aa7bf8cf0f7171bf9a685d494c0f720a7ecfe18a443ad7",
+  "contract_sha256": "eb1d66eb7d4d7b69b8e473910001be32d971aa27c19ff8b1cd0734ddbe2526fb",
   "identities": [
     {
       "derived_aihot_identity": "feed:ai_normal_technology",

@@ -2062,3 +2062,17 @@ optional = true
 required_env = "MP2RSS_FEED_URL"
 wechat_only = true
 public_url_override = "https://mp.weixin.qq.com/"
+
+[[source]]
+slug = "wx_wechat2rss"
+name = "微信公众号（Wechat2RSS 自建）"
+fetch_url = "${WECHAT2RSS_FEED_URL}"
+tier = "T2"
+enabled = true
+kind = "wechat"
+homepage_url = "https://mp.weixin.qq.com/"
+icon_url = "https://www.google.com/s2/favicons?domain=mp.weixin.qq.com&sz=64"
+optional = true
+required_env = "WECHAT2RSS_FEED_URL"
+wechat_only = true
+public_url_override = "https://mp.weixin.qq.com/"

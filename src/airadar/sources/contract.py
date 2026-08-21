@@ -62,7 +62,7 @@ def validate_source_contract(payload: object) -> dict[str, Any]:
     slugs: set[str] = set()
     web_slugs: set[str] = set()
     public_label_owners: dict[str, str] = {}
-    wechat_count = 0
+    wechat_envs: set[str] = set()
     for index, value in enumerate(sources):
         if not isinstance(value, dict):
             raise ValueError(f"source contract row {index} must be an object")
@@ -123,14 +123,16 @@ def validate_source_contract(payload: object) -> dict[str, Any]:
         _http_url(row.get("icon_url"), field="icon_url", slug=slug)
         fetch_url = row.get("fetch_url")
         if kind == "wechat":
-            wechat_count += 1
             if row.get("ai_radar_main_timeline_member") is not False:
                 raise ValueError(f"wechat source {slug} cannot be a main source")
             if row.get("optional") is not True or row.get("wechat_only") is not True:
                 raise ValueError(f"wechat source {slug} optional fields must declare optional and wechat_only")
             required_env = row.get("required_env")
-            if required_env != "MP2RSS_FEED_URL" or fetch_url != "${MP2RSS_FEED_URL}":
+            if not isinstance(required_env, str) or fetch_url != f"${{{required_env}}}":
                 raise ValueError(f"wechat source {slug} required_env and fetch_url must match")
+            if required_env in wechat_envs:
+                raise ValueError(f"wechat source {slug} reuses required_env {required_env}")
+            wechat_envs.add(required_env)
             _http_url(row.get("public_url_override"), field="public_url_override", slug=slug)
             if identity != f"extra:{slug}":
                 raise ValueError(f"invalid wechat identity for {slug}")
@@ -162,8 +164,8 @@ def validate_source_contract(payload: object) -> dict[str, Any]:
 
     if web_slugs != set(WEB_SOURCE_REGISTRY):
         raise ValueError("web source slugs must exactly match the code-owned registry")
-    if wechat_count != 1:
-        raise ValueError("source contract must contain exactly one optional WeChat source")
+    if not wechat_envs:
+        raise ValueError("source contract must contain at least one optional WeChat source")
     return payload
 
 

@@ -530,10 +530,10 @@ def _radar_item_from_row(
 def _select_run(conn: sqlite3.Connection, selected_date: str | None) -> sqlite3.Row | None:
     if selected_date:
         return conn.execute(
-            "SELECT * FROM curation_runs WHERE substr(created_at, 1, 10)=? ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM curation_runs WHERE substr(created_at, 1, 10)=? ORDER BY created_at DESC, id DESC LIMIT 1",
             (selected_date,),
         ).fetchone()
-    return conn.execute("SELECT * FROM curation_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+    return conn.execute("SELECT * FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
 
 
 def load_airadar_items(

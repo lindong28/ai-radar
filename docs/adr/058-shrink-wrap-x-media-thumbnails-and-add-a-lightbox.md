@@ -108,3 +108,16 @@
 ## 决策评审
 
 本决策过 `decision-review` gate。首轮判 blocker（"新标签页会丢失滚动位置"这一否决理由经核 `app.js:393` 的 `target="_blank"` **不成立**，且漏了混合方案）→ 交用户 → 用户改选混合方案 → 重走完整 gate → 判"复核" → 四轮复核后通过（Codex read-only，session `01a01492-6269-7863-affc-d40a11e980be`）。
+
+## 修订记录
+
+**2026-08-20 — 正文里的四处 `file:line` 已漂移，改用符号名定位。** 本 ADR 正文一字不改；下表给出 2026-08-20 当日源码的对照，读者按**符号名**找，不要按行号找。行号会继续漂，符号名不会。
+
+| 正文中的引用 | 指的是什么 | 2026-08-20 的实际位置 |
+|---|---|---|
+| `web/static/app.js:2045`（`bookmarkSnapshot` 字段白名单） | 收藏快照的字段白名单，不含 `media_assets` | `web/static/app.js` 的 `function bookmarkSnapshot(item)`，当日在 2345 行（写作当时该行号处是日报翻页逻辑，引用自落盘起就未指准） |
+| `app.js:393` 的 `target="_blank"` | `.x-media-link` 上的新标签页跳转 | `web/static/app.js` 的 `articleMedia()` 内 `<a class="x-media-link" … target="_blank">`，当日在 403 行 |
+| `src/airadar/web/app.py:739` 的 `/curated` alias | 复用首页渲染的 `/curated` 路由 | `src/airadar/web/app.py` 的 `curated_alias()`（`@app.get("/curated")`），当日在 786–787 行 |
+| `app.js:767` 处的 `rebuildTimeline` 用 `innerHTML` 整块替换列表 | 跨 960px 断点时整块重渲染列表的那次赋值 | **函数名本身就不存在**：`rebuildTimeline` 在全仓只出现于 `web/static/app.js` 的一处注释中，没有同名符号。实际做整块 `innerHTML` 替换的是 `renderTimeline()`（当日 757 行，赋值在 820 行）。本注记只更正定位，不改正文，也不改那处源码注释——后者是代码侧的独立待办 |
+
+漂移原因与「已知未验证项」里那条 `alt_text` 缺口无关，纯粹是行号引用在后续编辑下失效；同类写法在本仓的通用纪律（引用源码一律用符号名）已登记为文档质量债。

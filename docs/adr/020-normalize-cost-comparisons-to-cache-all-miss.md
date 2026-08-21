@@ -1,6 +1,6 @@
 # ADR-020：成本比较统一归一化为 cache 全未命中
 
-- 状态：Accepted
+- 状态：Accepted；「近 24 小时计量不完整时统一降级」对 A6 在途窗口的处理由 ADR-022 supersede
 - 日期：2026-08-11
 - 范围：A6、周报与 `/admin/usage` 的跨窗成本比较；不改变各窗口绝对成本的已观测 cache 口径
 - Supersedes：ADR-018 的 cache 精确覆盖 gate 与「过渡期」判断；ADR-019 的 interpret cache 精确覆盖 gate

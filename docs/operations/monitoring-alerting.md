@@ -1,6 +1,8 @@
 # 运维监控与告警 Runbook
 
 > Mutable snapshot. 面向 AI Radar 运维者：怎么看 `/admin`、怎么处理告警、怎么配置飞书与 Cloudflare Access。
+>
+> 本目录（`docs/operations/`）是维护者产线 runbook，绑定具体实机拓扑；fork 部署路径见 [README](../../README.md)。
 
 ## 入口
 
@@ -14,7 +16,7 @@
 - 用户旅程探针入口：`./run.sh performance-probe --help`（当前部署参数见下文）
 - 性能候选修复 CLI（启用仍受下文 gate 约束）：`./run.sh performance-remediate --help`
 
-`/admin` 和 `/admin/usage` 是运维面板，不挂公开导航。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**，仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行。应用对公网请求只检查 `Cf-Access-Jwt-Assertion` 是否非空，不验签；这只有在请求先经过 Cloudflare Access 时才是有效边界。当前生产 `news.aiplanet.live` 直解腾讯源站、未经过 Cloudflare，2026-08-12 实测无 header 为 403、伪造 header 为 200，因此当前 admin 不能视为已认证入口；开放修复见 [deploy issue](../issues/deploy.md#open-2026-08-12当前生产-admin-入口绕过-cloudflare-access).
+`/admin` 和 `/admin/usage` 是运维面板，不挂公开导航。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**，仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行。**已知限制（本文其余各处只引用这一条，不复述）**：应用对公网请求只检查 `Cf-Access-Jwt-Assertion` 是否非空，**不验签**；这只有在请求先经过 Cloudflare Access 时才是有效边界。当前生产 `news.aiplanet.live` 直解腾讯源站、未经过 Cloudflare，2026-08-12 实测无 header 为 403、伪造 header 为 200，因此当前 admin 不能视为已认证入口；开放修复见 [deploy issue](../issues/deploy.md#open-2026-08-12当前生产-admin-入口绕过-cloudflare-access).
 
 ## Dashboard 怎么看
 
@@ -44,9 +46,9 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 | A1 | 上游模型不可用 | DeepSeek/OpenAI/GLM/ARK 返回 endpoint/model/权限/余额类错误；`schema validation failed` 已排除 | 查 provider 控制台余额、模型权限、API key；必要时切换 provider 或充值 |
 | A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 的错误 numerator/denominator **各自只取最近 15 分钟**；样本数分别至少为 `4/4/2` 才让错误率支路参与 page。独立的 P95 与**超过 120 分钟没有成功 pipeline**支路不受该样本门影响。prefilter 等后台 LLM 阶段的 P95 仍用最近 2 小时口径，只在持续达到真挂起量级时 page。SKIP 日志表示 pipeline 已在运行，不单独视为故障 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
 | A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测从已安装 serve plist 的 `ProgramArguments` 解析端口，连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
-| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 按 error 分组读 `logs/pipeline-*.log` 最新一轮的 FAIL 行，见下方「出网链路的两种签名」；X 源走官方 `api.x.com`（另查 bearer token 与配额），微信源走 Mp2RSS |
+| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 按 error 分组读 `logs/pipeline-*.log` 最新一轮的 FAIL 行，见下方「出网链路的两种签名」；X 源走官方 `api.x.com`（另查 bearer token 与配额），微信源走 Mp2RSS + Wechat2RSS 双跑（见 [wechat-ingestion.md](wechat-ingestion.md)） |
 | A5 | 微信解读产出停滞 | 解读启用、4 小时无成功解读，且存在 fetched 至少 4 小时、仍符合重试资格的微信 pending 时 page；无近期成功且 pending 因退避/冻结归零时标为不可评估，不发「已恢复」 | 先查近 4 小时 pipeline/interpret 日志与 provider 成功/错误，再核对余额/配额；`ark-breaker.json` 只有 `opened_at` 仍在 2 小时 cooldown 内才是当前证据 |
-| A6 | 已记录 LLM 调用近 24 小时成本突变 | 两侧按同一现行费率、cache 全未命中重算；金额/次数只统计 `llm_usage` 记录行，未写入该表的付费调用不在内，因此只能作为下界（例如失败链路或未接入计量的调用点）。超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。当前实现固定把前 14 个 UTC 日都纳入基线，无记录日按 ¥0 进入中位数，所以 `baseline_days` 恒为 14；“至少 3 个有记录日”并不是现行门槛，缺口见 [ISSUE-023](../issues/cost-observability.md#issue-023--a6-的至少-3-个基线日门当前不可达)。近 24 小时已观测日志缺数时标为不可评估；若唯一缺口是当前上海日且 `.pipeline.flock` 的内核锁探测证明本轮在运行，则暂记 `in-progress`，把已记录金额作为下界继续允许首次 firing 与 notice→page，只在下界未越线时保留既有 episode、等待封口后再判断记录行金额是否回落；resolve 不表示 attempt-level 健康 | 先按消息中的 Top 驱动核查；它复用 A6 的 cache 中性已知成本聚合。未定价调用在 `/admin/usage` 单列，nominal 目录价不是账单实付 |
+| A6 | 已记录 LLM 调用近 24 小时成本突变 | 当前窗与基线按同一现行费率、cache 全未命中重算。阈值两档：超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。金额与次数只统计 `llm_usage` 记录行，所以**任何越线判定都是在一个下界上做的**——未写入该表的付费调用（失败链路、未接入计量的调用点）不在内，resolve 也因此不表示 attempt-level 健康。在途窗（`.pipeline.flock` 证明本轮在跑）按 `in-progress` 用下界继续判 firing 与 notice→page，下界未越线时保留既有 episode 等封口。`baseline_days` 的实际取值与「至少 3 个有记录日」的缺口见 [ISSUE-023](../issues/cost-observability.md#issue-023--a6-的至少-3-个基线日门当前不可达) | 先按消息中的 Top 驱动核查；它复用 A6 的 cache 中性已知成本聚合。未定价调用在 `/admin/usage` 单列，nominal 目录价不是账单实付 |
 | A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时 page。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数，不按健康处理。所有静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该来源的 OK/FAIL 行：整批同时静默多为出网链路，见下方「出网链路的两种签名」；单源静默则查该源站点或其上游订阅服务 |
 
 ### 出网链路的两种签名（A4、A7 的处置指引都指向这里）
@@ -68,7 +70,7 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 
 A7 补的是 A4 看不见的那一面：A4 用全站 item 增量与 fetch 失败率判定，单个来源死亡时其余来源仍把总量顶在 floor 之上。2026-08-14 至 08-17 微信来源零入库约 73 小时期间，A4 每天分别判定 firing 9 / 36 / 59 次，而 `send A4` 在 08-14、08-15 为 0 次、08-16 为 4 次。
 
-本节此前写作「A4 全程按 `notice` 处理、未投递（`sent=0`）」，两处均不成立：alert-check 日志的 firing 行不记录 severity，该归类未经核实；08-16 的 4 次投递也不是 `sent=0`。**未投递的真实机制不是 severity 分档**，而是 resolve 侧无对称确认加上 `attempted=0` 造成的假 ok 反复打断去抖计时，见 [issues/alerting.md ISSUE-A01](../issues/alerting.md)——该项当前未闭合，因此 A4 的投递不可依赖，A7 不是它的冗余而是唯一覆盖单源静默的规则。
+**A4 的投递当前不可依赖**（未闭合，机制与证据见 [issues/alerting.md ISSUE-A01](../issues/alerting.md)），所以 A7 不是它的冗余，而是唯一覆盖单源静默的规则。
 
 D3 每轮按 provider/model 检查 unpriced、stale、due-review 与 active tariff 变化，通过 `NOTIFICATION` webhook 发送，不带 `--alert`。未定价消息给出已记录调用数/已记录调用总数，stale/due-review 指名对象，price-changed 同时给旧值与新值。相同条件的调用计数变化不会重发；首次投递失败下轮重试，解除时 `im-notify --dedup-clear` 失败会保留 re-arm 义务，间歇未出现的模型仍保留旧价格签名。处置落点是 `src/airadar/pricing.py` 的 provider/model 条目、来源、生效区间与 `verified_at`。真实生产数据截至 P2 开发时尚未出现 stale、due-review 或 unpriced，这些分支目前只有 synthetic fixture 覆盖。
 
@@ -97,7 +99,7 @@ installer 当前只检查 notification webhook，`status.sh` 只检查 crontab m
 
 ### 已送达通知历史
 
-A1–A7、D3 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。成功投递的 firing/resolved 写入对应 channel；A1/A2/A5 合并时，被 carrier 吸收的规则另写 `type=suppressed, channel=INTERNAL`，并记录 carrier、reason 与 heartbeat freshness。投递行另含 `episode_since` 与 `notification_nonce`。失败 attempt 不写入。查询推送次数必须排除 INTERNAL，查询事故数必须按 episode identity 去重。例如：
+A1–A7、D3 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。**覆盖面仅限这三类**：`deploy/wechat2rss/healthcheck.sh` 那条 cron 走 `im-notify --alert --dedup-key wechat2rss-*` 直发，**不写这个 ledger**（它是外部探活脚本，不经 `alerts.py` 的 lifecycle）。所以「查最近告警」时 ledger 里没有 wechat2rss 记录不表示它没告过警，要另看该 cron 的执行与飞书 ALERT 通道。成功投递的 firing/resolved 写入对应 channel；A1/A2/A5 合并时，被 carrier 吸收的规则另写 `type=suppressed, channel=INTERNAL`，并记录 carrier、reason 与 heartbeat freshness。投递行另含 `episode_since` 与 `notification_nonce`。失败 attempt 不写入。查询推送次数必须排除 INTERNAL，查询事故数必须按 episode identity 去重。例如：
 
 ```bash
 tail -n 50 data/alert-events.jsonl | jq .
@@ -106,14 +108,37 @@ jq -c 'select(.type == "suppressed" and .channel == "INTERNAL")' data/alert-even
 jq -c 'select(.rule_id | startswith("PERF:"))' data/alert-events.jsonl
 ```
 
-ledger 在每次成功写入时裁掉 14 天前的事件；INTERNAL 抑制行同样计入裁剪与 64 MiB 上限。A1–A6、D3 与 PERF 可并发写入，因此用稳定的 `data/alert-events.lock` sidecar 做 `flock`；锁等待最多 1 秒。损坏 JSON、非普通文件、锁超时、超限或写入失败都 fail-open：记错误日志并跳过本批 ledger，不覆盖原文件，不阻断通知投递或告警状态持久化。因此 ledger 是便于查询的非权威投递与抑制历史，不是 attempt、状态或 exactly-once 真源。
+ledger 在每次成功写入时裁掉 14 天前的事件；INTERNAL 抑制行同样计入裁剪与 64 MiB 上限。A1–A7、D3 与 PERF 可并发写入，因此用稳定的 `data/alert-events.lock` sidecar 做 `flock`；锁等待最多 1 秒。损坏 JSON、非普通文件、锁超时、超限或写入失败都 fail-open：记错误日志并跳过本批 ledger，不覆盖原文件，不阻断通知投递或告警状态持久化。因此 ledger 是便于查询的非权威投递与抑制历史，不是 attempt、状态或 exactly-once 真源。
 
 ### 已知限制 / 运维备注
 
 - A2 rate 分支的最小样本门会在持续低量 pipeline 下产生低分母盲区：例如 15 分钟只有 3 次 prefilter 且 3 次全失败，因 `3 < min_samples 4` 不会由 A2 rate 分支 page。这是已接受的低样本取舍；持续总故障会让 items 停止产出，由 A4 items-floor 即时 page，并另有 A2 `no_success_minutes` 心跳支路兜底。排障时不要把「A2 rate 未 firing」当成 pipeline 健康的充分证据。
 - A3 5xx 的 15 分钟窗依赖 access log timestamp 带 `%z` 时区偏移（生产当前输出 `+0800`）。若 A3 异常显示 `server_pv=0`，先检查 access log timestamp 是否仍含 offset；缺失时 naive timestamp 会按 UTC 解释，在 `Asia/Shanghai` 生产中错移 8 小时并把窗口内行静默排除。
-- `logs/alert-check.log` 当前没有 rotation，长期会增长；`status.sh alert` 也不检查其大小。P2 保留现有服务拓扑，后续运维单元需增加有界 rotation 与状态暴露，在此之前应人工监看文件大小。
+- `logs/alert-check.log` 当前没有 rotation，长期会增长；`status.sh alert` 也不检查其大小。在补上有界 rotation 与状态暴露之前应人工监看文件大小；跟踪见 [ISSUE-013](../issues/cost-observability.md#issue-013--alert-checklog-无-rotationstatus-不暴露文件大小)。
 - 2026-08-11 的生产快照有 152 篇微信解读达到重试上限；本次文档同步未刷新该数量。A5 状态 detail 与 `/admin` 会显示当前 frozen 数，但本轮没有为历史冻结积压新增独立 page；是否批量重试或另建 backlog notice 需在具备安全 replay 策略后单独裁决。
+
+### serve 重启后 `/api/v1/hot` 短暂 503（预期，非故障）
+
+serve 刚起来的那几秒到十几秒里，`/api/v1/hot`（以及 SSR 的 `/hot`）返回 **503 + `Retry-After: 2`** 是**设计行为**，不是事故。热点榜由后台刷新的候选缓存供给，请求路径永不同步计算；缓存尚未填好时接口宁可显式 503，也不返回 `200` + 空 items（[ADR-060](../adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md)：把「未就绪」编码成「没有热点」会被公共缓存放大成约 120 秒的假空结果，前端也不会重试）。
+
+**这不是零成本的**：`/admin` 以外的 5xx 都进 A3 的用户侧 5xx 分子。冷启窗很短、A3 又要求 15 分钟内 `PV >= 20` 才让 5xx 率参与 page，所以正常重启不会把 A3 顶过线；但重启恰好撞上流量高峰时，A3 的 5xx 率会被这批 503 抬高一截——判 A3 时先看时间戳是否贴着一次 serve 重启。
+
+判别方法（serve 的 stderr，launchd 部署下是 `logs/serve-access.err.log`；logger 名 `airadar.hot_cache`）：
+
+| 日志行 | 含义 |
+|---|---|
+| `hot candidates unready (never populated); serving degraded for N.Ns` | 预热中。`N` 应在几秒到十几秒量级、且**只出现在重启后**；该行按 30 秒节流，不要按出现次数估请求数 |
+| `hot candidates refreshed: <N> candidates in X.XXs` | 预热完成，此后 `/api/v1/hot` 恢复 200。没有这一行就说明刷新从未成功 |
+| `hot candidate refresh failed`（带 traceback） | 刷新线程真的挂了——这才是故障 |
+
+**持续 503 才是事故**：`unready` 行的 `serving degraded for` 持续增长、或只见 `refresh failed` 不见 `refreshed`，说明后台线程反复失败（典型是 DB 打不开或查询报错）。此时查该 traceback，并确认 serve 进程里名为 `hot-candidate-refresh` 的线程是否还在：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/api/v1/hot   # 冷启后应很快从 503 变 200
+rg -n 'hot candidate' logs/serve-access.err.log | tail -n 20
+```
+
+本节只说明现象与判别，**没有为它新增告警**：短窗 503 会自愈；持续 503 会持续计入 A3 的用户侧 5xx 分子（`PV >= 20` 时参与 page），并在上面这些日志行里留下确定性痕迹。注意 healthz 支路对它是盲的——`/api/v1/healthz` 不读这个缓存。
 
 ## 用户旅程性能监控
 
@@ -130,17 +155,14 @@ ledger 在每次成功写入时裁掉 14 天前的事件；INTERNAL 抑制行同
 
 每个 cell 先积累 20 个样本，再用 nearest-rank P75/P95 评估最近窗口；P75/P95 任一超预算或窗口含 hard failure 都算该窗口违规，最近 3 个逐样本前进窗口都违规才进入 firing。因而从零样本到首个可 confirmed firing 需要 `WARM_SAMPLES + CONFIRMATION_WINDOWS - 1 = 22` 条有效 idle 样本；达到确认窗后直接以 `page` severity 投递，不降为 notice。这是“上膛”时间：表示冷启动或样本清空后，cell 重新具备发出 confirmed page 的最短数据准备过程，不代表每个退化都固定延迟同样时长，更不是每 5 分钟即时 page。
 
-2026-07-26 的 L2-4 live 证明中，生产 pipeline 约 60% 时间处于运行态，idle 窗稀疏；每个启用 cell 约每 14 分钟取得 1 条 idle 样本。4 条旅程 × origin/public 共 8 个 cell 都在 296 分钟（4.93 小时）取得第 22 条样本，满足预固定的 6 小时硬门槛，但只剩约 1.07 小时裕度。这个 PASS 依赖 pipeline 不比测量时更忙：源数量、interpret 时长或单轮 pipeline 占比继续上升都会吃掉裕度。运维必须持续监督“每个启用 cell 从零到 22 条 ≤6h”；任一 cell 超过 6 小时都表示 idle-only + 20+3 在当前负载下不再满足时效契约，不能靠放宽门槛结案。
+2026-07-26 的 L2-4 live 证明结论：8 个 cell（4 旅程 × origin/public）都在 4.93 小时取得第 22 条样本，勉强满足预固定的 6 小时硬门槛，裕度约 1.07 小时——且该裕度会被源数量、interpret 时长或 pipeline 占比的任何上升吃掉。逐 cell 读数与推导见 `docs/plans/20260601-monitoring-alerting/` 归档与 git 历史。运维必须持续监督“每个启用 cell 从零到 22 条 ≤6h”；任一 cell 超过 6 小时都表示 idle-only + 20+3 在当前负载下不再满足时效契约，不能靠放宽门槛结案。
 
 ### Liveness、投递语义与已知限制
 
 - LaunchAgent 的 `ProgramArguments` 经 `./run.sh performance-probe` 启动。`run.sh` 的外部进程 watchdog 在 16 分钟终止超时 probe；进程内另有 15 分钟 `SIGALRM`，负责杀 browser worker 进程组并退出，作为第二层兜底。两层都远短于 6 小时样本时效门槛。
-- 单次旅程测量在父进程 primary cutoff（`timeout + startup grace`）后，基于 worker 结果发布或进程退出的**有界 readiness**（`BROWSER_WORKER_EXIT_GRACE_SECONDS`）收集结果。已接受的 documented limitation：worker 若在 cutoff 后**超过该 grace** 才发布已判定的真实 site 故障（需恰在超时边界发生 >grace 的 scheduler 暂停，天文级罕见），该真故障会被归为 `worker_unavailable` infra、不进入 22 样本窗口。这是"严格 bounded liveness"与"无界 scheduler pause 零丢失"不可兼得的取舍——放宽等待会违反上面两层 watchdog 门槛；真正静默的 worker 仍确定性进入 infra。
+- 单次旅程测量在父进程 primary cutoff（`timeout + startup grace`）后，基于 worker 结果发布或进程退出的**有界 readiness**（`BROWSER_WORKER_EXIT_GRACE_SECONDS`）收集结果。已接受的取舍：worker 若在 cutoff 后超过该 grace 才发布一个已判定的真实 site 故障，该故障会被归为 `worker_unavailable` infra、不进入 22 样本窗口。放宽等待会违反上面两层 watchdog 门槛；真正静默的 worker 仍确定性进入 infra。
 - PERF 通知契约是 **at-least-once + `im-notify` dedup**，不是 exactly-once。发送和状态持久化无法原子提交；状态机在发送前持久化 notification nonce，同一意图的 crash retry 复用 nonce，不同 cooldown reminder / severity 往返分配新 nonce。真实 sender 把 rule/severity/event/nonce/episode identity 交给 `im-notify` 的持久 signature ledger，抑制同一意图的重复可见消息。`data/alert-events.jsonl` 只是成功投递历史，不承担去重权威。
-- 刻意把 probe、外部 watchdog 及其整棵进程树持续 `SIGSTOP` 超过 6 小时且不恢复，会同时冻结两层 in-tree liveness 机制；需要独立于该进程树的外部/fleet watchdog 或操作员解除冻结。这是已接受的 documented limitation。
-- 生命周期脚本按单操作员使用设计，不支持并发执行同一服务的 install + uninstall；并发调用可能产生最终状态竞争。
-- 恶意调用者在生命周期操作中途替换受信 `HOME` / `Library/LaunchAgents` 路径组件，超出该手动部署工具的 threat model。
-- 若外来 job 刻意同时冒用本项目的精确 launchd label、精确 generated plist 路径，且本项目 destination 也存在，`launchctl` canonicalize 后无法与 genuine legacy/current job 区分。不要把 label 或路径交给不受信调用者控制。
+- 生命周期脚本按单操作员设计：并发对同一服务执行 install + uninstall 会产生最终状态竞争，别这么用。
 
 | 资产 | 默认路径 | 保留策略 |
 |---|---|---|
@@ -160,11 +182,11 @@ ledger 在每次成功写入时裁掉 14 天前的事件；INTERNAL 抑制行同
 ./run.sh performance-probe --origin-url http://127.0.0.1:8010 --public-url https://news.aiplanet.live
 ```
 
-homepage `hard_failure=true` 的已知假阳性已修复，但这不代替部署后运维验证：在手工 probe 确认 homepage `hard_failure=false` 且 homepage `PERF:*` 非 firing 前，**只安装 probe，不启用 remediation cron**。
+先只安装 probe，**不启用 remediation cron**——启用 gate 的全文与可执行形式在下面「安装 remediation cron」那段，本节不复述。
 
 probe 使用专属 `live.aiplanet.ai-radar.performance-probe.plist`，`StartInterval=300`、`RunAtLoad=true`，并始终经 `./run.sh performance-probe` 进入 external watchdog。`install.sh` 以 per-file regular plist 放置到 `~/Library/LaunchAgents/`，按 destination + label/path ownership fail closed，并迁移精确指向本仓库 generated plist 的 legacy symlink；它不会编辑共享 crontab。pipeline 自身仍由既有 `*/15` user crontab 调度，未迁移。
 
-当前部署状态由 [services.md 服务表](services.md#服务清单) 维护。以下命令描述安装后的目标 lifecycle，不表示 probe 当前正在运行；恢复前还必须处理默认 origin 仍为 `http://127.0.0.1:8000` 的 ISSUE-017。
+当前部署状态由 [services.md §服务](services.md#服务) 维护。以下命令描述安装后的目标 lifecycle，不表示 probe 当前正在运行；恢复前还必须处理默认 origin 仍为 `http://127.0.0.1:8000` 的 ISSUE-017。
 
 ```bash
 ./install.sh performance-probe
@@ -173,7 +195,9 @@ probe 使用专属 `live.aiplanet.ai-radar.performance-probe.plist`，`StartInte
 ./uninstall.sh performance-probe
 ```
 
-部署包含上述修复的版本后，先手工 probe，再用最新 homepage idle 样本和权威 page lifecycle 做可失败 gate；两项都满足后才手工运行 remediation。只有这次手工 remediation 返回 0，才继续安装独立 cron：
+### 安装 remediation cron（启用 gate 全文）
+
+**这是 remediation 启用条件的唯一全文**，本仓其余各处（[services.md §服务](services.md#服务) 等）只应指向这里、不复述。homepage `hard_failure=true` 的已知假阳性虽已修复，但仍必须以部署后的实测样本为准：先手工 probe，再用最新 homepage idle 样本（`hard_failure=false`）和权威 page lifecycle（homepage `PERF:*` 非 firing）做可失败 gate；两项都满足后才手工运行一次 remediation。只有这次手工运行返回 0，才继续安装独立 cron：
 
 ```bash
 (
@@ -209,7 +233,7 @@ probe 使用专属 `live.aiplanet.ai-radar.performance-probe.plist`，`StartInte
 )
 ```
 
-`performance-remediate` **只消费 page incident**：对新状态它直接读取权威的 `lifecycles.page` firing episode，不信任顶层兼容投影；只有无 `lifecycles` 的旧 flat state 才回退到顶层，缺 severity 时按 page 兼容。它不会二次判断上游 hard failure 的真伪，所以即使 homepage 误标缺陷已修复，仍必须以部署后 `hard_failure=false` 且 homepage page lifecycle 非 firing 作为启用条件。worker 以 nonblocking lock 保证单 active，单次最长 3600 秒；Codex 固定使用 `--ignore-user-config --sandbox workspace-write` 和 `approval_policy="never"`，只允许隔离 worktree 写入。worker 不获得 push、deploy、launchctl 或生产数据库写入口；任何 preflight 无法证明边界时 fail closed、告警并留证。成功结果是 worktree 内的 detached 本地 candidate commit 和摘要，仍需站长审阅与显式授权后才能进入部署流程。
+`performance-remediate` **只消费 page incident**：对新状态它直接读取权威的 `lifecycles.page` firing episode，不信任顶层兼容投影；只有无 `lifecycles` 的旧 flat state 才回退到顶层，缺 severity 时按 page 兼容。它不会二次判断上游 hard failure 的真伪——这正是上面那道启用 gate 存在的理由。worker 以 nonblocking lock 保证单 active，单次最长 3600 秒；Codex 固定使用 `--ignore-user-config --sandbox workspace-write` 和 `approval_policy="never"`，只允许隔离 worktree 写入。worker 不获得 push、deploy、launchctl 或生产数据库写入口；任何 preflight 无法证明边界时 fail closed、告警并留证。成功结果是 worktree 内的 detached 本地 candidate commit 和摘要，仍需站长审阅与显式授权后才能进入部署流程。
 
 ### 边缘缓存与旅程延迟
 
@@ -260,7 +284,7 @@ plutil -p deploy/launchd/ai-radar-alert.plist \
 
 ## Cloudflare Access
 
-Cloudflare Access 是经其代理部署时的公网鉴权边界；origin 只做 `Cf-Access-Jwt-Assertion` 存在性兜底，不验签。当前生产没有经过 Cloudflare，本节是待恢复的目标拓扑，不是当前保护状态。
+Cloudflare Access 是经其代理部署时的公网鉴权边界；origin 侧只做存在性兜底（见文首「已知限制」）。当前生产没有经过 Cloudflare，本节是待恢复的目标拓扑，不是当前保护状态。
 
 ### 控制台配置
 
@@ -276,7 +300,7 @@ Cloudflare Access 是经其代理部署时的公网鉴权边界；origin 只做 
 
 ### 验证
 
-以下是完成 gate，不是当前生产已通过的检查。把 URL 换成实际生产 hostname 后，必须同时证明响应经过 Cloudflare edge、无凭证被拦截、伪造 origin 所信任的 header 也不能得到 `200`；只看到无 header 的 `302/403` 会被当前直达 origin 的坏状态骗过：
+以下是完成 gate，不是当前生产已通过的检查。把 URL 换成实际生产 hostname 后，必须同时证明响应经过 Cloudflare edge、无凭证被拦截、伪造 origin 所信任的 header 也不能得到 `200`（为什么伪造 header 是必测项，见文首「已知限制」）；只看到无 header 的 `302/403` 会被当前直达 origin 的坏状态骗过：
 
 ```bash
 (
@@ -304,9 +328,9 @@ curl -sS -o /dev/null -w 'origin_fake_header_page=%{http_code}\n' -H 'Cf-Access-
 
 预期依次为 `403 / 200 / 403 / 200`。
 
-已知限制：origin 只检查 header 是否存在，所以任意非空 `Cf-Access-Jwt-Assertion: x` 会被 origin 放行。真实安全边界依赖 Cloudflare Access 在边缘拦截；当前生产直接暴露 nginx/origin，故这一前提不成立。JWT 验签或把生产 hostname 重新置于可信认证代理之后，至少完成一项才能把 admin 称为已认证入口。
+预期读数中两个 `200` 正是文首「已知限制」的表现，不复述；剩余增强也在那里。
 
-安全注意：origin 的本地 bypass（放行 `127.0.0.1` / `::1` / `localhost`）已**默认关闭**——仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL` 时生效，生产 serve 不设该变量，故即便未来 cloudflared 转发机制变化让公网请求在 origin 看起来像 `127.0.0.1`，也不会触发本地 bypass。公网无凭证访问 `/admin` 已验证为 403。剩余增强：完成 Cloudflare Access JWT 验签 / origin token 校验（当前 origin 仅校验 `Cf-Access-Jwt-Assertion` 存在性，见上「已知限制」）。
+安全注意：origin 的本地 bypass（放行 `127.0.0.1` / `::1` / `localhost`）已**默认关闭**——仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL` 时生效，生产 serve 不设该变量，故即便未来 cloudflared 转发机制变化让公网请求在 origin 看起来像 `127.0.0.1`，也不会触发本地 bypass。公网无凭证访问 `/admin` 已验证为 403。
 
 ## 常用命令
 
@@ -319,4 +343,4 @@ tail -n 50 logs/alert-check.err.log
 tail -n 8 logs/performance/journey-samples.jsonl
 ```
 
-`./run.sh admin alert-check` 不是只读状态命令：当前状态若触发 firing / resolved，它会发送真实通知；只在明确要执行一次告警调度时运行。
+⚠ 上面这些是只读的；`./run.sh admin alert-check` **不是**——它会发真实生产消息，别拿它做诊断（见 [§im-notify 飞书双通道](#im-notify-飞书双通道)末段）。

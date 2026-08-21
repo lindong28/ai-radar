@@ -1,6 +1,6 @@
 # ADR-036: Preserve public-page observation outcomes in the WeRead canary
 
-Status: Accepted
+Status: Accepted; deprecated — the WeRead canary line stopped together with the Mp2RSS replacement plan it explored, see ADR-061
 
 Date: 2026-08-13
 

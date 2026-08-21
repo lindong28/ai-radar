@@ -1,6 +1,6 @@
 # ADR-027：让微信 shadow 页大小记录自描述且可恢复迁移
 
-- 状态：Accepted
+- 状态：Accepted；deprecated——后台 family 平台级不可用，见 ADR-061
 - 日期：2026-08-13
 - 范围：ADR-026 的持久状态演化部分
 - Supersedes：ADR-026 的“持久状态演化”段落；其余比较契约不变

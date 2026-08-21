@@ -1,6 +1,6 @@
 # ADR-031: Preserve only provable facts during WeChat ledger migration
 
-Status: Accepted
+Status: Accepted; deprecated — the backend `appmsgpublish` family is unavailable at the platform level, see ADR-061
 
 Date: 2026-08-13
 

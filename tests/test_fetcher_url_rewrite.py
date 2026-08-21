@@ -74,3 +74,16 @@ def test_rewrite_nitter_urls_script_backfills_items_and_original_url(tmp_path: P
     row = sqlite3.connect(db_path).execute("SELECT url, extra_json FROM items WHERE id='item-nitter'").fetchone()
     assert row[0] == "https://x.com/openai/status/2053939702110269822"
     assert json.loads(row[1])["original_url"] == "https://nitter.net/OpenAI/status/2053939702110269822#m"
+
+
+def test_canonicalize_item_url_leaves_a_wechat_article_query_exactly_as_published() -> None:
+    # The base64 `__biz` value ends in `==`. Rebuilding the query turns that
+    # into `%3D%3D`, and this URL is what a reader clicks through to.
+    published = "https://mp.weixin.qq.com/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904&idx=4&sn=904d426d"
+    assert canonicalize_item_url(published)[0] == published
+
+
+def test_canonicalize_item_url_still_strips_tracking_params_from_wechat_urls() -> None:
+    canonical = canonicalize_item_url("https://mp.weixin.qq.com/s?__biz=AA==&utm_source=x&mid=1")[0]
+    assert "utm_source" not in canonical
+    assert "mid=1" in canonical

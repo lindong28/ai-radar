@@ -1,3 +1,6 @@
+> **Archive status**: 已归档并上线。本 plan 为平铺单 plan，未启用长任务模式，无 `state.md` / `journal.md`。
+> 「访问原文」入口的当前契约见 [contracts/ux-contract.md](../../contracts/ux-contract.md)「解读详情页（`/wechat/<slug>`）」节（「可经标题/来源到达原文微信链接」）与 WX-5；改 `app.js` 必须同步 bump 资源版本串，见 [experiences/frontend.md](../../experiences/frontend.md)「2026-08-17 静态资源漏 bump `?v=` 会静默失效 20 小时」节。以下为原 plan 正文，未修改。
+
 # Plan — /wechat 文章加「访问原文」链接
 
 > 任务：让 https://your-domain.example/wechat 的每篇文章解读页（及列表卡片）显式提供一个可点击的「访问原文」入口，跳转到对应微信公众号原文。

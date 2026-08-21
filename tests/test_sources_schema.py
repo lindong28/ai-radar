@@ -267,12 +267,19 @@ def test_url_expands_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("env_value", [None, ""])
-def test_mp2rss_source_skips_when_feed_env_missing(
+def test_optional_source_skips_when_its_feed_env_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     env_value: str | None,
 ) -> None:
+    """Only a source that declares ``optional`` may be skipped when unset.
+
+    Which env var it is carries no meaning here — a second WeChat feed reaches
+    the same branch through its own variable. What earns the skip is the
+    explicit ``optional`` declaration; without it an unset variable still
+    fails the load, since nothing downstream would notice the missing source.
+    """
     if env_value is None:
         monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
     else:
@@ -280,18 +287,24 @@ def test_mp2rss_source_skips_when_feed_env_missing(
     path = _write_toml(
         tmp_path,
         [
+            "schema_version = 2",
+            "",
             "[[source]]",
             'slug = "openai_blog"',
             'name = "OpenAI Blog"',
-            'url = "https://openai.com/news/rss.xml"',
+            'fetch_url = "https://openai.com/news/rss.xml"',
             'tier = "T1"',
             "",
             "[[source]]",
             'slug = "wx_mp2rss"',
             'name = "WeChat collection"',
-            'url = "${MP2RSS_FEED_URL}"',
+            'fetch_url = "${MP2RSS_FEED_URL}"',
             'tier = "T2"',
             'kind = "wechat"',
+            "optional = true",
+            'required_env = "MP2RSS_FEED_URL"',
+            "wechat_only = true",
+            'public_url_override = "https://mp.weixin.qq.com/"',
         ],
     )
 
@@ -348,3 +361,64 @@ def test_url_unset_env_var_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     )
     with pytest.raises(ValueError, match="unset env var"):
         load_sources(path)
+
+
+def _wechat_toml_lines(**overrides: str) -> list[str]:
+    fields = {
+        "fetch_url": '"${WECHAT2RSS_FEED_URL}"',
+        "optional": "true",
+        "required_env": '"WECHAT2RSS_FEED_URL"',
+        "wechat_only": "true",
+        "public_url_override": '"https://mp.weixin.qq.com/"',
+    }
+    fields.update(overrides)
+    return [
+        "schema_version = 2",
+        "",
+        "[[source]]",
+        'slug = "wx_selfhosted"',
+        'name = "Self-hosted WeChat feed"',
+        'tier = "T2"',
+        'kind = "wechat"',
+        *(f"{key} = {value}" for key, value in fields.items() if value is not None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        # The placeholder must name the very variable the source declares it
+        # needs; otherwise the source loads from a variable nobody set up.
+        {"required_env": '"SOME_OTHER_FEED_URL"'},
+        {"fetch_url": '"https://mp.weixin.qq.com/literal-feed.xml"'},
+        {"fetch_url": '"${WECHAT2RSS_FEED_URL}/suffix"'},
+        {"optional": "false"},
+        {"wechat_only": "false"},
+        {"public_url_override": None},
+    ],
+    ids=["env-mismatch", "literal-url", "placeholder-with-suffix", "not-optional", "not-wechat-only", "no-override"],
+)
+def test_wechat_source_rejects_a_broken_optional_declaration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, str | None],
+) -> None:
+    monkeypatch.setenv("WECHAT2RSS_FEED_URL", "http://127.0.0.1:8080/feed/all.xml?k=t")
+    monkeypatch.setenv("SOME_OTHER_FEED_URL", "http://127.0.0.1:8080/feed/other.xml?k=t")
+    path = _write_toml(tmp_path, _wechat_toml_lines(**overrides))
+
+    with pytest.raises(ValueError, match="invalid optional WeChat configuration"):
+        load_sources(path)
+
+
+def test_wechat_source_with_a_matching_declaration_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved = "http://127.0.0.1:8080/feed/all.xml?k=t"
+    monkeypatch.setenv("WECHAT2RSS_FEED_URL", resolved)
+    path = _write_toml(tmp_path, _wechat_toml_lines())
+
+    source = load_sources(path)[0]
+    assert source.slug == "wx_selfhosted"
+    assert source.url == resolved

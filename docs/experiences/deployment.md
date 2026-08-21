@@ -49,3 +49,23 @@
 - Problem: origin 对可缓存分页响应发 `Cache-Control: public, max-age=90`，但公网下游看到的却是 `max-age=14400`（4h）。edge 命中正常（edge TTL 早已 respect origin），问题只在 browser TTL 这一层：CF zone 级默认 Browser Cache TTL（4h）覆盖了 origin 的 `max-age`，下发给浏览器的是 zone 值而非 origin 的 90s。对每 15 分钟更新的站，浏览器缓存 4h 会让用户长时间看到陈旧内容。
 - Solution: 在 Cache Rule 里显式把 Browser TTL 设为 "Respect origin TTL"，让下游浏览器也用 origin 的 90s，而不是继承 zone 默认的 4h。edge TTL 保持 respect origin 不变。修复后公网 `max-age` 回到 90s、翻页 API `CF-Cache-Status: HIT`。
 - Applies when: 站点经 Cloudflare 暴露、origin 用短 `max-age` 控制客户端刷新频率时——不要假设 origin 的 `Cache-Control` 会原样透传到浏览器。分别核对 edge 与 browser 两层 TTL：edge 层 miss 看 zone/rule 的 Edge TTL，浏览器看到的 `max-age` 看 zone/rule 的 Browser TTL；zone 默认 Browser TTL 会静默覆盖 origin，需在 Cache Rule 里 respect origin 才透传。
+
+## 2026-08-18 Lighthouse 实例的 metadata app-id 不是控制台归属账号
+
+- Problem: 排查新加坡图片代理主机时，从主机 metadata 读到 `app-id 1301555531`，与手头控制台账号 `AppId 1424748107` 不符，据此断言「这台机属于另一个腾讯云账号、需要换登录」。同时 CVM `DescribeInstances` 返回 0 台实例，被当作佐证。两个读数都被误读。
+- Solution: 两台主机都是 **Lighthouse（轻量应用服务器）** 实例（`webserver-singapore` = `lhins-3nxwyynb` / `43.153.216.193`，`webserver-china` = `111.229.134.9`），跑在腾讯托管 VPC 里——metadata 里的 app-id 是**底层资源账号**，不是控制台归属账号；用个人微信登录即在同一账号下看到两台机器。`DescribeInstances` 全 0 也是同因：Lighthouse 不在 CVM 命名空间，要用 Lighthouse 的接口查。
+- Applies when: 判断一台腾讯云主机归谁、或某个云 API 返回空列表时——先确认实例类型（Lighthouse / CVM）再解释读数。空列表与 app-id 不符都会伪装成「账号不对」，把人推向换登录这条昂贵且方向错误的处置。
+
+## 2026-08-20 WeWe RSS 路线已退役，且本文早先两条条目引用的文件从未入 git
+
+- Problem: 上面 2026-05-29 的两条 WeWe RSS 条目（容器出站代理与 loopback 抓取、docker compose 桥接服务进 launchd）描述的是**已退役路线**：`wewe` 服务已于 2026-06-06 从服务层移除，其容器又于 2026-08-20 手动停止（`exited`，保留未删除）。微信摄取现走 Mp2RSS + Wechat2RSS 双跑，见 [operations/wechat-ingestion.md](../operations/wechat-ingestion.md)。
+- Solution: 后续读者按那两条去找文件时注意三件事（`git log --all -- <path>` 实查）：`deploy/launchd/ai-radar-wewe.plist` 这个**生成物**从未进入 git（入过的是 `ai-radar-wewe.plist.example`，且已随服务移除、只在历史里）；条目里写的 `RUNBOOK.md` 指的是 `deploy/wewe-rss/RUNBOOK.md`（**仍在**，「Keeping It Running」小节也还在），不是仓库根的 `RUNBOOK.md`——根目录那个文件从未存在。两条条目的**一般化教训仍然成立**且已在新路线上复用：容器的 `restart: unless-stopped` 管不了 Docker daemon 缺席，所以 `wechat2rss` 同样把「OrbStack 必须开机自启」写成显式依赖（见 [operations/services.md §隐含依赖](../operations/services.md#隐含依赖repo-外)）；宿主机代理变量会污染 loopback 抓取这一条也照旧适用。
+- Applies when: 读本文 2026-05-29 那两条时，或按历史条目去寻找部署文件而遍寻不着时。
+
+## 2026-08-20 上面 2026-05-28 的 Cloudflare Tunnel region 处方只对仍走 tunnel 的部署形态成立
+
+- Problem: 上面 2026-05-28 那条给出的处方（升级 `cloudflared`、origin 显式指 `http://127.0.0.1:8000`、设 `region: us` 与 `edge-ip-version: "4"`）绑定的是「公网流量经 Cloudflare Tunnel 出去」这个前提。该前提对本产线**已不再成立**：公网生产现为 `news.aiplanet.live`，DNS 直解腾讯服务器、经 EdgeOne，**不经过这条 tunnel**；tunnel 上的 `aiplanet.live` 入口已退役并返回 502（见 [operations/services.md §Cloudflare tunnel shared ingress](../operations/services.md#cloudflare-tunnel-shared-ingress)）。照那条去调 region 不会影响当前公网延迟。
+- Solution: 按该条动手前先确认自己的流量确实走 tunnel（`aiplanet.live` 一类经 tunnel 的 hostname，而不是 `news.aiplanet.live`）。当前 tunnel 仅承载 SJTU 站，那条处方对它仍适用。本产线公网侧的延迟排查改看 EdgeOne 与源站，不要再调 tunnel region。
+- Applies when: 读上面 2026-05-28 那条时——它是**形态限定**的处方，不是通用的公网提速手段。
+
+

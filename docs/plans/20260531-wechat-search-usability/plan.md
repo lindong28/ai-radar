@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 简繁互通与短查询行为的当前口径见 [architecture.md](../../architecture.md)「Database」的「关键设计」节（「搜索索引」「短查询兜底」两条）与 [contracts/ux-contract.md](../../contracts/ux-contract.md) TL-3、WX-4；`/wechat` 侧的搜索字段范围见 [operations/wechat-ingestion.md](../../operations/wechat-ingestion.md)「微信文章解读与知识库回写」节。以下为原 plan 正文，未修改。
+
 # Plan：中文/微信公众号源搜索可用性修复（#4 + #6 + #5）
 
 > **Long-task mode** — 本 plan 启用状态外部化协议。implementer 必读 `~/.claude/references/long-task-protocol.md`：

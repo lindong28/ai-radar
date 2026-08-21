@@ -109,8 +109,25 @@ def _archive_where(
     return f"WHERE {' AND '.join(where_clauses)}", params, search_subquery
 
 
+# Only three columns are ever read off this row (`id`, `ruleset_version`, and
+# the date prefix of `created_at`). `SELECT *` also pulled input_eval_ids and
+# output_curated_ids -- two wide TEXT columns that make curation_runs 688MB at
+# 8235 rows -- costing 0.349s per call on the production origin for values no
+# caller touches.
+#
+# `id DESC` is not decoration: created_at alone is not a total order, and this
+# function and `_timeline_data_version` would otherwise be free to name
+# different rows as "the latest run". It also matches idx_curation_runs_created_at.
+_LATEST_RUN_SQL = """
+SELECT id, ruleset_version, created_at
+FROM curation_runs
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+"""
+
+
 def _latest_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM curation_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+    return conn.execute(_LATEST_RUN_SQL).fetchone()
 
 
 def _compute_archive_page(

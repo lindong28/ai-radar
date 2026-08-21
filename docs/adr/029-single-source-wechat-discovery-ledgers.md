@@ -1,6 +1,6 @@
 # ADR-029: Make WeChat discovery ledgers single-source and crash-safe
 
-Status: Accepted
+Status: Accepted; duplicated fields superseded by ADR-030; deprecated — the backend `appmsgpublish` family is unavailable at the platform level, see ADR-061
 
 Date: 2026-08-13
 

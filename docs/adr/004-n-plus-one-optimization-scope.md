@@ -1,6 +1,6 @@
 # ADR-004: N+1 优化仅限 timeline 路由
 
-- Status: accepted
+- Status: accepted；前提部分失效——热点榜已改为复用 curated archive 路径，见 ADR-060。**范围结论已被 ADR-062 推翻**：本 ADR 判定 curated「数据量小（<=30），N+1 的绝对耗时可忽略」，实测 curated 是 40 条，且其瓶颈并非 N+1 本身，而是 batch 化之后那一次全表 LIKE 扫描（生产 origin 上 1.008s）
 - Date: 2026-05-24
 
 ## Context

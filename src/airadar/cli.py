@@ -317,7 +317,7 @@ def _enrich(args: argparse.Namespace) -> int:
             if item_ids is not None:
                 raise ValueError("--curated-run and --item-id-file are mutually exclusive")
             if args.curated_run == "latest":
-                run = conn.execute("SELECT id FROM curation_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+                run = conn.execute("SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
                 if run is None:
                     print("enrich processed=0, errors=0")
                     return 0
@@ -879,6 +879,27 @@ def _admin(args: argparse.Namespace) -> int:
         usage_path = migrate_usage_db(main_db_path=db.resolve_db_path())
         print(f"migrated {db.resolve_db_path()}")
         print(f"migrated llm_usage {usage_path}")
+        return 0
+    if args.admin_command == "db" and args.db_command == "backfill-links":
+        from .presentation.links import backfill_item_links, links_ready
+
+        with db.get_conn() as conn:
+            already = links_ready(conn)
+            # The backfill takes its own write lock per batch and refuses to run
+            # inside a transaction it did not start, so leave one open here and
+            # it raises. Reads do not open one (verified on SQLite 3.50.4:
+            # `in_transaction` is False before and after a SELECT), but a future
+            # write added above this line would, hence the guard rather than an
+            # assumption about what this block happens to contain.
+            if conn.in_transaction:
+                conn.commit()
+            written = backfill_item_links(conn)
+        target = db.resolve_db_path()
+        if already:
+            print(f"item_links already complete for {target}; re-ran and wrote {written} links")
+        else:
+            print(f"item_links backfilled for {target}: {written} links")
+        print("related discussions now answer from the index instead of a full text scan")
         return 0
     if args.admin_command == "db" and args.db_command == "checkpoint":
         result = db.checkpoint_db(args.db_path)
@@ -1855,6 +1876,13 @@ def build_parser() -> argparse.ArgumentParser:
     db_parser = admin_subparsers.add_parser("db")
     db_subparsers = db_parser.add_subparsers(dest="db_command", required=True)
     db_subparsers.add_parser("migrate")
+    db_subparsers.add_parser(
+        "backfill-links",
+        help=(
+            "Populate item_links for existing items. Resumable. Until this "
+            "reports complete, related discussions fall back to the slow scan."
+        ),
+    )
     db_checkpoint = db_subparsers.add_parser("checkpoint")
     db_checkpoint.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
     for command in ("retain", "slim"):

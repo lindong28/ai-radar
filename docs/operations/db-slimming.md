@@ -1,6 +1,8 @@
 # radar.db 瘦身运维
 
 > Mutable snapshot. `radar.db` 的体量主要由可再生的 per-run digest 预计算缓存（`curated_items.summary_json`）撑起。本文记录常驻保留、`admin db retain` / `admin db slim` 子命令用法，以及一次性物理瘦身（VACUUM）的独立维护窗口。DB 同步不以 VACUUM 为前置。
+>
+> 本目录（`docs/operations/`）是维护者产线 runbook，绑定具体实机拓扑；fork 部署路径见 [README](../../README.md)。
 
 ## 背景：summary 缓存为何持续膨胀
 
@@ -49,12 +51,12 @@
 ## 何时 VACUUM
 
 - **不进 curate 热路径**——常驻保留已让 summary 有界，物理压缩是低频动作。
-- **不要为 DB 同步而跑**——当前 Mac producer 维护持久 base-only shipping replica，只把快照的非 FTS 逻辑差异就地应用到 replica，再与服务器上次接受的 base-only basis 做 rsync delta。VACUUM 会重写整库并重排 SQLite 页面，正是这条链路要避开的 churn；它不会减少逻辑差异，也不是同步 gate。
+- **不要为 DB 同步而跑**——同步走的是逻辑增量 + rsync delta（机制见 [services.md §DB sync](services.md#db-sync-职责验证与故障证据)），VACUUM 重写整库、重排页面，正是这条链路要避开的 churn；它不会减少逻辑差异，也不是同步 gate。
 - **只在确有本机磁盘回收需求时**手动 `admin db slim` 一次性回收，例如已在一致副本上确认 freelist 显著积累且维护窗口、临时磁盘都充足。
 
 ## 关键坑：freelist_count 只在 checkpoint 过的 `.backup` 副本上可信
 
-**绝不**在 live WAL 库上读 `PRAGMA freelist_count` 判断可回收空间——WAL 模式 + pipeline 持续写入下它在同一分钟内可读得 86,701 / 1,012 / 29,551 的抖动值。实测真值必须在 `sqlite3 "$DB" ".backup '$COPY'"` 出的、已 checkpoint 的一致副本上取。且 freelist 回收是 VACUUM 的**机会性**副产品、不是稳定节省来源——瘦身的**确定收益来自清 `summary_json`**。生产实测 **2.28GB → 1.495GB（省 ~785MB / 34%）**；plan-time probe 曾估 ~45%（2080→1151MB），但其中 ~340MB 是当时的**瞬时 freelist**，两天后已被增长复用掉，故实际回收就是 summary 清列这一份。
+**绝不**在 live WAL 库上读 `PRAGMA freelist_count` 判断可回收空间——WAL 模式 + pipeline 持续写入下它在同一分钟内可读得 86,701 / 1,012 / 29,551 的抖动值。实测真值必须在 `sqlite3 "$DB" ".backup '$COPY'"` 出的、已 checkpoint 的一致副本上取。且 freelist 回收是 VACUUM 的**机会性**副产品、不是稳定节省来源——瘦身的**确定收益来自清 `summary_json`**。生产实测 **2.28GB → 1.495GB（省 ~785MB / 34%）**；估算与实测的差额复盘（为什么 plan 期的估计偏高）见 [docs/plans/20260720-db-slimming/](../plans/20260720-db-slimming/)。
 
 ## Mac 主库一次性物理瘦身 + 回滚（停写维护窗口）
 
@@ -68,12 +70,12 @@
 6. **本地验证**（放行 gate）：用独立端口的短生命周期临时 serve / TestClient 指向 `$PROD_DB`——FTS5 integrity-check + 无半清 run + 被清键集精确 + schema hash 不变 + 最新 run `/api/v1/curated` 与 apply 前 sha256 一致。任一失败 → 回滚。
 7. **回滚**（fail-closed）：确认 serve/writer 仍停 → **先删 `"$PROD_DB-wal"` / `"$PROD_DB-shm"`**（与恢复文件不匹配的 WAL/SHM 会静默损坏库）→ 原子 `mv "$BACKUP" "$PROD_DB"` → 复验 integrity + FTS5 + FTS keyset → 通过前不恢复 writer/serve。
 8. **恢复 reader + writer + scheduler**：仅当验证通过。恢复此前 disable 的本机 serve、launchd 作业、pipeline cron 与 DB sync cron。
-9. **让正常同步链接管**：下一轮 Mac `deploy/sync/sync-db-to-server.sh` 会重新取 `query_only` 一致快照，对持久 shipping replica 应用非 FTS 逻辑差异并逐表对账，再传输 base-only artifact；无需、也不要再为同步追加 VACUUM。需要立即刷新时手动运行 `deploy/sync/sync-db-cron.sh`，并以 producer 报出本轮 `terminal state committed`、服务器 receipt/journal identity 一致和公网 health/search 验证为完成证据。远端拒绝本轮时保留旧 serving release，本地已验证的物理瘦身不因此回滚。
+9. **让正常同步链接管**：下一轮 Mac `deploy/sync/sync-db-to-server.sh` 会自行重新取快照并同步（机制同上，见 services.md）；无需、也不要再为同步追加 VACUUM。需要立即刷新时手动运行 `deploy/sync/sync-db-cron.sh`，并以 producer 报出本轮 `terminal state committed`、服务器 receipt/journal identity 一致和公网 health/search 验证为完成证据。远端拒绝本轮时保留旧 serving release，本地已验证的物理瘦身不因此回滚。
 
 > `.backup` 副本用完即弃、不回 merge——schema 无变更，代码（保留函数 + admin 子命令）走常规 merge 回 main，瘦身对生产库 apply 一次即可。
 
 ## 相关参考
 
 - [docs/architecture.md §API 端点](../architecture.md#api-端点) — `/api/v1/curated?run_id=X` 历史 run digest 的 TTL 语义
-- [plans/20260720-db-slimming/plan.md](../../plans/20260720-db-slimming/plan.md) — 完整设计、probe 证据、验证矩阵与生产 apply 流程
+- [docs/plans/20260720-db-slimming/plan.md](../plans/20260720-db-slimming/plan.md) — 完整设计、probe 证据、验证矩阵与生产 apply 流程
 - [docs/operations/services.md](services.md#db-sync-职责验证与故障证据) — Mac producer、服务器 apply、5 小时 cron、验证入口与故障证据

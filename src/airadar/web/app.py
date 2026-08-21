@@ -52,8 +52,19 @@ WECHAT_PAGE_LIMIT = 50
 PUBLIC_PAGINATION_CACHE_CONTROL = "public, max-age=90, stale-while-revalidate=30"
 PRIVATE_CACHE_CONTROL = "private, no-store"
 _CHANGELOG_MARKDOWN = MarkdownIt("commonmark", {"html": False})
+# A path listed here emits a public, edge-cacheable Cache-Control -- but only
+# for the exact query keys named. Anything else on the same path falls to
+# `private, no-store`, so a filtered or searched view can never be served to
+# the next visitor from a shared cache.
+#
+# `/all` was absent, which meant it sent no Cache-Control at all and the edge
+# had nothing to follow: every visit reached the origin (`eo-cache-status: MISS`
+# on every observed request), for a page whose bytes are identical between
+# visitors. `/` was already here and still missed, because the EdgeOne rule set
+# only names `/wechat`; that half lives in the console, not in this file.
 _PUBLIC_PAGINATION_QUERY_KEYS = {
     "/": frozenset({"page"}),
+    "/all": frozenset({"page"}),
     "/wechat": frozenset({"page"}),
     "/api/v1/curated": frozenset({"page", "limit"}),
     "/api/v1/hot": frozenset({"limit", "hours"}),

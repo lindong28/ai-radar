@@ -1,3 +1,6 @@
+> **Archive status**: 已归档。本 plan 是一次性的 UX 契约端到端测试脚本，不是产品契约本身；执行过程产物 `state.md` / `journal.md` 按长任务协议不入档。
+> 被测契约的当前权威是 [contracts/ux-contract.md](../../contracts/ux-contract.md)「用户视角验证条件（L2）」节（HP / TL / DY / AB / RS / FH 各组），正文中的验收项编号与措辞可能已被后续演进取代。以下为原 plan 正文，未修改。
+
 > ⚠️ **Long-task mode** — 本 plan 处于长任务模式
 > - 进度状态：`./state.md`
 > - 决策日志：`./journal.md`

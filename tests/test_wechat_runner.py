@@ -348,3 +348,187 @@ def test_fetch_source_preserves_existing_full_text_when_repeat_fetch_degrades(tm
         "<div id='js_content'>Full article body</div>",
         repeat_item.fetched_at,
     )
+
+
+LONG_FORM_URL = (
+    "https://mp.weixin.qq.com/s?__biz=MzIzNjc1NzUzMw==&mid=2247913187&idx=1&sn=5389abc"
+)
+
+
+def _second_wechat_source() -> SourceConfig:
+    return SourceConfig(
+        slug="wx_selfhosted",
+        name="Self-hosted WeChat feed",
+        url="http://127.0.0.1:8080/feed/all.xml",
+        tier="T2",
+        kind="wechat",
+        homepage_url="https://mp.weixin.qq.com/",
+    )
+
+
+def _dual_conn(tmp_path: Path) -> sqlite3.Connection:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    sync_to_db([_source(), _second_wechat_source()], conn)
+    return conn
+
+
+def _stored_urls(conn: sqlite3.Connection) -> list[str]:
+    return [row[0] for row in conn.execute("SELECT url FROM items ORDER BY url")]
+
+
+def test_second_wechat_feed_does_not_duplicate_an_article_the_first_already_carried(
+    tmp_path: Path,
+) -> None:
+    conn = _dual_conn(tmp_path)
+    incumbent = replace(_item(), author="量子位", title="世界模型进入“有声时代”：24FPS画面")
+    assert upsert_item(conn, incumbent, wechat=True) is True
+
+    # Same article from the other feed: unrelated URL, its own body, a title
+    # differing only in the whitespace and full/half-width punctuation two
+    # renderers disagree on, and a publish time seconds apart.
+    candidate = replace(
+        incumbent,
+        source_id="wx_selfhosted",
+        url=LONG_FORM_URL,
+        title=" 世界模型进入“有声时代”:24FPS画面 ",
+        published_at="2026-05-28T01:02:58Z",
+        content_text="Full body served by the self-hosted feed",
+    )
+    assert upsert_item(conn, candidate, wechat=True) is False
+    assert _stored_urls(conn) == [incumbent.url]
+
+
+def test_second_wechat_feed_still_inserts_an_article_the_first_missed(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    assert upsert_item(conn, replace(_item(), author="量子位", title="第一篇"), wechat=True) is True
+
+    missed = replace(
+        _item(),
+        source_id="wx_selfhosted",
+        url=LONG_FORM_URL,
+        author="量子位",
+        title="只有自建源发现的第二篇",
+    )
+    assert upsert_item(conn, missed, wechat=True) is True
+    assert len(_stored_urls(conn)) == 2
+
+
+def test_wechat_dedup_keeps_a_genuine_repost_of_the_same_title(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    original = replace(_item(), author="量子位", title="量子位编辑作者招聘")
+    assert upsert_item(conn, original, wechat=True) is True
+
+    # The closest genuine repost measured in production is 3.3 hours later; the
+    # dedup window must not reach it.
+    repost = replace(
+        original,
+        source_id="wx_selfhosted",
+        url=LONG_FORM_URL,
+        published_at="2026-05-28T04:22:03Z",
+    )
+    assert upsert_item(conn, repost, wechat=True) is True
+    assert len(_stored_urls(conn)) == 2
+
+
+def test_a_plain_feed_source_goes_through_the_real_runner_without_wechat_dedup(
+    tmp_path: Path,
+) -> None:
+    """Drive `fetch_source`, not `upsert_item` directly.
+
+    Calling upsert_item without `wechat=True` only restates the caller's own
+    behaviour; it stays green even if the runner starts passing wechat=True for
+    every source. The branch that decides is `source.kind`, so exercise that.
+    """
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    feed_source = SourceConfig(
+        slug="plain_feed",
+        name="Plain feed",
+        url="https://example.test/feed.xml",
+        tier="T2",
+        kind="feed",
+        homepage_url="https://example.test/",
+    )
+    sync_to_db([_source(), feed_source], conn)
+    wechat_row = replace(_item(), author="量子位", title="同题")
+    assert upsert_item(conn, wechat_row, wechat=True) is True
+
+    same_title_from_a_feed = replace(
+        wechat_row, source_id="plain_feed", url="https://example.test/a"
+    )
+    with (
+        patch("airadar.fetcher.runner.fetch_feed", return_value=FeedResponse(status_code=200, body=b"<rss/>")),
+        patch("airadar.fetcher.runner.parse_feed", return_value=[same_title_from_a_feed]),
+    ):
+        summary = fetch_source(conn, feed_source)
+
+    assert summary.error is None
+    assert summary.inserted == 1, "a non-wechat source must not be deduped against WeChat rows"
+
+
+def test_long_form_wechat_urls_are_not_sent_to_the_scraper(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    item = replace(_item(), source_id="wx_selfhosted", url=LONG_FORM_URL, author="量子位")
+
+    # Assert on the call itself: the scraper runs inside a thread pool that
+    # turns any exception into a failed-article dict, so a raising sentinel
+    # would be swallowed and the test would pass either way.
+    with patch(
+        "airadar.fetcher.runner.scrape_article",
+        return_value={"success": False, "error": "captcha"},
+    ) as scrape:
+        enriched = _enrich_wechat_bodies(conn, [item])
+
+    scrape.assert_not_called()
+    assert enriched == [item]
+
+
+def test_a_disabled_sources_rows_do_not_block_the_remaining_feed(tmp_path: Path) -> None:
+    """Switching a feed off must not take its articles down with it.
+
+    `/wechat` only shows rows whose source is enabled, so a disabled source's
+    rows are already invisible there. If dedup still matched them, turning one
+    feed off would hide everything it happened to find first AND stop the other
+    feed from ever bringing those articles back.
+    """
+    conn = _dual_conn(tmp_path)
+    found_first_by_the_candidate = replace(
+        _item(), source_id="wx_selfhosted", url=LONG_FORM_URL, author="量子位", title="只有候选源先发现的一篇"
+    )
+    assert upsert_item(conn, found_first_by_the_candidate, wechat=True) is True
+
+    conn.execute("UPDATE sources SET enabled=0 WHERE id='wx_selfhosted'")
+    incumbent_brings_it_later = replace(
+        found_first_by_the_candidate,
+        source_id="wx_guizang",
+        url="https://mp.weixin.qq.com/s/incumbent-token",
+    )
+    assert upsert_item(conn, incumbent_brings_it_later, wechat=True) is True
+
+
+def test_titles_differing_only_in_punctuation_are_not_merged(tmp_path: Path) -> None:
+    """The two renderers were measured to agree on punctuation, so folding it
+    away buys nothing and merges genuinely different articles for good."""
+    conn = _dual_conn(tmp_path)
+    first = replace(_item(), author="量子位", title="报告：1.0！")
+    assert upsert_item(conn, first, wechat=True) is True
+
+    different_article = replace(
+        first, source_id="wx_selfhosted", url=LONG_FORM_URL, title="报告10", published_at="2026-05-28T01:04:03Z"
+    )
+    assert upsert_item(conn, different_article, wechat=True) is True
+    assert len(_stored_urls(conn)) == 2
+
+
+def test_a_repost_from_the_same_source_is_never_merged_by_title(tmp_path: Path) -> None:
+    conn = _dual_conn(tmp_path)
+    first = replace(_item(), author="量子位", title="量子位编辑作者招聘")
+    assert upsert_item(conn, first, wechat=True) is True
+    minutes_later = replace(
+        first, url="https://mp.weixin.qq.com/s/second-posting", published_at="2026-05-28T01:03:03Z"
+    )
+    assert upsert_item(conn, minutes_later, wechat=True) is True
+    assert len(_stored_urls(conn)) == 2
