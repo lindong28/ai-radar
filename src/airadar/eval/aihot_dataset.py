@@ -3130,15 +3130,17 @@ class CaptureWriter:
         api_url = f"{self.base_url}/api/v1/items"
 
         def fetch(cursor: str | None) -> HttpResponse:
+            params: dict[str, str | int | float | bool | None] = {
+                "mode": "all",
+                "by": "timeline",
+                "window": "7d",
+                "limit": 100,
+            }
+            if cursor is not None:
+                params["cursor"] = cursor
             return self.transport.get(
                 api_url,
-                params={
-                    "mode": "all",
-                    "by": "timeline",
-                    "window": "7d",
-                    "limit": 100,
-                    "cursor": cursor,
-                },
+                params=params,
                 headers={"User-Agent": self.user_agent},
             )
 

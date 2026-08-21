@@ -12,6 +12,7 @@ import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
@@ -3874,13 +3875,15 @@ class FakeCaptureTransport:
             pass_index, page_index = divmod(self.api_page_index, 2)
             self.api_page_index += 1
             assert pass_index < len(self.pass_item_ids)
-            assert params == {
+            expected_params: dict[str, object] = {
                 "mode": "all",
                 "by": "timeline",
                 "window": "7d",
                 "limit": 100,
-                "cursor": None if page_index == 0 else f"fiction-cursor-{pass_index}",
             }
+            if page_index > 0:
+                expected_params["cursor"] = f"fiction-cursor-{pass_index}"
+            assert params == expected_params
             item_id = self.pass_item_ids[pass_index][page_index]
             on_second_day = item_id != "fiction-item-alpha"
             item = synthetic_api_item(
@@ -4181,6 +4184,211 @@ def test_capture_writer_rejects_actual_dirty_tool_checkout_despite_clean_provide
     assert not (output_root / "captures").exists()
     assert not (output_root / "windows").exists()
     assert not (output_root / ".staging").exists()
+
+
+def test_phase3_direct_negatives_cover_new_leaf_guards(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert error_code(ds, lambda: ds.SubprocessGitProvider().checkout(tmp_path / "not-a-repo")) == "git_checkout_invalid"
+
+    git_results = iter(
+        [
+            subprocess.CompletedProcess([], 0, stdout=f"{tmp_path}\n", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout=f"{'a' * 40}\n", stderr=""),
+            subprocess.CompletedProcess([], 1, stdout="", stderr="fictional status failure"),
+        ]
+    )
+    monkeypatch.setattr(ds.subprocess, "run", lambda *_args, **_kwargs: next(git_results))
+    assert error_code(ds, lambda: ds.SubprocessGitProvider().checkout(tmp_path)) == "git_checkout_invalid"
+    monkeypatch.undo()
+
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        ds.HttpxTransport(timeout_seconds=0, user_agent="Fictional-UA/1.0")
+    empty_response = ds.HttpResponse(status=200, headers={}, body=b"")
+    assert error_code(ds, lambda: ds._required_header(empty_response, "Date")) == "identity_anchor_missing"
+    blank_response = ds.HttpResponse(status=200, headers={"ETag": "   "}, body=b"")
+    assert error_code(ds, lambda: ds._optional_non_empty_header(blank_response, "ETag")) == "identity_anchor_missing"
+
+    staging_root = tmp_path / "staging"
+    staged_target = staging_root / "fictional.json"
+    staged_target.parent.mkdir(parents=True)
+    staged_target.write_bytes(b"preserve")
+    assert error_code(ds, lambda: ds._write_staged(staging_root, "fictional.json", b"replacement")) == "target_exists"
+    assert staged_target.read_bytes() == b"preserve"
+
+    outside = tmp_path / "outside"
+    allowed = tmp_path / "allowed"
+    outside.mkdir()
+    allowed.mkdir()
+    assert error_code(ds, lambda: ds._remove_exact_tree(outside, allowed_parent=allowed)) == "cleanup_refused"
+    assert outside.is_dir()
+
+
+@pytest.mark.parametrize("failure", ["tool_root", "unborn_head"])
+def test_phase3_direct_negatives_cover_capture_preflight_identity_guards(
+    ds: Any,
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    writer, transport, _clock, tool_root, _output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    if failure == "tool_root":
+        nested = tool_root / "nested"
+        nested.mkdir()
+        writer.tool_repo_root = nested.resolve()
+        expected_code = "tool_checkout_invalid"
+    else:
+        unborn = tmp_path / "unborn-tool"
+        initialize_fictional_git_repo(unborn, create_commit=False)
+        writer.tool_repo_root = unborn.resolve()
+        expected_code = "tool_commit_invalid"
+
+    assert error_code(ds, lambda: writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])) == expected_code
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        ("list_duplicate", "tag_observation_duplicate"),
+        ("detail_missing", "tag_observation_missing"),
+        ("detail_duplicate", "tag_observation_duplicate"),
+        ("no_decision", "capture_unstable"),
+        ("wrong_window", "window_invalid"),
+        ("existing_window", "target_exists"),
+    ],
+)
+def test_phase3_direct_negatives_cover_capture_pipeline_guards(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected_code: str,
+) -> None:
+    writer, transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    real_get = transport.get
+
+    def guarded_get(
+        url: str,
+        *,
+        params: dict[str, object] | None,
+        headers: dict[str, str],
+    ) -> object:
+        result = real_get(url, params=params, headers=headers)
+        parsed = urlparse(url)
+        if failure == "list_duplicate" and parsed.path == "/all" and params == {"page": 2}:
+            body = (
+                b'<article class="timeline-item" data-aihot-id="fiction-item-alpha" '
+                b'data-aihot-url="https://aihot.invalid/items/fiction-item-alpha"></article>'
+            )
+            return ds.HttpResponse(status=200, headers=result.headers, body=body)
+        if parsed.path.startswith("/items/") and failure in {"detail_missing", "detail_duplicate"}:
+            if failure == "detail_missing":
+                body = b"<html><body></body></html>"
+            else:
+                item_id = parsed.path.removeprefix("/items/")
+                article = (
+                    f'<article class="timeline-item" data-aihot-id="{item_id}" '
+                    f'data-aihot-url="https://aihot.invalid/items/{item_id}"></article>'
+                )
+                body = f"<html><body>{article}{article}</body></html>".encode()
+            return ds.HttpResponse(status=200, headers=result.headers, body=body)
+        return result
+
+    transport.get = guarded_get  # type: ignore[method-assign]
+    if failure == "no_decision":
+        monkeypatch.setattr(ds, "select_canonical_pass", lambda _observations: None)
+    if failure == "existing_window":
+        output_root.joinpath(*Path(synthetic_window_root(WINDOW_ONE)).parts).mkdir(parents=True)
+
+    start, end = (WINDOW_ONE[0], WINDOW_ONE[1]) if failure == "wrong_window" else (WINDOW_ONE[0], WINDOW_TWO[1])
+    assert error_code(ds, lambda: writer.capture(start=start, end=end)) == expected_code
+    assert not (output_root / "captures" / "fictional-capture-phase2").exists()
+
+
+def test_phase3_direct_negative_rejects_persisted_symlink_escape(ds: Any, tmp_path: Path) -> None:
+    output_root = tmp_path / "data"
+    captures = output_root / "captures"
+    captures.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"{}")
+    (captures / "escaped.json").symlink_to(outside)
+
+    assert error_code(ds, lambda: ds._persisted_artifact_maps(output_root)) == "reference_invalid"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        ("invalid_capture", "manifest_invalid"),
+        ("duplicate_formal_window", "window_missing"),
+        ("invalid_window", "window_integrity_failed"),
+        ("outside_normalized_coverage", "window_out_of_coverage"),
+        ("duplicate_item", "item_duplicate"),
+    ],
+)
+def test_phase3_direct_negatives_cover_persisted_slice_guards(
+    ds: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected_code: str,
+) -> None:
+    writer, _transport, _clock, _tool_root, output_root = make_capture_writer(
+        ds,
+        tmp_path,
+        retry_ssr=False,
+    )
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1])
+    start, end = WINDOW_ONE
+
+    if failure == "invalid_capture":
+        (output_root / result.capture_path).write_bytes(ds.canonical_json_bytes({}))
+    elif failure == "duplicate_formal_window":
+        fake_window = SimpleNamespace(
+            start_inclusive=WINDOW_ONE[0],
+            end_exclusive=WINDOW_ONE[1],
+        )
+        fake_pass = SimpleNamespace(
+            raw_pages=[
+                SimpleNamespace(date="Thu, 20 Aug 2026 12:00:00 GMT"),
+                SimpleNamespace(date="Thu, 20 Aug 2026 12:00:10 GMT"),
+            ],
+            formal_windows=[fake_window, fake_window],
+        )
+        fake_capture = SimpleNamespace(passes=[fake_pass], canonical_pass_index=0)
+        monkeypatch.setattr(ds, "_load_report_capture", lambda *_args, **_kwargs: ({}, fake_capture))
+    elif failure == "invalid_window":
+        manifest_path = output_root / result.window_manifest_paths[0]
+        manifest_path.write_bytes(ds.canonical_json_bytes({}))
+    elif failure == "outside_normalized_coverage":
+        start, end = "2026-08-17T00:00:00Z", "2026-08-18T00:00:00Z"
+    else:
+        duplicate = synthetic_item_record(ds)
+        monkeypatch.setattr(ds, "validate_window_projection", lambda *_args, **_kwargs: [duplicate])
+
+    assert (
+        error_code(
+            ds,
+            lambda: ds.slice_persisted_capture(
+                output_root,
+                capture_path=result.capture_path,
+                start=start,
+                end=end,
+                network_transport=FailIfNetworkTransport(),
+            ),
+        )
+        == expected_code
+    )
 
 
 def test_capture_writer_refuses_non_repo_root_and_existing_capture(
