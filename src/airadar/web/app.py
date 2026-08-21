@@ -62,14 +62,56 @@ _CHANGELOG_MARKDOWN = MarkdownIt("commonmark", {"html": False})
 # on every observed request), for a page whose bytes are identical between
 # visitors. `/` was already here and still missed, because the EdgeOne rule set
 # only names `/wechat`; that half lives in the console, not in this file.
+# The four sidebar destinations below were absent for the same reason `/all`
+# was, and with the same symptom: no Cache-Control at all, so the edge had
+# nothing to follow and every visit reached the origin (`eo-cache-status: MISS`
+# on every observed request, measured 2026-08-21 against production for
+# `/daily`, `/bookmarks`, `/more` and `/about`). They are listed with an *empty*
+# key set: none of them reads a query parameter, so any query string at all
+# falls to `private, no-store` -- the same closed default the entries above use.
+#
+# The precondition that makes them public-cacheable is that their bytes are
+# identical between visitors, and that is a property of their handlers, not of
+# their URLs. `/bookmarks` is the one to watch: it renders `bookmarks.html`
+# with an *empty* template context, and the bookmark set lives in localStorage
+# (`ai-radar:bookmarks:v1`); the server-side sync sketched in app.js is still
+# only a comment. **If that sync ever lands, this entry must come out first** --
+# a shared cache would hand one reader's bookmarks to the next visitor.
+# `/daily/{date}` is deliberately not here: this map is matched on the exact
+# path, so the dated pages keep the closed default until someone measures them.
 _PUBLIC_PAGINATION_QUERY_KEYS = {
     "/": frozenset({"page"}),
     "/all": frozenset({"page"}),
     "/wechat": frozenset({"page"}),
+    "/daily": frozenset(),
+    "/bookmarks": frozenset(),
+    "/more": frozenset(),
+    "/about": frozenset(),
     "/api/v1/curated": frozenset({"page", "limit"}),
     "/api/v1/hot": frozenset({"limit", "hours"}),
     "/api/v1/wechat": frozenset({"page", "limit"}),
 }
+
+
+def _declares_private(response: Response) -> bool:
+    """True when the handler already declared the *whole response* unshareable.
+
+    Parsed per directive rather than by substring, and across *every*
+    `Cache-Control` field: `headers.get()` returns only the first one, so a
+    handler emitting `max-age=0` and `no-store` as two fields would look
+    non-private to a substring test and get overwritten with a public policy.
+    Only bare `private` counts -- `private="Set-Cookie"` scopes the restriction
+    to named headers and does not forbid sharing the body -- and only exact
+    `no-store`, so `no-store-if-error` and values like `foo="private"` do not
+    trip it (RFC 9111 §5.2).
+    """
+    for field in response.headers.getlist("Cache-Control"):
+        for raw in field.split(","):
+            name, sep, _ = raw.strip().partition("=")
+            directive = name.strip().lower()
+            if directive == "no-store" or (directive == "private" and not sep):
+                return True
+    return False
 
 
 def _public_pagination_cache_control(request: Request, status_code: int) -> str | None:
@@ -77,6 +119,19 @@ def _public_pagination_cache_control(request: Request, status_code: int) -> str 
     if allowed_query_keys is None or request.method not in {"GET", "HEAD"}:
         return None
     if status_code != 200 or not set(request.query_params).issubset(allowed_query_keys):
+        return PRIVATE_CACHE_CONTROL
+    # A raw query string that parses to *zero* parameters is still a distinct
+    # URL, and the edge keys on the URL. `parse_qsl` drops bare separators, so
+    # `?&` and `?&&` reach here with an empty parameter set and would otherwise
+    # pass the subset test above and be published under a public entry. Compare
+    # the raw bytes instead: no parameters plus a non-empty query string means
+    # something was sent that this path does not model.
+    #
+    # Transport limit worth stating: a bare trailing `?` is not distinguishable
+    # from no query at all by the time the request reaches ASGI, so `/daily?`
+    # is treated as `/daily`. That is the same document, so it is a cache-key
+    # question, not a correctness one.
+    if not set(request.query_params) and request.scope.get("query_string"):
         return PRIVATE_CACHE_CONTROL
     return PUBLIC_PAGINATION_CACHE_CONTROL
 
@@ -565,7 +620,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         response.headers["Server-Timing"] = f"app;dur={duration_ms:.3f}"
         cache_control = _public_pagination_cache_control(request, response.status_code)
         if cache_control is not None:
-            response.headers["Cache-Control"] = cache_control
+            # A handler that has already declared itself private outranks this
+            # middleware. Without this, the allowlist is the *only* thing
+            # standing between a per-visitor response and a shared cache: a
+            # handler could return `private, no-store` correctly and still be
+            # published, because the middleware runs last and overwrites it.
+            # That is a silent, one-directional failure -- it turns a correct
+            # handler into a leak -- so the safe direction is to let private win.
+            if not (
+                _declares_private(response) and cache_control == PUBLIC_PAGINATION_CACHE_CONTROL
+            ):
+                response.headers["Cache-Control"] = cache_control
         return response
 
     @app.exception_handler(StarletteHTTPException)
