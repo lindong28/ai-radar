@@ -1029,27 +1029,42 @@ class _ApiLinks(_StrictModel):
         return _http_url(value, field_name=f"links.{info.field_name}")
 
 
+class _ApiAttribution(_StrictModel):
+    name: str
+    url: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return _non_empty_string(value, field_name="attribution.name")
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return _http_url(value, field_name="attribution.url")
+
+
 class _ApiItem(_StrictModel):
     id: str
     title: str
-    originalTitle: str | None
-    summary: str | None
+    originalTitle: str
+    summary: str
     source: _ApiSource
     links: _ApiLinks
-    publishedAt: str | None
+    publishedAt: str
     discoveredAt: str
-    category: str | None
-    score: float | None = Field(ge=0, le=100)
+    category: str
+    score: int = Field(ge=0, le=100)
     selected: bool
     reason: str | None
-    attribution: Any
+    attribution: _ApiAttribution
 
-    @field_validator("id", "title")
+    @field_validator("id", "title", "originalTitle", "summary", "category")
     @classmethod
     def validate_required_text(cls, value: str, info: Any) -> str:
         return _non_empty_string(value, field_name=info.field_name)
 
-    @field_validator("originalTitle", "summary", "category", "reason")
+    @field_validator("reason")
     @classmethod
     def validate_nullable_text(cls, value: str | None, info: Any) -> str | None:
         if value is None:
@@ -1058,9 +1073,7 @@ class _ApiItem(_StrictModel):
 
     @field_validator("publishedAt", "discoveredAt")
     @classmethod
-    def validate_timestamp(cls, value: str | None, info: Any) -> str | None:
-        if value is None:
-            return None
+    def validate_timestamp(cls, value: str, info: Any) -> str:
         return _rfc3339(value, field_name=info.field_name)
 
     @model_validator(mode="after")
@@ -1070,8 +1083,9 @@ class _ApiItem(_StrictModel):
 
 
 class _PageMetadata(_StrictModel):
+    count: int
     hasMore: bool
-    nextCursor: str | None
+    nextCursor: str | None = None
 
     @model_validator(mode="after")
     def validate_terminal_shape(self) -> _PageMetadata:

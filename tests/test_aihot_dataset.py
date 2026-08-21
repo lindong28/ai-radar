@@ -69,7 +69,7 @@ class FailIfNetworkTransport:
 def synthetic_api_item(
     item_id: str = "fiction-item-alpha",
     *,
-    published_at: str | None = "2026-08-18T07:00:00Z",
+    published_at: str = "2026-08-18T07:00:00Z",
     discovered_at: str = "2026-08-18T08:00:00Z",
 ) -> dict[str, object]:
     return {
@@ -85,10 +85,13 @@ def synthetic_api_item(
         "publishedAt": published_at,
         "discoveredAt": discovered_at,
         "category": "invented-research",
-        "score": 73.5,
+        "score": 73,
         "selected": True,
         "reason": "Synthetic recommendation rationale.",
-        "attribution": {"kind": "synthetic-shape-only"},
+        "attribution": {
+            "name": "Fictional Gazette",
+            "url": "https://origin.invalid/publishers/fictional-gazette",
+        },
     }
 
 
@@ -97,7 +100,7 @@ def synthetic_item_record(
     item_id: str = "fiction-item-alpha",
     *,
     tags: list[str] | None = None,
-    published_at: str | None = "2026-08-18T07:00:00Z",
+    published_at: str = "2026-08-18T07:00:00Z",
     discovered_at: str = "2026-08-18T08:00:00Z",
 ) -> Any:
     api_item = ds.parse_api_item(synthetic_api_item(item_id, published_at=published_at, discovered_at=discovered_at))
@@ -138,7 +141,7 @@ def page_payload(
             "ordering": ordering,
         },
         "items": items,
-        "page": {"hasMore": has_more, "nextCursor": next_cursor},
+        "page": {"count": len(items), "hasMore": has_more, "nextCursor": next_cursor},
     }
 
 
@@ -574,6 +577,36 @@ def replace_first_raw_api_page_envelope(
     page_reference["response_body_sha256"] = ds.sha256_hex(encoded)
 
 
+def mutate_first_persisted_raw_api_page(
+    ds: Any,
+    capture: dict[str, object],
+    raw_files: dict[str, bytes],
+    *,
+    mutation: str,
+) -> None:
+    page_reference = capture["passes"][0]["raw_pages"][0]  # type: ignore[index]
+    path = page_reference["raw_path"]
+    payload = json.loads(gzip.decompress(raw_files[path]))
+    if mutation == "root_extra":
+        payload["unknownRoot"] = "forbidden"
+    elif mutation == "query_missing":
+        del payload["query"]["q"]
+    elif mutation == "item_wrong_type":
+        payload["items"][0]["originalTitle"] = None
+    elif mutation == "attribution_extra":
+        payload["items"][0]["attribution"]["unknownNested"] = "forbidden"
+    elif mutation == "page_wrong_type":
+        payload["page"]["count"] = "1"
+    else:
+        payload["page"]["hasMore"] = True
+        payload["page"].pop("nextCursor", None)
+    encoded = ds.canonical_json_bytes(payload)
+    compressed = ds.deterministic_gzip(encoded)
+    raw_files[path] = compressed
+    page_reference["compressed_raw_sha256"] = ds.sha256_hex(compressed)
+    page_reference["response_body_sha256"] = ds.sha256_hex(encoded)
+
+
 def move_all_capture_items_into_window_one(
     ds: Any,
     capture: dict[str, object],
@@ -897,10 +930,9 @@ def test_gap_count_old_target_id_names_fail_closed_in_window_and_report(
     )
 
 
-def test_serialized_null_and_empty_row_exposes_completed_observation_states(ds: Any) -> None:
+def test_serialized_nullable_reason_and_empty_tags_expose_completed_observation_states(ds: Any) -> None:
     api_payload = synthetic_api_item()
-    for field in ("originalTitle", "summary", "publishedAt", "category", "score", "reason"):
-        api_payload[field] = None
+    api_payload["reason"] = None
     api_item = ds.parse_api_item(api_payload)
     final_item = ds.reconcile_tags(
         [api_item],
@@ -915,9 +947,37 @@ def test_serialized_null_and_empty_row_exposes_completed_observation_states(ds: 
     ).items[0]
     serialized = json.loads(ds.serialize_items_jsonl([final_item]))
     assert serialized["tags"] == []
-    assert serialized["aihot_summary"] is None
+    assert serialized["aihot_summary"] == "Clearly fictional summary for deterministic contract testing."
+    assert serialized["aihot_recommendation_reason"] is None
     assert serialized["api_record_projection_observation"] == "complete"
     assert serialized["ssr_tags_observation"] == "observed"
+
+
+def test_downstream_frozen_item_nullable_fields_round_trip_independently_of_upstream_shape(ds: Any) -> None:
+    payload = synthetic_item_record(ds).model_dump(mode="json")
+    nullable_fields = (
+        "original_title",
+        "aihot_summary",
+        "published_at",
+        "aihot_category_slug",
+        "aihot_score_0_to_100",
+    )
+    for field in nullable_fields:
+        payload[field] = None
+
+    frozen_item = ds.AihotItemV1.model_validate(payload)
+    encoded = ds.serialize_items_jsonl([frozen_item])
+    serialized = json.loads(encoded)
+    assert {field: serialized[field] for field in nullable_fields} == {
+        field: None for field in nullable_fields
+    }
+    assert serialized["api_record_projection_observation"] == "complete"
+    assert serialized["ssr_tags_observation"] == "observed"
+
+    reopened = ds.load_items_jsonl(encoded, schema_bytes=SCHEMA_PATH.read_bytes())
+    assert reopened == [frozen_item]
+    assert reopened[0].api_record_projection_observation == "complete"
+    assert reopened[0].ssr_tags_observation == "observed"
 
 
 @pytest.mark.parametrize(
@@ -1000,7 +1060,7 @@ def test_api_item_projection_preserves_upstream_strings(ds: Any) -> None:
         "published_at": "2026-08-18T07:00:00Z",
         "aihot_discovered_at": "2026-08-18T08:00:00Z",
         "aihot_category_slug": "invented-research",
-        "aihot_score_0_to_100": 73.5,
+        "aihot_score_0_to_100": 73,
         "aihot_selected": True,
         "aihot_recommendation_reason": "Synthetic recommendation rationale.",
     }
@@ -1041,7 +1101,7 @@ def test_unreconciled_api_item_cannot_be_serialized_as_final_v1(ds: Any) -> None
 def test_v1_serializer_and_report_keys_reject_old_ambiguous_names(ds: Any) -> None:
     item = synthetic_item_record(ds)
     serialized = json.loads(ds.serialize_items_jsonl([item]))
-    assert serialized["aihot_score_0_to_100"] == 73.5
+    assert serialized["aihot_score_0_to_100"] == 73
     assert serialized["aihot_selected"] is True
     assert serialized["aihot_title"] == "Synthetic Teapot Bulletin fiction-item-alpha"
     assert serialized["aihot_summary"] == "Clearly fictional summary for deterministic contract testing."
@@ -1594,6 +1654,222 @@ def test_api_envelope_by_domain_accepts_only_timeline_or_published(ds: Any) -> N
     )
 
 
+def test_authoritative_api_model_key_sets_are_exact(ds: Any) -> None:
+    assert tuple(ds._ApiPage.model_fields) == ("schemaVersion", "query", "items", "page")
+    assert tuple(ds._ApiQuery.model_fields) == ("mode", "category", "window", "q", "by", "ordering")
+    assert tuple(ds._ApiItem.model_fields) == (
+        "id",
+        "title",
+        "originalTitle",
+        "summary",
+        "source",
+        "links",
+        "publishedAt",
+        "discoveredAt",
+        "category",
+        "score",
+        "selected",
+        "reason",
+        "attribution",
+    )
+    assert tuple(ds._ApiSource.model_fields) == ("name",)
+    assert tuple(ds._ApiLinks.model_fields) == ("aihot", "original")
+    assert tuple(ds._ApiAttribution.model_fields) == ("name", "url")
+    assert tuple(ds._PageMetadata.model_fields) == ("count", "hasMore", "nextCursor")
+
+
+@pytest.mark.parametrize("field", ["schemaVersion", "query", "items", "page"])
+def test_api_root_rejects_each_missing_key(ds: Any, field: str) -> None:
+    payload = page_payload([synthetic_api_item()], has_more=False, next_cursor=None)
+    del payload[field]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("schemaVersion", "1"),
+        ("query", []),
+        ("items", {}),
+        ("page", []),
+    ],
+)
+def test_api_root_rejects_each_wrong_type(ds: Any, field: str, wrong_value: object) -> None:
+    payload = page_payload([synthetic_api_item()], has_more=False, next_cursor=None)
+    payload[field] = wrong_value
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+def test_api_root_rejects_unknown_extra_key(ds: Any) -> None:
+    payload = page_payload([synthetic_api_item()], has_more=False, next_cursor=None)
+    payload["unknownRoot"] = "forbidden"
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+@pytest.mark.parametrize("field", ["mode", "category", "window", "q", "by", "ordering"])
+def test_api_query_rejects_each_missing_key(ds: Any, field: str) -> None:
+    payload = page_payload([], has_more=False, next_cursor=None)
+    del payload["query"][field]  # type: ignore[index]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+@pytest.mark.parametrize("field", ["mode", "category", "window", "q", "by", "ordering"])
+def test_api_query_rejects_each_wrong_type(ds: Any, field: str) -> None:
+    payload = page_payload([], has_more=False, next_cursor=None)
+    payload["query"][field] = 7  # type: ignore[index]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+def test_api_query_rejects_unknown_extra_key_and_accepts_nullable_fields(ds: Any) -> None:
+    payload = page_payload([], has_more=False, next_cursor=None)
+    ds._parse_page_body(ds.canonical_json_bytes(payload))
+    payload["query"]["unknownQuery"] = "forbidden"  # type: ignore[index]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "id",
+        "title",
+        "originalTitle",
+        "summary",
+        "source",
+        "links",
+        "publishedAt",
+        "discoveredAt",
+        "category",
+        "score",
+        "selected",
+        "reason",
+        "attribution",
+    ],
+)
+def test_api_item_rejects_each_missing_key(ds: Any, field: str) -> None:
+    item = synthetic_api_item()
+    del item[field]
+    assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("id", 7),
+        ("title", 7),
+        ("originalTitle", None),
+        ("summary", None),
+        ("source", []),
+        ("links", []),
+        ("publishedAt", None),
+        ("discoveredAt", None),
+        ("category", None),
+        ("score", "73"),
+        ("selected", 1),
+        ("reason", 7),
+        ("attribution", []),
+    ],
+)
+def test_api_item_rejects_each_wrong_type(ds: Any, field: str, wrong_value: object) -> None:
+    item = synthetic_api_item()
+    item[field] = wrong_value
+    assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+@pytest.mark.parametrize("wrong_score", [73.5, True])
+def test_api_item_score_is_strict_int_not_float_or_bool(ds: Any, wrong_score: object) -> None:
+    item = synthetic_api_item()
+    item["score"] = wrong_score
+    assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+def test_api_item_accepts_nullable_reason_and_rejects_unknown_extra_key(ds: Any) -> None:
+    item = synthetic_api_item()
+    item["reason"] = None
+    assert ds.parse_api_item(item).aihot_recommendation_reason is None
+    item["unknownItem"] = "forbidden"
+    assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+@pytest.mark.parametrize(
+    ("container", "field"),
+    [
+        ("source", "name"),
+        ("links", "aihot"),
+        ("links", "original"),
+        ("attribution", "name"),
+        ("attribution", "url"),
+    ],
+)
+def test_api_item_nested_shapes_reject_each_missing_key(ds: Any, container: str, field: str) -> None:
+    item = synthetic_api_item()
+    del item[container][field]  # type: ignore[index]
+    assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+@pytest.mark.parametrize("container", ["source", "links", "attribution"])
+def test_api_item_nested_shapes_reject_unknown_extra_key(ds: Any, container: str) -> None:
+    item = synthetic_api_item()
+    item[container]["unknownNested"] = "forbidden"  # type: ignore[index]
+    assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+@pytest.mark.parametrize(
+    ("container", "field"),
+    [
+        ("source", "name"),
+        ("links", "aihot"),
+        ("links", "original"),
+        ("attribution", "name"),
+        ("attribution", "url"),
+    ],
+)
+def test_api_item_nested_shapes_reject_each_wrong_type(ds: Any, container: str, field: str) -> None:
+    item = synthetic_api_item()
+    item[container][field] = 7  # type: ignore[index]
+    assert error_code(ds, lambda: ds.parse_api_item(item)) == "item_invalid"
+
+
+@pytest.mark.parametrize("field", ["count", "hasMore"])
+def test_api_page_metadata_rejects_each_required_missing_key(ds: Any, field: str) -> None:
+    payload = page_payload([], has_more=False, next_cursor=None)
+    del payload["page"][field]  # type: ignore[index]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [("count", 0.0), ("count", False), ("hasMore", 0), ("nextCursor", 7)],
+)
+def test_api_page_metadata_rejects_each_wrong_type(ds: Any, field: str, wrong_value: object) -> None:
+    payload = page_payload([], has_more=False, next_cursor=None)
+    payload["page"][field] = wrong_value  # type: ignore[index]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+def test_api_page_metadata_rejects_unknown_extra_key_without_inventing_count_semantics(ds: Any) -> None:
+    payload = page_payload([synthetic_api_item()], has_more=False, next_cursor=None)
+    payload["page"]["count"] = 999  # type: ignore[index]
+    ds._parse_page_body(ds.canonical_json_bytes(payload))
+    payload["page"]["unknownPage"] = "forbidden"  # type: ignore[index]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "page_invalid"
+
+
+@pytest.mark.parametrize("next_cursor", [None, "missing"])
+def test_terminal_page_accepts_null_or_missing_next_cursor(ds: Any, next_cursor: str | None) -> None:
+    payload = page_payload([], has_more=False, next_cursor=None)
+    if next_cursor == "missing":
+        del payload["page"]["nextCursor"]  # type: ignore[index]
+    ds._parse_page_body(ds.canonical_json_bytes(payload))
+
+
+@pytest.mark.parametrize("next_cursor", [None, "missing"])
+def test_nonterminal_page_rejects_null_or_missing_next_cursor(ds: Any, next_cursor: str | None) -> None:
+    payload = page_payload([], has_more=True, next_cursor=None)
+    if next_cursor == "missing":
+        del payload["page"]["nextCursor"]  # type: ignore[index]
+    assert error_code(ds, lambda: ds._parse_page_body(ds.canonical_json_bytes(payload))) == "cursor_missing"
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected_code"),
     [
@@ -1986,6 +2262,43 @@ def test_persisted_capture_replay_rejects_api_envelope_mutations(
             ),
         )
         == "page_invalid"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("root_extra", "page_invalid"),
+        ("query_missing", "page_invalid"),
+        ("item_wrong_type", "item_invalid"),
+        ("attribution_extra", "item_invalid"),
+        ("page_wrong_type", "page_invalid"),
+        ("nonterminal_cursor_missing", "cursor_missing"),
+    ],
+)
+def test_persisted_capture_raw_replay_enforces_authoritative_api_shape(
+    ds: Any,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    manifest, raw_files = synthetic_capture_bundle(ds)
+    mutate_first_persisted_raw_api_page(
+        ds,
+        manifest,
+        raw_files,
+        mutation=mutation,
+    )
+    assert (
+        error_code(
+            ds,
+            lambda: ds.validate_capture_manifest(
+                manifest,
+                manifest_path=CAPTURE_PATH,
+                raw_files=raw_files,
+                schema_bytes=SCHEMA_PATH.read_bytes(),
+            ),
+        )
+        == expected_code
     )
 
 
@@ -3774,10 +4087,14 @@ def test_window_projection_rejects_tag_mutation_against_raw_observation(ds: Any)
     )
 
 
-def test_window_projection_preserves_explicit_api_null(ds: Any) -> None:
+def test_window_projection_preserves_explicit_nullable_api_reason(ds: Any) -> None:
     capture, raw_files = synthetic_capture_bundle(ds)
-    replace_first_api_item_field(ds, capture, raw_files, ("summary",), None)
-    window, files, ssr_raw_files = synthetic_window_bundle(ds, capture, item_updates={"aihot_summary": None})
+    replace_first_api_item_field(ds, capture, raw_files, ("reason",), None)
+    window, files, ssr_raw_files = synthetic_window_bundle(
+        ds,
+        capture,
+        item_updates={"aihot_recommendation_reason": None},
+    )
     raw_files.update(ssr_raw_files)
     items = ds.validate_window_projection(
         window,
@@ -3786,7 +4103,7 @@ def test_window_projection_preserves_explicit_api_null(ds: Any) -> None:
         files=files,
         raw_files=raw_files,
     )
-    assert items[0].aihot_summary is None
+    assert items[0].aihot_recommendation_reason is None
 
 
 def test_window_projection_rejects_list_detail_count_mutation(ds: Any) -> None:
