@@ -194,6 +194,27 @@ uv run python scripts/probe_x_source.py --source x_openai --db <全新临时数�
 
 配置 reload 只禁用已移除来源、保留历史 SQLite 行；所有公开 source/timeline/search/selected/wechat 消费面会过滤 disabled 行。
 
+### AIHOT 私有基准集
+
+AIHOT benchmark 数据位于 private submodule `benchmarks/aihot`；主仓只保存工具、冻结 schema 和 gitlink，不保存 AIHOT raw、JSONL、标题或 URL 内容。使用者须先取得 AI Radar 主仓，并让用于 Git submodule 的 GitHub SSH 身份获得 `lindong28/ai-radar-data` 读取权限，再递归克隆；已有 checkout 可单独初始化该 submodule：
+
+```bash
+git clone --recurse-submodules <AI Radar repository URL>
+git submodule update --init --recursive benchmarks/aihot
+```
+
+采集、离线切窗与验收共用同一 CLI。`capture` 必须从 clean、已固定的工具 commit 运行，输出根必须是 data submodule，并严格遵守 AIHOT 的 30 requests/minute 与 `Retry-After`；`slice` 和 `validate` 只读已保存的 raw/schema，不依赖 AIHOT 继续在线：
+
+```bash
+uv run python scripts/capture_aihot_dataset.py capture --start 2026-08-19T00:00:00Z --end 2026-08-21T00:00:00Z --output-root benchmarks/aihot
+uv run python scripts/capture_aihot_dataset.py slice --capture benchmarks/aihot/captures/<capture-id>/capture.json --start 2026-08-19T00:00:00Z --end 2026-08-20T00:00:00Z --output <output-path>
+uv run python scripts/capture_aihot_dataset.py validate --report-json benchmarks/aihot/windows/2026-08-19T000000Z--2026-08-20T000000Z/manifest.json
+```
+
+当前首个基准提交固定两个半开 UTC 日窗口：`[2026-08-19T00:00Z, 2026-08-20T00:00Z)` 共 348 条，`[2026-08-20T00:00Z, 2026-08-21T00:00Z)` 共 330 条。capture 保存两遍一致的公开 API 观察、SSR 标签证据、冻结 schema bytes/hash 与离线重放所需 raw；它的“完整”只覆盖采集时刻可见的 AIHOT public-surface baseline，不表示 AIHOT 内部 snapshot、筛选或排序实现等价。AIHOT live 仅保留约 7 天，因此 data commit 是窗口过期后的可复现 authority。
+
+代码与数据采用双仓提交：先在 private data 仓提交并经显式许可 push，使 exact data SHA 可远端取得；主仓随后才记录对应 gitlink。任一 data push、远端配置、主仓 push 或主分支整合都各自经过适用的显式授权 gate。契约理由与边界见 [ADR-060](docs/adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md)。
+
 ### 微信文章解读
 
 `interpret` 阶段只处理启用的微信公众号源。**该外部集成默认关闭**：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时，`./run.sh interpret` 打印 `interpret skipped=true` 并成功退出，不读取任何外部路径。

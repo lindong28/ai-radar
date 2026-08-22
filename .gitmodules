@@ -1,0 +1,3 @@
+[submodule "benchmarks/aihot"]
+	path = benchmarks/aihot
+	url = git@github.com:lindong28/ai-radar-data.git
