@@ -35,7 +35,22 @@ healthz 不覆盖同一失败面——它探本机 API 存活，探不到「站�
 
 降级没有任何出口：A7 上线后的 95 轮全部处于 `scope_limited`，一条通知都没发过；`metrics.py` 的 admin degraded 列表只收 `degraded` / `in_progress`，`scope_limited` 被排除，dashboard 上看不到；CLI 把它渲染成 `recorded-scope`——这个词是为 A6 的成本口径造的，对「98 个源没被监控」零指称。根因是 `scope_limited` 被 A6 当作正常态使用，于是无法再承载「监控降级」语义。
 
-**闭合方向**：把「监控降级」与 A6 的「记录行口径」拆成两个 evaluation_state；A5 已有正确对照（可选集成关闭时干净跳过、不 arm；被饥饿时显式发「转为不可评估」而非 ✅）。
+**2026-08-23 复核**：覆盖率已显著改善但缺口未闭合，且新增两项读数。按 `_silent_source_signal()` 实测：163 个启用源中 **evaluated=108、unevaluable=55**（原记 162 中 98），其中 X 源 109 个里 58 个已可评估（原记 15），至今零 item 的从 51 降到 12。
+
+新增第一项：**阈值统计量存在自我遮蔽**。`threshold = 2×(720h / 近30天条数)` 随条数下降而变宽，而条数下降正是源正在死亡的签名；降到 `min_history` 以下即转入 unevaluable、永不 page。同一机制在实测中呈现为 `x_sama`（n=5，已静默 82h，阈值 288h，判健康）与 `x_googleai`（n=1，已静默 127h，不评估）。这是 P9 缺口在阈值公式一侧的根因，与 ISSUE-A05 第 2 条（死满 30 天反而 resolve）是同一机制的两个出口。
+
+新增第二项：**该盲区当前是良性的，不构成在办漏检**。抽查 6 个盲区源（`x_polynoamial`/`x_googleai`/`x_jensenhuang`/`x_perplexity_ai`/`x_anthropicai`/`x_sama`）直查 X API 带各自 `since_id`，全部 `result_count=0`，即账号确实未发原创帖、我们没有漏抓。故本条按已记优先级排期即可，不需插队；但也因此**不宜用「现在会报几个」当作重标定的验收信号**——实测任何硬上限档位现在都会立刻 page 掉一批已验证为正常的源（120h 档 6 个、72h 档 21 个），那是噪声不是检出。
+
+新增第三项：**firing 分支根本不披露降级，本条原文未覆盖这一面**——它成文时 A7 从未 firing，可观察的只有非 firing 那条路径。两处各自独立：
+
+1. `a7_detail` 的 unevaluable 计数只写在 `else`（非 firing）分支，firing 时整句被丢弃。
+2. `evaluation_state = "scope_limited" if unevaluable and not a7_firing else "healthy"` —— firing 时无条件落到 `healthy`。`data/alert-state.json` 今日实录即 `state=firing` 与 `evaluation_state=healthy` 并存。
+
+后果比非 firing 那条更重：运维**正据此告警行动**的那一刻，「55/163 个源不在监控内」既不在消息里、也不在状态里，而 `values` 里虽带 `unevaluable_sources`，`_format_firing()` 从不渲染 `values`。今日 17 次投递没有一次带上它——本次诊断即因此从"整批出网故障"假设起步。
+
+`docs/operations/monitoring-alerting.md` 的 A7 行写「计入「无法评估」并在消息中给出计数」，与 firing 分支的实际行为不符，闭合时一并订正。
+
+**闭合方向**：把「监控降级」与 A6 的「记录行口径」拆成两个 evaluation_state；A5 已有正确对照（可选集成关闭时干净跳过、不 arm；被饥饿时显式发「转为不可评估」而非 ✅）。降级披露须覆盖 firing 与非 firing 两条分支，不能只在「没事」时才说。阈值一侧的自我遮蔽需单独处置，且重标定的验收不能只看当前 firing 数。
 
 ## ISSUE-A04 · A7 在评估源数为 0 时输出「均在各自节奏内」并判 ok
 
@@ -55,6 +70,35 @@ healthz 不覆盖同一失败面——它探本机 API 存活，探不到「站�
 2. 一个真死掉的源先进入 firing；随旧 item 滑出 30 天窗，`recent_count` 衰减到低于 `min_history` → 转入 unevaluable → 移出 `silent_sources` → `a7_firing` 变 false → 发 resolve。**源死满 30 天反而触发「已恢复」。**
 
 A7 尚未在生产 firing 过，故两条都是代码路径分析、无生产实例。
+
+**2026-08-23 更新：第 1 条已有生产实例，A7 首次在生产 firing。** `data/alert-state.json` 记 A7 `state=firing`、`since=2026-08-23T07:10:57+08:00`、`notification_sequence=17`，静默源为 `x_artificialanlys`（37.9h / 阈值 31h）与 `x_elonmusk`（14.1h / 阈值 13h）。该 episode 一旦 resolve 就会走进上述分支——直接构造 `_format_resolved(evaluation_state="scope_limited")` 实测输出为：
+
+```
+【AI Radar】✅ A7 来源静默：记录行金额已回落（since …）
+记录行证据：… 个源均在各自节奏内，55 个源历史过稀无法评估
+```
+
+即本条从「代码路径分析」升级为**待发生的确定事件**，而非潜在风险。第 2 条仍无生产实例。
+
+**2026-08-23 处置：两条均已闭合。**
+
+第 1 条：`_format_resolved()` 的 `scope_limited` 文案改为按 rule 分派（`_SCOPE_LIMITED_RESOLVED_COPY`），A6 输出逐字不变，A7 得到自己的收尾文案。
+
+第 2 条：新增 `faded` 判据把「转为不可评估」从「已恢复」里分出来——一个源若累计条目 ≥ `min_history`、近 30 天 < `min_history`、且静默超过 `max(floor, 2 × 其最近 min_history 条的典型间隔)`，则判为褪色；A7 非 firing 且存在褪色源时 `evaluation_state` 报 `degraded`，走既有 🟡「转为不可评估」通道。**不需要跨轮状态持久化**，故对本改动上线前就已褪色的源同样有效。
+
+节奏基线**按条目数取样、不按时间窗**：停更源在任何近期时间窗内都没有条目，时间窗基线对它要么为空、要么装着更早的东西。这一取值经三轮对抗审收敛，前两次取值各自失手且失败方向相反，值得记下以免重蹈：
+
+| 基线取值 | 失败形态 |
+|---|---|
+| 固定 6h floor | 每周一更的源在第 5 老条目滑出窗口时被误判死亡，还会把**他源**的真实 ✅ 劫持成 🟡 |
+| 全生命周期均值（MIN/MAX/COUNT） | 单条数年前的回填记录即可把阈值拉宽到任何静默都够不着，停更源因此漏检、继续误报恢复 |
+| **最近 `min_history` 条的跨度**（采用） | 三个已知场景均判对；免疫离群旧记录与节奏切换 |
+
+回归覆盖：`test_a7_faded_source_closes_as_unevaluable_not_recovered`（真死亡 → 🟡，断言状态机交给 sender 的完整文本）、`test_a7_low_cadence_source_is_not_faded_when_it_ages_out`（低频源反向对照）、`test_a7_stale_backfilled_item_does_not_hide_a_faded_source`（旧记录污染）。三者均做过变异检验。
+
+上线时生产读数 `evaluated=108 unevaluable=55 faded=0`，即当前无源被判褪色，真恢复仍走 ✅。
+
+同轮另有两项与本条相邻、但不改变其结论的实测：**这次 firing 的两个源判定正确**——各自当前静默均超过其自身近 30 天历史最大间隔（12.0h / 27.3h），阈值恰落在历史 max 之上；**抓取链路无故障**，代理实发 `api.github.com/zen` 得 200，两源直查 X API 均 `result_count=0`（阳性对照 `x_zho_zho_zho` 同查法得 5）。故本条要修的是消息文案，不是判定逻辑。
 
 **闭合方向**：resolve 文案按 rule 分派而非按 evaluation_state；源转入 unevaluable 时沿用 A5 的「转为不可评估」通道，不发 ✅。
 

@@ -129,6 +129,12 @@ class AlertSignals:
     # looks identical to a healthy one in the rule's output otherwise.
     unevaluable_sources: int = 0
     evaluated_sources: int = 0
+    # The half of `unevaluable_sources` whose silence has outrun the cadence of
+    # its own newest few items — as opposed to sources that simply never
+    # published enough to be characterised. Kept separate because leaving the
+    # evaluated set means something different for each: failure for the first,
+    # youth for the second, and only the first must block a ✅.
+    faded_sources: list[tuple[str, str, float]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -306,15 +312,36 @@ def evaluate_rules(
     )
     a7_firing = bool(signals.silent_sources)
     a7_named = sorted(signals.silent_sources, key=lambda row: -row[2])
+    a7_faded = sorted(signals.faded_sources, key=lambda row: -row[2])
+    # The unmonitored remainder matters most while A7 is firing: that is when
+    # someone acts on it, and a named-source list reads as the whole picture.
+    # Disclosing it only in the non-firing branch told the operator the scope
+    # was limited exactly when nothing was wrong, and stayed silent otherwise.
+    a7_scope_note = (
+        f"；另有 {signals.unevaluable_sources} 个源历史过稀无法评估，不在本次判定内"
+        if signals.unevaluable_sources
+        else ""
+    )
     a7_detail = (
         "；".join(
             f"{name} 静默 {hours:.1f}h（阈值 {limit:.0f}h）"
             for _sid, name, hours, limit in a7_named[:5]
         )
         + (f"；另有 {len(a7_named) - 5} 个源" if len(a7_named) > 5 else "")
+        + a7_scope_note
         if a7_firing
         else (
-            f"{signals.evaluated_sources} 个源均在各自节奏内"
+            # A faded source leaving the evaluated set empties `silent_sources`
+            # exactly like a recovery does. Say which one happened, and name
+            # them: "no source is past its threshold" is true in both cases and
+            # so distinguishes nothing.
+            "；".join(
+                f"{name} 已静默 {hours:.1f}h 且历史已稀疏到无法评估"
+                for _sid, name, hours in a7_faded[:5]
+            )
+            + (f"；另有 {len(a7_faded) - 5} 个源同此" if len(a7_faded) > 5 else "")
+            if a7_faded
+            else f"{signals.evaluated_sources} 个源均在各自节奏内"
             + (f"，{signals.unevaluable_sources} 个源历史过稀无法评估" if signals.unevaluable_sources else "")
         )
     )
@@ -552,6 +579,10 @@ def evaluate_rules(
                 "silent_count": len(a7_named),
                 "evaluated_sources": signals.evaluated_sources,
                 "unevaluable_sources": signals.unevaluable_sources,
+                "faded_sources": [
+                    {"source_id": sid, "name": name, "hours": hours}
+                    for sid, name, hours in a7_faded
+                ],
             },
             severity=PAGE_SEVERITY,
             impact=(
@@ -560,8 +591,17 @@ def evaluate_rules(
                 else ""
             ),
             urgency="是——需立即核查" if a7_firing else "",
+            # A firing episode that ends because its sources faded out has not
+            # resolved — nothing recovered, the rule just lost the ability to
+            # see them. `degraded` routes that to the 🟡 "转为不可评估" close
+            # instead of a ✅, which would otherwise report a source as healthy
+            # at the moment it is most thoroughly dead.
             evaluation_state=(
-                "scope_limited" if signals.unevaluable_sources and not a7_firing else "healthy"
+                "degraded"
+                if a7_faded and not a7_firing
+                else "scope_limited"
+                if signals.unevaluable_sources and not a7_firing
+                else "healthy"
             ),
         ),
     ]
@@ -585,6 +625,22 @@ def _format_firing(result: AlertRuleResult) -> str:
     return "\n".join(lines)
 
 
+# `scope_limited` was minted for one limitation only — A6's recorded-row cost
+# scope — so its resolve copy was written inline. A7 then reused the state for
+# an unrelated limitation (part of the source set is unmonitored), and inherited
+# A6's sentence: every A7 resolve announced that a cost had come back down.
+# Keying the copy by rule keeps the state meaning "scope is limited" while each
+# rule says *which* scope, and makes a new rule land on the neutral fallback
+# instead of silently borrowing another rule's wording.
+# (headline, caveat, evidence label). The caveat trails the `since` suffix so
+# the two never nest into stacked parentheses.
+_SCOPE_LIMITED_RESOLVED_COPY: dict[str, tuple[str, str, str]] = {
+    "A6": ("记录行金额已回落", "", "记录行证据"),
+    "A7": ("已恢复", "；部分来源不在评估范围内", "恢复证据"),
+}
+_SCOPE_LIMITED_RESOLVED_FALLBACK = ("已恢复", "；评估范围受限", "恢复证据")
+
+
 def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
     suffix = f"（since {since}）" if since else ""
     if result.evaluation_state == "degraded":
@@ -593,9 +649,12 @@ def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
             f"当前证据：{result.detail}\n处置方向：{result.action}"
         )
     if result.evaluation_state == "scope_limited":
+        headline, caveat, evidence_label = _SCOPE_LIMITED_RESOLVED_COPY.get(
+            result.rule_id, _SCOPE_LIMITED_RESOLVED_FALLBACK
+        )
         return (
-            f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title}：记录行金额已回落{suffix}\n"
-            f"记录行证据：{result.detail}"
+            f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title}：{headline}{suffix}{caveat}\n"
+            f"{evidence_label}：{result.detail}"
         )
     return (
         f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}\n"
@@ -1976,7 +2035,7 @@ def _silent_source_signal(
     floor_hours: float = 6.0,
     lookback_days: int = 30,
     min_history: int = 5,
-) -> tuple[list[tuple[str, str, float, float]], int, int]:
+) -> tuple[list[tuple[str, str, float, float]], int, int, list[tuple[str, str, float]]]:
     """Find enabled sources that have stopped producing items.
 
     Exists because the aggregate ingestion signal cannot see a single source
@@ -1993,12 +2052,33 @@ def _silent_source_signal(
     rather than assumed healthy: silently passing them would make "never
     checked" indistinguishable from "checked and fine".
 
-    Returns (silent, evaluated_count, unevaluable_count) where each silent row
-    is (source_id, name, hours_silent, threshold_hours).
+    Faded sources are that count's dangerous half, separated out. A source that
+    dies stays silent long enough for its items to age out of the window, at
+    which point `recent_count` drops below the minimum and it leaves the
+    evaluated set — silently, and looking exactly like a source that never
+    warmed up. `silent_sources` then empties and the rule reads as resolved,
+    so a source announces recovery at the moment it is most thoroughly dead.
+    What tells the two apart is the source's newest few items: they outlive the
+    window, so the cadence it last held stays measurable after the window has
+    forgotten it, and a source that never held one has no such gaps to show.
+
+    The faded test is deliberately the same shape as the evaluable one — twice
+    the source's own typical gap, floored — differing only in what it measures
+    that gap over. Two cheaper baselines were tried and both misfire: the flat
+    floor alone calls a source dead the moment its fifth-oldest item ages out,
+    which for anything publishing every few days happens while it is behaving
+    normally; and the mean gap over all time is dominated by a single stale row
+    — a revived source, a backfilled item from years back — widening the
+    threshold past any silence that could ever trip it.
+
+    Returns (silent, evaluated_count, unevaluable_count, faded) where each
+    silent row is (source_id, name, hours_silent, threshold_hours) and each
+    faded row is (source_id, name, hours_silent).
     """
     window_hours = lookback_days * 24.0
     cutoff = (current - timedelta(days=lookback_days)).isoformat().replace("+00:00", "Z")
     silent: list[tuple[str, str, float, float]] = []
+    faded: list[tuple[str, str, float]] = []
     evaluated = 0
     unevaluable = 0
     with db.get_conn(db_path) as conn:
@@ -2006,6 +2086,7 @@ def _silent_source_signal(
             """
             SELECT s.id, s.name,
                    MAX(i.fetched_at) AS last_fetched,
+                   COUNT(i.id) AS total_count,
                    SUM(CASE WHEN i.fetched_at >= ? THEN 1 ELSE 0 END) AS recent_count
             FROM sources s
             LEFT JOIN items i ON i.source_id = s.id
@@ -2014,28 +2095,77 @@ def _silent_source_signal(
             """,
             (cutoff,),
         ).fetchall()
+
+        def recent_cadence_hours(source_id: str) -> float | None:
+            """Typical gap across this source's newest `min_history` items.
+
+            Deliberately counted in items rather than measured over a fixed
+            span: a source that stopped publishing has no items in any recent
+            time window, so a time-based baseline for it is either empty or
+            filled with whatever came before. Bounding it to the newest few
+            also keeps one stale row — a long-dormant source that was revived,
+            or a single backfilled item from years earlier — from averaging the
+            gap out to something no recent silence can ever exceed.
+            """
+            stamps = [
+                str(entry["fetched_at"])
+                for entry in conn.execute(
+                    """
+                    SELECT fetched_at FROM items
+                    WHERE source_id = ? AND fetched_at IS NOT NULL
+                    ORDER BY fetched_at DESC LIMIT ?
+                    """,
+                    (source_id, min_history),
+                ).fetchall()
+            ]
+            if len(stamps) < 2:
+                return None
+            try:
+                newest = datetime.fromisoformat(stamps[0].replace("Z", "+00:00"))
+                oldest = datetime.fromisoformat(stamps[-1].replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if newest.tzinfo is None:
+                newest = newest.replace(tzinfo=UTC)
+            if oldest.tzinfo is None:
+                oldest = oldest.replace(tzinfo=UTC)
+            return (newest - oldest).total_seconds() / 3600.0 / (len(stamps) - 1)
+
+        cadence_by_source = {
+            str(row["id"]): recent_cadence_hours(str(row["id"]))
+            for row in rows
+            if int(row["total_count"] or 0) >= min_history
+            and int(row["recent_count"] or 0) < min_history
+        }
     for row in rows:
         recent = int(row["recent_count"] or 0)
         last_fetched = row["last_fetched"]
-        if recent < min_history or not last_fetched:
-            unevaluable += 1
-            continue
         try:
-            last = datetime.fromisoformat(str(last_fetched).replace("Z", "+00:00"))
+            last = (
+                datetime.fromisoformat(str(last_fetched).replace("Z", "+00:00"))
+                if last_fetched
+                else None
+            )
         except ValueError:
-            unevaluable += 1
-            continue
-        if last.tzinfo is None:
+            last = None
+        if last is not None and last.tzinfo is None:
             last = last.replace(tzinfo=UTC)
+        hours_silent = (current - last).total_seconds() / 3600.0 if last is not None else None
+        if recent < min_history or last is None:
+            unevaluable += 1
+            cadence_hours = cadence_by_source.get(str(row["id"]))
+            if cadence_hours is not None and hours_silent is not None:
+                if hours_silent > max(floor_hours, 2.0 * cadence_hours):
+                    faded.append((str(row["id"]), str(row["name"]), hours_silent))
+            continue
         evaluated += 1
         # Coarse cadence: the average gap over the window. Doubling it keeps a
         # source that merely skipped one publishing slot out of the alert.
         typical_gap_hours = window_hours / recent
         threshold = max(floor_hours, 2.0 * typical_gap_hours)
-        hours_silent = (current - last).total_seconds() / 3600.0
-        if hours_silent > threshold:
+        if hours_silent is not None and hours_silent > threshold:
             silent.append((str(row["id"]), str(row["name"]), hours_silent, threshold))
-    return silent, evaluated, unevaluable
+    return silent, evaluated, unevaluable, faded
 
 
 def _wechat_interpretation_signal(
@@ -2189,7 +2319,7 @@ def collect_alert_signals(
     attempted = int(latest_fetch.get("attempted", 0)) if isinstance(latest_fetch, dict) else 0
     failed = int(latest_fetch.get("failed", 0)) if isinstance(latest_fetch, dict) else 0
     a7 = _threshold_section(ALERT_THRESHOLDS, "a7")
-    silent_sources, evaluated_sources, unevaluable_sources = _silent_source_signal(
+    silent_sources, evaluated_sources, unevaluable_sources, faded_sources = _silent_source_signal(
         db_path,
         current,
         floor_hours=_float_threshold(a7, "silence_floor_hours", 6.0),
@@ -2274,6 +2404,7 @@ def collect_alert_signals(
         silent_sources=silent_sources,
         evaluated_sources=evaluated_sources,
         unevaluable_sources=unevaluable_sources,
+        faded_sources=faded_sources,
         a6_metering_complete=bool(a6_signal["metering_complete"]),
         a6_metering_failure_count=int(a6_signal["metering_failure_count"]),
     )

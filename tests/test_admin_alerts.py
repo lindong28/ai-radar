@@ -3276,10 +3276,232 @@ def test_a7_threshold_widens_for_low_cadence_sources(tmp_path: Path) -> None:
         )
         conn.commit()
 
-    silent, evaluated, unevaluable = _silent_source_signal(db_path, now)
+    silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, now)
     silent_ids = {row[0] for row in silent}
 
     assert "fast" in silent_ids, "a source 3x past its own cadence must fire"
     assert "slow" not in silent_ids, "6h floor must not page a source that is behaving normally"
     assert evaluated == 2
     assert unevaluable == 1, "sparse history is reported, not silently passed"
+
+
+def test_a7_resolve_does_not_borrow_a6_cost_copy() -> None:
+    """A7's ✅ must talk about sources, not about a cost coming back down.
+
+    `scope_limited` was minted for A6's recorded-row cost scope and its resolve
+    copy was written inline, so any rule reaching that state inherited it. A7
+    reaches it on every resolve it will ever send — it is `scope_limited`
+    whenever unevaluable sources exist and it is not firing, and in this
+    deployment unevaluable is never zero. The first production A7 episode
+    (2026-08-23) would have closed with "记录行金额已回落".
+    """
+    from airadar.admin.alerts import _format_resolved
+
+    signals = _normal_signals()
+    signals.silent_sources = []
+    signals.evaluated_sources = 108
+    signals.unevaluable_sources = 55
+    a7 = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
+
+    assert a7.evaluation_state == "scope_limited", "precondition: A7 resolves in this state"
+    message = _format_resolved(a7, "2026-08-23T07:10:57+08:00")
+
+    assert "记录行" not in message, "A6's cost wording must not describe source silence"
+    assert "金额" not in message
+    assert "已恢复" in message
+    assert "不在评估范围内" in message, "the resolve must still own up to the limited scope"
+
+    # The same dispatch must leave A6 byte-identical: it is the rule the copy
+    # was written for, and ADR-023 owns that recorded-row wording.
+    a6_signals = _normal_signals()
+    a6_signals.a6_evaluable = True
+    a6_signals.a6_baseline_median_cny = 20.0
+    a6_signals.a6_threshold_cny = 60.0
+    a6_signals.a6_page_threshold_cny = 120.0
+    a6_signals.a6_baseline_days = 14
+    a6 = next(r for r in evaluate_rules(a6_signals) if r.rule_id == "A6")
+    assert a6.evaluation_state == "scope_limited", "precondition: A6 uses this state normally"
+    a6_message = _format_resolved(a6, "2026-08-23T07:10:57+08:00")
+    assert "记录行金额已回落" in a6_message
+    assert "记录行证据：" in a6_message
+
+
+def test_a7_firing_message_discloses_the_unmonitored_remainder() -> None:
+    """The blind spot has to be visible while someone is acting on the alert.
+
+    The count was only ever written into the non-firing branch, so A7 disclosed
+    its limited scope exactly when nothing was wrong and went quiet otherwise.
+    A reader given two named sources and nothing else reads it as the whole
+    picture — the 2026-08-23 episode sent 17 notifications, none of which said
+    that 55 of 163 sources were outside the evaluated set.
+    """
+    signals = _normal_signals()
+    signals.silent_sources = [("x_elonmusk", "X：Elon Musk", 14.1, 13.0)]
+    signals.evaluated_sources = 108
+    signals.unevaluable_sources = 55
+    a7 = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
+
+    assert a7.firing is True
+    assert "55" in a7.detail, "the unmonitored remainder must survive into the firing message"
+    assert "无法评估" in a7.detail
+    assert "X：Elon Musk" in a7.detail, "naming the silent source is still the headline"
+
+    # Zero unevaluable sources must not append an empty clause.
+    signals.unevaluable_sources = 0
+    clean = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
+    assert "无法评估" not in clean.detail
+    assert clean.detail.endswith("h）"), "no dangling separator when scope is complete"
+
+
+def test_a7_faded_source_closes_as_unevaluable_not_recovered(tmp_path: Path) -> None:
+    """A source that dies must not announce recovery once it ages out.
+
+    A7 fires while a dead source still has enough recent history to evaluate.
+    Roughly three weeks later its items slide out of the 30-day window,
+    `recent_count` drops below the minimum, and it leaves the evaluated set —
+    which empties `silent_sources` and reads as a resolve. The source is more
+    thoroughly dead than when the alert opened, so a ✅ there is a false
+    statement, and the more readable that ✅ is the more it will be believed.
+
+    Asserts on the text the state machine hands the sender rather than on
+    `AlertRuleResult.detail`: the message is the artefact the operator acts on,
+    and the detail field is the same in both closing paths.
+    """
+    from airadar.admin.alerts import _silent_source_signal
+
+    db_path = tmp_path / "faded.db"
+    opened = datetime.fromisoformat("2026-08-01T00:00:00+00:00")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
+            INSERT INTO sources VALUES ('dead','已停更的源',1);
+            """
+        )
+        # 20 posts on a ~12h cadence, then nothing. Threshold ~72h.
+        for n in range(20):
+            conn.execute(
+                "INSERT INTO items VALUES (?,?,?)",
+                (f"d{n}", "dead", (opened - timedelta(days=8, hours=n * 12)).isoformat()),
+            )
+        conn.commit()
+
+    state_path = tmp_path / "alert-state.json"
+    calls: list[tuple[str, str]] = []
+
+    def sender(text: str, *, severity: str = "page") -> dict[str, object]:
+        calls.append((text, severity))
+        return {"skipped": False}
+
+    def round_at(moment: datetime) -> None:
+        silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, moment)
+        signals = _normal_signals()
+        signals.silent_sources = silent
+        signals.evaluated_sources = evaluated
+        signals.unevaluable_sources = unevaluable
+        signals.faded_sources = faded
+        a7 = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
+        run_alert_results_state_machine(
+            [a7],
+            state_path=state_path,
+            event_path=state_path.with_name("alert-events.jsonl"),
+            now=moment,
+            send=sender,
+        )
+
+    round_at(opened)
+    assert calls, "precondition: the dead source must open a firing episode"
+    assert "🔴" in calls[0][0], f"expected a firing page first, got {calls[0][0]!r}"
+
+    # Far enough out that every item has left the 30-day window.
+    round_at(opened + timedelta(days=25))
+    closing = calls[-1][0]
+
+    assert "✅" not in closing, f"a faded source must not close with a ✅: {closing!r}"
+    assert "已恢复" not in closing
+    assert "转为不可评估" in closing, f"expected the degraded close, got {closing!r}"
+    assert "已停更的源" in closing, "the close must name which source went dark"
+
+
+def test_a7_low_cadence_source_is_not_faded_when_it_ages_out(tmp_path: Path) -> None:
+    """Leaving the evaluated set is not by itself evidence that a source died.
+
+    The counter-case to the faded test: a source publishing every few days sits
+    at exactly the history minimum, and one round later its oldest item slides
+    out of the 30-day window. It drops to unevaluable while entirely healthy —
+    its last post is hours old against a cadence measured in days. Calling that
+    faded would be the flat-floor mistake the evaluable threshold already
+    avoids, and it would hijack an unrelated source's genuine ✅ into a 🟡.
+    """
+    from airadar.admin.alerts import _silent_source_signal
+
+    db_path = tmp_path / "low-cadence.db"
+    now = datetime.fromisoformat("2026-08-23T00:00:00+00:00")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
+            INSERT INTO sources VALUES ('slow','每周一更的源',1);
+            """
+        )
+        # Exactly `min_history` items spread over the window; newest 7h old.
+        for n, hours in enumerate((7.0, 24 * 7, 24 * 14, 24 * 21, 24 * 29.8)):
+            conn.execute(
+                "INSERT INTO items VALUES (?,?,?)",
+                (f"s{n}", "slow", (now - timedelta(hours=hours)).isoformat()),
+            )
+        conn.commit()
+
+    before = _silent_source_signal(db_path, now)
+    assert before[1] == 1 and before[0] == [], "precondition: healthy and evaluable"
+
+    # Five hours later the oldest item has aged out: recent_count drops to 4.
+    silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, now + timedelta(hours=5))
+
+    assert evaluated == 0 and unevaluable == 1, "precondition: it left the evaluated set"
+    assert faded == [], "a 12h silence against a multi-day cadence is not a death"
+
+
+def test_a7_stale_backfilled_item_does_not_hide_a_faded_source(tmp_path: Path) -> None:
+    """One ancient row must not widen the cadence past any reachable silence.
+
+    A long-lived source that was dormant and later revived — or one that picked
+    up a single backfilled item from years earlier — carries a history whose
+    mean gap is measured in months. Deriving the faded threshold from the whole
+    span lets that one row push the bar past any silence the source could ever
+    accumulate, so a genuinely dead source stays out of `faded` and closes its
+    episode with a ✅. Measuring across the newest few items instead keeps the
+    baseline on the cadence the source last actually held.
+    """
+    from airadar.admin.alerts import _silent_source_signal
+
+    db_path = tmp_path / "stale-backfill.db"
+    now = datetime.fromisoformat("2026-08-23T00:00:00+00:00")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
+            INSERT INTO sources VALUES ('revived','复活后又停更的源',1);
+            """
+        )
+        # Daily cadence for five days, then silence — plus one row from 2021.
+        for n in range(5):
+            conn.execute(
+                "INSERT INTO items VALUES (?,?,?)",
+                (f"r{n}", "revived", (now - timedelta(days=27 + n)).isoformat()),
+            )
+        conn.execute(
+            "INSERT INTO items VALUES ('r-old','revived',?)",
+            ((now - timedelta(days=1800)).isoformat(),),
+        )
+        conn.commit()
+
+    silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, now)
+
+    assert evaluated == 0 and unevaluable == 1, "precondition: it has left the evaluated set"
+    assert [row[0] for row in faded] == ["revived"], (
+        "27 days of silence against a daily cadence is a death, whatever 2021 says"
+    )
