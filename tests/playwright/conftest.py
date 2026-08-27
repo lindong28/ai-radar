@@ -374,7 +374,7 @@ def base_url(playwright_db_path: Path | None) -> Generator[str, None, None]:
 @pytest.fixture(scope="session")
 def browser() -> Generator[Browser, None, None]:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = playwright.chromium.launch(args=["--no-proxy-server"])
         yield browser
         browser.close()
 

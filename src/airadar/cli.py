@@ -33,6 +33,7 @@ from .curator.precompute import (
 )
 from .curator.select import curate
 from .curator.weights import load_weights
+from .egress import EgressPreflightError, require_selector_policy
 from .enrich.runner import run_enrich
 from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
 from .fetcher.runner import fetch_all, refresh_wechat_avatar, reload_sources
@@ -117,6 +118,21 @@ def _load_item_ids(path: str) -> list[str]:
 
 def _not_implemented(name: str) -> int:
     print(f"{name}: not implemented")
+    return 0
+
+
+def _egress_preflight() -> int:
+    try:
+        policy = require_selector_policy()
+    except EgressPreflightError as exc:
+        print(f"egress-preflight status=unavailable reason={exc}")
+        print("Impact: no managed external pipeline stage was started")
+        print("Next: restore a healthy domain-routing selector, then retry")
+        return 1
+    print(
+        "egress-preflight status=healthy "
+        f"policy_id={policy.policy_id} policy_sha256={policy.policy_sha256}"
+    )
     return 0
 
 
@@ -1785,6 +1801,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ai-radar")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    subparsers.add_parser("egress-preflight")
+
     fetch_parser = subparsers.add_parser("fetch")
     fetch_parser.add_argument("--sources", help="Override sources.toml path")
 
@@ -1986,6 +2004,8 @@ def main() -> None:
     _load_runtime_env()
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "egress-preflight":
+        raise SystemExit(_egress_preflight())
     if args.command == "fetch":
         raise SystemExit(_fetch(args))
     if args.command == "prefilter":

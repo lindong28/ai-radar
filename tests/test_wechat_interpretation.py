@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from airadar.db import migrate
+from airadar.egress import SelectorPolicy
 from airadar.llm_usage import migrate_usage_db
 from airadar.web.app import create_app
 
@@ -41,6 +43,18 @@ Agent, 工程化, 自动化
 值得一看，因为它包含可执行的工程实践。
 <script>alert("xss")</script><img src="x" onerror="alert(1)">
 """
+
+
+@pytest.fixture(autouse=True)
+def _isolated_selector_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "airadar.interpret.runner.require_selector_policy",
+        lambda: SelectorPolicy(
+            agent_proxy="http://selector.invalid:1",
+            policy_id="domain-routing-v1",
+            policy_sha256="a" * 64,
+        ),
+    )
 
 
 def _preload_from_html(html: str) -> dict[str, Any]:
@@ -349,6 +363,8 @@ def _seed_runner_db(tmp_path: Path, *, item_id: str = "item-1", title: str = "�
 
 
 def _assistant_root(tmp_path: Path) -> Path:
+    from airadar.interpret.runner import expected_selector_compatibility_receipt
+
     root = tmp_path / "ai-assistant"
     script_dir = root / "agents" / "summary-agent"
     script_dir.mkdir(parents=True)
@@ -356,6 +372,18 @@ def _assistant_root(tmp_path: Path) -> Path:
         path = script_dir / name
         path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         path.chmod(0o755)
+    scripts = [script_dir / "summarize.sh", script_dir / "run.sh"]
+    (root / "ai-radar-egress-contract-v1.json").write_text(
+        json.dumps(
+            expected_selector_compatibility_receipt(
+                policy_sha256="a" * 64,
+                summarize_sha256=hashlib.sha256(scripts[0].read_bytes()).hexdigest(),
+                run_sha256=hashlib.sha256(scripts[1].read_bytes()).hexdigest(),
+            ),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
     return root
 
 
@@ -1396,7 +1424,11 @@ def test_interpret_subprocess_does_not_inherit_radar_virtualenv(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    payload = _run_json(["/fake/run.sh", "--check-url", "https://example.test"], cwd=tmp_path)
+    payload = _run_json(
+        ["/fake/run.sh", "--check-url", "https://example.test"],
+        cwd=tmp_path,
+        callsite_id="interpret.runner.check_url",
+    )
 
     assert payload == {"ok": True}
     assert "VIRTUAL_ENV" not in seen_env
@@ -1491,6 +1523,110 @@ def test_interpret_runner_enabled_with_valid_root_uses_preflight(
     assert seen_root == [assistant_root.resolve()]
     assert summary.skipped is True
     assert summary.message == "sentinel preflight skip"
+
+
+def test_interpret_runner_skips_external_root_without_selector_compatibility_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    assistant_root = _assistant_root(tmp_path)
+    (assistant_root / "ai-radar-egress-contract-v1.json").unlink()
+    db_path = _seed_runner_db(tmp_path)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(
+            conn,
+            backfill=True,
+            assistant_root=assistant_root,
+            tmp_root=tmp_path / "tmp",
+        )
+
+    assert summary.skipped is True
+    assert summary.processed == 0
+    assert "selector compatibility is unproven" in summary.message
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "extra_field",
+        "missing_field",
+        "old_ambiguous_fields",
+        "wrong_attestation_kind",
+        "wrong_policy_id",
+        "wrong_policy_sha256",
+        "wrong_summarize_sha256",
+        "wrong_run_sha256",
+        "failed_selector_test",
+        "failed_standard_env_test",
+    ),
+)
+def test_interpret_runner_rejects_unproven_selector_compatibility_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    assistant_root = _assistant_root(tmp_path)
+    receipt_path = assistant_root / "ai-radar-egress-contract-v1.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if case == "extra_field":
+        receipt["unexpected"] = True
+    elif case == "missing_field":
+        receipt.pop("run_sha256")
+    elif case == "old_ambiguous_fields":
+        receipt["fake_selector_test"] = receipt.pop("parent_gcp_env_selector_only_test")
+        receipt["standard_proxy_env"] = receipt.pop("managed_descendants_standard_proxy_env_test")
+    elif case == "wrong_attestation_kind":
+        receipt["attestation_kind"] = "live-route-proof"
+    elif case == "wrong_policy_id":
+        receipt["policy_id"] = "domain-routing-v0"
+    elif case == "wrong_policy_sha256":
+        receipt["policy_sha256"] = "b" * 64
+    elif case == "wrong_summarize_sha256":
+        receipt["summarize_sha256"] = "0" * 64
+    elif case == "wrong_run_sha256":
+        receipt["run_sha256"] = "0" * 64
+    elif case == "failed_selector_test":
+        receipt["parent_gcp_env_selector_only_test"] = "failed"
+    elif case == "failed_standard_env_test":
+        receipt["managed_descendants_standard_proxy_env_test"] = "failed"
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
+    db_path = _seed_runner_db(tmp_path)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(
+            conn,
+            backfill=True,
+            assistant_root=assistant_root,
+            tmp_root=tmp_path / "tmp",
+        )
+
+    assert summary.skipped is True
+    assert summary.processed == 0
+    assert "selector compatibility is unproven" in summary.message
+
+
+def test_selector_compatibility_documented_schema_matches_authoritative_builder() -> None:
+    from airadar.interpret.runner import expected_selector_compatibility_receipt
+
+    contract = (Path(__file__).resolve().parents[1] / "docs/references/ai-assistant-contract.md").read_text(
+        encoding="utf-8"
+    )
+    section = contract.split("## Selector compatibility receipt", 1)[1]
+    documented = json.loads(section.split("```json", 1)[1].split("```", 1)[0])
+    expected = expected_selector_compatibility_receipt(
+        policy_sha256=documented["policy_sha256"],
+        summarize_sha256=documented["summarize_sha256"],
+        run_sha256=documented["run_sha256"],
+    )
+
+    assert documented == expected
 
 
 def test_interpret_runner_preflight_skip_for_missing_assistant_root(

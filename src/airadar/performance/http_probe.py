@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.request
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urljoin
+
+from ..egress import open_external_url
 
 TARGET_PATHS = {
     "homepage_http": "/",
@@ -86,7 +87,11 @@ def measure_http_component(
     request_url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
     started = time.perf_counter_ns()
     try:
-        with urllib.request.urlopen(request_url, timeout=timeout_seconds) as response:  # noqa: S310
+        with open_external_url(
+            request_url,
+            callsite_id="performance.http_probe.measure",
+            timeout=timeout_seconds,
+        ) as response:
             value_ms = (time.perf_counter_ns() - started) / 1_000_000
             body = response.read()
             status = response.status

@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from . import db
+from .egress import open_external_url
 
 LITELLM_PRICING_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/"
@@ -171,7 +172,11 @@ def _write_cache(path: Path, data: object, fetched_at: float) -> None:
 
 def _fetch_litellm_pricing() -> dict[str, object]:
     request = urllib.request.Request(LITELLM_PRICING_URL, headers={"User-Agent": "ai-radar/0.1"})
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with open_external_url(
+        request,
+        callsite_id="pricing.fetch_litellm",
+        timeout=10,
+    ) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("LiteLLM pricing response must be an object")

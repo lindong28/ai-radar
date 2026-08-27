@@ -21,6 +21,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from airadar import db
 from airadar.admin.alerts import AlertRuleResult, run_alert_results_state_machine
+from airadar.egress import SelectorPolicy
 from airadar.performance import browser_probe, journey_monitor
 from airadar.performance.browser_probe import BrowserMeasurement, _measure_browser_journey_inner
 from airadar.performance.journey_monitor import (
@@ -39,6 +40,16 @@ from airadar.performance.journey_monitor import (
 )
 
 MIN_CONFIRMABLE_SAMPLES = WARM_SAMPLES + CONFIRMATION_WINDOWS - 1
+
+
+@pytest.fixture(autouse=True)
+def _healthy_selector_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy = SelectorPolicy(
+        agent_proxy="http://selector.invalid:1",
+        policy_id="domain-routing-v1",
+        policy_sha256="a" * 64,
+    )
+    monkeypatch.setattr("airadar.egress.require_selector_policy", lambda: policy)
 
 
 def _delayed_site_timeout_worker(
@@ -2075,10 +2086,22 @@ def test_idle_only_migration_retries_only_skipped_real_sender_delivery(
         capture_output: bool,
         text: bool,
         timeout: float,
+        env: dict[str, str],
     ) -> subprocess.CompletedProcess[str]:
         assert capture_output is True
         assert text is True
         assert timeout == 15.0
+        assert all(
+            name not in env
+            for name in (
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+            )
+        )
         commands.append(command)
         return next(outcomes)
 

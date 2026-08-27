@@ -28,7 +28,28 @@ $AI_ASSISTANT_ROOT/
         └── run.sh
 ```
 
-Both scripts run with `cwd=$AI_ASSISTANT_ROOT`. AI Radar passes its normal environment except `VIRTUAL_ENV`, which is removed so the external implementation can choose its own runtime.
+Both scripts run with `cwd=$AI_ASSISTANT_ROOT`. AI Radar removes `VIRTUAL_ENV` and overwrites all six standard proxy variables with the status-validated domain selector plus loopback `NO_PROXY`. This only controls subprocesses that honor the standard environment; an implementation that creates `trust_env=False`, a custom transport, native sockets or unmanaged descendants is outside the guarantee and must not claim compatibility without the receipt below.
+
+## Selector compatibility receipt
+
+Interpret remains disabled for an external root unless `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v1.json` exists and exactly matches this schema:
+
+```json
+{
+  "schema_version": 1,
+  "attestation_kind": "trusted-operator-fake-selector",
+  "policy_id": "domain-routing-v1",
+  "policy_sha256": "<64 lowercase hex of the tested T1 policy>",
+  "parent_gcp_env_selector_only_test": "passed",
+  "managed_descendants_standard_proxy_env_test": "passed",
+  "summarize_sha256": "<64 lowercase hex of agents/summary-agent/summarize.sh>",
+  "run_sha256": "<64 lowercase hex of agents/summary-agent/run.sh>"
+}
+```
+
+The machine authority for this v1 shape is `airadar.interpret.runner.expected_selector_compatibility_receipt`; a regression test parses this JSON example through the same builder so the reader contract cannot drift independently from the preflight consumer.
+
+Extra or missing fields, invalid JSON, another `attestation_kind`, a non-`passed` test result, another policy id or policy digest, or either script digest mismatch makes `interpret` exit 0 with `skip interpret: selector compatibility is unproven ...`; no external script is started. `attestation_kind=trusted-operator-fake-selector` says what the record is: a trusted operator's compatibility attestation from an isolated selector test, not a current live-route observation. `policy_sha256` must equal the digest reported by the current healthy T1 status, so a policy content change invalidates the old receipt even when `policy_id` remains stable. `parent_gcp_env_selector_only_test=passed` means the exact script versions were tested with parent GCP proxy variables present and their model/network requests were observed at the selector listener without direct fallback. `managed_descendants_standard_proxy_env_test=passed` means those scripts and their managed descendants honor the six variables supplied by AI Radar. AI Radar only consumes this operator-supplied proof; it does not generate the receipt, authenticate its author, or claim that a hand-written example is live evidence. The trusted operator is responsible for the receipt's truth. The receipt does not cover transports that intentionally ignore those variables; update the external implementation or keep interpret skipped.
 
 ## Input article files
 
@@ -237,7 +258,7 @@ Run these from the AI Radar checkout after your scripts are in place. Nothing he
    |---|---|
    | `interpret processed=1 errors=0` | the contract held for that item |
    | `interpret processed=1 errors=1` | the scripts ran but something in the exchange failed; the message is in `wechat_interpretations.error` |
-   | `interpret skipped=true message=…` | never reached your scripts — the flag, `AI_ASSISTANT_ROOT`, or the two executables above |
+   | `interpret skipped=true message=…` | never reached your scripts — inspect the message for the disabled flag, missing `AI_ASSISTANT_ROOT`/executables, or a missing/invalid/mismatched selector compatibility attestation |
 
 4. **When it fails, where AI Radar says so.** Contract violations do not raise; they land as data:
 

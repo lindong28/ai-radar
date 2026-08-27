@@ -129,6 +129,35 @@ def test_fetch_x_timeline_requires_bearer_token_before_http(monkeypatch) -> None
     assert client.calls == []
 
 
+def test_fetch_x_timeline_default_transport_uses_selector_factory(monkeypatch) -> None:  # noqa: ANN001
+    from airadar.fetcher.x_api import X_API_BASE_URL, fetch_x_timeline
+
+    monkeypatch.setattr("airadar.fetcher.x_api.read_value", lambda key: "secret")
+    client = _Client([_Response({"data": [], "meta": {"result_count": 0}})])
+    calls: list[dict[str, object]] = []
+
+    class ContextClient:
+        def __enter__(self) -> _Client:
+            return client
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_factory(**kwargs: object) -> ContextClient:
+        calls.append(kwargs)
+        return ContextClient()
+
+    monkeypatch.setattr("airadar.fetcher.x_api.selector_httpx_client", fake_factory)
+
+    fetch_x_timeline(_source(persisted=True))
+
+    assert calls == [{
+        "callsite_id": "fetcher.x_api.fetch_x_timeline",
+        "request_url": X_API_BASE_URL,
+        "timeout": 30.0,
+    }]
+
+
 def test_fetch_x_timeline_resolves_identity_in_one_request_before_timeline(monkeypatch) -> None:  # noqa: ANN001
     from airadar.fetcher.x_api import fetch_x_timeline
 

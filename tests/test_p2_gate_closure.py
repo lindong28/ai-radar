@@ -591,16 +591,17 @@ def test_d3_count_change_does_not_resend_and_price_change_keeps_old_value(tmp_pa
             "effective_from": None, "effective_to": None,
         }],
     }
-    run_pricing_notifications(base, state_path=state_path, send=sender)
+    clear = lambda _key: {"cleared": True}  # noqa: E731 - compact fake transport boundary
+    run_pricing_notifications(base, state_path=state_path, send=sender, clear=clear)
     changed_count = {**base, "unpriced": [{"provider": "p", "model": "m", "calls": 4}]}
-    run_pricing_notifications(changed_count, state_path=state_path, send=sender)
+    run_pricing_notifications(changed_count, state_path=state_path, send=sender, clear=clear)
     assert len(sent) == 1
 
     absent = {**base, "unpriced": [], "pricing_table": []}
-    run_pricing_notifications(absent, state_path=state_path, send=sender)
+    run_pricing_notifications(absent, state_path=state_path, send=sender, clear=clear)
     changed = json.loads(json.dumps(absent))
     changed["pricing_table"] = [dict(base["pricing_table"][0], input_per_million_tokens_usd=3)]  # type: ignore[index]
-    run_pricing_notifications(changed, state_path=state_path, send=sender)
+    run_pricing_notifications(changed, state_path=state_path, send=sender, clear=clear)
     assert "旧值：input/cache/output USD per 1M=1/0.1/2" in sent[-1]
     assert "新值：input/cache/output USD per 1M=3/0.1/2" in sent[-1]
 

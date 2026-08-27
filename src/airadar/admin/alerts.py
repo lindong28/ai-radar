@@ -21,6 +21,7 @@ from typing import Any, Literal, Protocol
 import httpx
 
 from .. import db
+from ..egress import direct_subprocess_env, selector_httpx_client
 from ..pipeline_lock import DEFAULT_PIPELINE_LOCK_PATH, pipeline_lock_is_held
 from .calibration import SCHEMA_ERROR_RE, _is_upstream_error
 from .cost_report import (
@@ -439,14 +440,10 @@ def evaluate_rules(
             ),
             action=(
                 "先按 error 分组读 logs/pipeline-*.log 最新一轮的 FAIL 行。"
-                "整批 ConnectError 多为出网链路：看日志开头 === egress proxy: 的值"
-                "（该行无条件打印，判据是值、不是有没有）——"
-                "not configured 或 FAILED 开头 = 代理未生效（查 .env 的 AI_RADAR_PROXY_FILE）；"
-                "是地址则用它实发一次请求验通"
-                "（curl -x <地址> https://api.github.com/zen，200 才算通），"
-                "只探端口不算核实。"
+                "整批 ConnectError 多为出网链路：先看 === egress preflight FAIL/OK ===；"
+                "FAIL 时按 runbook 检查 selector，OK 但请求仍失败时按 hostname 查 route audit。"
                 "X 源走官方 api.x.com（另查 bearer token 与配额），微信源走 Mp2RSS。"
-                "详见 docs/operations/monitoring-alerting.md 的「出网链路的两种签名」。"
+                "详见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
             ),
             values={
                 "fetch_failed_ratio": signals.fetch_failed_ratio,
@@ -562,14 +559,10 @@ def evaluate_rules(
             detail=a7_detail,
             action=(
                 "按源逐个核对：先看 logs/pipeline-*.log 里该来源的 OK/FAIL 行。"
-                "整批同时静默多为出网链路：看日志开头 === egress proxy: 的值"
-                "（该行无条件打印，判据是值、不是有没有）——"
-                "not configured 或 FAILED 开头 = 代理未生效（查 .env 的 AI_RADAR_PROXY_FILE）；"
-                "是地址则用它实发一次请求验通"
-                "（curl -x <地址> https://api.github.com/zen，200 才算通），"
-                "只探端口不算核实。"
+                "整批同时静默多为出网链路：先看 === egress preflight FAIL/OK ===；"
+                "FAIL 时按 runbook 检查 selector，OK 但请求仍失败时按 hostname 查 route audit。"
                 "单源静默则查该源站点或其上游订阅服务。"
-                "详见 docs/operations/monitoring-alerting.md 的「出网链路的两种签名」。"
+                "详见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
             ),
             values={
                 "silent_sources": [
@@ -1228,7 +1221,12 @@ def _alert_state_lock(state_path: Path) -> Iterator[None]:
 
 def _probe_healthz(url: str, timeout: float) -> bool:
     try:
-        response = httpx.get(url, timeout=timeout)
+        with selector_httpx_client(
+            callsite_id="admin.alerts.healthz",
+            request_url=url,
+            timeout=timeout,
+        ) as client:
+            response = client.get(url)
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPError, ValueError):
@@ -1758,7 +1756,13 @@ def send_alert_message(
         command.extend(("--dedup-text", dedup_text))
     command.append(text)
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=15.0)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+            env=direct_subprocess_env(),
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         reason = f"im-notify failed: {type(exc).__name__}: {exc}"
         LOGGER.error("im-notify alert delivery failed: %s", reason)
@@ -1773,7 +1777,11 @@ def send_alert_message(
 def _clear_notification_dedup(key: str) -> dict[str, object]:
     try:
         completed = subprocess.run(
-            ["im-notify", "--dedup-clear", key], capture_output=True, text=True, timeout=15.0
+            ["im-notify", "--dedup-clear", key],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+            env=direct_subprocess_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         reason = f"im-notify --dedup-clear failed: {type(exc).__name__}: {exc}"

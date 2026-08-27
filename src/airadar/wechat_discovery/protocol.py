@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import Request
 
+from ..egress import open_external_url
 from .models import AccountConfig, DiscoveryArticle
 
 APPMSGPUBLISH_URL = "https://mp.weixin.qq.com/cgi-bin/appmsgpublish"
@@ -374,8 +375,11 @@ RequestJson = Callable[[Request, float], dict[str, object]]
 
 
 def _default_request_json(request: Request, timeout: float) -> dict[str, object]:
-    opener = build_opener(ProxyHandler({}))
-    with opener.open(request, timeout=timeout) as response:  # noqa: S310 - fixed HTTPS endpoint
+    with open_external_url(
+        request,
+        callsite_id="wechat_discovery.protocol.request_json",
+        timeout=timeout,
+    ) as response:
         try:
             payload = json.loads(response.read().decode("utf-8", "replace"))
         except json.JSONDecodeError as exc:

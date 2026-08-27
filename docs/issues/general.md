@@ -4,6 +4,18 @@
 
 ---
 
+## [open] 2026-08-26：全量单测有两条与 domain routing 无关的既有基线失败
+
+- Type: test baseline · Priority: low · Discovered: 2026-08-26 domain-routing T2 full-suite 验证
+- Description: 在 T2 隔离 worktree 与未带 T2 改动的 main checkout 上分别复现两条同形失败：`test_capture_writer_refuses_non_repo_root_and_existing_capture` 预期 `output_root_invalid`，实际先命中 `git_checkout_invalid`；`test_actual_candidate_app_search_endpoint_matches_manifest` 的本地 health request 被 ambient proxy 接管后返回 500/timeout。两条都不经过本次 selector-owned client，因此不能用 T2 的通过/失败归因其行为。
+- Current gate: domain-routing 全量 non-live 回归显式排除这两个 nodeid，并单独报告排除集合；其余测试必须全绿。后续分别修正 capture writer 的检查优先级契约，以及给该 DB-sync 本地 health probe 显式 no-proxy transport。
+
+## [open] 2026-08-26：X offline receipt 同时保存可派生 status 与 payload 自哈希
+
+- Type: schema debt · Priority: low · Discovered: 2026-08-26 domain-routing T2 schema review（独立 finding）
+- Description: `artifacts/x-pagination-offline-receipt.json` 同时保存 `status=success` 与 `pytest_exit_code=0`，当前 validator 下前者可由后者唯一推出；`report_payload_sha256` 又是同一 JSON 去掉自身后的自哈希，修改者可同时改 payload 与哈希，不能充当外部完整性锚。该 artifact 仅因 T2 更新 selector compatibility 字段而进入 diff，问题早于本次路由改造且不影响 T2 route contract。
+- Fix direction: 下一次演化该 receipt 时删除可派生的 `status` 与同文件自哈希；需要完整性锚时使用外层 `offline_proof.receipt_sha256` 或 transport/release 层 digest，并同步 validator/tests。不要为本次 domain-routing 改造单独切 schema。
+
 ## [open] `curation_runs.input_eval_ids` 让主库超线性增长
 
 - Type: reliability / capacity

@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
-import httpx
-
+from ..egress import selector_httpx_client
 from ..site_config import site_user_agent
 from ..sources.loader import SourceConfig
 
@@ -34,11 +32,6 @@ class FeedResponse:
     headers: dict[str, str] | None = None
 
 
-def _is_loopback_url(url: str) -> bool:
-    host = urlparse(url).hostname
-    return host in {"localhost", "127.0.0.1", "::1"}
-
-
 def fetch_document(
     source: SourceConfig,
     conn: sqlite3.Connection,
@@ -57,13 +50,13 @@ def fetch_document(
     if last_modified:
         headers["If-Modified-Since"] = str(last_modified)
 
-    response = httpx.get(
-        source.url,
+    with selector_httpx_client(
+        callsite_id="fetcher.http_client.fetch_document",
+        request_url=source.url,
         timeout=timeout,
         follow_redirects=True,
-        headers=headers,
-        trust_env=not _is_loopback_url(source.url),
-    )
+    ) as client:
+        response = client.get(source.url, headers=headers)
     if response.status_code == 304:
         return FeedResponse(
             status_code=304,

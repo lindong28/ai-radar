@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import os
 
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
+from ..egress import selector_openai_client as OpenAI
 from .base import ProviderItem, ScoringResult
 from .heuristics import heuristic_score
 
@@ -35,40 +35,47 @@ class CodexGptMiniScorer:
         return heuristic_score(item)
 
     def _score_with_openai(self, item: ProviderItem) -> ScoringResult:
-        client = OpenAI(timeout=float(os.environ.get("AI_RADAR_OPENAI_TIMEOUT", "30")))
-        model = os.environ.get("AI_RADAR_OPENAI_SCORER_MODEL", "gpt-4o-mini")
-        completion = client.chat.completions.parse(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You score AI news for an engineer's personal radar. "
-                        "Return only the requested structured object. Do not output a final recommendation."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Score this item on five independent 0-10 dimensions.\n"
-                        "relevance: AI/model/systems/tooling/research relevance.\n"
-                        "density: new information per word, excluding fluff.\n"
-                        "recency: freshness against the current AI/engineering state.\n"
-                        "authority: first-party or verified source strength.\n"
-                        "engineering: usefulness for code, architecture, APIs, benchmarks, evals, or operations.\n\n"
-                        f"Source tier: {item.tier}\n"
-                        f"Source id: {item.source_id}\n"
-                        f"Title: {item.title}\n"
-                        f"Author: {item.author or 'unknown'}\n"
-                        f"Published: {item.published_at}\n"
-                        f"URL: {item.url}\n\n"
-                        f"Content:\n{item.content_text[:5000]}"
-                    ),
-                },
-            ],
-            response_format=_OpenAIScoringResponse,
+        client = OpenAI(
+            callsite_id="provider.codex_gpt_mini.score",
+            api_key=str(os.environ.get("OPENAI_API_KEY", "")),
+            timeout=float(os.environ.get("AI_RADAR_OPENAI_TIMEOUT", "30")),
         )
-        parsed = completion.choices[0].message.parsed
+        model = os.environ.get("AI_RADAR_OPENAI_SCORER_MODEL", "gpt-4o-mini")
+        try:
+            completion = client.chat.completions.parse(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You score AI news for an engineer's personal radar. "
+                            "Return only the requested structured object. Do not output a final recommendation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Score this item on five independent 0-10 dimensions.\n"
+                            "relevance: AI/model/systems/tooling/research relevance.\n"
+                            "density: new information per word, excluding fluff.\n"
+                            "recency: freshness against the current AI/engineering state.\n"
+                            "authority: first-party or verified source strength.\n"
+                            "engineering: usefulness for code, architecture, APIs, benchmarks, evals, or operations.\n\n"
+                            f"Source tier: {item.tier}\n"
+                            f"Source id: {item.source_id}\n"
+                            f"Title: {item.title}\n"
+                            f"Author: {item.author or 'unknown'}\n"
+                            f"Published: {item.published_at}\n"
+                            f"URL: {item.url}\n\n"
+                            f"Content:\n{item.content_text[:5000]}"
+                        ),
+                    },
+                ],
+                response_format=_OpenAIScoringResponse,
+            )
+            parsed = completion.choices[0].message.parsed
+        finally:
+            client.close()
         if parsed is None:
             raise ValueError("OpenAI response did not parse into scoring schema")
         return ScoringResult(

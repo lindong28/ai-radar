@@ -117,6 +117,10 @@ def test_capture_login_does_not_report_failure_when_browser_close_fails_after_sa
             return None
 
     monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: FakeManager())
+    monkeypatch.setattr(
+        "airadar.wechat_discovery.login.playwright_launch_proxy",
+        lambda *_args, **_kwargs: {"server": "http://selector.invalid:1"},
+    )
 
     capture_login(
         session_path=session_path,
@@ -125,4 +129,5 @@ def test_capture_login_does_not_report_failure_when_browser_close_fails_after_sa
     )
 
     assert load_credentials(session_path).token == "12345"
-    assert launch_kwargs["args"] == ["--no-proxy-server"]
+    assert launch_kwargs["proxy"] == {"server": "http://selector.invalid:1"}
+    assert "args" not in launch_kwargs

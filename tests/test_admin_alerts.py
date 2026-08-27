@@ -34,6 +34,17 @@ from airadar.admin.alerts import (
     send_alert_message,
 )
 from airadar.admin.thresholds import ALERT_THRESHOLDS
+from airadar.egress import SelectorPolicy
+
+
+@pytest.fixture(autouse=True)
+def _healthy_selector_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy = SelectorPolicy(
+        agent_proxy="http://selector.invalid:1",
+        policy_id="domain-routing-v1",
+        policy_sha256="a" * 64,
+    )
+    monkeypatch.setattr("airadar.egress.require_selector_policy", lambda: policy)
 
 
 def _normal_signals() -> AlertSignals:
@@ -565,22 +576,13 @@ def test_a4_branches_choose_severity_channel_and_operator_message(
     assert impact in a4.impact
     assert urgency in a4.urgency
     assert detail in a4.detail
-    # A batch egress failure has two distinct signatures and they need different
-    # first moves: `No route to host` rounds carry no `=== egress proxy:` line at
-    # all (the proxy never applied), while `Connection refused` rounds do carry
-    # one whose port is dead. Reading that line is therefore not a check, and
-    # neither is probing the port — a live local listener answers even when the
-    # tunnel behind it is gone. Only a request through the proxy discriminates.
-    assert "=== egress proxy: 的值" in a4.action  # discriminate by value, not presence
-    assert "not configured" in a4.action  # ...and name the value that means "no proxy"
-    assert "200 才算通" in a4.action  # a 000 or a CONNECT failure is not a pass
-    assert "AI_RADAR_PROXY_FILE" in a4.action  # ...and where its address comes from
-    assert "curl -x" in a4.action  # signature 2: verify by sending, not by reading
-    assert "只探端口不算核实" in a4.action
+    assert "=== egress preflight FAIL/OK ===" in a4.action
+    assert "FAIL 时按 runbook 检查 selector" in a4.action
+    assert "OK 但请求仍失败时按 hostname 查 route audit" in a4.action
     assert "logs/pipeline-*.log" in a4.action  # the evidence file, named
-    # The condemned framing must not creep back: telling the operator to *read*
-    # the proxy line is precisely the false-green this wording replaced.
-    assert "核对日志开头" not in a4.action
+    assert "AI_RADAR_PROXY_FILE" not in a4.action
+    for internal_term in ("domain-routing-v1", "route attribution", "T1", "airadar.egress.audit"):
+        assert internal_term not in a4.action
     assert "nitter" not in a4.action.lower()
     assert "api.x.com" in a4.action
     assert "Mp2RSS" in a4.action
@@ -2430,8 +2432,12 @@ def test_legacy_fixed_page_cooldown_migrates_idempotently(tmp_path: Path, rule_i
 def test_send_alert_message_calls_im_notify_alert_without_dedup(monkeypatch) -> None:  # noqa: ANN001
     calls: list[tuple[list[str], bool, bool]] = []
 
-    def fake_run(command: list[str], *, capture_output: bool, text: bool, timeout: float) -> CompletedProcess[str]:
+    def fake_run(
+        command: list[str], *, capture_output: bool, text: bool, timeout: float, env: dict[str, str]
+    ) -> CompletedProcess[str]:
         assert timeout == 15.0
+        assert "HTTP_PROXY" not in env
+        assert env["NO_PROXY"] == "localhost,127.0.0.1,::1"
         calls.append((command, capture_output, text))
         return CompletedProcess(command, 0, stdout="sent\n", stderr="")
 
@@ -2447,7 +2453,10 @@ def test_send_alert_message_calls_im_notify_alert_without_dedup(monkeypatch) -> 
 def test_send_alert_message_routes_notice_without_alert_flag(monkeypatch) -> None:  # noqa: ANN001
     calls: list[list[str]] = []
 
-    def fake_run(command: list[str], *, capture_output: bool, text: bool, timeout: float) -> CompletedProcess[str]:
+    def fake_run(
+        command: list[str], *, capture_output: bool, text: bool, timeout: float, env: dict[str, str]
+    ) -> CompletedProcess[str]:
+        assert "HTTPS_PROXY" not in env
         calls.append(command)
         return CompletedProcess(command, 0, stdout="sent\n", stderr="")
 
@@ -2460,8 +2469,11 @@ def test_send_alert_message_routes_notice_without_alert_flag(monkeypatch) -> Non
 
 
 def test_send_alert_message_logs_failure_without_raising(monkeypatch, caplog) -> None:  # noqa: ANN001
-    def fake_run(command: list[str], *, capture_output: bool, text: bool, timeout: float) -> CompletedProcess[str]:
+    def fake_run(
+        command: list[str], *, capture_output: bool, text: bool, timeout: float, env: dict[str, str]
+    ) -> CompletedProcess[str]:
         assert timeout == 15.0
+        assert "ALL_PROXY" not in env
         return CompletedProcess(command, 7, stdout="", stderr="delivery unavailable\n")
 
     monkeypatch.setattr("airadar.admin.alerts.subprocess.run", fake_run)
@@ -2471,6 +2483,20 @@ def test_send_alert_message_logs_failure_without_raising(monkeypatch, caplog) ->
     assert result == {"skipped": True, "reason": "im-notify exited with status 7"}
     assert "im-notify alert delivery failed" in caplog.text
     assert "delivery unavailable" in caplog.text
+
+
+def test_send_alert_message_does_not_depend_on_selector_status(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        "airadar.egress.require_selector_policy",
+        lambda: (_ for _ in ()).throw(RuntimeError("selector unavailable")),
+    )
+
+    def fake_run(command: list[str], **kwargs: object) -> CompletedProcess[str]:
+        return CompletedProcess(command, 0, stdout="sent\n", stderr="")
+
+    monkeypatch.setattr("airadar.admin.alerts.subprocess.run", fake_run)
+
+    assert send_alert_message("selector failure alert") == {"skipped": False, "returncode": 0}
 
 
 def _read_ledger(path: Path) -> list[dict[str, object]]:
@@ -3206,16 +3232,10 @@ def test_a7_rolls_silent_sources_into_one_page() -> None:
     assert a7.detail.index("微信公众号") < a7.detail.index("OpenAI")
     # P3: the reader must get impact and urgency without opening anything.
     assert a7.impact and a7.urgency.startswith("是")
-    # Same two signatures as A4 (see its test): a missing proxy line and a dead
-    # port behind a present one need different first moves, and neither is
-    # verified by reading the line or probing the port. Keep the two messages
-    # from drifting apart — they describe the same upstream failure.
-    assert "=== egress proxy: 的值" in a7.action
-    assert "200 才算通" in a7.action
-    assert "AI_RADAR_PROXY_FILE" in a7.action
-    assert "curl -x" in a7.action
-    assert "只探端口不算核实" in a7.action
-    assert "核对 pipeline 日志开头" not in a7.action
+    assert "=== egress preflight FAIL/OK ===" in a7.action
+    assert "FAIL 时按 runbook 检查 selector" in a7.action
+    assert "OK 但请求仍失败时按 hostname 查 route audit" in a7.action
+    assert "AI_RADAR_PROXY_FILE" not in a7.action
     # A7 hedges ("多为") rather than asserting the cause outright: a shared CDN
     # or upstream feed service can also take a batch down at once.
     assert "多为出网链路" in a7.action
@@ -3223,12 +3243,8 @@ def test_a7_rolls_silent_sources_into_one_page() -> None:
     # both describe one upstream failure, so the discriminator must stay identical.
     a4 = next(r for r in evaluate_rules(_a4_firing()) if r.rule_id == "A4")
     shared = (
-        "看日志开头 === egress proxy: 的值"
-        "（该行无条件打印，判据是值、不是有没有）——"
-        "not configured 或 FAILED 开头 = 代理未生效（查 .env 的 AI_RADAR_PROXY_FILE）；"
-        "是地址则用它实发一次请求验通"
-        "（curl -x <地址> https://api.github.com/zen，200 才算通），"
-        "只探端口不算核实。"
+        "先看 === egress preflight FAIL/OK ===；"
+        "FAIL 时按 runbook 检查 selector，OK 但请求仍失败时按 hostname 查 route audit。"
     )
     assert shared in a4.action and shared in a7.action
 

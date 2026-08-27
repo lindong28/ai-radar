@@ -119,6 +119,7 @@ def test_pipeline_script_runs_stages_in_order_and_logs_success(tmp_path: Path) -
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines() == [
+        "egress-preflight",
         "fetch",
         "prefilter --since 24h",
         "score --since 24h",
@@ -135,6 +136,20 @@ def test_pipeline_script_runs_stages_in_order_and_logs_success(tmp_path: Path) -
     assert "=== PIPELINE DONE (failed=0) ===" in log_text
 
 
+def test_pipeline_fails_before_any_stage_when_egress_preflight_fails(tmp_path: Path) -> None:
+    script, env = _copy_pipeline_fixture(tmp_path)
+    env["FAIL_STAGE"] = "egress-preflight"
+
+    result = subprocess.run([str(script)], cwd="/", env=env, text=True, capture_output=True, timeout=30)
+
+    assert result.returncode == 1
+    assert (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines() == ["egress-preflight"]
+    log_text = next((tmp_path / "logs").glob("pipeline-*.log")).read_text(encoding="utf-8")
+    assert "=== egress preflight FAIL (exit 42) ===" in log_text
+    assert "=== fetch START ===" not in log_text
+    assert "AI_RADAR_PROXY_FILE" not in (tmp_path / "pipeline.sh").read_text(encoding="utf-8")
+
+
 def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
     script, env = _copy_pipeline_fixture(tmp_path, fail_stage="prefilter")
 
@@ -142,6 +157,7 @@ def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines() == [
+        "egress-preflight",
         "fetch",
         "prefilter --since 24h",
         "score --since 24h",

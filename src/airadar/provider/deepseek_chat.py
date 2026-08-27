@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import json_repair
-from openai import OpenAI
 
+from ..egress import selector_openai_client as OpenAI
 from ..llm_usage import (
     LlmUsageRecord,
     record_llm_usage_best_effort,
@@ -103,8 +103,10 @@ def chat_json(
         # if ARK is the only configured provider there is nothing to fall back to.
         if provider == "ark" and has_deepseek_fallback and ark_breaker.is_open():
             continue
+        client: Any | None = None
         try:
             client = OpenAI(
+                callsite_id="provider.deepseek_chat.chat_json",
                 api_key=api_key,
                 base_url=base_url,
                 timeout=float(os.environ.get("AI_RADAR_DEEPSEEK_TIMEOUT", "90")),
@@ -164,4 +166,8 @@ def chat_json(
             last_error = exc
             if provider == "ark":
                 ark_breaker.record_failure(exc)
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
     raise RuntimeError(f"all DeepSeek provider endpoints failed: {last_error}")

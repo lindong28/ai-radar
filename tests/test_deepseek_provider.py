@@ -22,6 +22,7 @@ def test_prefilter_default_model_uses_current_deepseek_v4_flash() -> None:
 
 def test_chat_json_disables_deepseek_v4_thinking_for_json_mode(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
+    client_calls: list[dict[str, Any]] = []
 
     class FakeCompletions:
         def create(self, **kwargs):  # noqa: ANN001
@@ -40,6 +41,7 @@ def test_chat_json_disables_deepseek_v4_thinking_for_json_mode(monkeypatch) -> N
 
     class FakeOpenAI:
         def __init__(self, **kwargs):  # noqa: ANN001
+            client_calls.append(kwargs)
             self.chat = type("Chat", (), {"completions": FakeCompletions()})()
 
     monkeypatch.setattr(deepseek_chat, "OpenAI", FakeOpenAI)
@@ -60,6 +62,7 @@ def test_chat_json_disables_deepseek_v4_thinking_for_json_mode(monkeypatch) -> N
     assert result.json == {"ok": True}
     assert result.model == "deepseek-v4-flash"
     assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert client_calls[0]["callsite_id"] == "provider.deepseek_chat.chat_json"
 
 
 def test_chat_json_persists_completion_usage_for_attributed_call(monkeypatch, tmp_path: Path) -> None:

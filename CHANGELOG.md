@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-26（AI Radar 出网不再继承整进程 GCP 代理）
+
+- pipeline 每轮先验证外部 `domain-routing-v1` selector，并绑定 `status_schema_id=agent-domain-routing-status-v1` 与 OpenAI provider aggregate scope；状态缺失、不完整、schema/policy 不匹配或任一路线非 healthy 时，在 fetch/LLM 等外部阶段启动前停止，不再从 `AI_RADAR_PROXY_FILE` 或父 Claude Code/Codex 的 proxy 环境自动选路。
+- 已登记的 httpx、OpenAI-compatible SDK、urllib、Playwright 与受管子进程显式使用 status-derived selector：Anthropic 由 router 送 GCP SG 且 fail closed，OpenAI/ChatGPT/X 送 OpenAI provider route（Tencent primary、ZYT fallback），Ark/DeepSeek/RSS/新闻/网页默认 direct。应用 audit 只记录 callsite、hostname、launch、policy identity 与本地结果；实际 `tencent` / `zyt-fallback` route 与 outcome 仍以 system-config 的 route audit 为准。
+- 外部 `AI_ASSISTANT_ROOT` 只有提供与脚本摘要绑定的 selector compatibility receipt 才会启用；未证明兼容时 `interpret` 按既有语义安全跳过。`/img` 的 ADR-057 独立图片代理保持不变。
+- 本次代码验收使用隔离 fake status/selector 与动态 loopback listener；macmini 的真实 GCP/Tencent 出口、断线与 fail-closed 验收仍属于部署步骤，不能从本地测试外推。
+
 ## 2026-08-21（「AI 日报」「收藏」「更多」「关于」四页此前完全没有缓存）
 
 - **这四页之前每次点开都要回源重算一遍。** 它们不发任何缓存指令，于是浏览器和边缘节点都无从缓存——实测这四个路由每一次请求都是 `eo-cache-status: MISS`，而同侧栏的「精选」「全部 AI 动态」早已是命中。现在它们与那两页发同一档指令（90 秒内可复用，之后 30 秒内可以先给旧的、后台去取新的）。

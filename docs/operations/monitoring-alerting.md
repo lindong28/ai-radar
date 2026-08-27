@@ -46,27 +46,21 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 | A1 | 上游模型不可用 | DeepSeek/OpenAI/GLM/ARK 返回 endpoint/model/权限/余额类错误；`schema validation failed` 已排除 | 查 provider 控制台余额、模型权限、API key；必要时切换 provider 或充值 |
 | A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 的错误 numerator/denominator **各自只取最近 15 分钟**；样本数分别至少为 `4/4/2` 才让错误率支路参与 page。独立的 P95 与**超过 120 分钟没有成功 pipeline**支路不受该样本门影响。prefilter 等后台 LLM 阶段的 P95 仍用最近 2 小时口径，只在持续达到真挂起量级时 page。SKIP 日志表示 pipeline 已在运行，不单独视为故障 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
 | A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测从已安装 serve plist 的 `ProgramArguments` 解析端口，连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
-| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 按 error 分组读 `logs/pipeline-*.log` 最新一轮的 FAIL 行，见下方「出网链路的两种签名」；X 源走官方 `api.x.com`（另查 bearer token 与配额），微信源走 Mp2RSS + Wechat2RSS 双跑（见 [wechat-ingestion.md](wechat-ingestion.md)） |
+| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 按 error 分组读 `logs/pipeline-*.log` 最新一轮的 FAIL 行，见下方「出网 selector 的 preflight 与实际 route」；X 源走官方 `api.x.com`（另查 bearer token 与配额），微信源走 Mp2RSS + Wechat2RSS 双跑（见 [wechat-ingestion.md](wechat-ingestion.md)） |
 | A5 | 微信解读产出停滞 | 解读启用、4 小时无成功解读，且存在 fetched 至少 4 小时、仍符合重试资格的微信 pending 时 page；无近期成功且 pending 因退避/冻结归零时标为不可评估，不发「已恢复」 | 先查近 4 小时 pipeline/interpret 日志与 provider 成功/错误，再核对余额/配额；`ark-breaker.json` 只有 `opened_at` 仍在 2 小时 cooldown 内才是当前证据 |
 | A6 | 已记录 LLM 调用近 24 小时成本突变 | 当前窗与基线按同一现行费率、cache 全未命中重算。阈值两档：超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。金额与次数只统计 `llm_usage` 记录行，所以**任何越线判定都是在一个下界上做的**——未写入该表的付费调用（失败链路、未接入计量的调用点）不在内，resolve 也因此不表示 attempt-level 健康。在途窗（`.pipeline.flock` 证明本轮在跑）按 `in-progress` 用下界继续判 firing 与 notice→page，下界未越线时保留既有 episode 等封口。`baseline_days` 的实际取值与「至少 3 个有记录日」的缺口见 [ISSUE-023](../issues/cost-observability.md#issue-023--a6-的至少-3-个基线日门当前不可达) | 先按消息中的 Top 驱动核查；它复用 A6 的 cache 中性已知成本聚合。未定价调用在 `/admin/usage` 单列，nominal 目录价不是账单实付 |
-| A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时 page。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数（firing 与非 firing 两条分支都给，2026-08-23 前只在非 firing 分支给），不按健康处理。这批来源里，累计条目已达 5 条、且静默超过其最近 5 条典型间隔两倍的判为**褪色**——一个真死掉的来源会先 firing，再随旧条目滑出 30 天窗掉出评估集，若不加区分就会在它最彻底死掉的那一刻发出 ✅「已恢复」；褪色存在时 A7 改发 🟡「转为不可评估」并点名该来源。所有静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该来源的 OK/FAIL 行：整批同时静默多为出网链路，见下方「出网链路的两种签名」；单源静默则查该源站点或其上游订阅服务 |
+| A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时 page。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数（firing 与非 firing 两条分支都给，2026-08-23 前只在非 firing 分支给），不按健康处理。这批来源里，累计条目已达 5 条、且静默超过其最近 5 条典型间隔两倍的判为**褪色**——一个真死掉的来源会先 firing，再随旧条目滑出 30 天窗掉出评估集，若不加区分就会在它最彻底死掉的那一刻发出 ✅「已恢复」；褪色存在时 A7 改发 🟡「转为不可评估」并点名该来源。所有静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该来源的 OK/FAIL 行：整批同时静默多为出网链路，见下方「出网 selector 的 preflight 与实际 route」；单源静默则查该源站点或其上游订阅服务 |
 
-### 出网链路的两种签名（A4、A7 的处置指引都指向这里）
+### 出网 selector 的 preflight 与实际 route（A4、A7 的处置指引都指向这里）
 
-抓取整批失败时，**读 `logs/pipeline-*.log` 最新一轮开头那行 `=== egress proxy:` 的值**。判据是它的**值**，不是它在不在——`pipeline.sh` 无条件打印这一行（`PROXY_STATUS` 的四种取值都会打印），所以「没有这一行」不表示代理未生效：
+抓取整批失败时先读 `logs/pipeline-*.log` 最新一轮的 `=== egress preflight START/OK/FAIL ===`，再按结果分流：
 
-| 该行的值 | 含义 | 下一步 |
-|---|---|---|
-| `not configured` | `AI_RADAR_PROXY_FILE` 未设置，httpx 直连出网 | 查 `.env` 的 `AI_RADAR_PROXY_FILE`。cron 拿到的是非交互 shell，交互式 rc 里的代理变量不在 |
-| `FAILED: … cannot read` / `FAILED: … is empty` | 指针文件读不到或为空 | 同上，另查该文件本身 |
-| `http://127.0.0.1:<port>` | 地址解析到了，但该端口后面的隧道可能已死 | 取该地址**实发一次请求**验通：`curl -x http://127.0.0.1:<port> -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/zen`。`200` 算通；`000` 连同 stderr 的 `Failed to connect` 或 `CONNECT tunnel failed` 都是不通 |
-| 整行缺失 | 该轮在打印它之前就退出了 | 多为锁竞争的 SKIP 轮（`pipeline.sh` 的 SKIP 分支 `exit 0` 早于这行）。换一份真正跑过 fetch 的日志再判，别据此认定代理未生效 |
+1. `preflight FAIL`：运行 `check-proxy-status --format=kv`。只有 stored/effective `domain-routing`、`domain-routing-v1` identity、policy projection matched、router/三路 upstream/route attribution/overall 全部 healthy 才可重跑；缺字段、重复/畸形字段、mismatch 或 status 命令失败都不是可降级状态。
+2. `preflight OK` 但请求仍失败：运行 `agent-proxy-route-audit --format=jsonl`，按 hostname 联合读取 `selected_route`、`outcome` 与 `outcome_scope`。`upstream-application + unknown` 表示线路已归因但该事件不观测应用结果，`proxy-connect + success|failure` 表示代理 CONNECT 结果，`direct-sentinel + success` 只证明受控直连哨兵。`OK` 只证明 AI Radar 接受了当时的 selector machine status，不证明后续每个请求的 route 或 upstream 成功。
 
-**这一行的地址不是连通性证据。** 它只反映 `pipeline.sh` 从指针文件里读出了一个地址——2026-08-18 00:04 那一轮头部是 `=== egress proxy: http://127.0.0.1:59527 ===`，同轮 `attempted=162 inserted=0 failed=162`、162 条全部 `Connection refused`。**端口探测（`nc -z`）同样不算核实**：代理的 listener 在 127.0.0.1 上，端口探测区分不了「本地 listener 活着」与「上游隧道通」这两件事，所以只有实发请求才有判别力。端口由外部 agent-proxy 写入指针文件、不保证稳定，只从当轮日志读、不要记住。
+应用的 `airadar.egress.audit` 是调用点审计，不是 route authority。selector-owned transport 记录已知 hostname、launch、policy identity 与本地 outcome；显式 direct 的 loopback/synthetic 请求不依赖 selector status，也不产生带 policy identity 的应用 audit。`local_outcome=request:http:*|request:error:*` 表示真实请求结果；`subprocess_env:prepared` 与 `playwright_proxy_config:prepared` 只表示本地准备完成。managed-standard-env subprocess 使用 `hostname=null`，不表示子进程已经启动，也不表示其最终访问了哪个 hostname。不要用 listener 端口探活、父进程 proxy 环境或应用 intent 反推 GCP/Tencent/direct。
 
-验通目标特意选了与被诊断对象无关的端点：拿 `api.x.com` 去验证一条正为 X 源整批失败而排查的链路会绕回自身，读数分不清是代理坏了还是 X 侧坏了。
-
-**这一层不是 `/img` 的图片代理。** `docs/operations/services.md` 有一份写得很好的出网代理三步诊断（`systemctl is-active ai-radar-img-tunnel`、`ss -lntp | grep 39148`），那条链路只服务 `/img` 的新加坡图片代理，与 fetch 出网无关——照它走完全程也诊断不到本节的故障。
+预期 policy：Anthropic-owned hostname → GCP SG，且线路失败不 direct/Tencent/ZYT fallback；OpenAI/ChatGPT/X → OpenAI provider route（Tencent primary，建隧道前失败时 ZYT fallback，两者均不可用则 fail closed）；Ark/DeepSeek/RSS/news/web → direct。域名表与实际 audit 只在 system-config；判断 provider 当前档位读 `tencent_route_mode`，判断单次实际出口读 `selected_route=tencent|zyt-fallback`。`/img` 仍是 ADR-057 的独立图片代理链路，不受本 selector 改造影响；排它的故障继续走 [services.md 的图片代理诊断](services.md#图片出口代理新加坡repo-外常驻服务)。
 
 A7 补的是 A4 看不见的那一面：A4 用全站 item 增量与 fetch 失败率判定，单个来源死亡时其余来源仍把总量顶在 floor 之上。2026-08-14 至 08-17 微信来源零入库约 73 小时期间，A4 每天分别判定 firing 9 / 36 / 59 次，而 `send A4` 在 08-14、08-15 为 0 次、08-16 为 4 次。
 

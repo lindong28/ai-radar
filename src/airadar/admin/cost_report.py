@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import db
+from ..egress import direct_subprocess_env
 from ..llm_usage import derive_cost_usd, migrate_usage_db
 from ..pricing import PricingCatalog, get_pricing, usd_cny_rate
 from .metrics import _load_pipeline_runs
@@ -702,7 +703,13 @@ def _format_abnormal_summary(row: dict[str, Any]) -> str:
 
 def deliver_cost_report(text: str) -> dict[str, object]:
     try:
-        completed = subprocess.run(["im-notify", text], capture_output=True, text=True, timeout=20)
+        completed = subprocess.run(
+            ["im-notify", text],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=direct_subprocess_env(),
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
     return {

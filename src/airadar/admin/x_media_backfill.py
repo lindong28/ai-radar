@@ -31,6 +31,7 @@ from typing import Any
 
 import httpx
 
+from ..egress import selector_httpx_client
 from ..fetcher.x_api import (
     X_API_BASE_URL,
     X_MEDIA_FIELDS,
@@ -165,7 +166,11 @@ def backfill_x_media(
         raise RuntimeError(f"{_BEARER_ENV} is not configured")
 
     owned = client is None
-    http = client or httpx.Client(timeout=30.0)
+    http = client or selector_httpx_client(
+        callsite_id="admin.x_media_backfill",
+        request_url=X_API_BASE_URL,
+        timeout=30.0,
+    )
     try:
         for batch in _batches(rows):
             ids = [post_id for _item_id, post_id, _extra in batch]

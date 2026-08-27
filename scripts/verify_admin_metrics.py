@@ -7,17 +7,30 @@ import math
 import os
 import re
 import sqlite3
+import sys
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from zoneinfo import ZoneInfo
 
-from airadar.admin.access_log import aggregate_access_log
-from airadar.db import DEFAULT_DB_PATH, PROJECT_ROOT
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from airadar.admin.access_log import aggregate_access_log  # noqa: E402
+from airadar.db import DEFAULT_DB_PATH, PROJECT_ROOT  # noqa: E402
+from airadar.egress import open_external_url  # noqa: E402
+
+
+def urlopen(request: Request, timeout: float):  # noqa: ANN201
+    return open_external_url(
+        request,
+        callsite_id="scripts.verify_admin_metrics",
+        timeout=timeout,
+    )
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 ADMIN_ALLOW_LOCAL_ENV = "AI_RADAR_ADMIN_ALLOW_LOCAL"

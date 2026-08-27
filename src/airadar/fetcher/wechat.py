@@ -21,6 +21,7 @@ from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
+from ..egress import playwright_launch_proxy
 from .content import clean_content
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,10 @@ class WeChatScraper:
         self.browser = self.playwright.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled"],
+            proxy=playwright_launch_proxy(
+                "https://mp.weixin.qq.com/",
+                callsite_id="fetcher.wechat.browser",
+            ),
         )
         self.context = self._new_context()
 

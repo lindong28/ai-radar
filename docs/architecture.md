@@ -288,6 +288,14 @@ fetch 阶段通过 RSS 发现新文章链接，再只对尚未入库的 `mp.weix
 
 每个阶段只处理尚未完成对应评估的新条目。`pipeline.sh` 按顺序调度全部阶段，`interpret` 位于最后且 preflight 缺 ai-assistant 依赖时跳过，不阻断前置抓取/精选。
 
+### Domain-selector egress boundary
+
+`pipeline.sh` 在外部阶段之前调用 `egress-preflight`，严格解析 `check-proxy-status --format=kv`：只有 stored/effective mode 均为 `domain-routing`、`policy_id=domain-routing-v1`、policy digest 合法且 matched、router/三条 upstream/route attribution/overall 全部 healthy，并且 status 给出稳定 selector 地址时才继续。应用不读取 `AI_RADAR_PROXY_FILE`、`current-proxy`、假定导出的 selector 环境变量或父进程六个 proxy 变量。
+
+`egress.py` 为 checked-in httpx、OpenAI-compatible SDK、urllib、Playwright 与 managed standard-env subprocess 提供 owned transport。外部请求显式进入 status-derived selector，loopback/synthetic 请求显式 direct 且不依赖 selector status；`im-notify` 等明确 direct 的本地工具获得清除六个 ambient proxy 变量的环境。router 按最终 hostname 持有 Anthropic → GCP SG、OpenAI/ChatGPT/X → OpenAI provider route（Tencent primary、ZYT fallback）、Ark/DeepSeek/RSS/news/web → direct 的单一 policy 与实际 route audit；AI Radar 只消费 provider aggregate readiness，实际线路由 system-config 的 `tencent_route_mode` 与 audit `selected_route` 给出。`egress_registry.py` 保存可枚举的调用点闭包，测试在新增未分类网络入口时失败。selector-owned 请求的应用 audit 只含 `callsite_id`、hostname、launch、policy identity 与本地 outcome，不记录 URL path/query、headers、body、token 或 proxy URL，也不冒充 route authority；显式 direct 的 loopback/synthetic 请求不产生带 policy identity 的应用 audit。`local_outcome` 的值自带阶段：真实请求为 `request:http:*`/`request:error:*`，managed subprocess 为 `subprocess_env:prepared`，Playwright 为 `playwright_proxy_config:prepared`。后两者不宣称子进程或浏览器已发出请求；managed-standard-env 的准备记录还使用 `hostname=null`，不宣称已知最终目标。`airadar.egress.audit` 的六字段 shape 作为首版兼容面冻结；未来任何增删改字段必须切换新的 logger/channel，而不能在现有 stream 原地演化。
+
+仓外 `AI_ASSISTANT_ROOT` 不因继承标准 env 自动进入保证；其两个脚本及兼容性 receipt 通过检查后才启动，否则 `interpret` 按 ADR-007 skip。Playwright 的外部 navigation 传显式 selector launch proxy，本地/合成 probe 用 no-proxy。ADR-057 `/img` 的独立图片 proxy、`trust_env=False` 与缺配置即 404 语义不变。
+
 ### Mac primary → Tencent serving replica
 
 公网副本同步采用“传 base、服务器重建 FTS”，而不是传输 primary 的 FTS 页面。FTS5 segment merge 会重写、重定位大量索引页；旧链路因此在真实增量窗口实发约 1.9GB，而基础表逻辑变化只有很小一部分。每轮重新 DROP/VACUUM 或 fresh-copy base-only DB 同样会重编号大部分 SQLite 页面，所以当前机制维护一份跨轮持久的 base-only shipping replica，并在原布局上应用逻辑差异。
@@ -561,6 +569,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | Wechat2RSS | 生产微信公众号发现层之二（自建，`deploy/wechat2rss/` 下 docker-compose 拉起 `ttttmr/wechat2rss` 容器）；`WECHAT2RSS_FEED_URL`，与 Mp2RSS 双跑取并集（ADR-059） |
 | X 官方 API | `kind="x"` 且 `meta.adapter="x_api"` 源的主路径：`fetcher/x_api.py` 走 `https://api.x.com/2`，需 `X_BEARER_TOKEN` |
 | 图片出口代理（repo 外常驻） | `AI_RADAR_IMG_PROXY_URL` 指向的 HTTP 正向代理，`/img` 取 `pbs.twimg.com` 时**强制**走它（serve 主机到 twimg 的连接被上游阻断）；未配置即直接 404，绝不退化成直连（[ADR-057](adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md)）。产线实机拓扑（新加坡 tinyproxy + SSH 隧道）与诊断顺序见 [operations/services.md](operations/services.md) |
+| Domain-routing selector（repo 外常驻） | pipeline 与已登记外部 client 的唯一出网入口；AI Radar 消费严格 status-derived `agent_proxy`，system-config 持有域名 policy、GCP/Tencent/direct upstream 与 route audit。状态不健康时 pipeline fail closed；见 [ADR-20260826-68e2](adr/20260826-68e2-route-ai-radar-through-domain-selector.md) 与 [operations/services.md](operations/services.md#ai-radar-域名-selector出网) |
 | 微信公众号后台（候选） | 默认关闭的 shadow 发现路径；私有登录态只供显式单账号 probe，尚未进入 pipeline |
 | markdown-it-py | 微信文章解读详情页 markdown 渲染 |
 | nh3 | 微信文章解读详情页 HTML sanitizer |

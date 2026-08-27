@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import struct
+import sys
 import tempfile
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +16,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from airadar.egress import open_external_url  # noqa: E402
+
+
+def urlopen(request: Request, timeout: float):  # noqa: ANN201
+    return open_external_url(
+        request,
+        callsite_id="scripts.web_contract_golden",
+        timeout=timeout,
+    )
 
 PRELOAD_RE = re.compile(rb'<script id="__PRELOAD__"[^>]*>(.*?)</script>', re.S)
 SUPPORTED_KINDS = frozenset({"api-json", "ssr-preload-json", "html"})

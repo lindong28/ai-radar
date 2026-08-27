@@ -43,7 +43,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 其他配置项都有可用的默认值，第一次本地试跑不用动（部署到公网前再按下文「站点身份与最小配置」改）。X 信源要 `X_BEARER_TOKEN`、微信信源要 `MP2RSS_FEED_URL` / `WECHAT2RSS_FEED_URL`，都可以先不填——不填时对应来源被跳过、其余信源照常加载，口径见下文「信源」。
 
-下面三个变量 `.env.example` **未收录，需要时手动新增**：`AI_RADAR_PUBLIC_URL`（公网站点地址，只被 `performance-probe` 用作 public 视角的测量目标，未设置时探针只测 origin）、`AI_RADAR_ADMIN_ALLOW_LOCAL`（设为 `1`/`true`/`yes` 时允许来自 `127.0.0.1`、`::1`、`localhost` 的请求直接访问 `/admin`，本地开发用；不设置则 `/admin` 要求请求带 Cloudflare Access header）、`AI_RADAR_PROXY_FILE`（指向一个记录出网代理地址的文件；`pipeline.sh` 运行时从中解析并导出代理，供 cron 这类拿不到交互式 shell 环境的场景使用）。
+下面两个变量 `.env.example` **未收录，需要时手动新增**：`AI_RADAR_PUBLIC_URL`（公网站点地址，只被 `performance-probe` 用作 public 视角的测量目标，未设置时探针只测 origin）、`AI_RADAR_ADMIN_ALLOW_LOCAL`（设为 `1`/`true`/`yes` 时允许来自 `127.0.0.1`、`::1`、`localhost` 的请求直接访问 `/admin`，本地开发用；不设置则 `/admin` 要求请求带 Cloudflare Access header）。出网 selector 不从 `.env` 读取代理地址；不要再配置 `AI_RADAR_PROXY_FILE`。
 
 ### 3. 初始化数据库
 
@@ -83,6 +83,8 @@ DEEPSEEK_API_KEY=sk-xxx
 ## 自动化调度
 
 `pipeline.sh` 按顺序执行 `fetch → prefilter → score → enrich → curate → interpret`，每个阶段只处理尚未评估的新条目。单阶段失败会记录 `FAIL` 后继续，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`，`.pipeline.flock` 上的内核排他锁跳过重叠运行。
+
+每轮在第一个外部阶段前执行 `./run.sh egress-preflight`。它只接受 `check-proxy-status --format=kv` 返回完整、healthy、policy matched 的 `domain-routing-v1` 状态；失败时整轮在发出外部请求前退出，不会退回父 Claude Code/Codex 的 proxy 环境或直连。域名路由由外部 domain router 持有：Anthropic → GCP SG 且 fail closed，OpenAI/ChatGPT/X → OpenAI provider route（Tencent primary，建隧道前失败时 ZYT fallback；两者均不可用则 fail closed），Ark/DeepSeek/RSS/新闻/网页 → direct。AI Radar 不维护第二份域名表；实际出口以 system-config 的 `tencent_route_mode` 与 route audit `selected_route` 为准，生产安装前置与排障见 [服务 runbook](docs/operations/services.md#ai-radar-域名-selector出网)。
 
 默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 
@@ -288,6 +290,8 @@ X 的图片还需要一条出口代理：`.env` 未配 `AI_RADAR_IMG_PROXY_URL` 
 服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）。**显式逐个安装你需要的服务**，不要用无参数全量安装。单服务安装幂等——重复跑不报错。DB sync 与 Wechat2RSS 不由这三个脚本管理。
 
 `./install.sh` 会先检查该服务脚本可判定的依赖（LLM key、飞书 webhook、`im-notify`、tunnel 配置文件等），缺失时在交互式终端询问并追加到 `./.env`、非交互环境自动跳过，跳过原因列在命令末尾的 summary 里。变量按当前进程环境、项目 `./.env`、`~/.claude/.env` 依次查找。Playwright Chromium 是 `install.sh` **不会**自动下载或校验的运行时前置，按快速开始那一步先装好。逐服务的依赖清单、隐含依赖与验证命令见 [`docs/operations/services.md`](docs/operations/services.md)。
+
+pipeline 所在主机还必须先由 system-config 安装并启用 healthy `domain-routing-v1` selector；AI Radar 的 installer 不创建、不切换也不修复这项外部服务。部署前先跑 `./run.sh egress-preflight`，看到 `status=healthy` 与 policy identity 后再安装 pipeline；这只验证应用可接受机器状态，不等于真实 GCP/Tencent 出口与断线行为已经在该主机验收。
 
 `/admin`、A1–A7 与 D3 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号摄取（两个来源的接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)。架构、设计决策记录与待办清单等开发者细节都在 [`docs/`](docs/)。
 

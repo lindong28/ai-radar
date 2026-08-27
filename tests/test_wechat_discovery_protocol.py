@@ -377,11 +377,10 @@ def test_default_request_json_classifies_malformed_json_as_invalid(monkeypatch) 
         def read(self) -> bytes:
             return b"<html>login</html>"
 
-    class Opener:
-        def open(self, *_args: object, **_kwargs: object) -> Response:
-            return Response()
-
-    monkeypatch.setattr("airadar.wechat_discovery.protocol.build_opener", lambda *_args: Opener())
+    monkeypatch.setattr(
+        "airadar.wechat_discovery.protocol.open_external_url",
+        lambda *_args, **_kwargs: Response(),
+    )
     with pytest.raises(DiscoveryResponseInvalid, match="not valid JSON"):
         _default_request_json(Request("https://mp.weixin.qq.com/"), 1)
 

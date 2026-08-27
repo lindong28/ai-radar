@@ -18,8 +18,9 @@ from typing import Any, Literal, Protocol
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 
-import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from airadar.egress import selector_httpx_client
 
 MINIMUM_REQUEST_INTERVAL_SECONDS = 2.0
 MAX_REQUESTS_PER_MINUTE = 30
@@ -3286,8 +3287,9 @@ class HttpxTransport:
             raise ValueError("timeout_seconds must be positive")
         self._timeout_seconds = timeout_seconds
         self._user_agent = _non_empty_string(user_agent, field_name="user_agent")
-        self._client = httpx.Client(
-            trust_env=False,
+        self._client = selector_httpx_client(
+            callsite_id="eval.aihot_dataset.capture",
+            request_url="https://aihot.virxact.com",
             follow_redirects=False,
             timeout=self._timeout_seconds,
             headers={"User-Agent": self._user_agent},

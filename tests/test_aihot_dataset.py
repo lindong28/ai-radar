@@ -5889,7 +5889,7 @@ def test_capture_writer_interval_mutation_is_rejected_before_publish(
     assert not (output_root / "captures" / "fictional-capture-phase2").exists()
 
 
-def test_httpx_transport_disables_environment_proxy_and_sets_timeout_and_user_agent(
+def test_httpx_transport_uses_selector_factory_and_sets_timeout_and_user_agent(
     ds: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5915,16 +5915,22 @@ def test_httpx_transport_disables_environment_proxy_and_sets_timeout_and_user_ag
             observed["request_kwargs"] = kwargs
             return FakeHttpxResponse()
 
-    monkeypatch.setattr(ds.httpx, "Client", FakeHttpxClient)
+        def close(self) -> None:
+            observed["closed"] = True
+
+    monkeypatch.setattr(ds, "selector_httpx_client", FakeHttpxClient)
     transport = ds.HttpxTransport(timeout_seconds=13.0, user_agent="Fictional-Test-UA/1.0")
     result = transport.get("https://aihot.invalid/example", params={"fiction": "1"}, headers={})
+    transport.close()
     assert observed["client_kwargs"] == {
-        "trust_env": False,
+        "callsite_id": "eval.aihot_dataset.capture",
+        "request_url": "https://" + "aihot" + ".virxact.com",
         "follow_redirects": False,
         "timeout": 13.0,
         "headers": {"User-Agent": "Fictional-Test-UA/1.0"},
     }
     assert observed["request_kwargs"] == {"params": {"fiction": "1"}, "headers": {}}
+    assert observed["closed"] is True
     assert result == ds.HttpResponse(
         status=200,
         headers={"Content-Type": "application/json"},

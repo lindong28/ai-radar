@@ -11,13 +11,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from airadar.egress import open_external_url  # noqa: E402
 from airadar.fetcher.urls import canonicalize_item_url  # noqa: E402
 
 
 def _probe_status(url: str) -> str:
     request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "ai-radar-url-rewrite/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
+        with open_external_url(
+            request,
+            callsite_id="scripts.rewrite_nitter_urls.probe",
+            timeout=8,
+        ) as response:
             return "ok" if response.status in {200, 301, 302, 303, 307, 308} else f"http_{response.status}"
     except urllib.error.HTTPError as exc:
         return "broken" if exc.code == 404 else f"http_{exc.code}"

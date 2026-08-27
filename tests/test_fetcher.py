@@ -304,7 +304,7 @@ def test_parse_feed_extracts_entry_fields() -> None:
     assert "LLM benchmark" in entries[0].content_text
 
 
-def test_fetch_feed_bypasses_proxy_for_loopback_urls(monkeypatch) -> None:  # noqa: ANN001
+def test_fetch_feed_uses_explicit_direct_client_for_loopback_urls(monkeypatch) -> None:  # noqa: ANN001
     calls: list[dict[str, object]] = []
 
     class FakeResponse:
@@ -315,11 +315,24 @@ def test_fetch_feed_bypasses_proxy_for_loopback_urls(monkeypatch) -> None:  # no
         def raise_for_status(self) -> None:
             return None
 
-    def fake_get(url: str, **kwargs: object) -> FakeResponse:
-        calls.append({"url": url, **kwargs})
-        return FakeResponse()
+    class FakeClient:
+        def __enter__(self) -> FakeClient:
+            return self
 
-    monkeypatch.setattr("airadar.fetcher.http_client.httpx.get", fake_get)
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            calls.append({"url": url, **kwargs})
+            return FakeResponse()
+
+    factory_calls: list[dict[str, object]] = []
+
+    def fake_factory(**kwargs: object) -> FakeClient:
+        factory_calls.append(kwargs)
+        return FakeClient()
+
+    monkeypatch.setattr("airadar.fetcher.http_client.selector_httpx_client", fake_factory)
     source = SourceConfig(
         slug="local_wewe",
         name="Local WeWe",
@@ -333,10 +346,15 @@ def test_fetch_feed_bypasses_proxy_for_loopback_urls(monkeypatch) -> None:  # no
     response = fetch_feed(source, sqlite3.connect(":memory:"))
 
     assert response.status_code == 200
-    assert calls[0]["trust_env"] is False
+    assert factory_calls == [{
+        "callsite_id": "fetcher.http_client.fetch_document",
+        "request_url": source.url,
+        "timeout": 30.0,
+        "follow_redirects": True,
+    }]
 
 
-def test_fetch_feed_keeps_environment_proxy_for_external_urls(monkeypatch) -> None:  # noqa: ANN001
+def test_fetch_feed_uses_selector_client_for_external_urls(monkeypatch) -> None:  # noqa: ANN001
     calls: list[dict[str, object]] = []
 
     class FakeResponse:
@@ -347,11 +365,24 @@ def test_fetch_feed_keeps_environment_proxy_for_external_urls(monkeypatch) -> No
         def raise_for_status(self) -> None:
             return None
 
-    def fake_get(url: str, **kwargs: object) -> FakeResponse:
-        calls.append({"url": url, **kwargs})
-        return FakeResponse()
+    class FakeClient:
+        def __enter__(self) -> FakeClient:
+            return self
 
-    monkeypatch.setattr("airadar.fetcher.http_client.httpx.get", fake_get)
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            calls.append({"url": url, **kwargs})
+            return FakeResponse()
+
+    factory_calls: list[dict[str, object]] = []
+
+    def fake_factory(**kwargs: object) -> FakeClient:
+        factory_calls.append(kwargs)
+        return FakeClient()
+
+    monkeypatch.setattr("airadar.fetcher.http_client.selector_httpx_client", fake_factory)
     source = SourceConfig(
         slug="external",
         name="External",
@@ -364,7 +395,12 @@ def test_fetch_feed_keeps_environment_proxy_for_external_urls(monkeypatch) -> No
     response = fetch_feed(source, sqlite3.connect(":memory:"))
 
     assert response.status_code == 200
-    assert calls[0]["trust_env"] is True
+    assert factory_calls == [{
+        "callsite_id": "fetcher.http_client.fetch_document",
+        "request_url": source.url,
+        "timeout": 30.0,
+        "follow_redirects": True,
+    }]
 
 
 def test_fetch_user_agent_defaults_to_neutral_value(monkeypatch) -> None:  # noqa: ANN001

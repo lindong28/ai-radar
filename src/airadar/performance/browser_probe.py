@@ -10,6 +10,8 @@ from multiprocessing.connection import wait as wait_for_multiprocessing
 from time import perf_counter_ns
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
+from ..egress import playwright_launch_proxy
+
 
 @dataclass(frozen=True, slots=True)
 class BrowserJourneyContract:
@@ -120,7 +122,15 @@ def _measure_browser_journey_inner(
             browser = None
             context = None
             try:
-                browser = playwright.chromium.launch(headless=True)
+                proxy = playwright_launch_proxy(
+                    request_url,
+                    callsite_id="performance.browser_probe.journey",
+                )
+                browser = playwright.chromium.launch(
+                    headless=True,
+                    proxy=proxy,
+                    args=["--no-proxy-server"] if proxy is None else None,
+                )
                 context = browser.new_context()
                 page = context.new_page()
                 page.set_default_timeout(timeout_ms)
@@ -465,7 +475,10 @@ def browser_runtime_available() -> bool:
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--no-proxy-server"],
+            )
             context = browser.new_context()
             try:
                 return True

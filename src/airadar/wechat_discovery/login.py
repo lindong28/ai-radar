@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from ..egress import playwright_launch_proxy
 from .protocol import DEFAULT_SESSION_PATH
 
 DEFAULT_BROWSER_PROFILE = Path(__file__).resolve().parents[3] / "data" / "wechat-discovery-browser"
@@ -118,7 +119,10 @@ def capture_login(
                 headless=False,
                 env=safe_browser_env(os.environ),
                 no_viewport=True,
-                args=["--no-proxy-server"],
+                proxy=playwright_launch_proxy(
+                    LOGIN_URL,
+                    callsite_id="wechat_discovery.login.browser",
+                ),
             )
             saved = False
             try:

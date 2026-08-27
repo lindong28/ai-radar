@@ -10,12 +10,11 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-
-import httpx  # noqa: E402
 
 from airadar.audit.receipts import (  # noqa: E402
     OBSERVATION_RECEIPT_CODE_PATHS,
@@ -25,9 +24,10 @@ from airadar.audit.receipts import (  # noqa: E402
     validate_archived_observation_receipt,
     validate_observation_receipt,
 )
+from airadar.egress import selector_httpx_client  # noqa: E402
 
 ENDPOINT = "https://aihot.virxact.com/api/v1/items"
-QUERY = {"mode": "all", "by": "timeline", "window": "7d", "limit": 100}
+QUERY: dict[str, str | int] = {"mode": "all", "by": "timeline", "window": "7d", "limit": 100}
 
 
 class ObservationTraversalFailure(RuntimeError):
@@ -222,7 +222,7 @@ def traverse_pages(
 
 
 def reconcile_sources(observed: dict[str, list[str]], contract_path: Path) -> dict[str, object]:
-    return reconcile_observed_sources(observed, contract_path)
+    return cast(dict[str, object], reconcile_observed_sources(observed, contract_path))
 
 
 def main() -> int:
@@ -237,7 +237,13 @@ def main() -> int:
         params = dict(QUERY)
         if cursor:
             params["cursor"] = cursor
-        response = httpx.get(ENDPOINT, params=params, timeout=30, follow_redirects=True, trust_env=False)
+        with selector_httpx_client(
+            callsite_id="scripts.audit_aihot_sources",
+            request_url=ENDPOINT,
+            timeout=30,
+            follow_redirects=True,
+        ) as client:
+            response = client.get(ENDPOINT, params=params)
         response.raise_for_status()
         raw_response_body = response.content
         payload = response.json()
@@ -291,8 +297,8 @@ def main() -> int:
     }
     report["report_payload_sha256"] = canonical_payload_sha256(report)
     validate_observation_receipt(report, contract_path=args.contract, repository_root=ROOT)
-    reconciliation = report["reconciliation"]
-    assert isinstance(reconciliation, dict)
+    persisted_reconciliation = report["reconciliation"]
+    assert isinstance(persisted_reconciliation, dict)
     if report["status"] == "failed":
         atomic_json(args.output, report)
         return 2

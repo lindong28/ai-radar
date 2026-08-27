@@ -1,9 +1,10 @@
 {
   "artifact_type": "x_pagination_offline_test",
-  "captured_at": "2026-08-20T04:10:04Z",
+  "captured_at": "2026-08-26T09:29:35Z",
   "production_code_sha256_by_path_relative_to_repository_root": {
     "src/airadar/fetcher/runner.py": "c8e629aa5ccdbef84035d210e8c1cf1fcb037250a2c3bd82b6b5562f7036ca52",
-    "src/airadar/fetcher/x_api.py": "a8b96e5210c0ce437916431a92e74164bca235da8687cb546b241bc02525ce50",
+    "src/airadar/fetcher/x_api.py":
+      "76e5b0b61eb7a5239fc28eaf71614c59a6380cdec79e1c1a6234c798e47f3aa2",
     "src/airadar/sources/x_state.py": "2e7ba8440391f1b844b55fe0da1c2ee0d0886459900ef14f1d5cd99482250204"
   },
   "pytest_exit_code": 0,
@@ -14,11 +15,12 @@
     "tests/test_x_api.py::test_fetch_x_timeline_rejects_non_advancing_pagination_token"
   ],
   "pytest_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "pytest_stdout_sha256": "006ba2e6e18954ad086677bc060e3290380048985a443818578f6ef51ed1b21b",
-  "report_payload_sha256": "6fefd849335894e382b473986eaa539eec47c3b48873fa67cc2b33b877742468",
+  "pytest_stdout_sha256": "87a60d5f0e877f12a64ce616288d296d98c12639c9d5ed55dc65a5ecd1c118d6",
+  "report_payload_sha256": "0640719bd61477f4084a4a0455a06c37262a02359450f8d24c5c5554286458c9",
   "schema_version": 1,
   "status": "success",
   "test_code_sha256_by_path_relative_to_repository_root": {
-    "tests/test_x_api.py": "772374413b4afdc67b152c31ee60a2014f130002f519d30c2d38a6a2db9898a3"
+    "tests/test_x_api.py":
+      "9734ca6ad1d56a74d71718265086e00712704f239ed6190faf601559f775bd2d"
   }
 }

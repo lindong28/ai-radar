@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
-
+from ..egress import selector_httpx_client
 from ..runtime_env import read_value
 from ..sources.loader import SourceConfig
 from ..sources.x_state import X_RUNTIME_META_KEYS, X_USERNAME_RE, validate_x_runtime_meta
@@ -298,12 +297,20 @@ def _resolve_x_identity(
 def fetch_x_timeline(
     source: SourceConfig,
     *,
-    client: Any = httpx,
+    client: Any | None = None,
     now: datetime | None = None,
 ) -> XTimelinePage:
     token = read_value("X_BEARER_TOKEN").strip()
     if not token:
         raise RuntimeError("X_BEARER_TOKEN is not configured")
+
+    if client is None:
+        with selector_httpx_client(
+            callsite_id="fetcher.x_api.fetch_x_timeline",
+            request_url=X_API_BASE_URL,
+            timeout=30.0,
+        ) as owned_client:
+            return fetch_x_timeline(source, client=owned_client, now=now)
 
     username = str(source.meta.get("username") or "").strip().lstrip("@")
     if not X_USERNAME_RE.fullmatch(username):

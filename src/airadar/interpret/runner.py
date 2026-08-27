@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .. import db
+from ..egress import managed_subprocess_env, require_selector_policy
 from ..llm_usage import (
     LlmUsageRecord,
     record_llm_usage_best_effort,
@@ -33,6 +35,19 @@ DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
 MISSING_ROOT_MESSAGE = "interpret enabled but AI_ASSISTANT_ROOT is not set"
 SUMMARY_AGENT_DIR = Path("agents") / "summary-agent"
 SUMMARY_AGENT_INTERPRET_MODEL = "ai-radar-interpret-deepseek"
+EGRESS_CONTRACT_FILE = "ai-radar-egress-contract-v1.json"
+EGRESS_CONTRACT_KEYS = frozenset(
+    {
+        "schema_version",
+        "attestation_kind",
+        "policy_id",
+        "policy_sha256",
+        "parent_gcp_env_selector_only_test",
+        "managed_descendants_standard_proxy_env_test",
+        "summarize_sha256",
+        "run_sha256",
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +84,26 @@ def _summary_agent_scripts(root: Path) -> tuple[Path, Path]:
     return agent_dir / "summarize.sh", agent_dir / "run.sh"
 
 
+def expected_selector_compatibility_receipt(
+    *,
+    policy_sha256: str,
+    summarize_sha256: str,
+    run_sha256: str,
+) -> dict[str, object]:
+    """Return the single authoritative v1 receipt shape for producers and tests."""
+
+    return {
+        "schema_version": 1,
+        "attestation_kind": "trusted-operator-fake-selector",
+        "policy_id": "domain-routing-v1",
+        "policy_sha256": policy_sha256,
+        "parent_gcp_env_selector_only_test": "passed",
+        "managed_descendants_standard_proxy_env_test": "passed",
+        "summarize_sha256": summarize_sha256,
+        "run_sha256": run_sha256,
+    }
+
+
 def _preflight(root: Path) -> tuple[bool, str]:
     summarize_script, run_script = _summary_agent_scripts(root)
     if not root.exists():
@@ -77,6 +112,21 @@ def _preflight(root: Path) -> tuple[bool, str]:
         return False, f"skip interpret: summarize.sh is missing or not executable: {summarize_script}"
     if not run_script.exists() or not os.access(run_script, os.X_OK):
         return False, f"skip interpret: run.sh is missing or not executable: {run_script}"
+    receipt_path = root / EGRESS_CONTRACT_FILE
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "skip interpret: selector compatibility is unproven (receipt missing or invalid)"
+    if not isinstance(receipt, dict) or set(receipt) != EGRESS_CONTRACT_KEYS:
+        return False, "skip interpret: selector compatibility is unproven (receipt schema mismatch)"
+    policy = require_selector_policy()
+    expected_receipt = expected_selector_compatibility_receipt(
+        policy_sha256=policy.policy_sha256,
+        summarize_sha256=hashlib.sha256(summarize_script.read_bytes()).hexdigest(),
+        run_sha256=hashlib.sha256(run_script.read_bytes()).hexdigest(),
+    )
+    if receipt != expected_receipt:
+        return False, "skip interpret: selector compatibility is unproven (receipt does not match scripts)"
     return True, "ok"
 
 
@@ -93,21 +143,24 @@ def _json_loads(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
-def _subprocess_env() -> dict[str, str]:
-    env = os.environ.copy()
+def _subprocess_env(*, callsite_id: str) -> dict[str, str]:
+    env = managed_subprocess_env(
+        require_selector_policy(),
+        callsite_id=callsite_id,
+    )
     env.pop("VIRTUAL_ENV", None)
     env.setdefault("AI_RADAR_ARK_BREAKER_STATE", str(db.PROJECT_ROOT / "data" / "ark-breaker.json"))
     return env
 
 
-def _run_json(cmd: list[str], *, cwd: Path) -> dict[str, Any]:
+def _run_json(cmd: list[str], *, cwd: Path, callsite_id: str) -> dict[str, Any]:
     completed = subprocess.run(
         cmd,
         cwd=str(cwd),
         check=True,
         text=True,
         capture_output=True,
-        env=_subprocess_env(),
+        env=_subprocess_env(callsite_id=callsite_id),
     )
     stdout = (completed.stdout or "").strip()
     if not stdout:
@@ -513,7 +566,9 @@ def _record_error(conn: sqlite3.Connection, row: sqlite3.Row, error: BaseExcepti
     ).fetchone()
     # Match the candidate query's `error IS NOT NULL` semantics: an empty error
     # string still marks a retryable failure, so it must advance the counter.
-    retry_count = int(previous["error_retry_count"]) + 1 if previous is not None and previous["error"] is not None else 0
+    retry_count = (
+        int(previous["error_retry_count"]) + 1 if previous is not None and previous["error"] is not None else 0
+    )
     slug = _unique_slug(conn, f"error-{row['id']}", row["id"])
     _save_interpretation(
         conn,
@@ -574,7 +629,11 @@ def _summarize_item(
     if _index_cannot_distinguish(str(row["url"] or "")):
         hit = None
     else:
-        check_payload = _run_json([str(run_script), "--check-url", row["url"], "--user", user], cwd=root)
+        check_payload = _run_json(
+            [str(run_script), "--check-url", row["url"], "--user", user],
+            cwd=root,
+            callsite_id="interpret.runner.check_url",
+        )
         hit = _check_url_hit(check_payload, title=row["title"])
     if hit:
         summary_file = hit.get("summary_file_path") or hit.get("summary_file")
@@ -633,6 +692,7 @@ def _summarize_item(
             SUMMARY_AGENT_INTERPRET_MODEL,
         ],
         cwd=root,
+        callsite_id="interpret.runner.summarize",
     )
     result = summary_payload.get("result")
     if not isinstance(result, dict):
@@ -666,7 +726,7 @@ def _summarize_item(
             json.dumps(meta, ensure_ascii=False),
         ]
         try:
-            _run_json(save_cmd, cwd=root)
+            _run_json(save_cmd, cwd=root, callsite_id="interpret.runner.save_from_batch")
         except subprocess.CalledProcessError as exc:
             duplicate_slug = _duplicate_slug_from_save_error(exc)
             if not duplicate_slug:
@@ -687,6 +747,7 @@ def _summarize_item(
                     json.dumps(meta, ensure_ascii=False),
                 ],
                 cwd=root,
+                callsite_id="interpret.runner.save_from_batch_retry",
             )
             slug = retry_slug
         kb_synced = True

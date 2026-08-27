@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import httpx
 import json_repair
 
 from ..curator.score import weighted_score as compute_weighted_score
 from ..curator.weights import DEFAULT_WEIGHTS
 from ..db import PROJECT_ROOT
+from ..egress import selector_httpx_client
 from ..enrich.schema import EnrichOutput
 from ..provider.deepseek_chat import chat_json
 from ..topics import CONTROLLED_VOCABULARY, deterministic_tags, is_in_vocabulary, topic_tags
@@ -184,18 +184,23 @@ class DeepSeekV4ProJudge:
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                response = httpx.post(
-                    f"{_deepseek_base_url()}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": os.environ.get("AI_RADAR_DEEPSEEK_JUDGE_MODEL", self.model_id),
-                        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0,
-                        "max_tokens": int(os.environ.get("AI_RADAR_EVAL_MAX_TOKENS", "1200")),
-                    },
+                base_url = _deepseek_base_url()
+                with selector_httpx_client(
+                    callsite_id="eval.judge.deepseek",
+                    request_url=base_url,
                     timeout=float(os.environ.get("AI_RADAR_DEEPSEEK_TIMEOUT", "60")),
-                )
+                ) as client:
+                    response = client.post(
+                        f"{base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": os.environ.get("AI_RADAR_DEEPSEEK_JUDGE_MODEL", self.model_id),
+                            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0,
+                            "max_tokens": int(os.environ.get("AI_RADAR_EVAL_MAX_TOKENS", "1200")),
+                        },
+                    )
                 response.raise_for_status()
                 content = response.json()["choices"][0]["message"]["content"]
                 if content is None:
