@@ -363,7 +363,10 @@ def _seed_runner_db(tmp_path: Path, *, item_id: str = "item-1", title: str = "�
 
 
 def _assistant_root(tmp_path: Path) -> Path:
-    from airadar.interpret.runner import expected_selector_compatibility_receipt
+    from airadar.interpret.runner import (
+        egress_implementation_sha256,
+        expected_selector_compatibility_receipt,
+    )
 
     root = tmp_path / "ai-assistant"
     script_dir = root / "agents" / "summary-agent"
@@ -372,13 +375,19 @@ def _assistant_root(tmp_path: Path) -> Path:
         path = script_dir / name
         path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         path.chmod(0o755)
-    scripts = [script_dir / "summarize.sh", script_dir / "run.sh"]
-    (root / "ai-radar-egress-contract-v1.json").write_text(
+    (root / "pyproject.toml").write_text("[project]\nname='summary-agent'\n", encoding="utf-8")
+    (root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    source_dir = script_dir / "src"
+    source_dir.mkdir()
+    (source_dir / "summarizer.py").write_text("def summarize(): return None\n", encoding="utf-8")
+    shared_dir = root / "shared"
+    shared_dir.mkdir()
+    (shared_dir / "project_env.py").write_text("def load_env(): return None\n", encoding="utf-8")
+    (root / "ai-radar-egress-contract-v2.json").write_text(
         json.dumps(
             expected_selector_compatibility_receipt(
                 policy_sha256="a" * 64,
-                summarize_sha256=hashlib.sha256(scripts[0].read_bytes()).hexdigest(),
-                run_sha256=hashlib.sha256(scripts[1].read_bytes()).hexdigest(),
+                egress_implementation_sha256=egress_implementation_sha256(root),
             ),
             sort_keys=True,
         ),
@@ -389,6 +398,7 @@ def _assistant_root(tmp_path: Path) -> Path:
 
 def _enable_interpret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_RADAR_ENABLE_INTERPRET", "true")
+    monkeypatch.setenv("AI_RADAR_INTERPRET_USER", "default")
 
 
 def test_wechat_migration_creates_table_and_indexes(tmp_path: Path) -> None:
@@ -401,9 +411,35 @@ def test_wechat_migration_creates_table_and_indexes(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert {"item_id", "slug", "save_decision", "abstract", "tags_json", "summary_md", "kb_synced"} <= columns
+    assert {
+        "item_id",
+        "slug",
+        "save_decision",
+        "abstract",
+        "tags_json",
+        "summary_md",
+        "kb_synced",
+        "criteria_reason_source",
+        "interpret_user",
+    } <= columns
     assert "idx_wechat_interp_decision" in indexes
     assert "idx_wechat_interp_slug" in indexes
+
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        conn = _connect(db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO wechat_interpretations (
+                  item_id, slug, save_decision, tags_json, summary_md,
+                  kb_synced, processed_at, criteria_reason_source
+                )
+                VALUES ('unknown-source', 'unknown-source', 0, '[]', '', 0,
+                        '2026-08-29T00:00:00Z', 'typo')
+                """
+            )
+        finally:
+            conn.close()
 
 
 def test_wechat_api_returns_only_worth_reading_items_with_pagination(tmp_path: Path) -> None:
@@ -916,9 +952,10 @@ def test_interpret_runner_saves_worth_reading_result_and_patches_kb_meta(
                             "save_decision": True,
                             "save_reason": "有实践价值",
                             "recommendation": "值得一看",
-                            "tags": ["Agent", "工程化"],
-                            "model": "fake-model",
-                            "summary_md": "stdout should not be used",
+                                "tags": ["Agent", "工程化"],
+                                "model": "fake-model",
+                                "summary_md": "stdout should not be used",
+                                "llm_metadata": {"criteria_reason_source": "json"},
                         },
                     },
                     ensure_ascii=False,
@@ -930,7 +967,13 @@ def test_interpret_runner_saves_worth_reading_result_and_patches_kb_meta(
             return subprocess.CompletedProcess(
                 cmd,
                 0,
-                stdout=json.dumps({"ok": True, "summary_file_path": "/kb/test-slug_output.md"}),
+                stdout=json.dumps(
+                    {
+                        "saved": True,
+                        "embedding_updated": True,
+                        "summary_file_path": "/kb/test-slug_output.md",
+                    }
+                ),
                 stderr="",
             )
         raise AssertionError(f"unexpected command: {cmd}")
@@ -955,9 +998,138 @@ def test_interpret_runner_saves_worth_reading_result_and_patches_kb_meta(
     assert any("--save-from-batch" in call for call in calls)
 
 
+@pytest.mark.parametrize(
+    "save_payload",
+    [
+        {"saved": False, "embedding_updated": False, "reason": "url_exists"},
+        {"saved": True, "embedding_updated": False},
+    ],
+)
+def test_interpret_runner_rejects_incomplete_fresh_kb_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    save_payload: dict[str, Any],
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    (batch_dir / "test-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
+    (batch_dir / "test-slug_meta.json").write_text("{}", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "batch_dir": str(batch_dir),
+                        "result": {
+                            "slug": "test-slug",
+                            "save_decision": True,
+                            "save_reason": "有实践价值",
+                            "recommendation": "值得一看",
+                            "tags": ["Agent"],
+                            "model": "fake-model",
+                            "llm_metadata": {"criteria_reason_source": "json"},
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        if "--save-from-batch" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(save_payload), stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    assert summary.errors == 1
+    assert row["kb_synced"] == 0
+    assert "knowledge-base save incomplete" in row["error"]
+
+
+@pytest.mark.parametrize("criteria_reason_source", [None, "future-or-typo"])
+def test_interpret_runner_rejects_invalid_reason_source_before_kb_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    criteria_reason_source: str | None,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    save_calls = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal save_calls
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            metadata = {}
+            if criteria_reason_source is not None:
+                metadata["criteria_reason_source"] = criteria_reason_source
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "batch_dir": str(batch_dir),
+                        "result": {
+                            "slug": "invalid-source",
+                            "save_decision": True,
+                            "recommendation": "值得一看",
+                            "llm_metadata": metadata,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        if "--save-from-batch" in cmd:
+            save_calls += 1
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"saved": True}), stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(
+            conn,
+            backfill=True,
+            assistant_root=assistant_root,
+            tmp_root=tmp_path / "tmp",
+        )
+        row = conn.execute(
+            "SELECT error, kb_synced FROM wechat_interpretations WHERE item_id='item-1'"
+        ).fetchone()
+
+    assert summary.processed == 0
+    assert summary.errors == 1
+    assert save_calls == 0
+    assert row["kb_synced"] == 0
+    assert "criteria_reason_source" in row["error"]
+
+
 def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
@@ -999,6 +1171,7 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
                                 "provider": "ark",
                                 "backend_model": "ark-actual-model",
                                 "fallback_used": False,
+                                "criteria_reason_source": "markdown_value_judgment_line",
                                 "input_char_count": 4321,
                                 "usage": {
                                     "prompt_tokens": 100,
@@ -1019,7 +1192,13 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
             return subprocess.CompletedProcess(
                 cmd,
                 0,
-                stdout=json.dumps({"ok": True, "summary_file_path": "/kb/usage-slug_output.md"}),
+                stdout=json.dumps(
+                    {
+                        "saved": True,
+                        "embedding_updated": True,
+                        "summary_file_path": "/kb/usage-slug_output.md",
+                    }
+                ),
                 stderr="",
             )
         raise AssertionError(f"unexpected command: {cmd}")
@@ -1028,6 +1207,7 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
 
     with _connect(db_path) as conn:
         summary = run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+    output = capsys.readouterr().out
 
     summarize_call = next(call for call in calls if "summarize.sh" in call[0])
     with sqlite3.connect(usage_db_path) as conn:
@@ -1043,18 +1223,232 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     assert summary.processed == 1
     assert summary.errors == 0
     assert summarize_call[summarize_call.index("--model") + 1] == "ai-radar-interpret-deepseek"
+    assert summarize_call[summarize_call.index("--temperature") + 1] == "0"
     assert usage_row[:10] == ("interpret", "ark", "ark-actual-model", "item-1", 100, 20, 120, 1, 4321, None)
     assert usage_row[10] == 40
     attribution = json.loads(usage_row[11])
     assert attribution["requested_model"] == "ai-radar-interpret-deepseek"
     assert attribution["backend_attempted"] == "deepseek-ark-first"
     assert attribution["cached_input_tokens"] == 40
+    assert "criteria_reason_source" not in attribution
+    assert "item_id" not in attribution
+    assert "summary_slug" not in attribution
+    with _connect(db_path) as conn:
+        interpretation = conn.execute(
+            """
+            SELECT criteria_reason_source, interpret_user
+            FROM wechat_interpretations
+            WHERE item_id='item-1'
+            """
+        ).fetchone()
+    assert tuple(interpretation) == ("markdown_value_judgment_line", "default")
+    expected_url_hash = hashlib.sha256(b"https://mp.weixin.qq.com/s/test").hexdigest()
+    assert (
+        f"interpret criteria_reason_fallback item=item-1 user=default slug=usage-slug "
+        f"url_sha256={expected_url_hash}"
+    ) in output
+    assert "https://mp.weixin.qq.com/s/test" not in output
+
+
+def test_interpret_runner_retries_missing_criteria_reason_once_and_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    (batch_dir / "retry-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
+    summarize_calls = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal summarize_calls
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            summarize_calls += 1
+            if summarize_calls == 1:
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=cmd,
+                    stderr="Error: summary JSON missing non-empty criteria_reason\n",
+                )
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "batch_dir": str(batch_dir),
+                        "result": {
+                            "slug": "retry-slug",
+                            "save_decision": False,
+                            "save_reason": "信息密度低",
+                            "recommendation": "可跳过",
+                                "tags": ["低价值"],
+                                "model": "fake-model",
+                                "llm_metadata": {"criteria_reason_source": "json"},
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    output = capsys.readouterr().out
+    assert summary.processed == 1
+    assert summary.errors == 0
+    assert summarize_calls == 2
+    assert row["error"] is None
+    assert "interpret item=item-1 retrying summary once: missing criteria_reason (attempt 2/2)" in output
+    assert "interpret item=item-1 recovered after one immediate retry: missing criteria_reason" in output
+
+
+def test_interpret_runner_stops_after_second_missing_criteria_reason_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    summarize_calls = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal summarize_calls
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            summarize_calls += 1
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=cmd,
+                stderr="Error: summary JSON missing non-empty criteria_reason\n",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    output = capsys.readouterr().out
+    assert summary.processed == 0
+    assert summary.errors == 1
+    assert summarize_calls == 2
+    assert "summary JSON missing non-empty criteria_reason" in row["error"]
+    assert output.count("retrying summary once: missing criteria_reason") == 1
+    assert "immediate retry exhausted: missing criteria_reason (attempt 2/2)" in output
+    assert "recovered after one immediate retry" not in output
+
+
+def test_interpret_runner_does_not_report_recovered_before_retry_result_is_validated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    summarize_calls = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal summarize_calls
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            summarize_calls += 1
+            if summarize_calls == 1:
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=cmd,
+                    stderr="Error: summary JSON missing non-empty criteria_reason\n",
+                )
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "result": {
+                            "slug": "retry-slug",
+                            "llm_metadata": {"criteria_reason_source": "json"},
+                        },
+                    }
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    output = capsys.readouterr().out
+    assert summary.processed == 0
+    assert summary.errors == 1
+    assert summarize_calls == 2
+    assert "summarize.sh JSON missing batch_dir" in row["error"]
+    assert "retrying summary once: missing criteria_reason" in output
+    assert "recovered after one immediate retry" not in output
+
+
+def test_interpret_runner_does_not_immediately_retry_other_subprocess_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    summarize_calls = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal summarize_calls
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            summarize_calls += 1
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="Error code: 429\n")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+
+    output = capsys.readouterr().out
+    assert summary.processed == 0
+    assert summary.errors == 1
+    assert summarize_calls == 1
+    assert "retrying summary once" not in output
 
 
 def test_interpret_preserves_paid_summary_when_metering_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from airadar.interpret import runner
 
@@ -1091,6 +1485,7 @@ def test_interpret_preserves_paid_summary_when_metering_write_fails(
             "llm_metadata": {
                 "provider": "ark",
                 "backend_model": "paid-summary-model",
+                "criteria_reason_source": "markdown_value_judgment_line",
                 "input_char_count": 4321,
                 "usage": {
                     "prompt_tokens": 100,
@@ -1111,13 +1506,23 @@ def test_interpret_preserves_paid_summary_when_metering_write_fails(
                 tmp_root=tmp_path / "tmp",
             )
             saved = conn.execute(
-                "SELECT summary_md, error FROM wechat_interpretations WHERE item_id = 'item-1'"
+                """
+                SELECT summary_md, error, criteria_reason_source, interpret_user
+                FROM wechat_interpretations
+                WHERE item_id = 'item-1'
+                """
             ).fetchone()
 
     assert summary.processed == 1
     assert summary.errors == 0
     assert summarize_calls == 1
-    assert tuple(saved) == (SUMMARY_MD, None)
+    assert tuple(saved) == (SUMMARY_MD, None, "markdown_value_judgment_line", "default")
+    output = capsys.readouterr().out
+    expected_url_hash = hashlib.sha256(b"https://mp.weixin.qq.com/s/test").hexdigest()
+    assert (
+        f"interpret criteria_reason_fallback item=item-1 user=default slug=paid-summary "
+        f"url_sha256={expected_url_hash}"
+    ) in output
     assert caplog.messages == [
         "llm_usage_metering_failure stage=interpret provider=ark "
         "model=paid-summary-model item_id=item-1 error=IntegrityError:injected metering failure"
@@ -1127,11 +1532,15 @@ def test_interpret_preserves_paid_summary_when_metering_write_fails(
 def test_interpret_runner_skips_kb_for_not_worth_reading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from airadar.interpret.runner import run_interpret
 
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
+    usage_db_path = tmp_path / "llm_usage.db"
+    monkeypatch.setenv("AI_RADAR_DB", str(db_path))
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
     assistant_root = _assistant_root(tmp_path)
     batch_dir = tmp_path / "batch"
     batch_dir.mkdir()
@@ -1156,6 +1565,17 @@ def test_interpret_runner_skips_kb_for_not_worth_reading(
                             "save_reason": "信息密度低",
                             "recommendation": "可跳过",
                             "tags": ["低价值"],
+                            "model": "ark-actual-model",
+                            "llm_metadata": {
+                                "provider": "ark",
+                                "backend_model": "ark-actual-model",
+                                "criteria_reason_source": "markdown_value_judgment_line",
+                                "usage": {
+                                    "prompt_tokens": 100,
+                                    "completion_tokens": 20,
+                                    "total_tokens": 120,
+                                },
+                            },
                         },
                     },
                     ensure_ascii=False,
@@ -1171,6 +1591,9 @@ def test_interpret_runner_skips_kb_for_not_worth_reading(
     with _connect(db_path) as conn:
         summary = run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
         row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+    output = capsys.readouterr().out
+    with sqlite3.connect(usage_db_path) as conn:
+        attribution_json = conn.execute("SELECT attribution_json FROM llm_usage").fetchone()[0]
 
     assert summary.processed == 1
     assert summary.errors == 0
@@ -1178,6 +1601,17 @@ def test_interpret_runner_skips_kb_for_not_worth_reading(
     assert row["kb_synced"] == 0
     assert row["error"] is None
     assert save_calls == 0
+    attribution = json.loads(attribution_json)
+    assert "criteria_reason_source" not in attribution
+    assert "item_id" not in attribution
+    assert "summary_slug" not in attribution
+    assert row["criteria_reason_source"] == "markdown_value_judgment_line"
+    assert row["interpret_user"] == "default"
+    expected_url_hash = hashlib.sha256(b"https://mp.weixin.qq.com/s/test").hexdigest()
+    assert (
+        f"interpret criteria_reason_fallback item=item-1 user=default slug=skip-slug "
+        f"url_sha256={expected_url_hash}"
+    ) in output
 
 
 def test_interpret_runner_reuses_kb_check_url_hit_without_llm(
@@ -1290,8 +1724,9 @@ def test_interpret_runner_falls_back_when_kb_summary_file_missing(
                             "slug": "fallback-slug",
                             "save_decision": False,
                             "save_reason": "fallback complete",
-                            "recommendation": "可跳过",
-                            "tags": ["Fallback"],
+                                "recommendation": "可跳过",
+                                "tags": ["Fallback"],
+                                "llm_metadata": {"criteria_reason_source": "json"},
                         },
                     },
                     ensure_ascii=False,
@@ -1313,7 +1748,7 @@ def test_interpret_runner_falls_back_when_kb_summary_file_missing(
     assert summarize_calls == 1
 
 
-def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
+def test_interpret_runner_retries_concurrent_duplicate_kb_slug_with_unique_slug(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1331,21 +1766,6 @@ def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
     kb_summary = assistant_root / kb_summary_rel
     kb_summary.parent.mkdir(parents=True)
     kb_summary.write_text(SUMMARY_MD, encoding="utf-8")
-    index_path = assistant_root / "data" / "summary_agent" / "default" / "index.json"
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(
-        json.dumps(
-            [
-                {
-                    "title": "测试文章",
-                    "output": {"summary_file_path": str(kb_summary_rel)},
-                    "metadata": {"tags": ["Agent"], "model_name": "existing-model"},
-                }
-            ],
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if "--check-url" in cmd:
@@ -1363,8 +1783,9 @@ def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
                             "save_decision": True,
                             "save_reason": "有实践价值",
                             "recommendation": "值得一看",
-                            "tags": ["Agent"],
-                            "model": "fresh-model",
+                                "tags": ["Agent"],
+                                "model": "fresh-model",
+                                "llm_metadata": {"criteria_reason_source": "json"},
                         },
                     },
                     ensure_ascii=False,
@@ -1380,7 +1801,7 @@ def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
                     stderr="Error: Slug 'existing-slug' already exists in index.json\n",
                 )
             saved_meta = json.loads(cmd[cmd.index("--meta-json") + 1])
-            assert save_slug == "existing-slug_radar_item-1"
+            assert save_slug == "existing-slug-radar-item-1"
             assert saved_meta["slug"] == save_slug
             assert saved_meta["url"] == "https://mp.weixin.qq.com/s/test"
             assert (batch_dir / f"{save_slug}_summary.md").exists()
@@ -1388,7 +1809,13 @@ def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
             return subprocess.CompletedProcess(
                 cmd,
                 0,
-                stdout=json.dumps({"ok": True, "summary_file_path": f"/kb/{save_slug}_output.md"}),
+                stdout=json.dumps(
+                    {
+                        "saved": True,
+                        "embedding_updated": True,
+                        "summary_file_path": f"/kb/{save_slug}_output.md",
+                    }
+                ),
                 stderr="",
             )
         raise AssertionError(f"unexpected command: {cmd}")
@@ -1407,6 +1834,135 @@ def test_interpret_runner_retries_duplicate_kb_slug_with_unique_slug(
     assert row["error"] is None
     assert row["model"] == "fresh-model"
     assert json.loads(row["tags_json"]) == ["Agent"]
+
+
+def test_interpret_runner_uses_one_slug_for_kb_local_and_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    usage_db_path = tmp_path / "llm_usage.db"
+    monkeypatch.setenv("AI_RADAR_DB", str(db_path))
+    monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO items (
+              id, source_id, url, title, author, published_at, fetched_at,
+              content_text, content_html, content_hash, extra_json
+            )
+            VALUES (
+              'item-existing', 'wx_mp2rss', 'https://mp.weixin.qq.com/s/existing',
+              '已有文章', '机器之心', '2026-06-01T10:00:00Z', '2026-06-01T10:01:00Z',
+              '已有正文', NULL, 'h-existing', '{}'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO wechat_interpretations (
+              item_id, slug, recommendation, save_decision, save_reason, abstract,
+              tags_json, summary_md, model, kb_synced, processed_at, error
+            )
+            VALUES (
+              'item-existing', 'existing-slug', '值得一看', 1, '已有结果', '已有摘要',
+              '[]', ?, 'existing-model', 1, '2026-06-01T10:10:00Z', NULL
+            )
+            """,
+            (SUMMARY_MD,),
+        )
+        conn.commit()
+
+    assistant_root = _assistant_root(tmp_path)
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    (batch_dir / "existing-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
+    (batch_dir / "existing-slug_article.md").write_text("# 测试文章\n\n正文", encoding="utf-8")
+    (batch_dir / "existing-slug_meta.json").write_text("{}", encoding="utf-8")
+    saved_slugs: list[str] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "batch_dir": str(batch_dir),
+                        "result": {
+                            "slug": "existing-slug",
+                            "save_decision": True,
+                            "save_reason": "有实践价值",
+                            "recommendation": "值得一看",
+                            "tags": ["Agent"],
+                            "model": "fresh-model",
+                            "llm_metadata": {
+                                "provider": "ark",
+                                "backend_model": "fresh-model",
+                                "criteria_reason_source": "markdown_value_judgment_line",
+                                "usage": {
+                                    "prompt_tokens": 100,
+                                    "completion_tokens": 20,
+                                    "total_tokens": 120,
+                                },
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        if "--save-from-batch" in cmd:
+            save_slug = cmd[cmd.index("--save-from-batch") + 1]
+            saved_slugs.append(save_slug)
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "saved": True,
+                        "embedding_updated": True,
+                        "summary_file_path": f"/kb/{save_slug}_output.md",
+                    }
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+    output = capsys.readouterr().out
+    with sqlite3.connect(usage_db_path) as conn:
+        usage_item_id, attribution_json = conn.execute(
+            "SELECT item_id, attribution_json FROM llm_usage"
+        ).fetchone()
+        attribution = json.loads(attribution_json)
+
+    assert summary.processed == 1
+    assert summary.errors == 0
+    assert saved_slugs == ["existing-slug-2"]
+    assert row["slug"] == "existing-slug-2"
+    assert row["criteria_reason_source"] == "markdown_value_judgment_line"
+    assert row["interpret_user"] == "default"
+    assert usage_item_id == "item-1"
+    assert "item_id" not in attribution
+    assert "summary_slug" not in attribution
+    assert "criteria_reason_source" not in attribution
+    expected_url_hash = hashlib.sha256(b"https://mp.weixin.qq.com/s/test").hexdigest()
+    assert (
+        f"interpret criteria_reason_fallback item=item-1 user=default slug=existing-slug-2 "
+        f"url_sha256={expected_url_hash}"
+    ) in output
 
 
 def test_interpret_subprocess_does_not_inherit_radar_virtualenv(
@@ -1533,7 +2089,7 @@ def test_interpret_runner_skips_external_root_without_selector_compatibility_rec
 
     _enable_interpret(monkeypatch)
     assistant_root = _assistant_root(tmp_path)
-    (assistant_root / "ai-radar-egress-contract-v1.json").unlink()
+    (assistant_root / "ai-radar-egress-contract-v2.json").unlink()
     db_path = _seed_runner_db(tmp_path)
 
     with _connect(db_path) as conn:
@@ -1554,14 +2110,15 @@ def test_interpret_runner_skips_external_root_without_selector_compatibility_rec
     (
         "extra_field",
         "missing_field",
-        "old_ambiguous_fields",
-        "wrong_attestation_kind",
+        "old_v1_schema",
         "wrong_policy_id",
         "wrong_policy_sha256",
-        "wrong_summarize_sha256",
-        "wrong_run_sha256",
-        "failed_selector_test",
-        "failed_standard_env_test",
+        "wrong_implementation_sha256",
+        "failed_parent_env_test",
+        "failed_summarize_test",
+        "failed_check_url_test",
+        "failed_save_embedding_test",
+        "failed_unknown_tag_test",
     ),
 )
 def test_interpret_runner_rejects_unproven_selector_compatibility_receipts(
@@ -1573,29 +2130,39 @@ def test_interpret_runner_rejects_unproven_selector_compatibility_receipts(
 
     _enable_interpret(monkeypatch)
     assistant_root = _assistant_root(tmp_path)
-    receipt_path = assistant_root / "ai-radar-egress-contract-v1.json"
+    receipt_path = assistant_root / "ai-radar-egress-contract-v2.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     if case == "extra_field":
         receipt["unexpected"] = True
     elif case == "missing_field":
-        receipt.pop("run_sha256")
-    elif case == "old_ambiguous_fields":
-        receipt["fake_selector_test"] = receipt.pop("parent_gcp_env_selector_only_test")
-        receipt["standard_proxy_env"] = receipt.pop("managed_descendants_standard_proxy_env_test")
-    elif case == "wrong_attestation_kind":
-        receipt["attestation_kind"] = "live-route-proof"
+        receipt.pop("save_embedding_selector_test")
+    elif case == "old_v1_schema":
+        receipt = {
+            "schema_version": 1,
+            "attestation_kind": "trusted-operator-fake-selector",
+            "policy_id": "domain-routing-v1",
+            "policy_sha256": "a" * 64,
+            "parent_gcp_env_selector_only_test": "passed",
+            "managed_descendants_standard_proxy_env_test": "passed",
+            "summarize_sha256": "0" * 64,
+            "run_sha256": "0" * 64,
+        }
     elif case == "wrong_policy_id":
         receipt["policy_id"] = "domain-routing-v0"
     elif case == "wrong_policy_sha256":
         receipt["policy_sha256"] = "b" * 64
-    elif case == "wrong_summarize_sha256":
-        receipt["summarize_sha256"] = "0" * 64
-    elif case == "wrong_run_sha256":
-        receipt["run_sha256"] = "0" * 64
-    elif case == "failed_selector_test":
+    elif case == "wrong_implementation_sha256":
+        receipt["egress_implementation_sha256"] = "0" * 64
+    elif case == "failed_parent_env_test":
         receipt["parent_gcp_env_selector_only_test"] = "failed"
-    elif case == "failed_standard_env_test":
-        receipt["managed_descendants_standard_proxy_env_test"] = "failed"
+    elif case == "failed_summarize_test":
+        receipt["summarize_llm_selector_test"] = "failed"
+    elif case == "failed_check_url_test":
+        receipt["check_url_local_only_test"] = "failed"
+    elif case == "failed_save_embedding_test":
+        receipt["save_embedding_selector_test"] = "failed"
+    elif case == "failed_unknown_tag_test":
+        receipt["save_unknown_tag_classification_selector_test"] = "failed"
     receipt_path.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
     db_path = _seed_runner_db(tmp_path)
 
@@ -1622,11 +2189,90 @@ def test_selector_compatibility_documented_schema_matches_authoritative_builder(
     documented = json.loads(section.split("```json", 1)[1].split("```", 1)[0])
     expected = expected_selector_compatibility_receipt(
         policy_sha256=documented["policy_sha256"],
-        summarize_sha256=documented["summarize_sha256"],
-        run_sha256=documented["run_sha256"],
+        egress_implementation_sha256=documented["egress_implementation_sha256"],
     )
 
     assert documented == expected
+
+
+def test_egress_implementation_digest_tracks_code_and_new_python_files(tmp_path: Path) -> None:
+    from airadar.interpret.runner import egress_implementation_sha256
+
+    assistant_root = _assistant_root(tmp_path)
+    original = egress_implementation_sha256(assistant_root)
+
+    source = assistant_root / "shared" / "project_env.py"
+    source.write_text(source.read_text(encoding="utf-8") + "\nVALUE = 1\n", encoding="utf-8")
+    changed_source = egress_implementation_sha256(assistant_root)
+    assert changed_source != original
+
+    source.write_text("def load_env(): return None\n", encoding="utf-8")
+    (assistant_root / "shared" / "new_transport.py").write_text("VALUE = 2\n", encoding="utf-8")
+    assert egress_implementation_sha256(assistant_root) != original
+
+
+def test_egress_implementation_digest_excludes_dynamic_tags_and_summary_agent_tests(tmp_path: Path) -> None:
+    from airadar.interpret.runner import egress_implementation_sha256
+
+    assistant_root = _assistant_root(tmp_path)
+    original = egress_implementation_sha256(assistant_root)
+
+    tags = assistant_root / "agents" / "summary-agent" / "docs" / "tags.md"
+    tags.parent.mkdir()
+    tags.write_text("# Runtime tags\n", encoding="utf-8")
+    tests_dir = assistant_root / "agents" / "summary-agent" / "src" / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_transport.py").write_text("assert True\n", encoding="utf-8")
+
+    assert egress_implementation_sha256(assistant_root) == original
+
+
+def test_egress_implementation_digest_includes_shared_tests(tmp_path: Path) -> None:
+    from airadar.interpret.runner import egress_implementation_sha256
+
+    assistant_root = _assistant_root(tmp_path)
+    original = egress_implementation_sha256(assistant_root)
+    tests_dir = assistant_root / "shared" / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_transport.py").write_text("assert True\n", encoding="utf-8")
+
+    assert egress_implementation_sha256(assistant_root) != original
+
+
+@pytest.mark.parametrize(
+    "missing",
+    (
+        "pyproject.toml",
+        "agents/summary-agent/src/summarizer.py",
+        "shared/project_env.py",
+    ),
+)
+def test_interpret_runner_rejects_incomplete_egress_implementation_closure(
+    tmp_path: Path,
+    missing: str,
+) -> None:
+    from airadar.interpret.runner import _preflight
+
+    assistant_root = _assistant_root(tmp_path)
+    (assistant_root / missing).unlink()
+
+    ready, message = _preflight(assistant_root)
+
+    assert ready is False
+    assert "implementation closure" in message
+
+
+def test_interpret_runner_rejects_receipt_after_implementation_changes(tmp_path: Path) -> None:
+    from airadar.interpret.runner import _preflight
+
+    assistant_root = _assistant_root(tmp_path)
+    source = assistant_root / "agents" / "summary-agent" / "src" / "summarizer.py"
+    source.write_text(source.read_text(encoding="utf-8") + "\nVALUE = 1\n", encoding="utf-8")
+
+    ready, message = _preflight(assistant_root)
+
+    assert ready is False
+    assert "does not match egress implementation" in message
 
 
 def test_interpret_runner_preflight_skip_for_missing_assistant_root(
@@ -1696,7 +2342,12 @@ def _fake_skip_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess
             {
                 "ok": True,
                 "batch_dir": str(batch_dir),
-                "result": {"slug": "retry-slug", "save_decision": False, "recommendation": "可跳过"},
+                "result": {
+                    "slug": "retry-slug",
+                    "save_decision": False,
+                    "recommendation": "可跳过",
+                    "llm_metadata": {"criteria_reason_source": "json"},
+                },
             },
             ensure_ascii=False,
         ),
@@ -1919,16 +2570,11 @@ def test_interpret_runner_eighth_retry_failure_reaches_cap_and_stops(
     assert summary.errors == 0
 
 
-def test_interpret_runner_never_trusts_the_cache_for_a_long_form_wechat_url(
+def test_interpret_runner_reuses_a_complete_legacy_wechat_url_cache_hit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Long links all share the path `/s`, so the URL-keyed index answers some
-    article for every one of them. Comparing titles does not save it: one
-    account reposting a distinct article under a repeated title is ordinary, so
-    a same-title hit still hands article A's summary to article B. The only
-    sound reading of an answer that does not depend on the URL is to not take
-    one."""
+    """A complete four-field legacy URL is now a stable article identity."""
     from airadar.interpret.runner import run_interpret
 
     _enable_interpret(monkeypatch)
@@ -1952,8 +2598,6 @@ def test_interpret_runner_never_trusts_the_cache_for_a_long_form_wechat_url(
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         nonlocal summarize_calls
         if "--check-url" in cmd:
-            # The index answers with a matching title — a different article
-            # that happens to be a repost under the same headline.
             return subprocess.CompletedProcess(
                 cmd,
                 0,
@@ -1987,7 +2631,10 @@ def test_interpret_runner_never_trusts_the_cache_for_a_long_form_wechat_url(
             )
         if "--save-from-batch" in cmd:
             return subprocess.CompletedProcess(
-                cmd, 0, stdout=json.dumps({"ok": True, "summary_file_path": "/kb/fresh-slug_output.md"}), stderr=""
+                cmd,
+                0,
+                stdout=json.dumps({"saved": True, "embedding_updated": True}),
+                stderr="",
             )
         raise AssertionError(f"unexpected command: {cmd}")
 
@@ -1997,8 +2644,21 @@ def test_interpret_runner_never_trusts_the_cache_for_a_long_form_wechat_url(
         run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
         row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
 
-    assert summarize_calls == 1, "a long-form URL must be summarized fresh, never taken from the URL index"
-    assert row["slug"] != "an-older-repost"
+    assert summarize_calls == 0
+    assert row["slug"] == "an-older-repost"
+    assert row["kb_synced"] == 1
+
+
+def test_index_cannot_distinguish_only_incomplete_legacy_wechat_identity() -> None:
+    from airadar.interpret.runner import _index_cannot_distinguish
+
+    assert not _index_cannot_distinguish(
+        "https://mp.weixin.qq.com/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904&idx=4&sn=abc"
+    )
+    assert _index_cannot_distinguish("https://mp.weixin.qq.com/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904")
+    assert _index_cannot_distinguish(
+        "https://mp.weixin.qq.com:443/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904"
+    )
 
 
 def test_interpret_runner_rejects_a_cached_hit_for_a_different_article(
@@ -2065,7 +2725,10 @@ def test_interpret_runner_rejects_a_cached_hit_for_a_different_article(
             )
         if "--save-from-batch" in cmd:
             return subprocess.CompletedProcess(
-                cmd, 0, stdout=json.dumps({"ok": True, "summary_file_path": "/kb/fresh-slug_output.md"}), stderr=""
+                cmd,
+                0,
+                stdout=json.dumps({"saved": True, "embedding_updated": True}),
+                stderr="",
             )
         raise AssertionError(f"unexpected command: {cmd}")
 

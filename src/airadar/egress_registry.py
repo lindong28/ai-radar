@@ -109,7 +109,7 @@ AUDIT_CALLSITE_REGISTRY = (
     AuditCallsite("src/airadar/fetcher/wechat.py", "fetcher.wechat.browser"),
     AuditCallsite("src/airadar/fetcher/x_api.py", "fetcher.x_api.fetch_x_timeline"),
     AuditCallsite("src/airadar/interpret/runner.py", "interpret.runner.check_url"),
-    AuditCallsite("src/airadar/interpret/runner.py", "interpret.runner.summarize"),
+    AuditCallsite("src/airadar/interpret/runner.py", "interpret.runner.summarize", 2),
     AuditCallsite("src/airadar/interpret/runner.py", "interpret.runner.save_from_batch"),
     AuditCallsite("src/airadar/interpret/runner.py", "interpret.runner.save_from_batch_retry"),
     AuditCallsite("src/airadar/performance/browser_probe.py", "performance.browser_probe.journey"),

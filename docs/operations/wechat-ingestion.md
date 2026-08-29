@@ -169,6 +169,7 @@ AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 - `wechat_interpretations.save_decision=1` 是 `/wechat` 展示与 KB 回写的唯一闸门。
 - `summary_md`、`abstract`、`tags_json` 在 `radar.db` 内保留独立网站副本；Web 请求不读取 ai-assistant 文件系统。
 - `save_decision=0` 的文章只落库为已处理记录，不展示、不写 KB，避免每轮重复消耗 LLM。
+- fresh summarize 若精确报 `summary JSON missing non-empty criteria_reason`，会立刻原样重试一次；日志用 `retrying` / `recovered` / `exhausted` 区分三种结果。其它错误不走这次即时重试，仍按既有 DB 退避处理。
 - cron 内不 git commit/push ai-assistant data 子模块；本地 KB 文件和 embedding 立即可被 `search-knowledgebase` 使用，提交子模块留给人工低频处理。
 
 详情页 `/wechat/<slug>` 使用 `markdown-it-py==4.0.0` 渲染 markdown，并用 `nh3==0.3.1` sanitize。LLM 生成的 `summary_md` 一律视为不可信 HTML 输入。

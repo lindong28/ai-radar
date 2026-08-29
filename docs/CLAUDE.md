@@ -148,6 +148,9 @@
 | [061-split-shared-ssr-responses-and-discriminate-aihot-reports.md](adr/061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | AIHOT window 拆分共享 SSR response/binding，验收报告按 subject 类型冻结严格语义 |
 | [062-carry-pairing-strategy-in-aihot-validation-reports.md](adr/062-carry-pairing-strategy-in-aihot-validation-reports.md) | AIHOT window 验收报告自持 primary/assistance/fallback pairing strategy |
 | [063-require-ordered-public-response-dates-in-aihot-captures.md](adr/063-require-ordered-public-response-dates-in-aihot-captures.md) | AIHOT capture 的 RSS/OpenAPI public response Date 按声明顺序非递减 |
+| [20260828-f8d9-replay-frozen-wechat-interpretations-in-bounded-cohorts.md](adr/20260828-f8d9-replay-frozen-wechat-interpretations-in-bounded-cohorts.md) | 先修零向量，再按有界 cohort 回放冻结的微信解读 |
+| [20260828-c3a5-retry-missing-criteria-reason-once.md](adr/20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 |
+| [20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md](adr/20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 | [README.md](adr/README.md) | ADR 索引 |
 

@@ -7,7 +7,9 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,18 +37,35 @@ DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
 MISSING_ROOT_MESSAGE = "interpret enabled but AI_ASSISTANT_ROOT is not set"
 SUMMARY_AGENT_DIR = Path("agents") / "summary-agent"
 SUMMARY_AGENT_INTERPRET_MODEL = "ai-radar-interpret-deepseek"
-EGRESS_CONTRACT_FILE = "ai-radar-egress-contract-v1.json"
+MISSING_CRITERIA_REASON_ERROR = "summary JSON missing non-empty criteria_reason"
+JSON_CRITERIA_REASON_SOURCE = "json"
+MARKDOWN_CRITERIA_REASON_SOURCE = "markdown_value_judgment_line"
+CRITERIA_REASON_SOURCES = frozenset(
+    {JSON_CRITERIA_REASON_SOURCE, MARKDOWN_CRITERIA_REASON_SOURCE}
+)
+EGRESS_CONTRACT_FILE = "ai-radar-egress-contract-v2.json"
 EGRESS_CONTRACT_KEYS = frozenset(
     {
         "schema_version",
-        "attestation_kind",
         "policy_id",
         "policy_sha256",
+        "egress_implementation_sha256",
         "parent_gcp_env_selector_only_test",
-        "managed_descendants_standard_proxy_env_test",
-        "summarize_sha256",
-        "run_sha256",
+        "summarize_llm_selector_test",
+        "check_url_local_only_test",
+        "save_embedding_selector_test",
+        "save_unknown_tag_classification_selector_test",
     }
+)
+EGRESS_IMPLEMENTATION_FIXED_FILES = (
+    SUMMARY_AGENT_DIR / "summarize.sh",
+    SUMMARY_AGENT_DIR / "run.sh",
+    Path("pyproject.toml"),
+    Path("uv.lock"),
+)
+EGRESS_IMPLEMENTATION_CODE_ROOTS = (
+    (SUMMARY_AGENT_DIR / "src", True),
+    (Path("shared"), False),
 )
 
 logger = logging.getLogger(__name__)
@@ -84,23 +103,74 @@ def _summary_agent_scripts(root: Path) -> tuple[Path, Path]:
     return agent_dir / "summarize.sh", agent_dir / "run.sh"
 
 
+def _regular_file_bytes(path: Path) -> bytes:
+    file_stat = path.lstat()
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise ValueError(f"not a regular file: {path}")
+    return path.read_bytes()
+
+
+def _is_test_python_path(path: Path, code_root: Path) -> bool:
+    relative = path.relative_to(code_root)
+    return (
+        any(part in {"tests", "__pycache__"} for part in relative.parts)
+        or relative.name.startswith("test_")
+        or relative.name.endswith("_test.py")
+    )
+
+
+def egress_implementation_sha256(root: Path) -> str:
+    """Digest the exact external code/lock closure covered by the v2 receipt."""
+
+    files: list[Path] = []
+    for relative in EGRESS_IMPLEMENTATION_FIXED_FILES:
+        path = root / relative
+        _regular_file_bytes(path)
+        files.append(path)
+    for relative, exclude_tests in EGRESS_IMPLEMENTATION_CODE_ROOTS:
+        code_root = root / relative
+        root_stat = code_root.lstat()
+        if not stat.S_ISDIR(root_stat.st_mode):
+            raise ValueError(f"not a directory: {code_root}")
+        code_files = [
+            path
+            for path in code_root.rglob("*.py")
+            if not exclude_tests or not _is_test_python_path(path, code_root)
+        ]
+        if not code_files:
+            raise ValueError(f"no implementation files: {code_root}")
+        for path in code_files:
+            _regular_file_bytes(path)
+        files.extend(code_files)
+
+    digest = hashlib.sha256()
+    for path in sorted(files, key=lambda candidate: candidate.relative_to(root).as_posix()):
+        relative_bytes = path.relative_to(root).as_posix().encode("utf-8")
+        content = _regular_file_bytes(path)
+        digest.update(len(relative_bytes).to_bytes(8, "big"))
+        digest.update(relative_bytes)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def expected_selector_compatibility_receipt(
     *,
     policy_sha256: str,
-    summarize_sha256: str,
-    run_sha256: str,
+    egress_implementation_sha256: str,
 ) -> dict[str, object]:
-    """Return the single authoritative v1 receipt shape for producers and tests."""
+    """Return the single authoritative v2 receipt shape for producers and tests."""
 
     return {
-        "schema_version": 1,
-        "attestation_kind": "trusted-operator-fake-selector",
+        "schema_version": 2,
         "policy_id": "domain-routing-v1",
         "policy_sha256": policy_sha256,
+        "egress_implementation_sha256": egress_implementation_sha256,
         "parent_gcp_env_selector_only_test": "passed",
-        "managed_descendants_standard_proxy_env_test": "passed",
-        "summarize_sha256": summarize_sha256,
-        "run_sha256": run_sha256,
+        "summarize_llm_selector_test": "passed",
+        "check_url_local_only_test": "passed",
+        "save_embedding_selector_test": "passed",
+        "save_unknown_tag_classification_selector_test": "passed",
     }
 
 
@@ -120,13 +190,16 @@ def _preflight(root: Path) -> tuple[bool, str]:
     if not isinstance(receipt, dict) or set(receipt) != EGRESS_CONTRACT_KEYS:
         return False, "skip interpret: selector compatibility is unproven (receipt schema mismatch)"
     policy = require_selector_policy()
+    try:
+        implementation_sha256 = egress_implementation_sha256(root)
+    except (OSError, ValueError):
+        return False, "skip interpret: selector compatibility is unproven (implementation closure invalid)"
     expected_receipt = expected_selector_compatibility_receipt(
         policy_sha256=policy.policy_sha256,
-        summarize_sha256=hashlib.sha256(summarize_script.read_bytes()).hexdigest(),
-        run_sha256=hashlib.sha256(run_script.read_bytes()).hexdigest(),
+        egress_implementation_sha256=implementation_sha256,
     )
     if receipt != expected_receipt:
-        return False, "skip interpret: selector compatibility is unproven (receipt does not match scripts)"
+        return False, "skip interpret: selector compatibility is unproven (receipt does not match egress implementation)"
     return True, "ok"
 
 
@@ -279,17 +352,18 @@ def _unique_slug(conn: sqlite3.Connection, base_slug: str, item_id: str) -> str:
 def _index_cannot_distinguish(url: str) -> bool:
     """True for URLs the external summary index provably answers wrongly for.
 
-    Long-form WeChat article links all have the path ``/s`` and differ only in
-    the query, which that index drops. Short links carry their identity in the
-    path and are keyed correctly.
+    Complete legacy WeChat links have a four-field identity understood by the
+    current summary index. Incomplete ``/s`` links remain ambiguous. Short
+    links carry their identity in the path and are keyed correctly.
     """
     try:
         parts = urlsplit(url)
     except ValueError:
         return False
-    if parts.netloc.lower() != "mp.weixin.qq.com":
+    if (parts.hostname or "").lower() != "mp.weixin.qq.com" or parts.path != "/s":
         return False
-    return "__biz" in parse_qs(parts.query)
+    query = parse_qs(parts.query, keep_blank_values=True)
+    return not all(len(query.get(key, [])) == 1 and query[key][0] for key in ("__biz", "mid", "idx", "sn"))
 
 
 def _check_url_hit(payload: dict[str, Any], *, title: object = None) -> dict[str, Any] | None:
@@ -327,6 +401,15 @@ def _check_url_hit(payload: dict[str, Any], *, title: object = None) -> dict[str
             continue
         return candidate
     return None
+
+
+def _require_complete_kb_save(payload: dict[str, Any]) -> None:
+    if payload.get("saved") is not True or payload.get("embedding_updated") is not True:
+        reason = payload.get("reason")
+        detail = f" reason={reason}" if isinstance(reason, str) and reason else ""
+        raise ValueError(
+            "knowledge-base save incomplete: expected saved=true and embedding_updated=true" + detail
+        )
 
 
 def _read_summary_file(path: Path) -> str:
@@ -439,6 +522,37 @@ def _kb_unique_slug(root: Path, user: str, base_slug: str, item_id: str) -> str:
     return slug
 
 
+def _unique_slug_across_radar_and_kb(
+    conn: sqlite3.Connection,
+    root: Path,
+    user: str,
+    base_slug: str,
+    item_id: str,
+) -> str:
+    existing_kb_slugs: set[str] = set()
+    for entry in _summary_agent_index_entries(root, user):
+        output = entry.get("output")
+        if not isinstance(output, dict):
+            continue
+        summary_file = output.get("summary_file_path") or output.get("summary_file")
+        if isinstance(summary_file, str) and summary_file:
+            existing_kb_slugs.add(_slug_seed(_summary_file_slug(summary_file)))
+
+    base = _slug_seed(base_slug)
+    slug = base
+    suffix = 2
+    while True:
+        radar_row = conn.execute(
+            "SELECT item_id FROM wechat_interpretations WHERE slug=?",
+            (slug,),
+        ).fetchone()
+        radar_available = radar_row is None or radar_row["item_id"] == item_id
+        if radar_available and slug not in existing_kb_slugs:
+            return slug
+        slug = f"{base}-{suffix}"
+        suffix += 1
+
+
 def _copy_batch_files_for_slug(batch_dir: Path, source_slug: str, target_slug: str) -> None:
     for kind in ("article", "summary"):
         source = batch_dir / f"{source_slug}_{kind}.md"
@@ -513,15 +627,17 @@ def _save_interpretation(
     kb_synced: bool,
     error: str | None,
     error_retry_count: int = 0,
+    criteria_reason_source: str | None = None,
+    interpret_user: str | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO wechat_interpretations (
           item_id, slug, recommendation, save_decision, save_reason, abstract,
           tags_json, summary_md, model, kb_synced, processed_at, error,
-          error_retry_count
+          error_retry_count, criteria_reason_source, interpret_user
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(item_id) DO UPDATE SET
           slug=excluded.slug,
           recommendation=excluded.recommendation,
@@ -534,7 +650,9 @@ def _save_interpretation(
           kb_synced=excluded.kb_synced,
           processed_at=excluded.processed_at,
           error=excluded.error,
-          error_retry_count=excluded.error_retry_count
+          error_retry_count=excluded.error_retry_count,
+          criteria_reason_source=excluded.criteria_reason_source,
+          interpret_user=excluded.interpret_user
         """,
         (
             row["id"],
@@ -550,6 +668,8 @@ def _save_interpretation(
             _utc_now(),
             error,
             error_retry_count,
+            criteria_reason_source,
+            interpret_user,
         ),
     )
     conn.commit()
@@ -621,6 +741,7 @@ def _summarize_item(
     user: str,
     tmp_root: Path,
     row: sqlite3.Row,
+    slug_resolver: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     input_path = _write_input_file(tmp_root, row)
     # Skip the lookup itself, not just its answer: `_run_json` runs with
@@ -681,22 +802,52 @@ def _summarize_item(
                     "saved": False,
                 }
 
-    summary_payload = _run_json(
-        [
-            str(summarize_script),
-            "--input",
-            str(input_path),
-            "--user",
-            user,
-            "--model",
-            SUMMARY_AGENT_INTERPRET_MODEL,
-        ],
-        cwd=root,
-        callsite_id="interpret.runner.summarize",
-    )
+    summarize_cmd = [
+        str(summarize_script),
+        "--input",
+        str(input_path),
+        "--user",
+        user,
+        "--model",
+        SUMMARY_AGENT_INTERPRET_MODEL,
+        "--temperature",
+        "0",
+    ]
+    recovered_after_criteria_retry = False
+    try:
+        summary_payload = _run_json(
+            summarize_cmd,
+            cwd=root,
+            callsite_id="interpret.runner.summarize",
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+        if MISSING_CRITERIA_REASON_ERROR not in (stderr or ""):
+            raise
+        print(f"interpret item={row['id']} retrying summary once: missing criteria_reason (attempt 2/2)")
+        try:
+            summary_payload = _run_json(
+                summarize_cmd,
+                cwd=root,
+                callsite_id="interpret.runner.summarize",
+            )
+        except subprocess.CalledProcessError as retry_exc:
+            retry_stderr = (
+                retry_exc.stderr.decode("utf-8", errors="replace")
+                if isinstance(retry_exc.stderr, bytes)
+                else retry_exc.stderr
+            )
+            if MISSING_CRITERIA_REASON_ERROR in (retry_stderr or ""):
+                print(
+                    f"interpret item={row['id']} immediate retry exhausted: "
+                    "missing criteria_reason (attempt 2/2)"
+                )
+            raise
+        recovered_after_criteria_retry = True
     result = summary_payload.get("result")
     if not isinstance(result, dict):
         raise ValueError("summarize.sh JSON missing result object")
+    _require_criteria_reason_source(result)
     batch_slug = str(result.get("slug") or _slug_seed(row["title"]))
     slug = _result_slug_for_row(row, batch_slug)
     batch_dir_raw = summary_payload.get("batch_dir")
@@ -709,6 +860,8 @@ def _summarize_item(
     save_decision = bool(result.get("save_decision"))
     kb_synced = False
     if save_decision:
+        if slug_resolver is not None:
+            slug = slug_resolver(slug)
         meta = _patch_batch_meta(_meta_path(batch_dir, batch_slug), row, result)
         save_slug = slug
         if save_slug != batch_slug:
@@ -726,15 +879,21 @@ def _summarize_item(
             json.dumps(meta, ensure_ascii=False),
         ]
         try:
-            _run_json(save_cmd, cwd=root, callsite_id="interpret.runner.save_from_batch")
+            save_payload = _run_json(save_cmd, cwd=root, callsite_id="interpret.runner.save_from_batch")
+            _require_complete_kb_save(save_payload)
         except subprocess.CalledProcessError as exc:
             duplicate_slug = _duplicate_slug_from_save_error(exc)
             if not duplicate_slug:
                 raise
-            retry_slug = _kb_unique_slug(root, user, duplicate_slug, str(row["id"]))
+            retry_seed = f"{_slug_seed(duplicate_slug)}-radar-{str(row['id'])[:8]}"
+            retry_slug = (
+                slug_resolver(retry_seed)
+                if slug_resolver is not None
+                else _kb_unique_slug(root, user, duplicate_slug, str(row["id"]))
+            )
             _copy_batch_files_for_slug(batch_dir, save_slug, retry_slug)
             meta["slug"] = retry_slug
-            _run_json(
+            retry_payload = _run_json(
                 [
                     str(run_script),
                     "--save-from-batch",
@@ -749,6 +908,7 @@ def _summarize_item(
                 cwd=root,
                 callsite_id="interpret.runner.save_from_batch_retry",
             )
+            _require_complete_kb_save(retry_payload)
             slug = retry_slug
         kb_synced = True
     return {
@@ -762,6 +922,7 @@ def _summarize_item(
         "llm_metadata": result.get("llm_metadata"),
         "kb_synced": kb_synced,
         "saved": kb_synced,
+        "recovered_after_criteria_retry": recovered_after_criteria_retry,
     }
 
 
@@ -771,6 +932,27 @@ def _usage_value(usage: object, *field_names: str) -> int:
         if value:
             return value
     return 0
+
+
+def _criteria_reason_source(result: dict[str, Any]) -> str | None:
+    metadata = result.get("llm_metadata")
+    if not isinstance(metadata, dict):
+        return None
+    raw_source = metadata.get("criteria_reason_source")
+    if raw_source is None:
+        return None
+    source = str(raw_source).strip()
+    if source not in CRITERIA_REASON_SOURCES:
+        allowed = ", ".join(sorted(CRITERIA_REASON_SOURCES))
+        raise ValueError(f"summarize.sh JSON invalid criteria_reason_source; expected one of: {allowed}")
+    return source
+
+
+def _require_criteria_reason_source(result: dict[str, Any]) -> str:
+    source = _criteria_reason_source(result)
+    if source is None:
+        raise ValueError("summarize.sh JSON missing criteria_reason_source")
+    return source
 
 
 def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
@@ -787,9 +969,12 @@ def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
     input_tokens = _usage_value(usage, "input_tokens", "prompt_tokens")
     output_tokens = _usage_value(usage, "output_tokens", "completion_tokens")
     total_tokens = _usage_value(usage, "total_tokens") or input_tokens + output_tokens
-    attribution = {key: value for key, value in metadata.items() if key != "usage"}
+    attribution = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"usage", "criteria_reason_source"}
+    }
     attribution["source"] = "summary-agent"
-    attribution["summary_slug"] = result.get("slug")
     record_llm_usage_best_effort(
         LlmUsageRecord(
             stage="interpret",
@@ -804,6 +989,25 @@ def _record_interpret_usage(row: sqlite3.Row, result: dict[str, Any]) -> None:
             attribution=attribution,
         ),
         usage=usage,
+    )
+
+
+def _audit_criteria_reason_fallback(
+    row: sqlite3.Row,
+    result: dict[str, Any],
+    *,
+    slug: str,
+    interpret_user: str,
+) -> None:
+    metadata = result.get("llm_metadata")
+    if not isinstance(metadata, dict):
+        return
+    if metadata.get("criteria_reason_source") != MARKDOWN_CRITERIA_REASON_SOURCE:
+        return
+    url_sha256 = hashlib.sha256(str(row["url"] or "").encode("utf-8")).hexdigest()
+    print(
+        f"interpret criteria_reason_fallback item={row['id']} "
+        f"user={interpret_user} slug={slug} url_sha256={url_sha256}"
     )
 
 
@@ -844,9 +1048,25 @@ def run_interpret(
                 user=interpret_user,
                 tmp_root=tmp_path,
                 row=row,
+                slug_resolver=lambda base_slug: _unique_slug_across_radar_and_kb(
+                    conn,
+                    root,
+                    interpret_user,
+                    base_slug,
+                    str(row["id"]),
+                ),
+            )
+            slug = _unique_slug(conn, str(result["slug"]), row["id"])
+            if result.get("slug") != slug:
+                result = {**result, "slug": slug}
+            criteria_reason_source = _criteria_reason_source(result)
+            _audit_criteria_reason_fallback(
+                row,
+                result,
+                slug=slug,
+                interpret_user=interpret_user,
             )
             _record_interpret_usage(row, result)
-            slug = _unique_slug(conn, str(result["slug"]), row["id"])
             summary_md = str(result.get("summary_md") or "")
             _save_interpretation(
                 conn,
@@ -861,7 +1081,11 @@ def run_interpret(
                 model=str(result["model"]) if result.get("model") else None,
                 kb_synced=bool(result.get("kb_synced")),
                 error=None,
+                criteria_reason_source=criteria_reason_source,
+                interpret_user=interpret_user,
             )
+            if result.get("recovered_after_criteria_retry"):
+                print(f"interpret item={row['id']} recovered after one immediate retry: missing criteria_reason")
             processed += 1
         except Exception as exc:  # noqa: BLE001 - per-item fail-safe is the contract.
             _record_error(conn, row, exc)

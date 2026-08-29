@@ -71,3 +71,6 @@
 | [062](./062-carry-pairing-strategy-in-aihot-validation-reports.md) | AIHOT window 验收报告自持 primary/assistance/fallback pairing strategy | accepted; clarifies ADR-061 | 2026-08-20 |
 | [063](./063-require-ordered-public-response-dates-in-aihot-captures.md) | AIHOT capture 的 RSS/OpenAPI public response Date 按声明顺序非递减 | accepted; clarifies ADR-060 and ADR-061 | 2026-08-20 |
 | [20260826-68e2](./20260826-68e2-route-ai-radar-through-domain-selector.md) | AI Radar 经 status 验证的域名 selector 隔离出网 | accepted | 2026-08-26 |
+| [20260828-f8d9](./20260828-f8d9-replay-frozen-wechat-interpretations-in-bounded-cohorts.md) | 先修零向量，再按有界 cohort 回放冻结的微信解读 | accepted | 2026-08-28 |
+| [20260828-c3a5](./20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 | accepted | 2026-08-28 |
+| [20260829-c0e8](./20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 | accepted; supersedes ADR-20260826-68e2 external-root receipt identity only | 2026-08-29 |

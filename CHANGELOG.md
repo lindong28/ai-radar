@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-08-29（明确写出判定理由的解读不再因遗漏末尾 JSON 而停滞）
+
+- summary-agent 现可在末尾 JSON 遗漏 `criteria_reason` 时，从「价值判断」模块唯一且与最终推荐等级一致的同行括号理由中补取；冲突、多条、空理由或跨行理由仍按 schema 错误处理，不会猜测。已有的一次即时重试与数据库退避继续覆盖无法机械补取的输出。
+- 每次 Markdown fallback 命中都会把来源 marker 与 Summary Agent 用户命名空间原子写入微信解读记录，并在 pipeline stdout 记录 item、用户、最终 slug 与原文 URL 的 SHA-256；完整 URL 不进入审计日志。审计坐标不再依赖可能缺失或写入失败的 LLM 计量记录，无论文章最终入不入知识库都能精确定位受影响结果。
+- 外部 summary-agent 的出网兼容收据从只绑定两层 shell wrapper 的 v1 升为绑定实际 Python 实现闭包与生产 `summarize`、本地 `check-url`、known/unknown tag 保存路径的 v2。实现或 selector policy 漂移而尚未重新验证时，interpret 会安全跳过，不再把“wrapper 没变”误当成内部网络实现仍受控。
+
+## 2026-08-28（微信解读遇到缺失判定理由时立即补试一次）
+
+- summary-agent 偶发返回缺少 `criteria_reason` 的结构化结果时，微信解读会立刻用同一命令补试一次，不再一律等待至少 15 分钟后才重新处理。该补试只覆盖这一条精确错误，余额、配额、网络与其它 schema 错误不会被额外调用。
+- pipeline 日志会分别标出开始补试、补试恢复与补试耗尽；第二次仍失败的文章继续进入原有数据库退避，不会无限重试。
+
 ## 2026-08-26（AI Radar 出网不再继承整进程 GCP 代理）
 
 - pipeline 每轮先验证外部 `domain-routing-v1` selector，并绑定 `status_schema_id=agent-domain-routing-status-v1` 与 OpenAI provider aggregate scope；状态缺失、不完整、schema/policy 不匹配或任一路线非 healthy 时，在 fetch/LLM 等外部阶段启动前停止，不再从 `AI_RADAR_PROXY_FILE` 或父 Claude Code/Codex 的 proxy 环境自动选路。

@@ -32,24 +32,34 @@ Both scripts run with `cwd=$AI_ASSISTANT_ROOT`. AI Radar removes `VIRTUAL_ENV` a
 
 ## Selector compatibility receipt
 
-Interpret remains disabled for an external root unless `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v1.json` exists and exactly matches this schema:
+Interpret remains disabled for an external root unless `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` exists and exactly matches this schema:
 
 ```json
 {
-  "schema_version": 1,
-  "attestation_kind": "trusted-operator-fake-selector",
+  "schema_version": 2,
   "policy_id": "domain-routing-v1",
   "policy_sha256": "<64 lowercase hex of the tested T1 policy>",
+  "egress_implementation_sha256": "<64 lowercase hex of the framed code/lock closure>",
   "parent_gcp_env_selector_only_test": "passed",
-  "managed_descendants_standard_proxy_env_test": "passed",
-  "summarize_sha256": "<64 lowercase hex of agents/summary-agent/summarize.sh>",
-  "run_sha256": "<64 lowercase hex of agents/summary-agent/run.sh>"
+  "summarize_llm_selector_test": "passed",
+  "check_url_local_only_test": "passed",
+  "save_embedding_selector_test": "passed",
+  "save_unknown_tag_classification_selector_test": "passed"
 }
 ```
 
-The machine authority for this v1 shape is `airadar.interpret.runner.expected_selector_compatibility_receipt`; a regression test parses this JSON example through the same builder so the reader contract cannot drift independently from the preflight consumer.
+The machine authority for this v2 shape is `airadar.interpret.runner.expected_selector_compatibility_receipt`; a regression test parses this JSON example through the same builder so the reader contract cannot drift independently from the preflight consumer. The implementation digest is produced by `airadar.interpret.runner.egress_implementation_sha256` from repo-relative path plus file-byte framed records over these exact inputs:
 
-Extra or missing fields, invalid JSON, another `attestation_kind`, a non-`passed` test result, another policy id or policy digest, or either script digest mismatch makes `interpret` exit 0 with `skip interpret: selector compatibility is unproven ...`; no external script is started. `attestation_kind=trusted-operator-fake-selector` says what the record is: a trusted operator's compatibility attestation from an isolated selector test, not a current live-route observation. `policy_sha256` must equal the digest reported by the current healthy T1 status, so a policy content change invalidates the old receipt even when `policy_id` remains stable. `parent_gcp_env_selector_only_test=passed` means the exact script versions were tested with parent GCP proxy variables present and their model/network requests were observed at the selector listener without direct fallback. `managed_descendants_standard_proxy_env_test=passed` means those scripts and their managed descendants honor the six variables supplied by AI Radar. AI Radar only consumes this operator-supplied proof; it does not generate the receipt, authenticate its author, or claim that a hand-written example is live evidence. The trusted operator is responsible for the receipt's truth. The receipt does not cover transports that intentionally ignore those variables; update the external implementation or keep interpret skipped.
+- `agents/summary-agent/summarize.sh` and `agents/summary-agent/run.sh`
+- root `pyproject.toml` and root `uv.lock`
+- every non-test `.py` file under `agents/summary-agent/src/`
+- every `.py` file under `shared/`
+
+Missing fixed files, missing or empty code roots, symlinks/non-regular files, read failures, extra or missing receipt fields, invalid JSON, a non-`passed` test result, another policy identity, or a digest mismatch makes `interpret` exit 0 with `skip interpret: selector compatibility is unproven ...`; no external script is started. A new in-scope Python file changes the digest automatically. Runtime `docs/tags.md`, KB data and temporary outputs are deliberately excluded because they are mutable data, not executable implementation.
+
+The trusted operator may write the receipt only after mechanically copying or comparing the exact target code bytes into an isolated mirror with temporary data/tmp/tags and running the production entrypoints through a fake selector. With all six parent proxy variables first set to an unusable endpoint, AI Radar's managed subprocess environment must be the only route observed for summarize LLM, save embedding and the extra unknown-tag classification LLM request. `run.sh --check-url` must complete against the local index without any selector request. Known-tag and unknown-tag save cases are separate test inputs. Old v1, a changed closure file and a changed attestation field must be rejected, while the valid v2 receipt must pass.
+
+AI Radar consumes this trusted operator attestation; it does not authenticate its author or turn the receipt into live-route proof. The guarantee covers only the listed code/lock snapshot and the four production path assertions. It does not cover the installed Python/uv/site-packages bytes, future imports outside the two code roots, plugins, native sockets, custom transports or runtime monkeypatching. Update the external implementation or keep interpret skipped when these boundaries cannot be attested.
 
 ## Input article files
 
@@ -133,6 +143,7 @@ For a new article, `summarize.sh` must return:
       "provider": "ark",
       "backend_model": "ark-deepseek-model",
       "fallback_used": false,
+      "criteria_reason_source": "json",
       "input_char_count": 12345,
       "usage": {
         "prompt_tokens": 1000,
@@ -155,7 +166,10 @@ Recognized fields:
 - `result.slug`: base slug. AI Radar may normalize it for WeChat title artifacts or uniqueness.
 - `result.save_decision`: true means save back to the external KB and show the article on `/wechat`.
 - `result.save_reason`, `result.recommendation`, `result.tags`, `result.model` or `result.model_name`: metadata copied into `wechat_interpretations`.
+- `result.llm_metadata.criteria_reason_source`: `json` when the reason came from the trailing JSON, or `markdown_value_judgment_line` when the compatible summary-agent recovered the only non-empty parenthesized reason on a matching `推荐等级` line inside the `价值判断` section. Fresh results from a compatible summary-agent must contain exactly one of those values; AI Radar rejects a missing or unknown value before attempting a KB save. Cached legacy results may omit it, and absence means unknown rather than `json`.
 - `result.llm_metadata.provider`, `backend_model`, `usage`, and `input_char_count`: optional but required for LLM usage metering. When present on the successful result path, AI Radar writes one `llm_usage` row with `stage='interpret'`. `usage` may use either OpenAI names (`prompt_tokens`, `completion_tokens`, `total_tokens`) or normalized names (`input_tokens`, `output_tokens`, `total_tokens`). Cache usage is normalized into nullable `llm_usage.cached_input_tokens` from `prompt_cache_hit_tokens`, then `prompt_tokens_details.cached_tokens`, or—when only miss tokens are present—`input_tokens - prompt_cache_miss_tokens`. Absent facts remain `NULL`; contradictory or out-of-bounds provider fields fail metering loudly without turning the already-paid summary into a provider retry.
+
+AI Radar persists provenance independently of metering. `wechat_interpretations.criteria_reason_source` is the authoritative accepted-reason source, `wechat_interpretations.slug` is the authoritative AI Radar interpretation slug, and `wechat_interpretations.interpret_user` identifies the per-user Summary Agent namespace. These nullable columns are additive: historical rows and cached legacy results may lack the source marker, and readers must treat that as unverified. `llm_usage.item_id` remains the sole item identity in the usage ledger; `attribution_json` does not duplicate the item, interpretation slug, or reason source. A Markdown fallback also emits a pipeline stdout audit line with item ID, interpret user, interpretation slug, and the stored URL's SHA-256; the URL itself is not logged.
 
 Measurement-scope policy (not a field requirement): this landing contract is not an attempt ledger, so downstream totals are recorded-row lower bounds — see [ADR-023](../adr/023-define-recorded-row-measurement-scope.md) and [ISSUE-021](../issues/cost-observability.md#issue-021--interpret-usage-只记录下游成功样本漏掉已计费的失败响应).
 
@@ -221,7 +235,7 @@ The runner uses `metadata.url` for URL hits and `output.summary_file_path` or `o
 
 ## Failure retry semantics
 
-Each item's interpretation outcome is upserted into `wechat_interpretations`; failures record the message in `error` (the subprocess stderr when the script exited non-zero). Errored items are retried automatically with exponential backoff: the first failure becomes eligible again after 15 minutes, and each further failure doubles the wait (15m, 30m, 1h, ... tracked in `error_retry_count`). After 8 retries the item is skipped permanently until its row is deleted by hand. A successful interpretation clears `error` and resets the counter. `pipeline.sh` caps each run at `--limit 30` items so a large error backlog drains across runs instead of holding the pipeline lock for hours.
+Each item's interpretation outcome is upserted into `wechat_interpretations`; failures record the message in `error` (the subprocess stderr when the script exited non-zero). On the fresh-summary path, the exact `summary JSON missing non-empty criteria_reason` subprocess error is retried immediately once with the same command; retrying, recovered, and immediate-retry-exhausted outcomes are identified in stdout. No other subprocess or schema error gets this immediate retry. If the item still fails, it follows the normal exponential backoff: the first failure becomes eligible again after 15 minutes, and each further failure doubles the wait (15m, 30m, 1h, ... tracked in `error_retry_count`). After 8 retries the item is skipped permanently until its row is deleted by hand. A successful interpretation clears `error` and resets the counter. `pipeline.sh` caps each run at `--limit 30` items so a large error backlog drains across runs instead of holding the pipeline lock for hours.
 
 ## Verifying an implementation against this contract
 
