@@ -3292,13 +3292,169 @@ def test_a7_threshold_widens_for_low_cadence_sources(tmp_path: Path) -> None:
         )
         conn.commit()
 
-    silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, now)
+    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(db_path, now)
     silent_ids = {row[0] for row in silent}
 
     assert "fast" in silent_ids, "a source 3x past its own cadence must fire"
     assert "slow" not in silent_ids, "6h floor must not page a source that is behaving normally"
     assert evaluated == 2
     assert unevaluable == 1, "sparse history is reported, not silently passed"
+    assert quiet_x == []
+
+
+def test_a7_suppresses_only_fresh_terminal_x_receipts(tmp_path: Path) -> None:
+    """A quiet X account is actionable only when the last catch-up proof is absent.
+
+    A successful terminal receipt proves that the source really had no newer
+    original posts at that fetch. Blocked, unfinished, stale, or future-dated
+    receipts do not prove that and must leave the existing page candidate in
+    place.
+    """
+    from airadar.admin.alerts import _silent_source_signal
+
+    db_path = tmp_path / "a7-x-receipts.db"
+    now = datetime.fromisoformat("2026-08-29T03:00:00+00:00")
+
+    def runtime(*, status: str, cursor: str, validated_at: datetime | None) -> str:
+        meta: dict[str, object] = {
+            "adapter": "x_api",
+            "username": "fixture",
+            "x_state_schema_version": 1,
+            "x_reference_status": status,
+            "x_cursor_state": cursor,
+            "x_user_id": "42",
+            "x_since_id": "200",
+        }
+        if validated_at is not None:
+            meta["x_reference_validated_at"] = validated_at.isoformat().replace("+00:00", "Z")
+        if status == "blocked":
+            meta.update(
+                {
+                    "x_reference_attempted_at": (now - timedelta(minutes=5))
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "x_reference_reason": "http_or_runtime_failure",
+                    "x_reference_recovery": "inspect_X_fetch_error_then_rerun_fetch",
+                }
+            )
+        return json.dumps(meta)
+
+    sources = {
+        "fresh": runtime(
+            status="verified", cursor="checkpointed", validated_at=now - timedelta(minutes=30)
+        ),
+        "blocked": runtime(status="blocked", cursor="checkpointed", validated_at=None),
+        "draining": runtime(
+            status="verified", cursor="draining", validated_at=now - timedelta(minutes=30)
+        ),
+        "stale": runtime(
+            status="verified", cursor="checkpointed", validated_at=now - timedelta(minutes=121)
+        ),
+        "future": runtime(
+            status="verified", cursor="checkpointed", validated_at=now + timedelta(minutes=1)
+        ),
+        "pending": json.dumps(
+            {
+                "adapter": "x_api",
+                "username": "fixture",
+                "x_state_schema_version": 1,
+                "x_reference_status": "pending",
+                "x_cursor_state": "identity_pending",
+            }
+        ),
+        "invalid": "{",
+    }
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sources(
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                enabled INTEGER,
+                kind TEXT,
+                meta_json TEXT
+            );
+            CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
+            """
+        )
+        for source_id, meta_json in sources.items():
+            conn.execute(
+                "INSERT INTO sources VALUES (?,?,?,?,?)",
+                (source_id, source_id.title(), 1, "x", meta_json),
+            )
+            for n in range(120):
+                conn.execute(
+                    "INSERT INTO items VALUES (?,?,?)",
+                    (
+                        f"{source_id}-{n}",
+                        source_id,
+                        (now - timedelta(hours=20 + n * 6)).isoformat(),
+                    ),
+                )
+        conn.commit()
+
+    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(
+        db_path,
+        now,
+        x_receipt_fresh_minutes=120,
+    )
+
+    assert evaluated == 7 and unevaluable == 0 and faded == []
+    assert [row[0] for row in quiet_x] == ["fresh"]
+    assert {row[0] for row in silent} == {
+        "blocked",
+        "draining",
+        "stale",
+        "future",
+        "pending",
+        "invalid",
+    }
+
+    signals = _normal_signals()
+    signals.silent_sources = []
+    signals.evaluated_sources = evaluated
+    signals.quiet_x_sources = quiet_x
+    healthy = next(result for result in evaluate_rules(signals) if result.rule_id == "A7")
+    assert healthy.firing is False
+    assert "Fresh 上游未更新" in healthy.detail
+    assert "最近一次 X 读取已追平（30 分钟前）" in healthy.detail
+    quiet_values = healthy.values["quiet_x_sources"]
+    assert isinstance(quiet_values, list)
+    assert quiet_values == [
+        {
+            "source_id": "fresh",
+            "name": "Fresh",
+            "hours": pytest.approx(20.0),
+            "receipt_age_minutes": pytest.approx(30.0),
+        }
+    ]
+
+    signals.silent_sources = [silent[0]]
+    firing = next(result for result in evaluate_rules(signals) if result.rule_id == "A7")
+    assert firing.firing is True
+    assert "Fresh 上游未更新，最近一次 X 读取已追平" in firing.detail
+    assert "无需处置" in firing.detail
+
+    signals.silent_sources = []
+    signals.faded_sources = [("faded", "Faded", 200.0)]
+    degraded = next(result for result in evaluate_rules(signals) if result.rule_id == "A7")
+    assert degraded.evaluation_state == "degraded"
+    assert "Faded 已静默 200.0h" in degraded.detail
+    assert "Fresh 上游未更新，最近一次 X 读取已追平" in degraded.detail
+    assert "无需处置" in degraded.detail
+
+    state_path = tmp_path / "mixed-a7-state.json"
+    event_path = tmp_path / "mixed-a7-events.jsonl"
+    run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=lambda text, *, severity="page": {"skipped": False},
+    )
+    ledger_row = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
+    assert ledger_row["type"] == "firing"
+    assert ledger_row["values"]["quiet_x_sources"][0]["source_id"] == "fresh"
 
 
 def test_a7_resolve_does_not_borrow_a6_cost_copy() -> None:
@@ -3315,6 +3471,7 @@ def test_a7_resolve_does_not_borrow_a6_cost_copy() -> None:
 
     signals = _normal_signals()
     signals.silent_sources = []
+    signals.quiet_x_sources = [("x_aiatmeta", "X：AI at Meta", 200.4, 20.0)]
     signals.evaluated_sources = 108
     signals.unevaluable_sources = 55
     a7 = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
@@ -3326,6 +3483,8 @@ def test_a7_resolve_does_not_borrow_a6_cost_copy() -> None:
     assert "金额" not in message
     assert "已恢复" in message
     assert "不在评估范围内" in message, "the resolve must still own up to the limited scope"
+    assert "logs/pipeline-*.log" in message
+    assert "docs/operations/monitoring-alerting.md" in message
 
     # The same dispatch must leave A6 byte-identical: it is the rule the copy
     # was written for, and ADR-023 owns that recorded-row wording.
@@ -3411,12 +3570,13 @@ def test_a7_faded_source_closes_as_unevaluable_not_recovered(tmp_path: Path) -> 
         return {"skipped": False}
 
     def round_at(moment: datetime) -> None:
-        silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, moment)
+        silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(db_path, moment)
         signals = _normal_signals()
         signals.silent_sources = silent
         signals.evaluated_sources = evaluated
         signals.unevaluable_sources = unevaluable
         signals.faded_sources = faded
+        signals.quiet_x_sources = quiet_x
         a7 = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
         run_alert_results_state_machine(
             [a7],
@@ -3474,10 +3634,13 @@ def test_a7_low_cadence_source_is_not_faded_when_it_ages_out(tmp_path: Path) -> 
     assert before[1] == 1 and before[0] == [], "precondition: healthy and evaluable"
 
     # Five hours later the oldest item has aged out: recent_count drops to 4.
-    silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, now + timedelta(hours=5))
+    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(
+        db_path, now + timedelta(hours=5)
+    )
 
     assert evaluated == 0 and unevaluable == 1, "precondition: it left the evaluated set"
     assert faded == [], "a 12h silence against a multi-day cadence is not a death"
+    assert quiet_x == []
 
 
 def test_a7_stale_backfilled_item_does_not_hide_a_faded_source(tmp_path: Path) -> None:
@@ -3515,9 +3678,10 @@ def test_a7_stale_backfilled_item_does_not_hide_a_faded_source(tmp_path: Path) -
         )
         conn.commit()
 
-    silent, evaluated, unevaluable, faded = _silent_source_signal(db_path, now)
+    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(db_path, now)
 
     assert evaluated == 0 and unevaluable == 1, "precondition: it has left the evaluated set"
     assert [row[0] for row in faded] == ["revived"], (
         "27 days of silence against a daily cadence is a death, whatever 2021 says"
     )
+    assert quiet_x == []

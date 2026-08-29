@@ -23,6 +23,7 @@ import httpx
 from .. import db
 from ..egress import direct_subprocess_env, selector_httpx_client
 from ..pipeline_lock import DEFAULT_PIPELINE_LOCK_PATH, pipeline_lock_is_held
+from ..sources.x_state import validate_x_runtime_meta
 from .calibration import SCHEMA_ERROR_RE, _is_upstream_error
 from .cost_report import (
     _load_usage_rows,
@@ -136,6 +137,11 @@ class AlertSignals:
     # evaluated set means something different for each: failure for the first,
     # youth for the second, and only the first must block a ✅.
     faded_sources: list[tuple[str, str, float]] = field(default_factory=list)
+    # X sources whose local item age crossed the cadence threshold, but whose
+    # most recent successful timeline fetch reached a terminal checkpoint.
+    # They remain visible in A7's evidence while staying out of the actionable
+    # page set.
+    quiet_x_sources: list[tuple[str, str, float, float]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -314,6 +320,7 @@ def evaluate_rules(
     a7_firing = bool(signals.silent_sources)
     a7_named = sorted(signals.silent_sources, key=lambda row: -row[2])
     a7_faded = sorted(signals.faded_sources, key=lambda row: -row[2])
+    a7_quiet_x = sorted(signals.quiet_x_sources, key=lambda row: -row[2])
     # The unmonitored remainder matters most while A7 is firing: that is when
     # someone acts on it, and a named-source list reads as the whole picture.
     # Disclosing it only in the non-firing branch told the operator the scope
@@ -323,12 +330,21 @@ def evaluate_rules(
         if signals.unevaluable_sources
         else ""
     )
+    a7_quiet_detail = (
+        "；".join(
+            f"{name} 上游未更新，最近一次 X 读取已追平（{age_minutes:.0f} 分钟前）"
+            for _sid, name, _hours, age_minutes in a7_quiet_x[:5]
+        )
+        + (f"；另有 {len(a7_quiet_x) - 5} 个 X 来源同此" if len(a7_quiet_x) > 5 else "")
+    )
+    a7_quiet_note = f"；无需处置：{a7_quiet_detail}" if a7_quiet_detail else ""
     a7_detail = (
         "；".join(
             f"{name} 静默 {hours:.1f}h（阈值 {limit:.0f}h）"
             for _sid, name, hours, limit in a7_named[:5]
         )
         + (f"；另有 {len(a7_named) - 5} 个源" if len(a7_named) > 5 else "")
+        + a7_quiet_note
         + a7_scope_note
         if a7_firing
         else (
@@ -341,9 +357,19 @@ def evaluate_rules(
                 for _sid, name, hours in a7_faded[:5]
             )
             + (f"；另有 {len(a7_faded) - 5} 个源同此" if len(a7_faded) > 5 else "")
+            + a7_quiet_note
             if a7_faded
-            else f"{signals.evaluated_sources} 个源均在各自节奏内"
-            + (f"，{signals.unevaluable_sources} 个源历史过稀无法评估" if signals.unevaluable_sources else "")
+            else (
+                a7_quiet_detail
+                + a7_scope_note
+                if a7_quiet_x
+                else f"{signals.evaluated_sources} 个源均在各自节奏内"
+                + (
+                    f"，{signals.unevaluable_sources} 个源历史过稀无法评估"
+                    if signals.unevaluable_sources
+                    else ""
+                )
+            )
         )
     )
 
@@ -576,6 +602,15 @@ def evaluate_rules(
                     {"source_id": sid, "name": name, "hours": hours}
                     for sid, name, hours in a7_faded
                 ],
+                "quiet_x_sources": [
+                    {
+                        "source_id": sid,
+                        "name": name,
+                        "hours": hours,
+                        "receipt_age_minutes": receipt_age_minutes,
+                    }
+                    for sid, name, hours, receipt_age_minutes in a7_quiet_x
+                ],
             },
             severity=PAGE_SEVERITY,
             impact=(
@@ -632,10 +667,18 @@ _SCOPE_LIMITED_RESOLVED_COPY: dict[str, tuple[str, str, str]] = {
     "A7": ("已恢复", "；部分来源不在评估范围内", "恢复证据"),
 }
 _SCOPE_LIMITED_RESOLVED_FALLBACK = ("已恢复", "；评估范围受限", "恢复证据")
+_RESOLVED_EVIDENCE_POINTERS = {
+    "A7": (
+        "复核入口：logs/pipeline-*.log；runbook：docs/operations/monitoring-alerting.md "
+        "的「出网 selector 的 preflight 与实际 route」。"
+    )
+}
 
 
 def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
     suffix = f"（since {since}）" if since else ""
+    evidence_pointer = _RESOLVED_EVIDENCE_POINTERS.get(result.rule_id)
+    pointer_suffix = f"\n{evidence_pointer}" if evidence_pointer else ""
     if result.evaluation_state == "degraded":
         return (
             f"【{ALERT_SOURCE}】🟡 {result.rule_id} {result.title} 转为不可评估{suffix}\n"
@@ -647,11 +690,11 @@ def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
         )
         return (
             f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title}：{headline}{suffix}{caveat}\n"
-            f"{evidence_label}：{result.detail}"
+            f"{evidence_label}：{result.detail}{pointer_suffix}"
         )
     return (
         f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}\n"
-        f"恢复证据：{result.detail}"
+        f"恢复证据：{result.detail}{pointer_suffix}"
     )
 
 
@@ -2043,7 +2086,14 @@ def _silent_source_signal(
     floor_hours: float = 6.0,
     lookback_days: int = 30,
     min_history: int = 5,
-) -> tuple[list[tuple[str, str, float, float]], int, int, list[tuple[str, str, float]]]:
+    x_receipt_fresh_minutes: int = 120,
+) -> tuple[
+    list[tuple[str, str, float, float]],
+    int,
+    int,
+    list[tuple[str, str, float]],
+    list[tuple[str, str, float, float]],
+]:
     """Find enabled sources that have stopped producing items.
 
     Exists because the aggregate ingestion signal cannot see a single source
@@ -2079,20 +2129,26 @@ def _silent_source_signal(
     — a revived source, a backfilled item from years back — widening the
     threshold past any silence that could ever trip it.
 
-    Returns (silent, evaluated_count, unevaluable_count, faded) where each
+    Returns (silent, evaluated_count, unevaluable_count, faded, quiet_x) where each
     silent row is (source_id, name, hours_silent, threshold_hours) and each
-    faded row is (source_id, name, hours_silent).
+    faded row is (source_id, name, hours_silent). Each quiet_x row adds the
+    terminal receipt age in minutes after hours_silent.
     """
     window_hours = lookback_days * 24.0
     cutoff = (current - timedelta(days=lookback_days)).isoformat().replace("+00:00", "Z")
     silent: list[tuple[str, str, float, float]] = []
     faded: list[tuple[str, str, float]] = []
+    quiet_x: list[tuple[str, str, float, float]] = []
     evaluated = 0
     unevaluable = 0
     with db.get_conn(db_path) as conn:
+        # Pin the item history and runtime receipt to one SQLite snapshot. The
+        # fetcher commits them atomically; splitting these reads across commits
+        # would throw away that guarantee on the evaluator side.
+        conn.execute("BEGIN")
         rows = conn.execute(
             """
-            SELECT s.id, s.name,
+            SELECT s.*,
                    MAX(i.fetched_at) AS last_fetched,
                    COUNT(i.id) AS total_count,
                    SUM(CASE WHEN i.fetched_at >= ? THEN 1 ELSE 0 END) AS recent_count
@@ -2172,8 +2228,34 @@ def _silent_source_signal(
         typical_gap_hours = window_hours / recent
         threshold = max(floor_hours, 2.0 * typical_gap_hours)
         if hours_silent is not None and hours_silent > threshold:
-            silent.append((str(row["id"]), str(row["name"]), hours_silent, threshold))
-    return silent, evaluated, unevaluable, faded
+            source_id = str(row["id"])
+            source_name = str(row["name"])
+            row_keys = set(row.keys())
+            kind = str(row["kind"] or "") if "kind" in row_keys else ""
+            meta_json = row["meta_json"] if "meta_json" in row_keys else None
+            receipt_age_minutes: float | None = None
+            if kind == "x" and isinstance(meta_json, str):
+                try:
+                    meta = json.loads(meta_json)
+                    if isinstance(meta, dict) and meta.get("adapter") == "x_api":
+                        runtime = validate_x_runtime_meta(meta, context=source_id)
+                        validated_at = _parse_dt(runtime.get("x_reference_validated_at"))
+                        if (
+                            runtime.get("x_reference_status") == "verified"
+                            and runtime.get("x_cursor_state") == "checkpointed"
+                            and validated_at is not None
+                        ):
+                            receipt_age_minutes = (current - validated_at).total_seconds() / 60.0
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    receipt_age_minutes = None
+            if (
+                receipt_age_minutes is not None
+                and 0.0 <= receipt_age_minutes <= float(x_receipt_fresh_minutes)
+            ):
+                quiet_x.append((source_id, source_name, hours_silent, receipt_age_minutes))
+            else:
+                silent.append((source_id, source_name, hours_silent, threshold))
+    return silent, evaluated, unevaluable, faded, quiet_x
 
 
 def _wechat_interpretation_signal(
@@ -2327,10 +2409,17 @@ def collect_alert_signals(
     attempted = int(latest_fetch.get("attempted", 0)) if isinstance(latest_fetch, dict) else 0
     failed = int(latest_fetch.get("failed", 0)) if isinstance(latest_fetch, dict) else 0
     a7 = _threshold_section(ALERT_THRESHOLDS, "a7")
-    silent_sources, evaluated_sources, unevaluable_sources, faded_sources = _silent_source_signal(
+    (
+        silent_sources,
+        evaluated_sources,
+        unevaluable_sources,
+        faded_sources,
+        quiet_x_sources,
+    ) = _silent_source_signal(
         db_path,
         current,
         floor_hours=_float_threshold(a7, "silence_floor_hours", 6.0),
+        x_receipt_fresh_minutes=_int_threshold(a2, "no_success_minutes", 120),
     )
     a5 = _threshold_section(ALERT_THRESHOLDS, "a5")
     no_success_hours = _float_threshold(a5, "no_success_hours", 4.0)
@@ -2413,6 +2502,7 @@ def collect_alert_signals(
         evaluated_sources=evaluated_sources,
         unevaluable_sources=unevaluable_sources,
         faded_sources=faded_sources,
+        quiet_x_sources=quiet_x_sources,
         a6_metering_complete=bool(a6_signal["metering_complete"]),
         a6_metering_failure_count=int(a6_signal["metering_failure_count"]),
     )
