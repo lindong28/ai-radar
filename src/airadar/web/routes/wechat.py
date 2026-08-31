@@ -10,11 +10,20 @@ from markdown_it import MarkdownIt
 
 from ...presentation.media import proxy_image_url
 from ...presentation.summary import json_loads
+from ...wechat_archive import wechat_visibility_sql
 from ...wechat_text import normalize_wechat_title
 from ..envelope import ok
 from .pagination import clamp_page
 from .request_db import conn_from_request
-from .search import like_patterns_for_query, whitespace_insensitive_sql
+from .search import (
+    controlled_alias_terms,
+    expand_st_variants,
+    fts_phrase_query,
+    like_patterns_for_query,
+    remove_search_whitespace,
+    tokenize_search_query,
+    whitespace_insensitive_sql,
+)
 
 router = APIRouter()
 
@@ -91,32 +100,112 @@ def _item_from_row(row: sqlite3.Row, *, page: int | None = None, q: str | None =
     }
 
 
-def _search_sql(q: str | None) -> tuple[str, list[object], str, list[object], str | None]:
-    patterns = like_patterns_for_query(q)
-    if not patterns:
+def _fts_field_query(fields: tuple[str, ...], values: list[str]) -> str:
+    phrases = [
+        f"{field} : {phrase}"
+        for value in values
+        for variant in expand_st_variants(value)
+        if (phrase := fts_phrase_query(variant))
+        for field in fields
+    ]
+    return " OR ".join(dict.fromkeys(phrases))
+
+
+def _search_sql(
+    q: str | None,
+    *,
+    include_normalized_item_like: bool = False,
+) -> tuple[str, list[object], str, list[object], str | None]:
+    terms = tokenize_search_query(q)
+    if not terms:
         return "", [], "", [], None
 
-    search_clauses: list[str] = []
+    term_groups: list[str] = []
     search_params: list[object] = []
     author_clauses: list[str] = []
     author_params: list[object] = []
-    search_fields = [
+    raw_title_rank_clauses: list[str] = []
+    raw_title_rank_params: list[object] = []
+    alias_title_rank_clauses: list[str] = []
+    alias_title_rank_params: list[object] = []
+    raw_item_like_fields = [
         whitespace_insensitive_sql("i.title"),
         whitespace_insensitive_sql("i.author"),
+        whitespace_insensitive_sql("i.content_text"),
+    ]
+    alias_item_like_fields = [
+        whitespace_insensitive_sql("i.title"),
+        whitespace_insensitive_sql("i.content_text"),
+    ]
+    interpretation_like_fields = [
         whitespace_insensitive_sql("wi.abstract"),
         whitespace_insensitive_sql("wi.tags_json"),
+        whitespace_insensitive_sql("wi.summary_md"),
     ]
     author_field = whitespace_insensitive_sql("i.author")
-    for pattern in patterns:
-        search_clauses.extend(f"{field} LIKE ? ESCAPE '\\'" for field in search_fields)
-        search_params.extend([pattern, pattern, pattern, pattern])
-        author_clauses.append(f"{author_field} LIKE ? ESCAPE '\\'")
-        author_params.append(pattern)
+    title_field = whitespace_insensitive_sql("i.title")
+    for term in terms:
+        raw_patterns = like_patterns_for_query(term)
+        alias_terms = controlled_alias_terms(term)
+        alias_patterns = [pattern for alias in alias_terms for pattern in like_patterns_for_query(alias)]
+        clauses: list[str] = []
+        raw_title_clauses: list[str] = []
+        for pattern in raw_patterns:
+            for field in interpretation_like_fields:
+                clauses.append(f"{field} LIKE ? ESCAPE '\\'")
+                search_params.append(pattern)
 
-    where_sql = f" AND ({' OR '.join(search_clauses)})"
+            author_clauses.append(f"{author_field} LIKE ? ESCAPE '\\'")
+            author_params.append(pattern)
+            raw_title_clauses.append(f"{title_field} LIKE ? ESCAPE '\\'")
+            raw_title_rank_params.append(pattern)
+
+        raw_title_rank_clauses.append(f"({' OR '.join(raw_title_clauses)})")
+
+        alias_title_clauses: list[str] = []
+        for pattern in alias_patterns:
+            for field in interpretation_like_fields:
+                clauses.append(f"{field} LIKE ? ESCAPE '\\'")
+                search_params.append(pattern)
+            alias_title_clauses.append(f"{title_field} LIKE ? ESCAPE '\\'")
+            alias_title_rank_params.append(pattern)
+        if alias_title_clauses:
+            alias_title_rank_clauses.append(f"({' OR '.join(alias_title_clauses)})")
+
+        long_term = len(remove_search_whitespace(term)) >= 3
+        if long_term:
+            fts_query = _fts_field_query(("title", "content_text", "author"), [term])
+            alias_fts_query = _fts_field_query(("title", "content_text"), alias_terms)
+            if alias_fts_query:
+                fts_query = f"{fts_query} OR {alias_fts_query}"
+            clauses.append("i.id IN (SELECT item_id FROM items_fts WHERE items_fts MATCH ?)")
+            search_params.append(fts_query)
+        if not long_term or include_normalized_item_like:
+            for pattern in raw_patterns:
+                for field in raw_item_like_fields:
+                    clauses.append(f"{field} LIKE ? ESCAPE '\\'")
+                    search_params.append(pattern)
+            for pattern in alias_patterns:
+                for field in alias_item_like_fields:
+                    clauses.append(f"{field} LIKE ? ESCAPE '\\'")
+                    search_params.append(pattern)
+        term_groups.append(f"({' OR '.join(clauses)})")
+
+    where_sql = f" AND {' AND '.join(term_groups)}"
     author_match_sql = f"CASE WHEN ({' OR '.join(author_clauses)}) THEN 1 ELSE 0 END"
+    raw_title_rank_sql = " + ".join(f"CASE WHEN {clause} THEN 1 ELSE 0 END" for clause in raw_title_rank_clauses)
+    alias_title_rank_sql = (
+        " + ".join(f"CASE WHEN {clause} THEN 1 ELSE 0 END" for clause in alias_title_rank_clauses)
+        or "CASE WHEN 0 THEN 1 ELSE 0 END"
+    )
+    ranking_sql = f"{author_match_sql} DESC, ({raw_title_rank_sql}) DESC, ({alias_title_rank_sql}) DESC"
     query = (q or "").strip()
-    return where_sql, search_params, author_match_sql, author_params, query
+    ranking_params = [
+        *author_params,
+        *raw_title_rank_params,
+        *alias_title_rank_params,
+    ]
+    return where_sql, search_params, ranking_sql, ranking_params, query
 
 
 def list_wechat_items(
@@ -126,21 +215,33 @@ def list_wechat_items(
     page: int = 1,
     limit: int = 50,
 ) -> dict[str, Any]:
-    where_sql, search_params, author_match_sql, author_params, query = _search_sql(q)
-    total = conn.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM wechat_interpretations wi
-        JOIN items i ON i.id=wi.item_id
-        JOIN sources s ON s.id=i.source_id
-        WHERE wi.save_decision=1 AND s.enabled=1 AND COALESCE(s.kind, 'feed')='wechat'{where_sql}
-        """,
-        search_params,
-    ).fetchone()[0]
+    where_sql, search_params, ranking_sql, ranking_params, query = _search_sql(q)
+
+    def count_matches() -> int:
+        return int(
+            conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM wechat_interpretations wi
+                JOIN items i ON i.id=wi.item_id
+                JOIN sources s ON s.id=i.source_id
+                WHERE wi.save_decision=1 AND {wechat_visibility_sql()}{where_sql}
+                """,
+                search_params,
+            ).fetchone()[0]
+        )
+
+    total = count_matches()
+    if query and total == 0:
+        where_sql, search_params, ranking_sql, ranking_params, query = _search_sql(
+            q,
+            include_normalized_item_like=True,
+        )
+        total = count_matches()
     current_page = clamp_page(page=int(page), total=int(total), limit=limit)
     offset = (current_page - 1) * limit
     order_sql = (
-        f"{author_match_sql} DESC, i.published_at DESC, i.fetched_at DESC, i.id DESC"
+        f"{ranking_sql}, i.published_at DESC, i.fetched_at DESC, i.id DESC"
         if query
         else "i.published_at DESC, i.fetched_at DESC, i.id DESC"
     )
@@ -157,11 +258,11 @@ def list_wechat_items(
           ON COALESCE(s.kind, 'feed')='wechat'
          AND wa.account=i.author
          AND wa.avatar_url IS NOT NULL
-        WHERE wi.save_decision=1 AND s.enabled=1 AND COALESCE(s.kind, 'feed')='wechat'{where_sql}
+        WHERE wi.save_decision=1 AND {wechat_visibility_sql()}{where_sql}
         ORDER BY {order_sql}
         LIMIT ? OFFSET ?
         """,
-        (*search_params, *author_params, limit, offset),
+        (*search_params, *ranking_params, limit, offset),
     ).fetchall()
     return {
         "items": [_item_from_row(row, page=current_page, q=query) for row in rows],
@@ -173,7 +274,7 @@ def list_wechat_items(
 
 def get_wechat_detail(conn: sqlite3.Connection, slug: str) -> dict[str, Any]:
     row = conn.execute(
-        """
+        f"""
         SELECT i.id, wi.slug, wi.recommendation, wi.abstract, wi.tags_json, wi.summary_md,
                i.title, i.author, i.published_at, i.url,
                s.name AS source_name,
@@ -185,7 +286,7 @@ def get_wechat_detail(conn: sqlite3.Connection, slug: str) -> dict[str, Any]:
           ON COALESCE(s.kind, 'feed')='wechat'
          AND wa.account=i.author
          AND wa.avatar_url IS NOT NULL
-        WHERE wi.slug=? AND wi.save_decision=1 AND s.enabled=1 AND COALESCE(s.kind, 'feed')='wechat'
+        WHERE wi.slug=? AND wi.save_decision=1 AND {wechat_visibility_sql()}
         """,
         (slug,),
     ).fetchone()

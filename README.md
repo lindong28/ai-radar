@@ -121,7 +121,7 @@ cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调
 | 精选 | `/` | 高评分精选内容，按日期分组（可折叠），顶部为近 48 小时热点榜（2 条 + 「完整榜单 →」），无限下拉加载 |
 | 全部 AI 动态 | `/all` | 完整时间线，最新优先，无限下拉加载（搜索态用页码分页） |
 | 热点榜 | `/hot` | 近 48 小时热点完整榜单（热度 = 加权分×10 + 关联讨论×5）；桌面从侧栏进入，移动端从首页「完整榜单 →」进入。serve 重启后的短窗内接口返回 503、页面显示「热点榜单正在生成」是预期行为（会自愈），见 [monitoring-alerting.md](docs/operations/monitoring-alerting.md#serve-重启后-apiv1hot-短暂-503预期非故障) |
-| 微信文章解读 | `/wechat` | 已订阅微信公众号文章的结构化总结，支持按标题、公众号、摘要和标签搜索；详情页为 `/wechat/<slug>` |
+| 微信文章解读 | `/wechat` | 微信公众号文章的结构化总结，支持跨标题、公众号、正文、摘要、标签和完整解读的多词搜索；详情页为 `/wechat/<slug>` |
 | AI 日报 | `/daily` | 每日精选归档，按月份分组的可折叠归档栏 + 今日看点，支持 `?date=YYYY-MM-DD` |
 | 收藏 | `/bookmarks` | 本设备浏览器收藏的内容（localStorage），支持导出/导入 JSON |
 | 关于 | `/about` | 项目介绍和信源池 |
@@ -138,6 +138,7 @@ cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调
 
 ```
 RSS / X / 微信公众号源（Mp2RSS + 自建 Wechat2RSS，取并集） → fetch → prefilter → score → enrich → curate → interpret → web 展示 / ai-assistant KB
+ai-assistant KB 文章目录 → 手动 `admin wechat-kb import` → 内部微信归档 → web 展示
 ```
 
 各阶段做什么见「快速开始 → 4. 运行数据处理流水线」的命令注释；`interpret` 是可选阶段，启用后对微信公众号文章调用 ai-assistant 兼容的 summary-agent 脚本，保存独立解读数据并把值得阅读的文章回写外部知识库（见下文「微信文章解读」）。
@@ -221,7 +222,17 @@ uv run python scripts/capture_aihot_dataset.py validate --report-json benchmarks
 
 `interpret` 阶段只处理启用的微信公众号源。**该外部集成默认关闭**：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时，`./run.sh interpret` 打印 `interpret skipped=true` 并成功退出，不读取任何外部路径。
 
-启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。被判定值得保存的文章展示到 `/wechat` 并回写外部知识库，其余只在 `radar.db` 留处理记录。`/wechat` 支持 `?q=` 搜索解读卡片字段（标题、公众号 author、abstract、tags），分页和详情页返回链接会保留搜索状态；网站请求只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约与启用条件见 [`docs/references/ai-assistant-contract.md`](docs/references/ai-assistant-contract.md)，运维细节见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#微信文章解读与知识库回写)。
+启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。被判定值得保存的文章展示到 `/wechat` 并回写外部知识库，其余只在 `radar.db` 留处理记录。`/wechat` 的 `?q=` 会把查询拆成必需词，每个词可跨标题、公众号、正文、abstract、tags 与完整 summary 命中；评测类记忆词有受控同义扩展，分页和详情页返回链接会保留搜索状态。
+
+本地 ai-assistant 知识库里已有、但 AI Radar 从未摄取的微信文章，可由维护者显式补录：
+
+```bash
+./run.sh admin wechat-kb import \
+  --assistant-root ~/research/ai-assistant \
+  --user dong_lin
+```
+
+先加 `--dry-run` 可只看将导入多少篇，加 `--limit N` 可分批执行。命令只导入目录中索引、文件和向量都有效的微信文章，并跳过 AI Radar 已有 URL；每次成功运行打印用于审计和 postcheck 的 run id。失败运行在事务内零提交；成功批次不提供删除式回滚，因为归档项可能已成为后续实时 feed 的去重锚点。网站请求仍只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约与启用条件见 [`docs/references/ai-assistant-contract.md`](docs/references/ai-assistant-contract.md)，完整导入和故障判读见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#手动补录-ai-assistant-知识库归档)。
 
 ### LLM Provider
 

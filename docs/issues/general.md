@@ -4,6 +4,13 @@
 
 ---
 
+## [open] ISSUE-GENERAL-20260901-7c2e · Playwright Sync egress test depends on full-suite asyncio state
+
+- Type: test reliability · Priority: low · Discovered: 2026-09-01 WeChat search/import full-suite verification
+- Description: `tests/test_egress_routing.py::test_playwright_external_and_loopback_reach_the_selected_listener` fails in the full suite because `sync_playwright()` observes an already-running asyncio loop (`Playwright Sync API inside the asyncio loop`). The same node id passes in isolation. The product route and selector behavior therefore have not failed; the test result depends on suite execution context.
+- Evidence: full suite result was `2404 passed, 4 skipped, 2 failed`; this node was one failure. Immediate isolated rerun was `1 passed in 3.13s`. The WeChat task did not modify `tests/test_egress_routing.py` or the egress implementation.
+- Fix direction: give this sync Playwright probe an execution boundary whose event-loop state is owned by the test, or convert the probe to the async API consistently. Preserve the existing positive assertions for external-via-selector and loopback-direct routing; do not silence the failure by skipping whenever a loop exists.
+
 ## [open] 2026-08-26：全量单测有两条与 domain routing 无关的既有基线失败
 
 - Type: test baseline · Priority: low · Discovered: 2026-08-26 domain-routing T2 full-suite 验证

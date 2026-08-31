@@ -75,3 +75,6 @@
 | [20260828-c3a5](./20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 | accepted | 2026-08-28 |
 | [20260829-c0e8](./20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 | accepted; supersedes ADR-20260826-68e2 external-root receipt identity only | 2026-08-29 |
 | [20260829-a7f1](./20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 | accepted | 2026-08-29 |
+| [20260831-30ad](./20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并显式补录 ai-assistant KB 归档 | accepted | 2026-08-31 |
+| [20260831-8b7c](./20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，不放宽多词交集 | accepted | 2026-08-31 |
+| [20260901-a31f](./20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 | accepted | 2026-09-01 |

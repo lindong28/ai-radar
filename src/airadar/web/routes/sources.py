@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from ...presentation.summary import json_loads
 from ...sources.contract import load_source_contract
 from ...sources.x_state import X_RUNTIME_META_KEYS, validate_x_runtime_meta
+from ...wechat_archive import ARCHIVE_SOURCE_ID
 from ..envelope import ok
 from .request_db import conn_from_request
 
@@ -93,7 +94,10 @@ def _legacy_public_meta(value: str | None) -> dict[str, object]:
 @router.get("/sources")
 def sources(request: Request) -> dict[str, object]:
     with conn_from_request(request) as conn:
-        rows = conn.execute("SELECT * FROM sources ORDER BY tier, id").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM sources WHERE id<>? ORDER BY tier, id",
+            (ARCHIVE_SOURCE_ID,),
+        ).fetchall()
     public_rows = []
     for row in rows:
         keys = row.keys()
@@ -125,7 +129,10 @@ TIER_LABELS = {"T1": "核心", "T1.5": "重点", "T2": "扩展"}
 @v2_router.get("/sources")
 def sources_v2(request: Request) -> dict[str, object]:
     with conn_from_request(request) as conn:
-        rows = conn.execute("SELECT * FROM sources WHERE enabled=1 ORDER BY tier, id").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM sources WHERE enabled=1 AND id<>? ORDER BY tier, id",
+            (ARCHIVE_SOURCE_ID,),
+        ).fetchall()
     public_rows = []
     for row in rows:
         kind = row["kind"] if "kind" in row.keys() else "feed"

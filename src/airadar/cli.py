@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from .admin.alerts import (
 from .admin.cost_audit import run_cost_audit
 from .admin.cost_report import build_cost_report, deliver_cost_report, format_cost_report
 from .admin.metrics import SHANGHAI_TZ
+from .admin.wechat_kb import import_catalog
 from .admin.x_media_backfill import backfill_x_media
 from .curator.precompute import (
     DEFAULT_KEEP_DAYS,
@@ -129,10 +131,7 @@ def _egress_preflight() -> int:
         print("Impact: no managed external pipeline stage was started")
         print("Next: restore a healthy domain-routing selector, then retry")
         return 1
-    print(
-        "egress-preflight status=healthy "
-        f"policy_id={policy.policy_id} policy_sha256={policy.policy_sha256}"
-    )
+    print(f"egress-preflight status=healthy policy_id={policy.policy_id} policy_sha256={policy.policy_sha256}")
     return 0
 
 
@@ -268,10 +267,7 @@ def _admin_db_retention(args: argparse.Namespace) -> int:
         db_path = _existing_db_path(args.db_path)
         if args.dry_run:
             stats = _dry_run_retention_stats(db_path, args.keep_days)
-            print(
-                f"eligible_rows={stats.eligible_rows} "
-                f"logical_summary_bytes={stats.logical_summary_bytes}"
-            )
+            print(f"eligible_rows={stats.eligible_rows} logical_summary_bytes={stats.logical_summary_bytes}")
             return 0
         if args.db_command == "retain":
             _require_writable_db(db_path)
@@ -544,8 +540,7 @@ def _wechat_comparison_not_comparable(
         next_step = "run a new authorized shadow probe after cooldown, then compare that attempt"
     elif "article-URL public-biz verification" in reason:
         next_step = (
-            "resolve a provisional account mapping, then run a new authorized "
-            "identity-checking probe after cooldown"
+            "resolve a provisional account mapping, then run a new authorized identity-checking probe after cooldown"
         )
     elif "fakeid identity resolution" in reason or "fakeid mapping" in reason:
         next_step = "resolve the account identity, then run a new authorized probe after cooldown"
@@ -585,10 +580,7 @@ def _admin_wechat_discovery_compare(args: argparse.Namespace) -> int:
             account_name=args.account,
             attempt_id=args.attempt,
             reason="the shadow state schema requires explicit migration",
-            next_step_override=(
-                "run ./run.sh admin wechat-discovery migrate "
-                f"--state-db {args.state_db}"
-            ),
+            next_step_override=(f"run ./run.sh admin wechat-discovery migrate --state-db {args.state_db}"),
         )
     except (OSError, sqlite3.Error, ValueError) as exc:
         return _wechat_comparison_not_comparable(
@@ -634,27 +626,20 @@ def _admin_wechat_discovery_compare(args: argparse.Namespace) -> int:
         conn = sqlite3.connect(f"{production_path.as_uri()}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         try:
-            source = conn.execute(
-                "SELECT enabled FROM sources WHERE id='wx_mp2rss'"
-            ).fetchone()
+            source = conn.execute("SELECT enabled FROM sources WHERE id='wx_mp2rss'").fetchone()
             if source is None or int(source["enabled"]) != 1:
                 raise ShadowNotComparable("the production wx_mp2rss source is absent or disabled")
             authors = {
                 str(row["author"])
                 for row in conn.execute(
-                    "SELECT DISTINCT author FROM items "
-                    "WHERE source_id='wx_mp2rss' AND author IS NOT NULL"
+                    "SELECT DISTINCT author FROM items WHERE source_id='wx_mp2rss' AND author IS NOT NULL"
                 )
             }
             matched_authors = sorted(
-                author
-                for author in authors
-                if normalized_account_name(author) == normalized_account_name(account.name)
+                author for author in authors if normalized_account_name(author) == normalized_account_name(account.name)
             )
             if not matched_authors:
-                raise ShadowNotComparable(
-                    "the configured account name has no normalized production author bucket"
-                )
+                raise ShadowNotComparable("the configured account name has no normalized production author bucket")
             placeholders = ", ".join("?" for _ in matched_authors)
             baseline_rows = conn.execute(
                 f"""
@@ -728,21 +713,10 @@ def _readonly_wechat_discovery_evidence(
     try:
         with sqlite3.connect(uri, uri=True) as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            attempt_count = int(
-                conn.execute("SELECT COUNT(*) FROM discovery_attempts").fetchone()[0]
-            )
-            tables = {
-                str(row[0])
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
+            attempt_count = int(conn.execute("SELECT COUNT(*) FROM discovery_attempts").fetchone()[0])
+            tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             resolution_count = (
-                int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM identity_resolution_attempts"
-                    ).fetchone()[0]
-                )
+                int(conn.execute("SELECT COUNT(*) FROM identity_resolution_attempts").fetchone()[0])
                 if "identity_resolution_attempts" in tables
                 else 0
             )
@@ -769,14 +743,12 @@ def _readonly_wechat_discovery_evidence(
                 ).fetchall()
                 for possible_row in possible_rows:
                     candidate_rows = conn.execute(
-                        "SELECT url FROM discovery_attempt_candidates "
-                        "WHERE probe_attempt_id=?",
+                        "SELECT url FROM discovery_attempt_candidates WHERE probe_attempt_id=?",
                         (possible_row[0],),
                     ).fetchall()
                     try:
                         if candidate_rows and all(
-                            observed_article_biz(str(candidate_row[0]))
-                            == str(possible_row[2])
+                            observed_article_biz(str(candidate_row[0])) == str(possible_row[2])
                             for candidate_row in candidate_rows
                         ):
                             verified_row = possible_row
@@ -808,23 +780,14 @@ def _readonly_wechat_discovery_evidence(
         f"schema v{version}",
         attempt_count,
         resolution_count,
-        (
-            int(verified_row[0])
-            if verified_row is not None
-            else 0 if version in {6, 7, 8, 9, 10} else None
-        ),
+        (int(verified_row[0]) if verified_row is not None else 0 if version in {6, 7, 8, 9, 10} else None),
         str(verified_row[1]) if verified_row is not None else None,
         (
             int(latest_platform_error[0])
-            if latest_platform_error is not None
-            and latest_platform_error[0] is not None
+            if latest_platform_error is not None and latest_platform_error[0] is not None
             else None
         ),
-        (
-            str(latest_platform_error[1])
-            if latest_platform_error is not None
-            else None
-        ),
+        (str(latest_platform_error[1]) if latest_platform_error is not None else None),
     )
 
 
@@ -846,10 +809,7 @@ def _print_local_request_timing(
     *,
     timespec: str | None = None,
 ) -> None:
-    print(
-        "Request timing basis: local safety policy; "
-        "not a published WeChat platform window"
-    )
+    print("Request timing basis: local safety policy; not a published WeChat platform window")
     local_time = next_request_at.astimezone(SHANGHAI_TZ)
     rendered = local_time.isoformat(timespec=timespec) if timespec else local_time.isoformat()
     print(f"Next request allowed by local policy after: {rendered}")
@@ -858,30 +818,15 @@ def _print_local_request_timing(
 def _target_identity_evidence_line(attempt: DiscoveryAttempt) -> str:
     evidence = attempt.target_identity_evidence
     if evidence is TargetIdentityEvidence.EMPTY_ARTICLE_LIST:
-        return (
-            "Target identity: NOT_VERIFIED — valid empty article list contained no "
-            "public article URL"
-        )
+        return "Target identity: NOT_VERIFIED — valid empty article list contained no public article URL"
     if evidence is TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_UNAVAILABLE:
-        return (
-            "Target identity: NOT_VERIFIED — returned article URL did not expose a "
-            "unique public biz"
-        )
+        return "Target identity: NOT_VERIFIED — returned article URL did not expose a unique public biz"
     if evidence is TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_MISMATCH:
-        return (
-            "Target identity: MISMATCH — returned article URL public biz contradicted "
-            "configured target"
-        )
+        return "Target identity: MISMATCH — returned article URL public biz contradicted configured target"
     if evidence is TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_VERIFIED:
-        return (
-            "Target identity: VERIFIED — all returned article URLs matched configured "
-            "public biz"
-        )
+        return "Target identity: VERIFIED — all returned article URLs matched configured public biz"
     if evidence is TargetIdentityEvidence.PREDATES_V7_VERIFICATION:
-        return (
-            "Target identity: NOT_VERIFIED — probe predates persisted article-URL "
-            "public-biz verification"
-        )
+        return "Target identity: NOT_VERIFIED — probe predates persisted article-URL public-biz verification"
     if evidence is TargetIdentityEvidence.PENDING:
         return "Target identity: PENDING — probe request outcome is unknown"
     return "Target identity: NOT_OBSERVED — request produced no public article URL evidence"
@@ -934,6 +879,75 @@ def _admin(args: argparse.Namespace) -> int:
                 for row in rows:
                     print(f"{row['id']}\t{row['tier']}\t{row['enabled']}\t{row['url']}")
                 return 0
+    if args.admin_command == "wechat-kb":
+        try:
+            db_path = _existing_db_path(args.db_path)
+            with db.get_conn(db_path) as conn:
+                if args.wechat_kb_command == "import":
+                    import_receipt = import_catalog(
+                        conn,
+                        assistant_root=Path(args.assistant_root).expanduser().resolve(),
+                        user=args.user,
+                        dry_run=args.dry_run,
+                        limit=args.limit,
+                    )
+                    if import_receipt.dry_run:
+                        label = "DRY RUN (no database changes)"
+                    elif import_receipt.remaining:
+                        label = "BATCH COMPLETE (more eligible articles remain)"
+                    elif not import_receipt.changed:
+                        label = "COMPLETE (nothing new to import)"
+                    else:
+                        label = "COMPLETE"
+                    print(f"WeChat KB import: {label}")
+                    print(f"Run id: {import_receipt.run_id}")
+                    print(
+                        "Counts: "
+                        f"catalog={import_receipt.catalog_articles} eligible={import_receipt.eligible} "
+                        f"imported={import_receipt.imported} already_present={import_receipt.already_present} "
+                        "existing_without_interpretation="
+                        f"{import_receipt.existing_without_interpretation} skipped={import_receipt.skipped} "
+                        f"remaining={import_receipt.remaining}"
+                    )
+                    print(f"Postcheck: {import_receipt.postcheck}")
+                    print(f"Changed: {'yes' if import_receipt.changed else 'no'}")
+                    if import_receipt.skipped_reasons:
+                        labels = {
+                            "article_metadata_or_date_invalid": "article metadata or date invalid",
+                            "article_or_summary_encoding_invalid": "article or summary encoding invalid",
+                            "article_or_summary_file_missing": "article or summary file missing",
+                            "article_or_summary_file_unreadable": "article or summary file unreadable",
+                            "canonical_url_mismatch": "catalog URL and canonical URL disagree",
+                            "entry_status": "catalog entry invalid",
+                            "file_both_missing": "article and summary files both missing",
+                            "missing_slug": "catalog slug missing",
+                            "not_wechat_article": "not a WeChat article URL",
+                            "schema_version": "catalog schema version unsupported",
+                            "vector_zero_or_nonfinite": "embedding vector zero or non-finite",
+                        }
+                        details = "; ".join(
+                            f"{labels.get(reason, reason.replace('_', ' '))}: {count}"
+                            for reason, count in sorted(import_receipt.skipped_reasons.items())
+                        )
+                        print(f"Skipped reasons: {details}")
+                    if import_receipt.dry_run:
+                        print("Next: rerun without --dry-run to import this candidate set")
+                    elif import_receipt.remaining:
+                        print("Next: rerun import to process the remaining eligible articles")
+                    elif import_receipt.skipped:
+                        print(
+                            "Next: review skipped reasons; correct source records you expected to import, "
+                            "then rerun; successful imports are already searchable"
+                        )
+                    else:
+                        print("Next: search /wechat for an imported title; reruns are idempotent")
+                    return 0
+        except (FileNotFoundError, OSError, ValueError, RuntimeError, sqlite3.Error, subprocess.SubprocessError) as exc:
+            print("WeChat KB operation: FAILED")
+            print(f"Reason: {exc}")
+            print("Changed: no committed changes from this operation")
+            print("Next: resolve the reported reason, then rerun the same command")
+            return 1
     if args.admin_command == "x-media" and args.x_media_command == "backfill":
         with db.get_conn(args.db_path) as conn:
             backfill_receipt = backfill_x_media(conn, limit=args.limit, dry_run=args.dry_run).as_dict()
@@ -986,10 +1000,7 @@ def _admin(args: argparse.Namespace) -> int:
         print(f"WeChat discovery state migration: {outcome}")
         print(f"State: {args.state_db}")
         print(f"Schema: v{before} -> v{after}")
-        print(
-            "Impact: private shadow state only; no backend request, Mp2RSS, production "
-            "item, or scheduler changed"
-        )
+        print("Impact: private shadow state only; no backend request, Mp2RSS, production item, or scheduler changed")
         print("Next: run ./run.sh admin wechat-discovery status")
         return 0
     if args.admin_command == "wechat-discovery" and args.wechat_discovery_command == "resolve":
@@ -1012,9 +1023,7 @@ def _admin(args: argparse.Namespace) -> int:
         store = DiscoveryStore(args.state_db)
         started_at = datetime.now(UTC)
         try:
-            resolution_id = store.reserve_identity_resolution(
-                account, config=config, started_at=started_at
-            )
+            resolution_id = store.reserve_identity_resolution(account, config=config, started_at=started_at)
         except DiscoveryCooldownActive as exc:
             print("WeChat identity resolution: COOLDOWN")
             print(f"Account: {account.name}")
@@ -1032,9 +1041,7 @@ def _admin(args: argparse.Namespace) -> int:
         provisional_identity = None
         platform_error_ret = None
         try:
-            candidates = WeChatAdminClient(credentials).search_accounts(
-                account_name=account.name
-            )
+            candidates = WeChatAdminClient(credentials).search_accounts(account_name=account.name)
             provisional_identity = select_unique_searchbiz_candidate(account, candidates)
             resolution_state = IdentityResolutionState.PROVISIONAL_MATCH
         except DiscoveryIdentityNoMatch:
@@ -1083,16 +1090,12 @@ def _admin(args: argparse.Namespace) -> int:
             print("Mapping: provisional and available for one identity-checking probe only")
             print("Private mapping identifier: not displayed")
             _print_local_request_timing(next_request_at, timespec="seconds")
-            print(
-                f"Next: after that time, run one authorized probe for {account.name}"
-            )
+            print(f"Next: after that time, run one authorized probe for {account.name}")
             return 0
         if resolution_state is IdentityResolutionState.AUTH_REQUIRED:
             print("Next: sign in again only with the authorized WeChat admin account")
         elif resolution_state is IdentityResolutionState.RATE_LIMITED:
-            next_request_at = backend_request_blocked_until(
-                config, store.latest_backend_request(), now=finished_at
-            )
+            next_request_at = backend_request_blocked_until(config, store.latest_backend_request(), now=finished_at)
             assert next_request_at is not None
             _print_local_request_timing(next_request_at, timespec="seconds")
             print("Next: wait until the local safety window ends; do not retry in a loop")
@@ -1120,10 +1123,7 @@ def _admin(args: argparse.Namespace) -> int:
         ready_accounts: tuple[tuple[str, int], ...]
         try:
             config = load_discovery_config(args.config)
-            disabled_evidence: (
-                tuple[str, int, int, int | None, str | None, int | None, str | None]
-                | None
-            ) = None
+            disabled_evidence: tuple[str, int, int, int | None, str | None, int | None, str | None] | None = None
             if not config.manual_backend_requests_enabled:
                 disabled_evidence = _readonly_wechat_discovery_evidence(args.state_db)
                 latest_attempt_id = None
@@ -1133,24 +1133,16 @@ def _admin(args: argparse.Namespace) -> int:
                 latest_resolution = None
                 ready_accounts = ()
                 identity_counts = (0, 0, 0, len(config.accounts))
-                latest_verified_probe_id = (
-                    disabled_evidence[3]
-                    if disabled_evidence[3] not in {None, 0}
-                    else None
-                )
+                latest_verified_probe_id = disabled_evidence[3] if disabled_evidence[3] not in {None, 0} else None
             else:
                 status_store = DiscoveryStore(args.state_db)
                 latest_attempt_id = status_store.latest_attempt_id()
-                latest_attempt = (
-                    status_store.attempt(latest_attempt_id)
-                    if latest_attempt_id is not None
-                    else None
-                )
+                latest_attempt = status_store.attempt(latest_attempt_id) if latest_attempt_id is not None else None
                 latest_successful_attempts = status_store.latest_successful_attempts()
                 latest_request = status_store.latest_backend_request()
                 latest_resolution = status_store.latest_identity_resolution()
-                ready_accounts, assigned_count, invalidated_count, unresolved_count = (
-                    status_store.identity_status(config.accounts)
+                ready_accounts, assigned_count, invalidated_count, unresolved_count = status_store.identity_status(
+                    config.accounts
                 )
                 identity_counts = (
                     len(ready_accounts),
@@ -1158,9 +1150,7 @@ def _admin(args: argparse.Namespace) -> int:
                     invalidated_count,
                     unresolved_count,
                 )
-                latest_verified_probe_id = (
-                    status_store.latest_identity_verified_successful_probe_id()
-                )
+                latest_verified_probe_id = status_store.latest_identity_verified_successful_probe_id()
             discovery_status = effective_status(
                 config,
                 credential_path=args.session_file,
@@ -1186,10 +1176,7 @@ def _admin(args: argparse.Namespace) -> int:
         except DiscoveryStoreVersionError:
             print("WeChat discovery: UNAVAILABLE")
             print("Impact: status could not be determined without changing the shadow state")
-            print(
-                "Next: run ./run.sh admin wechat-discovery migrate "
-                f"--state-db {args.state_db}"
-            )
+            print(f"Next: run ./run.sh admin wechat-discovery migrate --state-db {args.state_db}")
             return 2
         except (OSError, ValueError, sqlite3.Error) as exc:
             print("WeChat discovery: UNAVAILABLE")
@@ -1200,8 +1187,7 @@ def _admin(args: argparse.Namespace) -> int:
         print(f"WeChat discovery request gate: {discovery_status.state.value.upper()}")
         print(f"Accounts: {discovery_status.account_count} configured")
         readiness_message = (
-            "NOT_VALIDATED — article-URL public-biz-verified probe exists; "
-            "explicit comparison required"
+            "NOT_VALIDATED — article-URL public-biz-verified probe exists; explicit comparison required"
             if latest_verified_probe_id is not None
             else "NOT_VALIDATED — no article-URL public-biz-verified live probe"
         )
@@ -1236,10 +1222,7 @@ def _admin(args: argparse.Namespace) -> int:
                 if platform_line is not None:
                     print(platform_line)
             print("Canary: not started")
-            print(
-                "Next: no action while disabled; explicitly enable only for an "
-                "authorized one-shot request"
-            )
+            print("Next: no action while disabled; explicitly enable only for an authorized one-shot request")
             return 0
         if discovery_status.state is DiscoveryGateState.UNCONFIGURED:
             print("Impact: no WeChat admin requests can run")
@@ -1294,9 +1277,7 @@ def _admin(args: argparse.Namespace) -> int:
             if platform_line is not None:
                 print(platform_line)
         if latest_attempt is not None:
-            target_names = ", ".join(
-                result.account_name for result in latest_attempt.account_results
-            )
+            target_names = ", ".join(result.account_name for result in latest_attempt.account_results)
             print(
                 f"Latest attempt: {latest_attempt_id} {latest_attempt.kind.value} "
                 f"({target_names}) request outcome {latest_attempt.state.value.upper()}"
@@ -1318,8 +1299,7 @@ def _admin(args: argparse.Namespace) -> int:
         latest_verified_probe_account = next(
             (
                 successful_account
-                for successful_id, successful_account, _successful_biz
-                in latest_successful_attempts
+                for successful_id, successful_account, _successful_biz in latest_successful_attempts
                 if successful_id == latest_verified_probe_id
             ),
             None,
@@ -1328,8 +1308,7 @@ def _admin(args: argparse.Namespace) -> int:
             "Next: compare probe "
             f"{latest_verified_probe_id} for {latest_verified_probe_account} "
             "before making another backend request"
-            if latest_verified_probe_id is not None
-            and latest_verified_probe_account is not None
+            if latest_verified_probe_id is not None and latest_verified_probe_account is not None
             else None
         )
         if discovery_status.state is DiscoveryGateState.REQUEST_OUTCOME_UNKNOWN:
@@ -1351,36 +1330,23 @@ def _admin(args: argparse.Namespace) -> int:
             if compare_next is not None:
                 print(compare_next)
             elif len(ready_accounts) == 1:
-                print(
-                    "Next: after that time, run one authorized probe for "
-                    f"{ready_accounts[0][0]}"
-                )
+                print(f"Next: after that time, run one authorized probe for {ready_accounts[0][0]}")
             elif ready_accounts:
                 ready_names = ", ".join(name for name, _resolution_id in ready_accounts)
-                print(
-                    "Next: after that time, run one authorized probe for one ready account: "
-                    f"{ready_names}"
-                )
+                print(f"Next: after that time, run one authorized probe for one ready account: {ready_names}")
             else:
                 print("Next: after that time, resolve one unresolved account before probing")
             return 1
         if discovery_status.state is DiscoveryGateState.READY_TO_PROBE:
             ready_names = ", ".join(name for name, _resolution_id in ready_accounts)
             print(f"Ready accounts: {ready_names}")
-            print(
-                "Impact: each listed mapping can be atomically assigned to only one future "
-                "probe reservation"
-            )
-            print(
-                compare_next
-                or "Next: run one authorized probe for one listed account; do not schedule it"
-            )
+            print("Impact: each listed mapping can be atomically assigned to only one future probe reservation")
+            print(compare_next or "Next: run one authorized probe for one listed account; do not schedule it")
             return 0
         print("Impact: no provisional searchbiz mapping is ready; Mp2RSS remains unchanged")
         if (
             discovery_status.latest_request is not None
-            and discovery_status.latest_request.state
-            == DiscoveryState.PLATFORM_REJECTED.value
+            and discovery_status.latest_request.state == DiscoveryState.PLATFORM_REJECTED.value
         ):
             print(
                 "Next: inspect the rejected request target, authorized account conditions, "
@@ -1415,9 +1381,7 @@ def _admin(args: argparse.Namespace) -> int:
                 requested_page_size=args.count,
             )
         except DiscoveryCooldownActive as exc:
-            ready_accounts, _assigned, _invalidated, _unresolved = store.identity_status(
-                (account,)
-            )
+            ready_accounts, _assigned, _invalidated, _unresolved = store.identity_status((account,))
             print("WeChat discovery probe: COOLDOWN")
             print(f"Account: {account.name}")
             print("Impact: no request was sent; Mp2RSS and production items are unchanged")
@@ -1425,10 +1389,7 @@ def _admin(args: argparse.Namespace) -> int:
             if ready_accounts:
                 print(f"Next: after that time, rerun probe for {account.name} once")
             else:
-                print(
-                    f"Next: after that time, resolve {account.name} first; "
-                    "do not rerun probe yet"
-                )
+                print(f"Next: after that time, resolve {account.name} first; do not rerun probe yet")
             return 1
         except DiscoveryIdentityNoMatch:
             print("WeChat discovery probe: IDENTITY_UNRESOLVED")
@@ -1453,22 +1414,16 @@ def _admin(args: argparse.Namespace) -> int:
             )
             if articles:
                 state = DiscoveryState.SUCCESS
-                target_identity_evidence = (
-                    TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_VERIFIED
-                )
+                target_identity_evidence = TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_VERIFIED
             else:
                 state = DiscoveryState.IDENTITY_UNVERIFIED
                 target_identity_evidence = TargetIdentityEvidence.EMPTY_ARTICLE_LIST
         except DiscoveryIdentityMismatch:
             state = DiscoveryState.IDENTITY_MISMATCH
-            target_identity_evidence = (
-                TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_MISMATCH
-            )
+            target_identity_evidence = TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_MISMATCH
         except DiscoveryIdentityUnverified:
             state = DiscoveryState.IDENTITY_UNVERIFIED
-            target_identity_evidence = (
-                TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_UNAVAILABLE
-            )
+            target_identity_evidence = TargetIdentityEvidence.ARTICLE_URL_PUBLIC_BIZ_UNAVAILABLE
         except DiscoveryAuthRequired as exc:
             state = DiscoveryState.AUTH_REQUIRED
             target_identity_evidence = TargetIdentityEvidence.NOT_OBSERVED
@@ -1502,9 +1457,7 @@ def _admin(args: argparse.Namespace) -> int:
             print(f"Account: {account.name}")
             print(f"Reservation: {reservation.attempt_id} probe")
             print(f"Impact: the request result was not trusted ({type(exc).__name__})")
-            print(
-                "Preserved: its mapping is assigned to this reservation and cooldown remains active"
-            )
+            print("Preserved: its mapping is assigned to this reservation and cooldown remains active")
             print("Next: repair the private shadow database; do not repeat the request")
             return 2
 
@@ -1542,22 +1495,14 @@ def _admin(args: argparse.Namespace) -> int:
             print("Next: do not compare this attempt; no public-biz verification exists")
             return 1
         if state is DiscoveryState.IDENTITY_MISMATCH:
-            print(
-                "Preserved: no candidates were stored; the provisional mapping was "
-                "invalidated"
-            )
+            print("Preserved: no candidates were stored; the provisional mapping was invalidated")
             print("Next: inspect the returned article URL identity before resolving again")
         elif state is DiscoveryState.AUTH_REQUIRED:
             print("Preserved: existing shadow candidates remain available; this failure was recorded")
-            print(
-                "Next: run ./run.sh admin wechat-discovery login "
-                f"--session-file {args.session_file}"
-            )
+            print(f"Next: run ./run.sh admin wechat-discovery login --session-file {args.session_file}")
         elif state is DiscoveryState.RATE_LIMITED:
             print("Preserved: existing shadow candidates remain available; this failure was recorded")
-            next_request_at = backend_request_blocked_until(
-                config, store.latest_backend_request(), now=finished_at
-            )
+            next_request_at = backend_request_blocked_until(config, store.latest_backend_request(), now=finished_at)
             assert next_request_at is not None
             _print_local_request_timing(next_request_at, timespec="seconds")
             print("Next: wait until the local safety window ends; do not retry in a loop")
@@ -1586,10 +1531,9 @@ def _admin(args: argparse.Namespace) -> int:
             pricing_catalog=catalog,
         )
         test_sender = (
-            (lambda text, *, severity="page": send_alert_message(
-                f"{args.message_prefix}{text}", severity=severity
-            ))
-            if args.message_prefix else None
+            (lambda text, *, severity="page": send_alert_message(f"{args.message_prefix}{text}", severity=severity))
+            if args.message_prefix
+            else None
         )
         alert_result = run_alert_state_machine(
             signals,
@@ -1645,11 +1589,7 @@ def _admin(args: argparse.Namespace) -> int:
                     else (
                         "in-progress"
                         if raw.get("evaluation_state") == "in_progress"
-                        else (
-                            "recorded-scope"
-                            if raw.get("evaluation_state") == "scope_limited"
-                            else "ok"
-                        )
+                        else ("recorded-scope" if raw.get("evaluation_state") == "scope_limited" else "ok")
                     )
                 )
             )
@@ -1923,18 +1863,32 @@ def build_parser() -> argparse.ArgumentParser:
     wechat_avatar_refresh = wechat_avatar_subparsers.add_parser("refresh")
     wechat_avatar_refresh.add_argument("--account", required=True)
     wechat_avatar_refresh.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
+    wechat_kb_parser = admin_subparsers.add_parser("wechat-kb")
+    wechat_kb_subparsers = wechat_kb_parser.add_subparsers(dest="wechat_kb_command", required=True)
+    wechat_kb_import = wechat_kb_subparsers.add_parser("import")
+    wechat_kb_import.add_argument("--dry-run", action="store_true")
+    wechat_kb_import.add_argument("--limit", type=_positive_int)
+    wechat_kb_import.add_argument(
+        "--assistant-root",
+        default=os.environ.get("AI_ASSISTANT_ROOT", str(Path.home() / "research" / "ai-assistant")),
+    )
+    wechat_kb_import.add_argument("--user", default=os.environ.get("AI_RADAR_INTERPRET_USER", "dong_lin"))
+    wechat_kb_import.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
     x_media_parser = admin_subparsers.add_parser("x-media")
     x_media_subparsers = x_media_parser.add_subparsers(dest="x_media_command", required=True)
     x_media_backfill_parser = x_media_subparsers.add_parser("backfill")
-    x_media_backfill_parser.add_argument("--limit", type=_positive_int, default=None,
-                                         help="cap how many items this run looks up (X bills per returned post)")
-    x_media_backfill_parser.add_argument("--dry-run", action="store_true",
-                                         help="report the candidate count without issuing any request")
+    x_media_backfill_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="cap how many items this run looks up (X bills per returned post)",
+    )
+    x_media_backfill_parser.add_argument(
+        "--dry-run", action="store_true", help="report the candidate count without issuing any request"
+    )
     x_media_backfill_parser.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
     wechat_discovery_parser = admin_subparsers.add_parser("wechat-discovery")
-    wechat_discovery_subparsers = wechat_discovery_parser.add_subparsers(
-        dest="wechat_discovery_command", required=True
-    )
+    wechat_discovery_subparsers = wechat_discovery_parser.add_subparsers(dest="wechat_discovery_command", required=True)
     wechat_discovery_status = wechat_discovery_subparsers.add_parser("status")
     wechat_discovery_status.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     wechat_discovery_status.add_argument("--state-db", default=str(DEFAULT_STATE_DB_PATH))
@@ -1975,7 +1929,9 @@ def build_parser() -> argparse.ArgumentParser:
     alert_check = admin_subparsers.add_parser("alert-check")
     alert_check.add_argument("--state-path", default=str(db.PROJECT_ROOT / "data" / "alert-state.json"))
     alert_check.add_argument("--event-path", default=str(db.PROJECT_ROOT / "data" / "alert-events.jsonl"))
-    alert_check.add_argument("--notification-state-path", default=str(db.PROJECT_ROOT / "data" / "pricing-notification-state.json"))
+    alert_check.add_argument(
+        "--notification-state-path", default=str(db.PROJECT_ROOT / "data" / "pricing-notification-state.json")
+    )
     alert_check.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))
     alert_check.add_argument("--usage-db-path")
     alert_check.add_argument("--pricing-cache-path")

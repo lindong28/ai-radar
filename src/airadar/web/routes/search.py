@@ -6,7 +6,9 @@ from functools import lru_cache
 from opencc import OpenCC
 
 SEARCH_WHITESPACE_RE = re.compile(r"[\s\u3000]+")
+SEARCH_TERM_RE = re.compile(r"[^\W_]+(?:[.+-][^\W_]+)*", re.UNICODE)
 SQL_SEARCH_WHITESPACE_REMOVALS = ("' '", "char(12288)", "char(9)", "char(10)", "char(13)")
+REVIEW_TERM_ALIAS_GROUP = ("实测", "评测", "测评", "狂测")
 
 
 def fts_phrase_query(value: str | None) -> str | None:
@@ -20,6 +22,19 @@ def fts_phrase_query(value: str | None) -> str | None:
 
 def remove_search_whitespace(value: str | None) -> str:
     return SEARCH_WHITESPACE_RE.sub("", (value or "").strip())
+
+
+def tokenize_search_query(value: str | None) -> list[str]:
+    """Split recalled-title queries while preserving product versions such as 2.5."""
+    return list(dict.fromkeys(match.group(0) for match in SEARCH_TERM_RE.finditer(value or "")))
+
+
+def controlled_alias_terms(term: str) -> list[str]:
+    """Return controlled conceptual aliases, excluding the raw term's S/T variants."""
+    raw_variants = set(expand_st_variants(term))
+    if not raw_variants.intersection(REVIEW_TERM_ALIAS_GROUP):
+        return []
+    return [alias for alias in REVIEW_TERM_ALIAS_GROUP if alias not in raw_variants]
 
 
 def whitespace_insensitive_sql(expr: str) -> str:
@@ -56,7 +71,9 @@ def like_patterns_for_query(q: str | None) -> list[str]:
     return [f"%{escape_like(variant)}%" for variant in expand_st_variants(q, remove_whitespace=True)]
 
 
-def source_match_expression(q: str | None, *, source_alias: str = "s", item_alias: str = "i") -> tuple[str, list[object]]:
+def source_match_expression(
+    q: str | None, *, source_alias: str = "s", item_alias: str = "i"
+) -> tuple[str, list[object]]:
     patterns = like_patterns_for_query(q)
     if not patterns:
         return "0", []

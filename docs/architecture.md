@@ -276,6 +276,11 @@ data/sources.toml
    │ interpret │ ─────────────────────────> │ wechat_interpretations 表 │
    │ runner    │  + KB writeback if saved  │ summary_md/tags/decision │
    └───────────┘                            └──────────────────────────┘
+
+ai-assistant KB ── versioned article catalog ──> admin/wechat_kb.py
+                                                    │ explicit import only
+                                                    ▼
+                                      reserved archive items + interpretations
 ```
 
 `kind="feed"` 由 `rss.py` 解析 RSS/Atom；只有经来源证据批准的范围收窄进入 `feed_rules.py`。`kind="web"` 只用于没有合适原始 Feed 的官方列表或 API，由 `fetcher/web.py` 的代码登记表约束 fetch host、最终 host、item URL 范围、解析器和最小结果数；零结果、越界链接、错误最终 host 或结构漂移会让该来源本轮显式失败，不会切换到 AIHOT、Mp2RSS、第三方镜像或通用任意链接抓取。
@@ -285,6 +290,8 @@ data/sources.toml
 `kind="wechat"` 生产源有两个并行运行、取并集：`wx_mp2rss`（托管 Mp2RSS 合集 feed，`MP2RSS_FEED_URL`）与 `wx_wechat2rss`（本机自建 Wechat2RSS，`WECHAT2RSS_FEED_URL`）。两者互有漏文、谁都不是对方的超集，所以并行而非切换（[ADR-059](adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md)）。既有去重按 URL / 正文哈希且作用域限于单个 `source_id`，识别不出跨源重复——两个源给同一篇文章的 URL 没有公共子串（短链 `/s/<token>` vs 长链 `?__biz=…&mid=…&idx=…&sn=…`），正文也来自不同渲染方。因此 `fetcher/dedup.py` 另加一层**跨源身份**，只对 `kind='wechat'` 且 enabled 的来源在 INSERT 前判定：账号（`items.author`）+ 归一化标题（`wechat_text.wechat_identity_title`）+ 发布时间差 ≤ `WECHAT_IDENTITY_WINDOW`（5 分钟），命中即丢弃后到的一条，谁先到留谁。
 
 fetch 阶段通过 RSS 发现新文章链接，再只对尚未入库的 `mp.weixin.qq.com/s/...` 原文用 Playwright 抓全文；抓取失败时降级保留 RSS 裸条目，后续 Web 层仍只公开中文摘要与原文回链。`interpret` 阶段只读取启用的 wechat 源 item，调用 ai-assistant `summarize-article` 逻辑生成结构化总结；`save_decision=1` 的条目展示在 `/wechat` 并回写 ai-assistant KB，`save_decision=0` 只在本库留处理记录。X API 接入不读取或替换 `wx_mp2rss`。
+
+反向补录不是自动 pipeline：`admin/wechat_kb.py` 通过 ai-assistant 的 `--list-article-records` JSONL 契约读取一致的 index/file/vector 快照，只把缺失的合格微信文章写入保留来源 `wx_ai_assistant_kb_archive`。`wechat_archive.py` 单一持有这个来源身份与两组消费谓词：`/wechat` 和跨源去重包含它，公开 source API、fetch 和 A7 排除它。来源固定 disabled，避免配置 reload 把内部归档误当实时 feed；每个 import run 用 `extra_json.import_run_id` 绑定同一事务内的后检查并保留 provenance，失败时整笔事务回滚，成功批次不提供通用删除命令。
 
 每个阶段只处理尚未完成对应评估的新条目。`pipeline.sh` 按顺序调度全部阶段，`interpret` 位于最后且 preflight 缺 ai-assistant 依赖时跳过，不阻断前置抓取/精选。
 
@@ -404,6 +411,8 @@ confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron �
 - **搜索索引**：`003_add_fts5_search.sql` 是当前 `items_fts` schema 的权威定义，每次 `migrate()` 都会重建 FTS 表和触发器。索引覆盖标题、正文、来源名、作者和 enrich 生成的中文标题；scoring `reasoning` 不再进入搜索索引。`sources.name` 更新和成功的 enrich 写入会通过 trigger 同步到 FTS。
 - **短查询兜底**：timeline 和 curated 共用 `search_id_subquery()`。3 字及以上使用 `items_fts MATCH`；1-2 字只在标题、来源名、作者和中文标题上用 escaped LIKE，避免对正文做短词全表扫。
 - **微信解读闸门**：`wechat_interpretations.save_decision=1` 是 `/wechat` 展示和 ai-assistant KB 写入的唯一闸门。详情页从本库 `summary_md` 渲染，不在请求时读取 ai-assistant 文件。
+- **微信解读搜索**：查询拆成必需词，每词跨标题、作者、正文、摘要、标签和完整解读满足；严格阶段的长 item 字段走 trigram FTS，短词与解读字段走 escaped LIKE，严格阶段为零结果时才为长 item 字段追加空白不敏感 LIKE。受控评测词同义组只扩展非作者召回，排序保持 raw 作者、raw 标题、alias 标题的优先级。执行策略与残余召回边界见 [ADR-20260901-a31f](adr/20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md)。
+- **KB 归档边界**：ai-assistant 私有 store 只能经 versioned article catalog CLI 读取。归档导入后网站仍只消费本地 SQLite；内部来源不公开、不调度，但参与微信可见性与跨源身份。
 
 ### 索引
 
@@ -597,12 +606,13 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | 改热点榜（口径、缓存或未就绪态） | `web/routes/hot_cache.py`（候选缓存与热度公式）、`web/routes/curated.py`（`hot_payload`/`/api/v1/hot`）、`web/templates/hot.html`、`web/templates/_hot_topics.html`、`web/static/app.js`（`renderHotTopics`）+ [ADR-060](adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md)；SSR partial 与 CSR 渲染必须逐节点同形 |
 | 修改分类契约 | `web/routes/categories.py`（`CATEGORY_CONTRACT`） |
 | 修改 timeline/curated/wechat 搜索 | `web/routes/search.py` + 对应路由的查询字段 |
+| 补录 ai-assistant KB 微信文章 | `admin/wechat_kb.py`、`wechat_archive.py`、`cli.py` + [摄取 runbook](operations/wechat-ingestion.md#手动补录-ai-assistant-知识库归档) + [跨仓契约](references/ai-assistant-contract.md#只读文章目录-jsonl) |
 | 修改真实计数缓存或页码 clamp | `web/routes/pagination.py`, `web/routes/timeline.py`, `web/routes/curated_archive.py`, `web/routes/wechat.py` |
 | 修改 pipeline stage 通用 evaluation 原语 | `stage_common.py` + `prefilter/runner.py`, `scorer/runner.py`, `enrich/runner.py` |
 | 修改数据库 schema | `migrations/` 下新建 SQL 文件 |
 | 修改 Mac→Tencent DB 同步、FTS oracle 或 server apply 状态机 | `deploy/sync/sync-db-to-server.sh`, `logical_delta.py`, `snapshot_db.py`, `build_fts_manifest.py`, `apply_db_update.py` + [ADR-014](adr/014-ship-base-only-db-and-rebuild-fts.md) |
 | 修改标签词表 | `topics.py`（CONTROLLED_VOCABULARY） |
 | 前端页面修改 | `web/templates/`（`/`、`/all` SSR 首屏）+ `web/static/`（JS/CSS 与静态页面） |
-| 调整微信文章解读 | `interpret/runner.py`、`web/routes/wechat.py`、`web/templates/wechat*.html` |
+| 调整微信文章解读 | `interpret/runner.py`、`web/routes/wechat.py`、`web/templates/wechat*.html`、`wechat_archive.py` |
 | 行为等价的 Web route / presentation / SSR 重构 | `scripts/web_contract_golden.py` + [Web Contract Golden 验证](references/web-contract-golden.md) |
 | 改动 `web/static/app.js` 或 `web/static/style.css` | `scripts/bump_frontend_assets.py`（重算 `?v=`）+ [ADR-039](adr/039-route-news-through-edgeone-dns-only-cname.md)、[前端经验](experiences/frontend.md) |

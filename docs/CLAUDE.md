@@ -30,7 +30,7 @@
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + DB sync 的职责分工、验证与"已服务"终态判据 + X 图片新加坡出口代理（隧道链路、凭据边界、从内到外的诊断顺序）+ Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
 | [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A7 与 D3 告警、domain selector preflight/route audit、周报、飞书 webhook、用户旅程性能监控 runbook |
-| [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS + Wechat2RSS 双跑与跨源去重、真名头像 backfill、停用/重启用清重步骤；后台发现候选已停止推进（ADR-061） |
+| [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS + Wechat2RSS 双跑与跨源去重、ai-assistant KB 手动归档补录、真名头像 backfill；后台发现候选已停止推进（ADR-061） |
 | [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
 
 ### docs/references/ [Developer]
@@ -39,7 +39,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| [ai-assistant-contract.md](references/ai-assistant-contract.md) | 可选外部 summary-agent 的接口契约 [Developer]：启用条件、`./run.sh interpret` 契约、title/跳过语义、验证入口 |
+| [ai-assistant-contract.md](references/ai-assistant-contract.md) | 可选外部 summary-agent 的接口契约 [Developer]：interpret 写回、只读文章目录 JSONL、title/跳过语义与验证入口 |
 | [source-maintenance.md](references/source-maintenance.md) | 信源清单维护与验证规则 [Developer]（aihot_sources.json 机器契约、audit 脚本） |
 | [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 ADR-061，本档只留取证读数 |
 | [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源添加流程 [User]（已停用，微信摄取现走 Mp2RSS + Wechat2RSS 双跑，见 operations/wechat-ingestion.md） |
@@ -152,6 +152,9 @@
 | [20260828-c3a5-retry-missing-criteria-reason-once.md](adr/20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 |
 | [20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md](adr/20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 |
 | [20260829-a7f1-suppress-actionless-x-silence.md](adr/20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 |
+| [20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md](adr/20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并通过内部归档来源显式补录 ai-assistant KB |
+| [20260831-8b7c-control-wechat-review-term-aliases.md](adr/20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，并保持 raw 作者优先 |
+| [20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md](adr/20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 | [README.md](adr/README.md) | ADR 索引 |
 

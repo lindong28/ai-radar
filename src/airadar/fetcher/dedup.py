@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..presentation.links import replace_item_links
+from ..wechat_archive import wechat_visibility_sql
 from ..wechat_text import wechat_identity_title
 
 # Two providers serving the same WeChat article agree on its publish time to
@@ -76,8 +77,9 @@ def wechat_duplicate_id(conn: sqlite3.Connection, item: FetchedItem) -> str | No
 
     Two restrictions keep this from suppressing articles it should not:
 
-    ``s.enabled=1`` — a disabled source's rows are already invisible on
-    ``/wechat``, which filters on the same flag. Matching against them would
+    The shared WeChat visibility predicate includes enabled sources and the
+    reserved ai-assistant archive. Other disabled source rows remain invisible
+    on ``/wechat``. Matching against them would
     mean that switching a feed off both hides everything it found first *and*
     blocks the remaining feed from bringing those articles back, since every
     later insert would keep matching the hidden row.
@@ -107,12 +109,11 @@ def wechat_duplicate_id(conn: sqlite3.Connection, item: FetchedItem) -> str | No
         )
         return None
     rows = conn.execute(
-        """
+        f"""
         SELECT i.id, i.title
         FROM items i
         JOIN sources s ON s.id = i.source_id
-        WHERE COALESCE(s.kind, 'feed')='wechat'
-          AND s.enabled = 1
+        WHERE {wechat_visibility_sql()}
           AND i.source_id <> ?
           AND i.author = ?
           AND i.published_at BETWEEN ? AND ?

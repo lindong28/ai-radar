@@ -47,6 +47,7 @@ CALLSITE_REGISTRY = (
     Callsite("src/airadar/admin/cost_report.py", "direct_subprocess_env", 1, "managed-direct-env"),
     Callsite("src/airadar/admin/cost_report.py", "subprocess.run", 1, "managed-standard-env"),
     Callsite("src/airadar/admin/performance.py", "subprocess.run", 1, "local-process"),
+    Callsite("src/airadar/admin/wechat_kb.py", "subprocess.run", 1, "local-process"),
     Callsite("src/airadar/admin/x_media_backfill.py", "selector_httpx_client", 1, "selector-owned"),
     Callsite("src/airadar/egress.py", "OpenAI", 1, "selector-implementation"),
     Callsite("src/airadar/egress.py", "selector_httpx_client", 1, "selector-implementation"),

@@ -17,6 +17,7 @@ from airadar.db import migrate
 from airadar.egress import SelectorPolicy
 from airadar.llm_usage import migrate_usage_db
 from airadar.web.app import create_app
+from airadar.web.routes import wechat as wechat_routes
 
 SUMMARY_MD = """### 📋 文章概况
 
@@ -509,6 +510,147 @@ def test_wechat_api_searches_interpretation_card_fields_and_prioritizes_author(t
     assert [item["slug"] for item in author_data["items"][:2]] == ["author-new-slug", "author-old-slug"]
 
 
+def test_wechat_api_search_requires_each_term_but_allows_cross_field_matches(tmp_path: Path) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    conn = _connect(db_path)
+    rows = [
+        (
+            "search-seedance-target",
+            "seedance-target-slug",
+            "https://mp.weixin.qq.com/s/seedance-target",
+            "刚刚，即梦 Seedance 2.5 来了！我狂测测测测",
+            "数字生命卡兹克",
+            "2026-08-20T10:00:00Z",
+            "本文包含多个视频样例。",
+            "命中摘要",
+        ),
+        (
+            "search-seedance-decoy",
+            "seedance-decoy-slug",
+            "https://mp.weixin.qq.com/s/seedance-decoy",
+            "即梦 Seedance 2.5 新闻",
+            "其他作者",
+            "2026-08-21T10:00:00Z",
+            "这里只有发布消息，没有测试内容。",
+            "干扰摘要",
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (?, 'wx_mp2rss', ?, ?, ?, ?, ?, ?, NULL, ?, '{}')
+        """,
+        [
+            (item_id, url, title, author, published_at, published_at, body, f"h-{item_id}")
+            for item_id, _slug, url, title, author, published_at, body, _abstract in rows
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO wechat_interpretations (
+          item_id, slug, recommendation, save_decision, save_reason, abstract,
+          tags_json, summary_md, model, kb_synced, processed_at, error
+        )
+        VALUES (?, ?, '值得一看', 1, '测试', ?, '["Seedance"]', '普通总结',
+                'fake-model', 1, ?, NULL)
+        """,
+        [
+            (item_id, slug, abstract, published_at)
+            for item_id, slug, _url, _title, _author, published_at, _body, abstract in rows
+        ],
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    data = client.get(
+        "/api/v1/wechat",
+        params={"q": "即梦 Seedance 2.5 实测", "limit": 50},
+    ).json()["data"]
+
+    assert data["total"] == 1
+    assert [item["slug"] for item in data["items"]] == ["seedance-target-slug"]
+
+
+def test_wechat_api_search_review_aliases_preserve_raw_author_and_title_priority(
+    tmp_path: Path,
+) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    conn = _connect(db_path)
+    rows = [
+        (
+            "search-review-author-raw",
+            "review-author-raw-slug",
+            "https://mp.weixin.qq.com/s/review-author-raw",
+            "普通产品观察",
+            "实测研究所",
+            "2026-08-01T10:00:00Z",
+        ),
+        (
+            "search-review-title-raw",
+            "review-title-raw-slug",
+            "https://mp.weixin.qq.com/s/review-title-raw",
+            "Seedance 实测报告",
+            "普通作者",
+            "2026-08-02T10:00:00Z",
+        ),
+        (
+            "search-review-title-alias",
+            "review-title-alias-slug",
+            "https://mp.weixin.qq.com/s/review-title-alias",
+            "Seedance 评测报告",
+            "普通作者",
+            "2026-08-03T10:00:00Z",
+        ),
+        (
+            "search-review-author-alias-only",
+            "review-author-alias-only-slug",
+            "https://mp.weixin.qq.com/s/review-author-alias-only",
+            "普通产品观察",
+            "评测研究所",
+            "2026-08-04T10:00:00Z",
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        )
+        VALUES (?, 'wx_mp2rss', ?, ?, ?, ?, ?, '普通正文', NULL, ?, '{}')
+        """,
+        [
+            (item_id, url, title, author, published_at, published_at, f"h-{item_id}")
+            for item_id, _slug, url, title, author, published_at in rows
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO wechat_interpretations (
+          item_id, slug, recommendation, save_decision, save_reason, abstract,
+          tags_json, summary_md, model, kb_synced, processed_at, error
+        )
+        VALUES (?, ?, '值得一看', 1, '测试', '普通摘要', '[]', '普通总结',
+                'fake-model', 1, ?, NULL)
+        """,
+        [(item_id, slug, published_at) for item_id, slug, *_rest, published_at in rows],
+    )
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db_path))
+
+    data = client.get("/api/v1/wechat", params={"q": "实测", "limit": 50}).json()["data"]
+
+    assert [item["slug"] for item in data["items"]] == [
+        "review-author-raw-slug",
+        "review-title-raw-slug",
+        "review-title-alias-slug",
+    ]
+
+
 def test_wechat_api_search_ignores_internal_whitespace_across_card_fields(tmp_path: Path) -> None:
     db_path = _seed_wechat_search_db(tmp_path)
     conn = _connect(db_path)
@@ -595,6 +737,12 @@ def test_wechat_api_search_ignores_internal_whitespace_across_card_fields(tmp_pa
     assert [item["slug"] for item in title_spaced["items"]] == ["whitespace-title-slug"]
     assert [item["slug"] for item in title_full_width_tab["items"]] == ["whitespace-title-slug"]
 
+    title_compact = client.get("/api/v1/wechat", params={"q": "分享ClaudeCode", "limit": 50}).json()["data"]
+    author_compact = client.get("/api/v1/wechat", params={"q": "空白作者ClaudeCode", "limit": 50}).json()["data"]
+
+    assert [item["slug"] for item in title_compact["items"]] == ["whitespace-title-slug"]
+    assert [item["slug"] for item in author_compact["items"]] == ["whitespace-author-slug"]
+
     author = client.get("/api/v1/wechat", params={"q": "空白作者 Claude Code", "limit": 50}).json()["data"]
     abstract = client.get("/api/v1/wechat", params={"q": "空白摘要 Claude Code", "limit": 50}).json()["data"]
     tag = client.get("/api/v1/wechat", params={"q": "空白标签 Claude Code", "limit": 50}).json()["data"]
@@ -602,6 +750,68 @@ def test_wechat_api_search_ignores_internal_whitespace_across_card_fields(tmp_pa
     assert [item["slug"] for item in author["items"]] == ["whitespace-author-slug"]
     assert [item["slug"] for item in abstract["items"]] == ["whitespace-abstract-slug"]
     assert [item["slug"] for item in tag["items"]] == ["whitespace-tag-slug"]
+
+
+def test_wechat_api_search_only_runs_normalized_item_fallback_after_empty_strict_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = _seed_wechat_search_db(tmp_path)
+    conn = _connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO items (
+          id, source_id, url, title, author, published_at, fetched_at,
+          content_text, content_html, content_hash, extra_json
+        ) VALUES (
+          'search-fallback', 'wx_mp2rss', 'https://mp.weixin.qq.com/s/search-fallback',
+          '分享Claude Code', '空白测试', '2026-06-10T10:00:00Z',
+          '2026-06-10T10:00:00Z', '普通正文', NULL, 'h-search-fallback', '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO wechat_interpretations (
+          item_id, slug, recommendation, save_decision, save_reason, abstract,
+          tags_json, summary_md, model, kb_synced, processed_at, error
+        ) VALUES (
+          'search-fallback', 'search-fallback-slug', '值得一看', 1, '测试',
+          '普通摘要', '[]', '普通总结', 'fake-model', 1,
+          '2026-06-10T10:00:00Z', NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    calls: list[bool] = []
+    original_search_sql = wechat_routes._search_sql
+
+    def observed_search_sql(
+        q: str | None,
+        *,
+        include_normalized_item_like: bool = False,
+    ) -> tuple[str, list[object], str, list[object], str | None]:
+        calls.append(include_normalized_item_like)
+        return original_search_sql(q, include_normalized_item_like=include_normalized_item_like)
+
+    monkeypatch.setattr(wechat_routes, "_search_sql", observed_search_sql)
+    client = TestClient(create_app(db_path))
+
+    strict = client.get("/api/v1/wechat", params={"q": "分享Claude Code"}).json()["data"]
+    assert [item["slug"] for item in strict["items"]] == ["search-fallback-slug"]
+    assert calls == [False]
+
+    calls.clear()
+    compact = client.get("/api/v1/wechat", params={"q": "分享ClaudeCode"}).json()["data"]
+    assert [item["slug"] for item in compact["items"]] == ["search-fallback-slug"]
+    assert calls == [False, True]
+
+    calls.clear()
+    missing = client.get("/api/v1/wechat", params={"q": "绝无此词xyz987"}).json()["data"]
+    assert missing["total"] == 0
+    assert calls == [False, True]
 
 
 def test_wechat_api_search_supports_traditional_simplified_short_terms_and_negative_fields(
@@ -619,9 +829,13 @@ def test_wechat_api_search_supports_traditional_simplified_short_terms_and_negat
     assert source_name_only["total"] == 0
     assert source_name_only["items"] == []
 
+    long_source_name_only = client.get("/api/v1/wechat?q=Mp2RSS&limit=50").json()["data"]
+    assert long_source_name_only["total"] == 0
+    assert long_source_name_only["items"] == []
+
     summary_only = client.get("/api/v1/wechat?q=深海泡泡词&limit=50").json()["data"]
-    assert summary_only["total"] == 0
-    assert summary_only["items"] == []
+    assert summary_only["total"] == 1
+    assert [item["slug"] for item in summary_only["items"]] == ["title-slug"]
 
 
 def test_wechat_api_search_paginates_clamps_and_carries_q_in_detail_urls(tmp_path: Path) -> None:
@@ -748,6 +962,7 @@ def test_wechat_ssr_routes_close_request_connection(
 ) -> None:
     db_path = _seed_wechat_db(tmp_path)
     client = TestClient(create_app(db_path))
+
     class TrackingConnection(sqlite3.Connection):
         closed_by_route = False
 
@@ -952,10 +1167,10 @@ def test_interpret_runner_saves_worth_reading_result_and_patches_kb_meta(
                             "save_decision": True,
                             "save_reason": "有实践价值",
                             "recommendation": "值得一看",
-                                "tags": ["Agent", "工程化"],
-                                "model": "fake-model",
-                                "summary_md": "stdout should not be used",
-                                "llm_metadata": {"criteria_reason_source": "json"},
+                            "tags": ["Agent", "工程化"],
+                            "model": "fake-model",
+                            "summary_md": "stdout should not be used",
+                            "llm_metadata": {"criteria_reason_source": "json"},
                         },
                     },
                     ensure_ascii=False,
@@ -1115,9 +1330,7 @@ def test_interpret_runner_rejects_invalid_reason_source_before_kb_save(
             assistant_root=assistant_root,
             tmp_root=tmp_path / "tmp",
         )
-        row = conn.execute(
-            "SELECT error, kb_synced FROM wechat_interpretations WHERE item_id='item-1'"
-        ).fetchone()
+        row = conn.execute("SELECT error, kb_synced FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
 
     assert summary.processed == 0
     assert summary.errors == 1
@@ -1244,8 +1457,7 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     assert tuple(interpretation) == ("markdown_value_judgment_line", "default")
     expected_url_hash = hashlib.sha256(b"https://mp.weixin.qq.com/s/test").hexdigest()
     assert (
-        f"interpret criteria_reason_fallback item=item-1 user=default slug=usage-slug "
-        f"url_sha256={expected_url_hash}"
+        f"interpret criteria_reason_fallback item=item-1 user=default slug=usage-slug url_sha256={expected_url_hash}"
     ) in output
     assert "https://mp.weixin.qq.com/s/test" not in output
 
@@ -1289,9 +1501,9 @@ def test_interpret_runner_retries_missing_criteria_reason_once_and_recovers(
                             "save_decision": False,
                             "save_reason": "信息密度低",
                             "recommendation": "可跳过",
-                                "tags": ["低价值"],
-                                "model": "fake-model",
-                                "llm_metadata": {"criteria_reason_source": "json"},
+                            "tags": ["低价值"],
+                            "model": "fake-model",
+                            "llm_metadata": {"criteria_reason_source": "json"},
                         },
                     },
                     ensure_ascii=False,
@@ -1520,8 +1732,7 @@ def test_interpret_preserves_paid_summary_when_metering_write_fails(
     output = capsys.readouterr().out
     expected_url_hash = hashlib.sha256(b"https://mp.weixin.qq.com/s/test").hexdigest()
     assert (
-        f"interpret criteria_reason_fallback item=item-1 user=default slug=paid-summary "
-        f"url_sha256={expected_url_hash}"
+        f"interpret criteria_reason_fallback item=item-1 user=default slug=paid-summary url_sha256={expected_url_hash}"
     ) in output
     assert caplog.messages == [
         "llm_usage_metering_failure stage=interpret provider=ark "
@@ -1609,8 +1820,7 @@ def test_interpret_runner_skips_kb_for_not_worth_reading(
     assert row["interpret_user"] == "default"
     expected_url_hash = hashlib.sha256(b"https://mp.weixin.qq.com/s/test").hexdigest()
     assert (
-        f"interpret criteria_reason_fallback item=item-1 user=default slug=skip-slug "
-        f"url_sha256={expected_url_hash}"
+        f"interpret criteria_reason_fallback item=item-1 user=default slug=skip-slug url_sha256={expected_url_hash}"
     ) in output
 
 
@@ -1724,9 +1934,9 @@ def test_interpret_runner_falls_back_when_kb_summary_file_missing(
                             "slug": "fallback-slug",
                             "save_decision": False,
                             "save_reason": "fallback complete",
-                                "recommendation": "可跳过",
-                                "tags": ["Fallback"],
-                                "llm_metadata": {"criteria_reason_source": "json"},
+                            "recommendation": "可跳过",
+                            "tags": ["Fallback"],
+                            "llm_metadata": {"criteria_reason_source": "json"},
                         },
                     },
                     ensure_ascii=False,
@@ -1783,9 +1993,9 @@ def test_interpret_runner_retries_concurrent_duplicate_kb_slug_with_unique_slug(
                             "save_decision": True,
                             "save_reason": "有实践价值",
                             "recommendation": "值得一看",
-                                "tags": ["Agent"],
-                                "model": "fresh-model",
-                                "llm_metadata": {"criteria_reason_source": "json"},
+                            "tags": ["Agent"],
+                            "model": "fresh-model",
+                            "llm_metadata": {"criteria_reason_source": "json"},
                         },
                     },
                     ensure_ascii=False,
@@ -1943,9 +2153,7 @@ def test_interpret_runner_uses_one_slug_for_kb_local_and_audit(
         row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
     output = capsys.readouterr().out
     with sqlite3.connect(usage_db_path) as conn:
-        usage_item_id, attribution_json = conn.execute(
-            "SELECT item_id, attribution_json FROM llm_usage"
-        ).fetchone()
+        usage_item_id, attribution_json = conn.execute("SELECT item_id, attribution_json FROM llm_usage").fetchone()
         attribution = json.loads(attribution_json)
 
     assert summary.processed == 1
@@ -2493,14 +2701,10 @@ def test_interpret_runner_empty_error_message_still_advances_retry_counter(
             "SELECT error, error_retry_count FROM wechat_interpretations WHERE item_id='item-1'"
         ).fetchone()
         # Age the row past the first backoff window, then fail again.
-        conn.execute(
-            "UPDATE wechat_interpretations SET processed_at='2026-06-02T10:05:00Z' WHERE item_id='item-1'"
-        )
+        conn.execute("UPDATE wechat_interpretations SET processed_at='2026-06-02T10:05:00Z' WHERE item_id='item-1'")
         conn.commit()
         run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
-        second = conn.execute(
-            "SELECT error_retry_count FROM wechat_interpretations WHERE item_id='item-1'"
-        ).fetchone()
+        second = conn.execute("SELECT error_retry_count FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
 
     assert first["error"] == ""
     assert first["error_retry_count"] == 0
@@ -2560,9 +2764,7 @@ def test_interpret_runner_eighth_retry_failure_reaches_cap_and_stops(
         assert row["error_retry_count"] == ERROR_RETRY_MAX
 
         # Age the row far past every window: the cap must keep it out for good.
-        conn.execute(
-            "UPDATE wechat_interpretations SET processed_at='2026-01-01T00:00:00Z' WHERE item_id='item-1'"
-        )
+        conn.execute("UPDATE wechat_interpretations SET processed_at='2026-01-01T00:00:00Z' WHERE item_id='item-1'")
         conn.commit()
         summary = run_interpret(conn, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
 
@@ -2656,9 +2858,7 @@ def test_index_cannot_distinguish_only_incomplete_legacy_wechat_identity() -> No
         "https://mp.weixin.qq.com/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904&idx=4&sn=abc"
     )
     assert _index_cannot_distinguish("https://mp.weixin.qq.com/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904")
-    assert _index_cannot_distinguish(
-        "https://mp.weixin.qq.com:443/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904"
-    )
+    assert _index_cannot_distinguish("https://mp.weixin.qq.com:443/s?__biz=MTQzMjE1NjQwMQ==&mid=2656194904")
 
 
 def test_interpret_runner_rejects_a_cached_hit_for_a_different_article(

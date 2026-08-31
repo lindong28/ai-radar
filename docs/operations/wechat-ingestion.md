@@ -1,6 +1,6 @@
 # 微信公众号摄取运维
 
-> Mutable snapshot. 微信公众号源（`kind="wechat"`）当前生产链路是**托管 Mp2RSS 合集 feed 与自建 Wechat2RSS 双跑取并集**（`wx_mp2rss` + `wx_wechat2rss`，跨源去重见下文），文章卡片显示真实公众号名与头像。仓库内的公众号后台发现候选与微信读书 canary 默认关闭且已停止推进。本文记录这些路径的配置、运维机制和迁移门槛。
+> Mutable snapshot. 微信公众号实时生产链路是**托管 Mp2RSS 合集 feed 与自建 Wechat2RSS 双跑取并集**（`wx_mp2rss` + `wx_wechat2rss`，跨源去重见下文），另有维护者显式触发的 ai-assistant KB 内部归档补录；文章卡片显示真实公众号名与头像。仓库内的公众号后台发现候选与微信读书 canary 默认关闭且已停止推进。本文记录这些路径的配置、运维机制和迁移门槛。
 >
 > 本目录（`docs/operations/`）是维护者产线 runbook，绑定具体实机拓扑；fork 部署路径见 [README](../../README.md)。
 
@@ -40,7 +40,7 @@ WECHAT2RSS_FEED_URL=http://127.0.0.1:8080/feed/all.xml?k=<RSS_TOKEN>
 
 ### 去重键：账号 + 归一化标题 + 5 分钟发布窗
 
-两个源给同一篇文章的 URL 没有公共子串——Mp2RSS 出短链 `/s/<token>`，Wechat2RSS 出长链 `?__biz=…&mid=…&idx=…&sn=…`——所以既有的按 URL / content hash 去重（`src/airadar/fetcher/dedup.py`，作用域是单个 source）看不出它们是同一篇。跨源去重改用**账号 + 归一化标题**，并要求两侧发布时间相差不超过 5 分钟；只匹配 enabled 的来源，且排除条目自己所属的 source（同源身份由上面那两条既有路径裁定，它们按"文章是什么"判而不是按"它叫什么"判）。
+两个源给同一篇文章的 URL 没有公共子串——Mp2RSS 出短链 `/s/<token>`，Wechat2RSS 出长链 `?__biz=…&mid=…&idx=…&sn=…`——所以既有的按 URL / content hash 去重（`src/airadar/fetcher/dedup.py`，作用域是单个 source）看不出它们是同一篇。跨源去重改用**账号 + 归一化标题**，并要求两侧发布时间相差不超过 5 分钟；正常信源只匹配 enabled 的来源，且排除条目自己所属的 source（同源身份由上面那两条既有路径裁定，它们按"文章是什么"判而不是按"它叫什么"判）。唯一例外是内部归档源 `wx_ai_assistant_kb_archive`：它必须保持 disabled 以避开抓取和告警，但仍作为同篇文章的去重锚点。
 
 归一化只做 **NFKC + 空白折叠 + casefold**，不剥离标点、不做词干化或截断。
 
@@ -174,7 +174,32 @@ AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 
 详情页 `/wechat/<slug>` 使用 `markdown-it-py==4.0.0` 渲染 markdown，并用 `nh3==0.3.1` sanitize。LLM 生成的 `summary_md` 一律视为不可信 HTML 输入。
 
-`/wechat` 列表支持 `?q=` 搜索，匹配范围限定为解读卡片字段：`items.title`、`items.author`（公众号名）、`wechat_interpretations.abstract`、`wechat_interpretations.tags_json`。不匹配聚合 feed 名 `sources.name`，也不搜索 `summary_md` 全文。搜索使用 SQLite `LIKE` + 简繁扩展，且**空格不敏感**（查询与被匹配列两侧都剥除空白后比对，含全角空格——`分享 Claude Code` 与 `分享Claude Code` 等价）；详情链接和详情页返回链接会保留 `q` 与 `page`。
+`/wechat` 列表支持 `?q=` 搜索。查询先按空白和标点拆成必需词，每个词可在 `items.title`、`items.author`（公众号名）、`items.content_text`、`wechat_interpretations.abstract`、`tags_json` 或 `summary_md` 中满足；不匹配聚合 feed 名 `sources.name`。第一阶段用 trigram FTS 检索 3 字及以上的标题、正文和作者，短词与解读字段用 escaped `LIKE`；严格阶段为零结果时，才为长 item 字段追加空白不敏感 `LIKE` 兜底。`实测`、`评测`、`测评`、`狂测`是唯一受控同义组；同义词不触发作者优先，排序依次是原始作者命中、原始标题词数、仅同义标题词数、时间。详情链接和详情页返回链接会保留 `q` 与 `page`。严格阶段已有其它结果时不会运行慢速兜底，因此不承诺召回只靠压缩空白才能匹配的额外候选；发现与回退条件见 [ADR-20260901-a31f](../adr/20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md)。
+
+## 手动补录 ai-assistant 知识库归档
+
+这条命令用于“文件系统里已经有文章，但 AI Radar 从未摄取”的情况。它不属于 pipeline，也不自动运行；读取 ai-assistant Summary Agent 的版本化 JSONL 文章目录，把符合以下全部条件且 canonical URL 尚未存在的微信文章写入 `radar.db`：索引条目有效、文章与摘要文件存在、manifest 与向量行精确对齐、目标向量为 1536 维且非零有限值。
+
+```bash
+# 先预演：不写数据库
+./run.sh admin wechat-kb import \
+  --dry-run \
+  --assistant-root ~/research/ai-assistant \
+  --user dong_lin
+
+# 导入全部仍缺失的合格文章；可加 --limit 100 分批执行
+./run.sh admin wechat-kb import \
+  --assistant-root ~/research/ai-assistant \
+  --user dong_lin
+```
+
+默认数据库是 `data/radar.db`；测试或其它实例用 `--db-path /path/to/radar.db`。成功输出包含 `Run id`、catalog/eligible/imported/already_present/skipped/remaining 计数、`Postcheck: passed` 与 `Changed`。只有事务内 provenance、item、解读、`/wechat` 可见性、FTS 和公开来源排除计数全部一致才提交；目录对齐失败、字段 schema 漂移、文件校验失败或 postcheck 不一致都会返回非零且不提交该次运行。
+
+导入项归属保留源 `wx_ai_assistant_kb_archive`。该源固定 `enabled=0`，所以不会被 fetch、pipeline 或 A7 调度，也不会进入公开 source API；`/wechat`、详情页和微信跨源去重显式包含它。后续实时 feed 遇到同篇文章时会复用既有归档身份，不再生成重复卡片。
+
+`Run id` 用于审计本次导入和核对 postcheck，不是成功批次的删除句柄。命令执行失败或 postcheck 不一致时，尚未提交的事务会整体回滚；成功提交后不提供批量删除命令。原因是归档项会作为后续实时 feed 的去重锚点，按 run id 删除可能同时删掉系统里唯一存储的一份文章身份。
+
+如果以后确实需要撤销已提交批次，先停在这里，不要直接按 `extra_json.import_run_id` 删除。该动作应作为单独的数据修复接受评审，逐项确认是否已有可安全接替的实时源身份；需要频繁处理时再设计 promotion/claim ledger。目录 JSONL 字段与 ai-assistant 端生成规则见 [`../references/ai-assistant-contract.md`](../references/ai-assistant-contract.md#只读文章目录-jsonl)。
 
 ## 运维记录
 

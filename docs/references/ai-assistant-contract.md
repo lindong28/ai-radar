@@ -233,6 +233,34 @@ AI Radar expects this file to be a JSON array. Each entry may include:
 
 The runner uses `metadata.url` for URL hits and `output.summary_file_path` or `output.summary_file` for slug and summary-file lookup.
 
+## 只读文章目录 JSONL
+
+`admin wechat-kb import` 不直接读取 `index.json`、manifest 或 NumPy 文件。它调用同一个稳定 wrapper，让 ai-assistant 在 per-user `fcntl` 锁内输出一份一致快照：
+
+```bash
+$AI_ASSISTANT_ROOT/agents/summary-agent/run.sh \
+  --list-article-records \
+  --user "$AI_RADAR_INTERPRET_USER"
+```
+
+stdout 是 JSON Lines，第一行必须是 schema header：
+
+```json
+{"record_type":"catalog","schema_version":1,"user":"dong_lin","index_rows":3448,"manifest_rows":3448,"vector_rows":3448,"vector_ndim":2,"vector_dim":1536,"expected_vector_dim":1536,"alignment_status":"exact"}
+```
+
+后续每行是一篇 index 文章，必需字段如下：
+
+```json
+{"record_type":"article","schema_version":1,"kb_slug":"article-slug","title":"文章标题","url":"https://mp.weixin.qq.com/s/example","canonical_url":"https://mp.weixin.qq.com/s/example","source":"公众号名","saved_at":"2026-02-10 12:00","tags":["视频生成"],"keywords":["Seedance"],"article_file_path":"/absolute/path/article.md","summary_file_path":"/absolute/path/article-slug_output.md","entry_status":"ok","file_status":"ok","vector_status":"ok"}
+```
+
+AI Radar 只接受 header 的 `schema_version=1`、三层 row count 相等、二维 1536 维向量和 `alignment_status=exact`。文章行只有在 record/schema/type 正确、`entry_status=file_status=vector_status=ok`、URL 是 `mp.weixin.qq.com/s...`、canonical URL 与原 URL 一致可验证且两个绝对文件路径可读时才有资格导入。Malformed index 条目仍作为非 `ok` 文章行输出，便于命令计数并跳过，而不是让整个目录静默截断。
+
+`SUMMARY_AGENT_KB_ROOT` 可把目录根指向另一个持久数据 checkout，供隔离 worktree 或测试使用；正常维护者命令无需设置。这个 JSONL 是 ai-assistant 私有 store 的唯一跨仓读取面，字段增删或语义变化必须切换新的 `schema_version`，不能让 AI Radar 猜测兼容。
+
+AI Radar 把这次调用登记为本地进程并设置 `UV_OFFLINE=1`；目录导出不得解析依赖或访问网络。目标 ai-assistant checkout 尚未安装依赖时命令会显式失败，维护者应先完成该仓正常安装，而不是让归档扫描在后台下载包。
+
 ## Failure retry semantics
 
 Each item's interpretation outcome is upserted into `wechat_interpretations`; failures record the message in `error` (the subprocess stderr when the script exited non-zero). On the fresh-summary path, the exact `summary JSON missing non-empty criteria_reason` subprocess error is retried immediately once with the same command; retrying, recovered, and immediate-retry-exhausted outcomes are identified in stdout. No other subprocess or schema error gets this immediate retry. If the item still fails, it follows the normal exponential backoff: the first failure becomes eligible again after 15 minutes, and each further failure doubles the wait (15m, 30m, 1h, ... tracked in `error_retry_count`). After 8 retries the item is skipped permanently until its row is deleted by hand. A successful interpretation clears `error` and resets the counter. `pipeline.sh` caps each run at `--limit 30` items so a large error backlog drains across runs instead of holding the pipeline lock for hours.
