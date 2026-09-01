@@ -154,3 +154,13 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 - **`0f0a6fd` 是否已在生产 serve 上生效未核实**——本地 `tencent/main` 这个 remote-tracking ref 包含该 commit（其后还有 `5039988`），但 ref 里有 ≠ 服务器已 checkout 并重启 serve。核实要从生产侧取读数（如对一个必然失败的 `/img` URL 观察响应头里有没有 `Cache-Control: no-store`），不能只看 git。
 
 前两点都要**从真实公网**取读数：源站与边缘的行为在本地和 curl 直连源站时读数相同，看不出差别。
+
+## ISSUE-DEPLOY-20260901-b7e3 · status-server 把运行中的模板实例错报为 not installed
+
+**状态**：open · **优先级**：medium · **发现**：2026-09-01，微信搜索生产恢复验收
+
+生产已切换到 `ai-radar-serve@8000.service` 后，`deploy/server/status-server.sh` 仍输出 `serve@8000 not installed`。同一时刻直接读取 systemd 得到 `active`、`enabled`、Main PID `3359596`，公网健康检查和搜索消费者也都正常；因此这是状态命令的假阴性，不是服务未运行。
+
+根因在 `unit_state()`：它用 `systemctl list-unit-files "ai-radar-serve@8000.service"` 的退出码判断 unit 是否安装，但磁盘上的 unit file 是模板 `ai-radar-serve@.service`，instance 名不会被该查询识别。后续 `systemctl is-active`、`is-enabled` 和 `show MainPID` 本来都能读取真实实例，却被提前返回跳过。
+
+闭合时应让模板实例的“已安装”判定识别对应 `@.service`，并增加至少三类 CLI 输出测试：模板已安装且实例 active、模板已安装但实例 inactive、模板不存在。修复后从生产直接运行 `status-server.sh`，确认 active slot 不再与 nginx upstream / systemd 真实状态矛盾。
