@@ -73,25 +73,7 @@ interpret 在总结一篇文章前，会拿它的 URL 问外部 summary-agent �
 
 选择匹配 enabled 而不是匹配全部行，是因为另一种写法下隐藏行会持续拦住每一次插入，那些文章**永久补不回来**。重复只在"停用后又重新启用"这一条路径上出现。
 
-**所以重新启用一个曾被停用的微信源之前，先清一次重**：
-
-```bash
-uv run python - <<'EOF'
-import sqlite3, unicodedata, re, collections
-c = sqlite3.connect('data/radar.db'); c.row_factory = sqlite3.Row
-n = lambda t: unicodedata.normalize('NFKC', re.sub(r'\s+', ' ', str(t or '')).strip()).casefold()
-rows = c.execute("""SELECT i.id, i.author, i.title, i.published_at, i.source_id
-FROM items i JOIN sources s ON s.id=i.source_id WHERE COALESCE(s.kind,'feed')='wechat'""").fetchall()
-seen = collections.defaultdict(list)
-for r in rows:
-    seen[(r['author'], n(r['title']), r['published_at'][:16])].append(r)
-for key, group in seen.items():
-    if len(group) > 1:
-        print(key[1][:40], '->', [(g['source_id'], g['id']) for g in group])
-EOF
-```
-
-打印出来的每一组都是同一篇文章的多份；决定保留哪一份后再删另一份的 `items` 行与其 `wechat_interpretations` 行。
+**所以在当前没有受测清重命令时，不要重新启用一个曾被停用的微信源。** 旧 runbook 曾内嵌一段一次性 SQL/Python，但它没有复用运行时的可见源谓词、同源排除和标题规范化，可能错删或漏删，现已移除。若业务确实要求重新启用，当前安全入口尚未实现，进展跟踪见 [`docs/issues/general.md`](../issues/general.md) 中的对应 open issue；不要直接拼 SQL 修改生产库。
 
 ### 对告警与计数的影响
 
@@ -105,7 +87,7 @@ A7「来源静默」逐源判定，阈值公式与「无法评估」的判据以
 
 仓库内还留着两条替代发现路线的实现：公众号后台 `searchbiz + appmsgpublish` 适配器与微信读书只读 canary。两者**默认关闭**（`data/wechat-discovery.toml` 的 `manual_backend_requests_enabled=false`），不被 `fetch_all` 或 pipeline 调用，也不写生产 `items`。
 
-后台路线已因平台级不可用**停止推进**（跨账号文章列举在 2026-07-30 前后被平台限制，见 [ADR-061](../adr/061-deprecate-wechat-admin-discovery-line.md)）；微信摄取改由 Mp2RSS + Wechat2RSS 双跑承担。
+后台路线已因平台级不可用**停止推进**（跨账号文章列举在 2026-07-30 前后被平台限制，见 [061-wechat-discovery](../adr/061-deprecate-wechat-admin-discovery-line.md)）；微信摄取改由 Mp2RSS + Wechat2RSS 双跑承担。
 
 只读地查看当前状态（不读私有 session、不发后台请求）：
 
@@ -178,26 +160,88 @@ AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 
 ## 手动补录 ai-assistant 知识库归档
 
-这条命令用于“文件系统里已经有文章，但 AI Radar 从未摄取”的情况。它不属于 pipeline，也不自动运行；读取 ai-assistant Summary Agent 的版本化 JSONL 文章目录，把符合以下全部条件且 canonical URL 尚未存在的微信文章写入 `radar.db`：索引条目有效、文章与摘要文件存在、manifest 与向量行精确对齐、目标向量为 1536 维且非零有限值。
+这条命令只解决一种缺口：ai-assistant Summary Agent 的知识库里已经有微信文章，但 AI Radar 按 canonical URL 查不到该文章。它不属于 pipeline，也不自动运行；实际导入会把目录中完整、有效且尚未入库的微信文章及其既有解读写入 `radar.db`。
+
+### 什么时候运行，什么时候不要运行
+
+| 场景 | 动作 |
+|---|---|
+| 第一次补录，或更换了 `--assistant-root`、`--user`、`--db-path` | 在命令中显式写出三个目标，再跑 `--dry-run` 核对候选数、已有条目和聚合后的跳过原因；CLI 不回显目标路径，dry-run 不写数据库 |
+| dry-run 显示 `eligible>0`，且聚合计数符合预期 | 去掉 `--dry-run` 实际导入；数量大时加 `--limit N` 分批执行。若关心某一篇，先按下文目录命令核对它的逐篇状态 |
+| 正常摄取之后发布的新文章 | 不用本命令；继续用 Mp2RSS / Wechat2RSS 与 pipeline |
+| URL 已在 AI Radar，但没有 `wechat_interpretations` | 不用本命令；它只增加 `existing_without_interpretation` 计数，不修改该条目。启用源走正常 `./run.sh interpret`，其它情况按单独数据修复处理 |
+| 想导入非微信文章，或目录记录缺文章、摘要、有效向量等完整性条件 | 不用本命令绕过校验；修复 ai-assistant 侧记录后重跑，具体原因会列在 `Skipped reasons` |
+| 想撤销已提交批次 | 不要按 run id 直接删除；见下文「成功批次没有删除式回滚」 |
+
+### dry-run 与实际导入
+
+从 AI Radar 仓库根目录运行。`--assistant-root` 必须指向包含 `agents/summary-agent/run.sh` 的 ai-assistant checkout 根目录，不是 `data/summary_agent/` 知识库目录；同时显式写出 Summary Agent user 与目标数据库：
 
 ```bash
-# 先预演：不写数据库
+# 预演：检查全部候选，不写数据库
 ./run.sh admin wechat-kb import \
   --dry-run \
-  --assistant-root ~/research/ai-assistant \
-  --user dong_lin
+  --assistant-root /path/to/ai-assistant \
+  --user your-summary-agent-user \
+  --db-path /path/to/radar.db
 
-# 导入全部仍缺失的合格文章；可加 --limit 100 分批执行
+# 实际导入全部仍缺失的合格文章
 ./run.sh admin wechat-kb import \
-  --assistant-root ~/research/ai-assistant \
-  --user dong_lin
+  --assistant-root /path/to/ai-assistant \
+  --user your-summary-agent-user \
+  --db-path /path/to/radar.db
+
+# 分批示例：本次由操作者选择最多导入 100 篇；按输出提示重跑，直到 remaining=0
+./run.sh admin wechat-kb import \
+  --limit 100 \
+  --assistant-root /path/to/ai-assistant \
+  --user your-summary-agent-user \
+  --db-path /path/to/radar.db
 ```
 
-默认数据库是 `data/radar.db`；测试或其它实例用 `--db-path /path/to/radar.db`。成功输出包含 `Run id`、catalog/eligible/imported/already_present/skipped/remaining 计数、`Postcheck: passed` 与 `Changed`。只有事务内 provenance、item、解读、`/wechat` 可见性、FTS 和公开来源排除计数全部一致才提交；目录对齐失败、字段 schema 漂移、文件校验失败或 postcheck 不一致都会返回非零且不提交该次运行。
+首次操作或切换实例时，每条命令都显式写 `--db-path`；省略时 CLI 会使用 `data/radar.db`，但成功输出不会回显实际路径，容易把正确收据误归到错误实例。`--limit` 接受任意正整数，只限制本批实际导入数，不改变 `eligible` 总数；分批运行看到 `remaining>0` 时继续执行同一条实际导入命令。dry-run 是当时目录的预览，不会冻结候选；实际导入会重新读取目录。命令按 canonical URL 幂等，重跑不会重复导入已有文章。
+
+`Skipped reasons` 只给按原因聚合的数量，不列文章标题。若你在找某一篇，先在 ai-assistant 仓完整导出 catalog，再按标题或 URL 查看该行的三个状态；不要把 exporter 直接接 `head`，它要求消费者完整读取 stdout：
+
+```bash
+cd /path/to/ai-assistant
+mkdir -p tmp
+./agents/summary-agent/run.sh --list-article-records --user your-summary-agent-user \
+  > tmp/summary-agent-article-catalog.jsonl
+jq 'select(.record_type == "article" and (.title | contains("目标标题片段"))) |
+    {title, url, entry_status, file_status, vector_status}' \
+  tmp/summary-agent-article-catalog.jsonl
+```
+
+### 如何判读输出
+
+| 结果 | 退出码与关键输出 | 下一步 |
+|---|---|---|
+| dry-run 完成 | exit 0；`DRY RUN (no database changes)`、`Postcheck: not_run`、`Changed: no` | `eligible>0` 才有可导入候选；先审聚合的 `skipped` / `Skipped reasons` 和 `existing_without_interpretation`，需要逐篇身份时再查 catalog，确认范围后去掉 `--dry-run` |
+| 导入并提交 | exit 0；`COMPLETE` 或 `BATCH COMPLETE`、`imported>0`、`Postcheck: passed`、`Changed: yes` | `remaining>0` 时继续下一批；否则从 `/wechat` 搜一篇本批标题确认消费者可见 |
+| 没有新内容 | exit 0；`COMPLETE (nothing new to import)`、`imported=0`、`Changed: no`，通常 `Postcheck: not_needed` | 查看 `already_present`、`existing_without_interpretation` 和 `skipped`，判断候选是已存在、需另行补解读，还是上游记录不合格 |
+| 有跳过 | 整体仍可 exit 0；`skipped>0` 并打印 `Skipped reasons` | 混合知识库里的非微信文章等跳过可以是预期；若某篇本应导入，按原因修复 ai-assistant 侧记录后重跑 |
+| 操作失败 | exit 1；`WeChat KB operation: FAILED`、`Reason: ...`、`Changed: no committed changes from this operation` | 修复报出的数据库、目录、目录对齐、文件或 postcheck 问题，再原样重跑 |
+
+`Counts` 各字段的运维含义：`catalog` 是目录文章总数，`eligible` 是完整且尚未入库的微信文章数，`imported` 是本批提交数，`already_present` 是已有文章且已有解读，`existing_without_interpretation` 是已有文章但缺解读，`skipped` 是不合格或非微信记录，`remaining` 是受 `--limit` 影响而留到后续批次的合格候选。
+
+实际导入的 `Run id` 会随新条目落库，用于审计本批 provenance 和 postcheck；dry-run 虽会打印 run id，但不持久化任何批次记录。CLI 的 `Postcheck: passed` 证明本批数据库事务内的 item、解读、搜索索引、`/wechat` 可见性与公开来源隔离一致；再从正在服务这份数据库的 Web 入口搜索一篇本批标题，确认用户真正读到的是同一份结果：
+
+```bash
+query='替换成一篇本批导入标题中的唯一片段'
+wechat_base_url=${AI_RADAR_WECHAT_BASE_URL:-http://localhost:8000}
+set -o pipefail
+curl --fail-with-body -sSG --data-urlencode "q=$query" "$wechat_base_url/api/v1/wechat" \
+  | jq '.data | {total, titles: [.items[].title]}'
+```
+
+示例默认使用 fork 的 8000 端口；其它实例先把 `AI_RADAR_WECHAT_BASE_URL` 设为实际 origin（维护者产线 Mac 是 `http://localhost:8010`）。返回的 `total` 应大于 0，`titles` 应包含目标文章；若没有，先确认该 Web 进程实际连接的是本次 `--db-path` 指向的数据库。
+
+### 归档源与成功批次没有删除式回滚
 
 导入项归属保留源 `wx_ai_assistant_kb_archive`。该源固定 `enabled=0`，所以不会被 fetch、pipeline 或 A7 调度，也不会进入公开 source API；`/wechat`、详情页和微信跨源去重显式包含它。后续实时 feed 遇到同篇文章时会复用既有归档身份，不再生成重复卡片。
 
-`Run id` 用于审计本次导入和核对 postcheck，不是成功批次的删除句柄。命令执行失败或 postcheck 不一致时，尚未提交的事务会整体回滚；成功提交后不提供批量删除命令。原因是归档项会作为后续实时 feed 的去重锚点，按 run id 删除可能同时删掉系统里唯一存储的一份文章身份。
+命令执行失败或 postcheck 不一致时，尚未提交的事务会整体回滚；成功提交后不提供批量删除命令。原因是归档项会作为后续实时 feed 的去重锚点，按 run id 删除可能同时删掉系统里唯一存储的一份文章身份。
 
 如果以后确实需要撤销已提交批次，先停在这里，不要直接按 `extra_json.import_run_id` 删除。该动作应作为单独的数据修复接受评审，逐项确认是否已有可安全接替的实时源身份；需要频繁处理时再设计 promotion/claim ledger。目录 JSONL 字段与 ai-assistant 端生成规则见 [`../references/ai-assistant-contract.md`](../references/ai-assistant-contract.md#只读文章目录-jsonl)。
 
@@ -262,4 +306,3 @@ cd "$AI_ASSISTANT_ROOT"
 - [docs/references/wechat-discovery-evidence.md](../references/wechat-discovery-evidence.md) — 后台发现候选与微信读书 canary 的历史证据台账（已停止推进）
 - [deploy/wechat2rss/RUNBOOK.md](../../deploy/wechat2rss/RUNBOOK.md) — 自建 Wechat2RSS 部署与运维手册
 - [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 添加流程（已停用，仅回滚参考）
-- [deploy/wewe-rss/RUNBOOK.md](../../deploy/wewe-rss/RUNBOOK.md) — 旧 WeWe RSS 桥接运维手册（已停用）

@@ -2,13 +2,41 @@
 
 > 文档自身的质量债跟踪（README 定位、重复、可观察性等审查遗留）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
 
-## [open] 2026-08-20：服务器侧生产栈与 make-live 路径不在任何服务清单
+## [open] 2026-09-01：ux-contract issue domain 混入非端到端观察
+
+- Type: ownership drift · Priority: medium · Discovered: 2026-09-01 微信搜索与 KB 补录文档同步的 P1 审查。
+
+`docs/issues/ux-contract-issues.md` 的文件头要求条目来自真实端到端产品观察，但其中多条 2026-08-20 条目明确标注来源是 `sync-docs` / 源码核对，而不是产品观察。当前 2026-08-31 微信搜索条目有用户真实入口失败报告，符合该 domain；旧条目则需要逐条选择：补真实观察后保留，或迁到一般产品/文档 issue domain。批量迁移会改变 issue provenance 与后续 UX contract intake 范围，本次不把它夹带进微信搜索手册更新。
+
+## [open] 2026-09-01：README 私有 benchmark 内容与 docs/data authority 尚未收敛
+
+- Type: information architecture · Priority: low · Discovered: 2026-09-01 微信搜索与 KB 补录文档同步的 P1/P2 审查。
+
+根 README 的 `AIHOT 私有基准集` 章节承载了 private submodule 获取、capture/slice/validate 和双仓提交细节，面向维护基准的开发者而非入口部署者；同时仓库已消费大量外部源和物化 SQLite/benchmark 数据，却还没有 `docs/data/` 作为单一数据 authority。这两项需要一起决定内容迁移和新目录边界，不能只从 README 删除。当前事实仍由 README、`docs/architecture.md` 与相关 ADR 分担；后续应单独设计迁移，并按内容重新分配闸核对不丢信息。
+
+## [open] 2026-09-01：README 的服务入口与 operations authority 边界尚未收敛
+
+- Type: information architecture · Priority: low · Discovered: 2026-09-01 微信搜索与 KB 补录文档同步的 README P6 复审。
+
+根 README 的服务/部署区域同时承载入口清单与较重的运维细节，包括 lifecycle 约束、依赖查找顺序、selector preflight 和 EdgeOne 对账退出码；相同事实也由 `docs/operations/services.md` 与 `docs/operations/monitoring-alerting.md` 维护。当前不能机械删除 README 段落：README 仍须满足服务协议的“服务清单 + 运维入口”，而 operations 文档又绑定维护者具体产线，并非全部适合 fork。
+
+后续应按 fork 部署者与维护者两类任务重新划分：README 保留选服务、最短 bring-up/验证和 authority 路由；可变的产线状态、完整诊断与重操作步骤留在 operations。迁移前按内容重新分配闸逐段对账，避免在“去重”时删掉 fork 唯一可见的入口。
+
+## [open] 2026-09-01：自托管 Tunnel 验证缺少当前 checkout 的身份锚
+
+- Type: observability · Priority: medium · Discovered: 2026-09-01 微信搜索与 KB 补录文档同步的 README P4 复审。
+
+README 的自托管 Cloudflare Tunnel 步骤可以分别证明 supervisor、本地 origin 与配置 hostname 可达，但 `/api/v1/healthz` 没有 checkout / commit 身份，公网响应来自当前树、旧实例或同机另一服务时都可能得到相同读数。README 已明确把 `public_ok` 收窄为 hostname reachability，不再据此宣称当前 checkout 已连通；仍缺的是能证明 origin 与公网响应身份相同的消费者侧读数。
+
+闭合时应提供不会泄露敏感信息的实例身份锚，并让 bring-up 同时读取本地与公网两端进行比对；若身份只在部署时生成，要写清失效与轮换条件。不要用两个独立的 `200 OK` 或相同静态 `healthz` body 代替身份平账。
+
+## [open] 2026-08-20：服务器侧 web/alert 与 make-live 路径仍未进入服务清单
 
 - Type: coverage gap · Priority: medium · Discovered: 2026-08-10 README 全面审查（原属该条清单的「services.md / 服务清单侧」一项）；2026-08-20 归档母条目时复核仍未修，独立成条。
 
-`deploy/install-server.sh` 装出的服务器侧生产栈（serve / db-apply / alert，双槽 serve@8000 与 @8001）不在 `docs/operations/services.md` 的服务表里；`git push tencent` → `post-receive` → `deploy_code.py` 这条 make-live 路径也没有任何文档。复核读数（2026-08-20）：`docs/operations/services.md` 内 `install-server|deploy_code|post-receive|8001` 命中 **0**。
+`deploy/server/install-server.sh` 定义的服务器侧生产栈包含双槽 `ai-radar-serve@8000/@8001`、`ai-radar-db-apply` 与 `ai-radar-alert`。当前 `docs/operations/services.md` 已列出 DB apply consumer/timer，但仍没有把服务器侧 web/alert 单元纳入服务表，也没有写清 `git push tencent` → `deploy/server/post-receive` → `deploy/sync/deploy_code.py` 的 make-live 路径。复核读数（2026-09-01）：`services.md` 能命中 `ai-radar-db-apply.service`，但 `ai-radar-serve|serve@|ai-radar-alert|post-receive|deploy_code` 仍为 **0**。
 
-**为什么值得记**：services.md 是「系统在跑什么、谁拉起的」的单点权威，而生产上真正在服务公网的那一套恰好不在其中——接手者按它排查会得到一份只覆盖 Mac 本机的图景。ADR-042 已把生产 deploy commit 与本地 main 隔离，那条路径的存在性更需要写下来。
+**为什么值得记**：services.md 是「系统在跑什么、谁拉起的」的单点权威；当前它虽已覆盖 DB apply，但生产 web/alert 与代码生效路径仍不在完整清单中。接手者按它排查仍无法还原公网服务和部署切换。ADR-042 已把生产 deploy commit 与本地 main 隔离，那条路径的存在性更需要写下来。
 
 ## [open] 2026-08-20：ADR 内的 `file:line` 锚点在 append-only 下必然衰减
 

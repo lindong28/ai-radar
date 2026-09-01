@@ -1,11 +1,8 @@
 # Wechat2RSS Runbook
 
-Discovery layer for `kind="wechat"` sources, replacing the hosted Mp2RSS feed.
+Self-hosted discovery layer for `kind="wechat"` sources. AI Radar currently runs it alongside Mp2RSS and takes the cross-source union rather than treating either feed as a complete replacement.
 
-Upstream is **WeRead**, not the mp backend. That distinction is the whole reason
-this route exists: cross-account article listing via `searchbiz + appmsg` was
-restricted platform-wide around 2026-07-30 and no longer works for third-party
-accounts (evidence in `plans/20260816-mp2rss-replacement/state.md`, ISSUE-001).
+Upstream is **WeRead**, not the mp backend. That distinction is the whole reason this route exists: cross-account article listing via `searchbiz + appmsg` was restricted platform-wide around 2026-07-30 and no longer works for third-party accounts; the retired discovery path and evidence boundary are summarized in [`061-wechat-discovery`](../../docs/adr/061-deprecate-wechat-admin-discovery-line.md).
 
 ## Bring-up
 
@@ -13,8 +10,12 @@ accounts (evidence in `plans/20260816-mp2rss-replacement/state.md`, ISSUE-001).
 cd deploy/wechat2rss
 cp .env.example .env      # fill LIC_EMAIL, LIC_CODE, RSS_TOKEN
 docker compose up -d
-docker compose logs -f
+docker compose ps
+curl -sf http://127.0.0.1:8080/ >/dev/null && echo admin_ui_ok
+./logs.sh --since 10m
 ```
+
+`admin_ui_ok` is the pre-login bring-up signal. It proves the loopback UI answered; account usability is checked separately with `./healthcheck.sh` after the first login.
 
 Service listens on `127.0.0.1:8080` (loopback only — the admin UI accepts
 subscription changes and must not be world-reachable).
@@ -48,8 +49,29 @@ feature at least once: in WeChat, open any Official Account article → Share �
 "在微信读书中阅读" → complete the prompt. Skipping this produces a login that
 succeeds but crawls nothing, and the symptom looks like risk-control.
 
-Then in the admin UI: 微信账号 → 添加账号 → scan. Prefer a **frequently used**
-WeChat account; the vendor notes those trip risk-control less often.
+Open `http://127.0.0.1:8080`, then in the admin UI choose 微信账号 → 添加账号 → scan. Prefer a **frequently used** WeChat account; the vendor notes those trip risk-control less often. After login, run `./healthcheck.sh`; success is a terminal line shaped as `healthy: N 个账号可用，均未风控` with exit code 0.
+
+## Connect and operate AI Radar
+
+Set the following in the AI Radar repository root `.env` on the same host; replace `<RSS_TOKEN>` with the value from this directory's `.env`:
+
+```bash
+WECHAT2RSS_FEED_URL=http://127.0.0.1:8080/feed/all.xml?k=<RSS_TOKEN>
+```
+
+The feed URL is host-local and must not go in a cross-machine shared env file. Its response semantics, cross-source union, and deduplication contract are maintained in [the WeChat ingestion runbook](../../docs/operations/wechat-ingestion.md#双跑wechat2rss_feed_url-与跨源去重). Service health is not consumer verification: after setting the root `.env`, complete that runbook's [AI Radar-side fetch and database checks](../../docs/operations/wechat-ingestion.md#验证) before concluding that the feed is connected.
+
+Use these lifecycle and verification entries from `deploy/wechat2rss/`:
+
+```bash
+docker compose ps                 # read-only container status
+./healthcheck.sh                  # exit 0 plus healthy: ... means the logged-in accounts are usable
+./logs.sh --since 10m             # redacted logs; never use raw docker compose logs
+docker compose down               # stop and remove the container; persistent data remains in ./data
+docker compose pull
+docker compose up -d              # make image or .env/compose changes live
+./healthcheck.sh                  # post-change terminal check
+```
 
 ## Risk control
 
@@ -57,10 +79,7 @@ Expected, not a failure. The service backs off 15m → 30m → 60m → … cappe
 and resets on recovery. Manual clear: in WeRead, 书架 → 文章收藏 → tap an account
 **name** (not an article title) → follow the prompts.
 
-Alerting: `BOT_WEBHOOK_URL` posts `{"msgtype":"text","text":{"content":"..."}}`.
-That is the **企业微信** bot schema, not Feishu's
-(`{"msg_type":"text","content":{"text":...}}`) — pointing it straight at the
-Feishu webhook will be rejected. A translating endpoint is needed in between.
+Repository-owned alerting deliberately does not use the service's `BOT_WEBHOOK_URL`: the external `healthcheck.sh` can still notify through `im-notify --alert` when the container itself is down. If you independently enable the vendor webhook, it posts the **企业微信** schema `{"msgtype":"text","text":{"content":"..."}}`, not Feishu's `{"msg_type":"text","content":{"text":...}}`; a translating endpoint is required between it and a Feishu webhook.
 
 ## Known coverage limits
 
@@ -76,5 +95,4 @@ Feishu webhook will be rejected. A translating endpoint is needed in between.
 
 ## Migration to another host
 
-Copy the whole `deploy/wechat2rss` directory (including `data/`), then
-`docker compose up -d` there. No re-login required.
+Copy the whole `deploy/wechat2rss` directory (including `data/`), run `docker compose up -d` there, and finish with `./healthcheck.sh`. Exit 0 plus the `healthy: ...` terminal line is the migration terminal check; no re-login is required when the copied data is valid.

@@ -30,7 +30,7 @@
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + DB sync 的职责分工、验证与"已服务"终态判据 + X 图片新加坡出口代理（隧道链路、凭据边界、从内到外的诊断顺序）+ Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
 | [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A7 与 D3 告警、domain selector preflight/route audit、周报、飞书 webhook、用户旅程性能监控 runbook |
-| [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS + Wechat2RSS 双跑与跨源去重、ai-assistant KB 手动归档补录、真名头像 backfill；后台发现候选已停止推进（ADR-061） |
+| [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS + Wechat2RSS 双跑与跨源去重、ai-assistant KB 手动归档补录、真名头像 backfill；后台发现候选已停止推进（见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)） |
 | [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
 
 ### docs/references/ [Developer]
@@ -41,7 +41,7 @@
 |---|---|
 | [ai-assistant-contract.md](references/ai-assistant-contract.md) | 可选外部 summary-agent 的接口契约 [Developer]：interpret 写回、只读文章目录 JSONL、title/跳过语义与验证入口 |
 | [source-maintenance.md](references/source-maintenance.md) | 信源清单维护与验证规则 [Developer]（aihot_sources.json 机器契约、audit 脚本） |
-| [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 ADR-061，本档只留取证读数 |
+| [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)，本档只留取证读数 |
 | [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源添加流程 [User]（已停用，微信摄取现走 Mp2RSS + Wechat2RSS 双跑，见 operations/wechat-ingestion.md） |
 | [web-contract-golden.md](references/web-contract-golden.md) | 行为等价 Web 重构的冻结 DB + HTTP golden 使用边界、命令与 re-baseline 规则 |
 
@@ -71,7 +71,7 @@
 | [README.md](issues/README.md) | Domain 索引 |
 | [ux-issues.md](issues/ux-issues.md) | 端到端测试发现的产品 UX 问题（contract 在实际产品中被 broken） |
 | [ux-contract-issues.md](issues/ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时） |
-| [deploy.md](issues/deploy.md) | 部署与 DB 同步链路的运维问题（sync/apply/cron/verifier，含影响其验收的测试基线） |
+| [deploy.md](issues/deploy.md) | 部署、服务生命周期与 DB 同步链路的运维问题（install/status、sync/apply、cron/verifier，含影响其验收的测试基线） |
 | [docs-quality.md](issues/docs-quality.md) | 文档自身的质量债（README 定位/重复/可观察性等审查遗留） |
 | [alerting.md](issues/alerting.md) | 服务故障告警的设计质量债（值不值得 page、严重度、消息说什么、要不要合并、基线可行性、留痕） |
 | [cost-observability.md](issues/cost-observability.md) | LLM 成本计量、定价、报告与告警消费面的未闭合项；金额口径只覆盖 `llm_usage` 记录行 |
@@ -144,10 +144,14 @@
 | [057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md](adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md) | X 推文媒体经新加坡出口代理取回，RSS 正文图仍不展示 |
 | [058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md](adr/058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md) | X 媒体缩略图改为收缩包裹左对齐，lightbox 增强而非取代原生链接 |
 | [059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md](adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) | 两个微信来源并行取并集，按账号+归一化标题+5 分钟发布窗跨源去重 |
-| [060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md](adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md) | AIHOT benchmark manifests 在 v1 首发前删除重复 topology、标明投影并冻结版本化机器语义 |
-| [061-split-shared-ssr-responses-and-discriminate-aihot-reports.md](adr/061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | AIHOT window 拆分共享 SSR response/binding，验收报告按 subject 类型冻结严格语义 |
-| [062-carry-pairing-strategy-in-aihot-validation-reports.md](adr/062-carry-pairing-strategy-in-aihot-validation-reports.md) | AIHOT window 验收报告自持 primary/assistance/fallback pairing strategy |
+| [060-hot-cache](adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md) | 热点榜由后台刷新候选缓存供给，未就绪返回 503 |
+| [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md) | 公众号后台发现线整体废弃，发现层改由自建 Wechat2RSS 承担 |
+| [062-page-switch](adr/062-cut-the-switch-cost-at-the-query-the-edge-and-the-navigation.md) | 精选与全部动态的切换成本在查询、边缘和导航三层收敛 |
+| [060-aihot-manifest](adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md) | AIHOT benchmark manifests 在 v1 首发前删除重复 topology、标明投影并冻结版本化机器语义 |
+| [061-aihot-reports](adr/061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | AIHOT window 拆分共享 SSR response/binding，验收报告按 subject 类型冻结严格语义 |
+| [062-aihot-pairing](adr/062-carry-pairing-strategy-in-aihot-validation-reports.md) | AIHOT window 验收报告自持 primary/assistance/fallback pairing strategy |
 | [063-require-ordered-public-response-dates-in-aihot-captures.md](adr/063-require-ordered-public-response-dates-in-aihot-captures.md) | AIHOT capture 的 RSS/OpenAPI public response Date 按声明顺序非递减 |
+| [20260826-68e2-route-ai-radar-through-domain-selector.md](adr/20260826-68e2-route-ai-radar-through-domain-selector.md) | AI Radar 经状态验证的域名 selector 隔离出网 |
 | [20260828-f8d9-replay-frozen-wechat-interpretations-in-bounded-cohorts.md](adr/20260828-f8d9-replay-frozen-wechat-interpretations-in-bounded-cohorts.md) | 先修零向量，再按有界 cohort 回放冻结的微信解读 |
 | [20260828-c3a5-retry-missing-criteria-reason-once.md](adr/20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 |
 | [20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md](adr/20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 |
@@ -156,7 +160,6 @@
 | [20260831-8b7c-control-wechat-review-term-aliases.md](adr/20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，并保持 raw 作者优先 |
 | [20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md](adr/20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
-| [README.md](adr/README.md) | ADR 索引 |
 
 ### docs/experiences/ [Agent]
 

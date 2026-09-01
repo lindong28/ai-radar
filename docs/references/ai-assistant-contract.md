@@ -1,8 +1,8 @@
 # ai-assistant summary-agent integration
 
-> Reader: [Developer] — whoever implements an external summary-agent that AI Radar's `interpret` stage will call. This file is the contract; the operational entry point (how to enable it, how to run it in production) is [operations/wechat-ingestion.md §微信文章解读与知识库回写](../operations/wechat-ingestion.md#微信文章解读与知识库回写).
+> Reader: [Developer] — whoever implements an external summary-agent consumed by AI Radar's `interpret` stage or manual KB archive importer. This file is the cross-repository interface contract; production enablement and operator command sequences belong to [operations/wechat-ingestion.md](../operations/wechat-ingestion.md).
 
-`./run.sh interpret` can call an external article-summary implementation that is compatible with the `ai-assistant` summary-agent scripts. This integration is optional and disabled by default.
+`./run.sh interpret` can call an external article-summary implementation that is compatible with the `ai-assistant` summary-agent scripts. Separately, `./run.sh admin wechat-kb import` can consume the versioned read-only catalog described below to copy missing WeChat archive articles into AI Radar. The live interpretation integration is optional and disabled by default; the archive importer is an explicit maintenance command and is never part of `pipeline.sh`.
 
 ## Enablement
 
@@ -92,7 +92,7 @@ $AI_ASSISTANT_ROOT/agents/summary-agent/run.sh \
 
 ## stdout JSON contracts
 
-All script stdout must contain a JSON object. Extra log lines are allowed before the final JSON object; AI Radar scans stdout from the end and uses the last parseable JSON object.
+All script stdout must contain a JSON object. AI Radar first tries to parse the entire trimmed stdout as one JSON object; if that fails, it scans non-empty lines from the end and accepts the last parseable line that is itself a complete JSON object. Extra non-JSON log lines may precede or follow that compact one-line object. Pretty-printed multi-line JSON mixed with logs is not accepted.
 
 ### `run.sh --check-url`
 
@@ -207,9 +207,9 @@ The summary Markdown is stored in `wechat_interpretations.summary_md` and render
 
 Generated Markdown is treated as untrusted HTML input and sanitized before rendering.
 
-## Index contract
+## Interpret index contract
 
-Existing-summary metadata is read from:
+The `interpret` compatibility path reads existing-summary metadata from:
 
 ```text
 $AI_ASSISTANT_ROOT/data/summary_agent/{AI_RADAR_INTERPRET_USER}/index.json
@@ -231,7 +231,7 @@ AI Radar expects this file to be a JSON array. Each entry may include:
 }
 ```
 
-The runner uses `metadata.url` for URL hits and `output.summary_file_path` or `output.summary_file` for slug and summary-file lookup.
+The runner uses `metadata.url` for URL hits and `output.summary_file_path` or `output.summary_file` for slug and summary-file lookup. This direct index read is not available to the archive importer; that consumer must use the locked, versioned catalog below.
 
 ## 只读文章目录 JSONL
 
@@ -255,17 +255,36 @@ stdout 是 JSON Lines，第一行必须是 schema header：
 {"record_type":"article","schema_version":1,"kb_slug":"article-slug","title":"文章标题","url":"https://mp.weixin.qq.com/s/example","canonical_url":"https://mp.weixin.qq.com/s/example","source":"公众号名","saved_at":"2026-02-10 12:00","tags":["视频生成"],"keywords":["Seedance"],"article_file_path":"/absolute/path/article.md","summary_file_path":"/absolute/path/article-slug_output.md","entry_status":"ok","file_status":"ok","vector_status":"ok"}
 ```
 
-AI Radar 只接受 header 的 `schema_version=1`、三层 row count 相等、二维 1536 维向量和 `alignment_status=exact`。文章行只有在 record/schema/type 正确、`entry_status=file_status=vector_status=ok`、URL 是 `mp.weixin.qq.com/s...`、canonical URL 与原 URL 一致可验证且两个绝对文件路径可读时才有资格导入。Malformed index 条目仍作为非 `ok` 文章行输出，便于命令计数并跳过，而不是让整个目录静默截断。
+AI Radar 只接受 header 的 `record_type=catalog`、`schema_version=1`、`user` 与请求 namespace 一致、header `index_rows` 与随后 article 行数一致、三层 row count 相等、二维 1536 维向量和 `alignment_status=exact`。后续行必须全部是同版本的 `record_type=article`；不认识的 record type 或 schema version 使整份 catalog 失败，而不是猜测兼容。
+
+文章行只有在 `entry_status=file_status=vector_status=ok`、URL 是 `mp.weixin.qq.com/s...`、canonical URL 与原 URL 的文章身份一致、slug 非空且两个绝对文件路径可读时才有资格导入。导入前还会以 UTF-8 读取 article/summary，并要求 article header 或 catalog fallback 能提供非空 title、author/source 和可解析的 published_at/saved_at。单篇不合格记录进入 `skipped_reasons`，不会阻止同一 catalog 中其它合格记录；Malformed index 条目因此应由 producer 输出成同版本、非 `ok` 的 article 行，便于 consumer 计数并跳过，而不是让目录静默截断。
 
 `SUMMARY_AGENT_KB_ROOT` 可把目录根指向另一个持久数据 checkout，供隔离 worktree 或测试使用；正常维护者命令无需设置。这个 JSONL 是 ai-assistant 私有 store 的唯一跨仓读取面，字段增删或语义变化必须切换新的 `schema_version`，不能让 AI Radar 猜测兼容。
 
 AI Radar 把这次调用登记为本地进程并设置 `UV_OFFLINE=1`；目录导出不得解析依赖或访问网络。目标 ai-assistant checkout 尚未安装依赖时命令会显式失败，维护者应先完成该仓正常安装，而不是让归档扫描在后台下载包。
 
-## Failure retry semantics
+### Archive import consumer contract
+
+`admin wechat-kb import` 当前 CLI help 暴露 `--dry-run`、`--limit`、`--assistant-root`、`--user` 与 `--db-path`。开发者判断调用场景时使用以下边界；面向生产数据库的完整命令顺序、输出判读和回滚政策仍以 [摄取 runbook §手动补录 ai-assistant 知识库归档](../operations/wechat-ingestion.md#手动补录-ai-assistant-知识库归档) 为准。
+
+| 场景 | 参数语义 |
+|---|---|
+| 验证 producer/consumer 契约及候选规模，不写数据库 | `--dry-run`；仍会导出并校验完整 catalog、读取目标数据库、按 canonical URL 判重并验证所有候选文件 |
+| 有界补导 | `--limit N`；按 catalog 顺序只选择前 N 个合格且缺失的候选，未选择数写入 `remaining`，后续显式再运行 |
+| 选择跨仓 producer 与 namespace | `--assistant-root` 指向兼容 checkout，`--user` 同时约束 catalog header 与落库 `interpret_user` |
+| 选择目标实例 | `--db-path`；它决定判重、写入和 postcheck 的 SQLite，不从 ai-assistant 路径推断 |
+
+consumer 先按 canonical URL 建立目标库现状。已有且已有 interpretation 的文章计入 `already_present`；已有 item 但缺 interpretation 的文章计入 `existing_without_interpretation`，本命令不会补写或覆盖该行。只有目标库完全缺失的合格文章进入候选集，因此重复运行是缺失补录，不是双向同步、修复既有行或重放全部 KB。
+
+实际写入时，`admin/wechat_kb.py` 通过 `wechat_archive.py` 创建或收敛保留来源 `wx_ai_assistant_kb_archive`，并强制它保持 `kind=wechat`、`enabled=0`、`optional=1`、`wechat_only=1`。每篇候选同时插入 `items` 与 `wechat_interpretations`：`save_decision=1`、`kb_synced=1`、`model=ai-assistant-kb-archive`，原始 article/summary Markdown 留在本地 SQLite，`extra_json` 记录 origin、run id、KB slug、upstream canonical URL 与发布日期依据。保留来源参与 `/wechat` 可见性和微信跨源去重，但不进入公开 source API，也不成为 fetch 调度源。
+
+一次非 dry-run 的所有写入共享一个事务。提交前 postcheck 要求本次 run 的 provenance item、保留来源 item、成功 interpretation、`/wechat` 可见行与 FTS 行数都等于 `imported`，同时公开来源计数仍为零；任何不一致整笔回滚。没有选中候选时不创建来源也不写库，receipt 的 `postcheck` 为 `not_needed`。选中过候选时会执行 postcheck，检查一致即为 `passed`；若所选文件在写入前的第二次校验中全部失效，`imported=0`、`changed=false` 与 `postcheck=passed` 可以同时成立。run id 是 provenance，不是成功批次的通用删除或回滚句柄。
+
+## Interpret failure retry semantics
 
 Each item's interpretation outcome is upserted into `wechat_interpretations`; failures record the message in `error` (the subprocess stderr when the script exited non-zero). On the fresh-summary path, the exact `summary JSON missing non-empty criteria_reason` subprocess error is retried immediately once with the same command; retrying, recovered, and immediate-retry-exhausted outcomes are identified in stdout. No other subprocess or schema error gets this immediate retry. If the item still fails, it follows the normal exponential backoff: the first failure becomes eligible again after 15 minutes, and each further failure doubles the wait (15m, 30m, 1h, ... tracked in `error_retry_count`). After 8 retries the item is skipped permanently until its row is deleted by hand. A successful interpretation clears `error` and resets the counter. `pipeline.sh` caps each run at `--limit 30` items so a large error backlog drains across runs instead of holding the pipeline lock for hours.
 
-## Verifying an implementation against this contract
+## Verifying interpret compatibility
 
 Run these from the AI Radar checkout after your scripts are in place. Nothing here writes to the external KB unless step 3 finds an article that has not been summarized yet.
 
@@ -276,12 +295,24 @@ Run these from the AI Radar checkout after your scripts are in place. Nothing he
    test -x "$AI_ASSISTANT_ROOT/agents/summary-agent/run.sh"
    ```
 
-2. **`--check-url` returns a parseable JSON object** — AI Radar scans stdout from the end and uses the last JSON object, so log lines before it are fine, but nothing may follow it:
+2. **`--check-url` returns a parseable JSON object** — stdout must be either one JSON object, or contain at least one line that is itself a complete JSON object; AI Radar scans non-empty lines from the end and accepts the last parseable object line, so surrounding non-JSON logs are fine, but pretty-printed multi-line JSON mixed with logs is not:
 
    ```bash
    cd "$AI_ASSISTANT_ROOT"
-   ./agents/summary-agent/run.sh --check-url 'https://mp.weixin.qq.com/s/<token>' \
-     --user "${AI_RADAR_INTERPRET_USER:-default}" | tail -n 1 | jq .
+   output="$(
+     ./agents/summary-agent/run.sh --check-url 'https://mp.weixin.qq.com/s/<token>' \
+       --user "${AI_RADAR_INTERPRET_USER:-default}"
+   )" || exit $?
+   if parsed="$(printf '%s\n' "$output" | jq -e 'select(type == "object")' 2>/dev/null)"; then
+     printf '%s\n' "$parsed"
+   else
+     printf '%s\n' "$output" | jq -Rsc '
+       split("\n")
+       | reverse
+       | map(select(length > 0) | try fromjson catch empty | select(type == "object"))
+       | first // error("no JSON object line")
+     '
+   fi
    ```
 
    Expected: an object carrying `found`/`exists` (top level or nested under `dedup`/`result`/`data`), and, when it reports a hit, `slug`, `summary_file_path` and the `title` of the article that summary is actually about. A hit whose `title` names a different article is the failure this check exists to catch.

@@ -8,7 +8,7 @@
 |---|---|
 | [ux-issues.md](ux-issues.md) | 端到端测试发现的产品 UX 问题（contract 在实际产品中被 broken） |
 | [ux-contract-issues.md](ux-contract-issues.md) | contract 本身的问题（定义缺失 / 不准确 / 过时） |
-| [deploy.md](deploy.md) | 部署与 DB 同步链路的运维问题（sync/apply/cron/verifier，含影响其验收的测试基线） |
+| [deploy.md](deploy.md) | 部署、服务生命周期与 DB 同步链路的运维问题（install/status、sync/apply、cron/verifier，含影响其验收的测试基线） |
 | [docs-quality.md](docs-quality.md) | 文档自身的质量债（README 定位/重复/可观察性等审查遗留） |
 | [alerting.md](alerting.md) | 服务故障告警的设计质量债（值不值得 page、严重度、消息说什么、要不要合并、基线可行性、留痕） |
 | [cost-observability.md](cost-observability.md) | LLM 成本计量、定价、报告与告警消费面的未闭合项；金额口径只覆盖 `llm_usage` 记录行 |

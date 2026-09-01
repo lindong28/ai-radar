@@ -1,6 +1,6 @@
 # Deploy / DB-sync Issues
 
-> 部署与 DB 同步链路的运维问题跟踪（含影响其验收的测试基线）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
+> 部署、服务生命周期与 DB 同步链路的运维问题跟踪（含影响其验收的测试基线）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
 
 ## [open] 2026-08-21：quarantine 只写不收，每次切换失败沉淀两份全量 DB 且永不回收
 
@@ -81,11 +81,27 @@
 
 `./status.sh performance-probe` 当前返回 `not installed`；旧 hourly crontab 条目仍带 `[PAUSED 2026-07-24 pending plans/20260724-perf-idle-only-and-grounding]` 注释。该暂停不是成本观测 plan 所为，也未由它恢复。恢复前应由 performance plan owner 处理崩溃样本与 ISSUE-017 的 origin 默认值，再安装 per-file LaunchAgent；不能仅删除 PAUSED 注释让旧 cron 与新 lifecycle 并存。
 
-## [open] 2026-08-12：DB sync 与 performance-remediate 缺少统一生命周期接口
+## [open] 2026-08-12：三条 repo-owned cron 与一条维护者临时 cron 缺少统一收口
 
 - Type: service lifecycle · Priority: medium · Discovered: 20260810 LLM cost plan 的 full docs-sync P5 review
 
-repo-owned 的 DB sync cron 与 performance-remediate cron 都列在 README/services 清单，但不受 `./install.sh`、`./uninstall.sh`、`./status.sh` 管理：前者只给完整 wrapper/裸 producer，后者仍让操作者手工编辑 crontab。两者都应在保留现有 fail-closed gate 的前提下增加规范 lifecycle，并让 status 展示调度和最近 terminal state。`status.sh` 当前还会抑制 `crontab -l` 的错误，并把“无法读取”折叠成 `not installed`，因此这类输出不能单独证明排期不存在。pulled code 如何进入运行态的跨服务 make-live 文档缺口已登记在 `docs/issues/docs-quality.md`，本条不重复展开。
+repo-owned 的 DB sync、performance-remediate 与 Wechat2RSS healthcheck cron，以及维护者本机的 shadow-observe 临时 cron，都列在 services 清单但不受 `./install.sh`、`./uninstall.sh`、`./status.sh` 管理：前两者只给完整 wrapper / 裸 producer，或让操作者手工编辑 crontab；healthcheck 同样只有裸脚本；shadow-observe 的入口则明确未入 git。前三条应按各自现有启用约束增加规范 lifecycle，并让 status 展示调度和最近 terminal state；shadow-observe 要先由 owner 在“纳入 git 并提供 lifecycle”与“评估结束后移除”之间裁决，不能把未入 git 的临时任务直接当作 repo-owned 服务加固。`status.sh` 当前还会抑制 `crontab -l` 的错误，并把“无法读取”折叠成 `not installed`，因此这类输出不能单独证明排期不存在。pulled code 如何进入运行态的跨服务 make-live 文档缺口已登记在 `docs/issues/docs-quality.md`，本条不重复展开。
+
+## [open] 2026-09-01：pipeline 的 launchd 备选形态没有规范 lifecycle 入口
+
+- Type: service lifecycle · Priority: low · Discovered: 2026-09-01 微信搜索与 KB 补录文档同步的 P5 复审。
+
+`docs/operations/services.md` 同时展示 pipeline 的 cron 当前形态和 launchd 备选模板，但切换到 launchd 的说明要求操作者直接运行 `launchctl bootstrap`。仓库的 `./install.sh pipeline`、`./status.sh pipeline`、`./uninstall.sh pipeline` 只识别 cron 形态，没有安装、查询或移除 launchd 形态的标准入口。结果是同名 repo-owned 服务一旦按文档切换 supervisor，就脱离跨项目约定的 lifecycle 动词。
+
+闭合时应先决定 pipeline 是否仍正式支持 launchd：继续支持则让标准 lifecycle 命令识别并管理该 supervisor；不再支持则从现役 runbook 移除裸 `launchctl` 切换步骤，把 plist 降为历史或明确的非支持示例。当前不要把手动 `launchctl` 当成已收口的运维接口。
+
+## [open] 2026-09-01：pipeline cron 按路径子串识别，多个 checkout 会串判与串删
+
+- Type: service lifecycle · Priority: medium · Discovered: 2026-09-01 微信搜索与 KB 补录文档同步的 README P4 复审。
+
+`./install.sh pipeline` 写入的 crontab 行没有稳定 marker；`install.sh`、`status.sh` 与 `uninstall.sh` 都按 `ai-radar/pipeline.sh` 路径子串识别。若同一用户同时保留多个 ai-radar checkout，另一个 checkout 的排期会让 status 误判当前树已安装，卸载时也可能把两条一起删除。README 已改用 `pwd -P` 的绝对仓根精确核对当前 checkout，但这个人工读数还没有被三条 lifecycle 脚本复用，因此只能识别风险，不能消除脚本侧的串判与串删。
+
+闭合时应给 pipeline cron 增加能绑定 canonical checkout 的稳定身份，并让 install/status/uninstall 共用同一解析规则；迁移须保留无关 crontab 条目，并能区分当前树、其它树与无法读取 crontab 三种状态。
 
 ## [open] 2026-08-12：当前生产 admin 入口绕过 Cloudflare Access
 

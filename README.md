@@ -53,7 +53,7 @@ DEEPSEEK_API_KEY=sk-xxx
 ./run.sh admin sources reload
 ```
 
-成功读数：`migrate` 打印 `migrated <radar.db 路径>` 与 `migrated llm_usage <llm_usage.db 路径>` 两行；`backfill-links` 打印 `item_links backfilled for <路径>: <N> links`；`reload` 打印 `reloaded <N> sources`，N 应等于 `data/sources.toml` 里启用的来源数。
+成功读数：`migrate` 打印 `migrated <radar.db 路径>` 与 `migrated llm_usage <llm_usage.db 路径>` 两行；`backfill-links` 打印 `item_links backfilled for <路径>: <N> links`；`reload` 打印 `reloaded <N> sources`。这里的 N 是本次实际加载数：`data/sources.toml` 中启用但缺少所需环境变量的 optional 来源会被跳过，因此 N 可以小于配置中的 enabled 总数。
 
 `backfill-links` 把文章正文里的外链抽成一张带索引的表，「关联讨论」靠它回答。**可续跑，也可以晚些再补**——没跑完之前该功能回落到旧的全表扫描：结果正确，但每次打开精选页会多花约 1 秒。只需在已有数据库上跑一次，此后由抓取流程自行维护；重跑是安全的。
 
@@ -84,7 +84,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 `pipeline.sh` 按顺序执行 `fetch → prefilter → score → enrich → curate → interpret`，每个阶段只处理尚未评估的新条目。单阶段失败会记录 `FAIL` 后继续，日志写入 `logs/pipeline-YYYYMMDD-HHMMSS.log`，`.pipeline.flock` 上的内核排他锁跳过重叠运行。
 
-每轮在第一个外部阶段前执行 `./run.sh egress-preflight`。它只接受 `check-proxy-status --format=kv` 返回完整、healthy、policy matched 的 `domain-routing-v1` 状态；失败时整轮在发出外部请求前退出，不会退回父 Claude Code/Codex 的 proxy 环境或直连。域名路由由外部 domain router 持有：Anthropic → GCP SG 且 fail closed，OpenAI/ChatGPT/X → OpenAI provider route（Tencent primary，建隧道前失败时 ZYT fallback；两者均不可用则 fail closed），Ark/DeepSeek/RSS/新闻/网页 → direct。AI Radar 不维护第二份域名表；实际出口以 system-config 的 `tencent_route_mode` 与 route audit `selected_route` 为准，生产安装前置与排障见 [服务 runbook](docs/operations/services.md#ai-radar-域名-selector出网)。
+每轮在第一个外部阶段前执行 `./run.sh egress-preflight`。它只接受 `check-proxy-status --format=kv` 返回完整、healthy、policy matched 的 `domain-routing-v1` 状态；失败时整轮在发出外部请求前退出，不会退回父 Claude Code/Codex 的 proxy 环境或直连。域名路由由外部 domain router 持有：Anthropic → GCP SG 且 fail closed，OpenAI/ChatGPT/X → OpenAI provider route（Tencent primary，建隧道前失败时 ZYT fallback；两者均不可用则 fail closed），Ark/DeepSeek/RSS/新闻/网页 → direct。AI Radar 不维护第二份域名表；实际出口以 system-config 的 `tencent_route_mode` 与 route audit `selected_route` 为准，生产安装前置与排障见 [服务 runbook](docs/operations/services.md#ai-radar-域名-selector-出网)。
 
 默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 
@@ -95,7 +95,7 @@ cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调
 ./install.sh pipeline     # 注册到 user crontab，每 15 分钟一次
 ```
 
-`install.sh pipeline` 的成功读数：先打印 `✓ pipeline: installed in user crontab (every 15 min)`（已装过则是 `✓ pipeline: already in crontab`），末尾 `Install summary:` 块里 `installed:` 一行列出本次装上的服务、`skipped:` 列出因缺依赖跳过的服务及原因。装完再核一遍排期与产出：`crontab -l | grep pipeline.sh` 应见一条 `*/15` 开头的行；每轮结果写在 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
+`install.sh pipeline` 的成功读数：先打印 `✓ pipeline: installed in user crontab (every 15 min)`（已装过则是 `✓ pipeline: already in crontab`），末尾 `Install summary:` 块里 `installed:` 一行列出本次装上的服务、`skipped:` 列出因缺依赖跳过的服务及原因。装完再核一遍当前 checkout 的排期与产出：`repo="$(pwd -P)"; crontab -l | grep -F "$repo/pipeline.sh"` 应见一条 `*/15` 开头的行；每轮结果写在 `logs/pipeline-YYYYMMDD-HHMMSS.log`。
 
 调度方式详情、launchd 备选模板见 §服务 + [docs/operations/services.md](docs/operations/services.md)。
 
@@ -216,7 +216,7 @@ uv run python scripts/capture_aihot_dataset.py validate --report-json benchmarks
 
 当前首个基准提交固定两个半开 UTC 日窗口：`[2026-08-19T00:00Z, 2026-08-20T00:00Z)` 共 348 条，`[2026-08-20T00:00Z, 2026-08-21T00:00Z)` 共 330 条。capture 保存两遍一致的公开 API 观察、SSR 标签证据、冻结 schema bytes/hash 与离线重放所需 raw；它的“完整”只覆盖采集时刻可见的 AIHOT public-surface baseline，不表示 AIHOT 内部 snapshot、筛选或排序实现等价。AIHOT live 仅保留约 7 天，因此 data commit 是窗口过期后的可复现 authority。
 
-代码与数据采用双仓提交：先在 private data 仓提交并经显式许可 push，使 exact data SHA 可远端取得；主仓随后才记录对应 gitlink。任一 data push、远端配置、主仓 push 或主分支整合都各自经过适用的显式授权 gate。契约理由与边界见 [ADR-060](docs/adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md)。
+代码与数据采用双仓提交：先在 private data 仓提交并经显式许可 push，使 exact data SHA 可远端取得；主仓随后才记录对应 gitlink。任一 data push、远端配置、主仓 push 或主分支整合都各自经过适用的显式授权 gate。契约理由与边界见 [060-aihot-manifest](docs/adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md)。
 
 ### 微信文章解读
 
@@ -224,15 +224,9 @@ uv run python scripts/capture_aihot_dataset.py validate --report-json benchmarks
 
 启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。被判定值得保存的文章展示到 `/wechat` 并回写外部知识库，其余只在 `radar.db` 留处理记录。`/wechat` 的 `?q=` 会把查询拆成必需词，每个词可跨标题、公众号、正文、abstract、tags 与完整 summary 命中；评测类记忆词有受控同义扩展，分页和详情页返回链接会保留搜索状态。
 
-本地 ai-assistant 知识库里已有、但 AI Radar 从未摄取的微信文章，可由维护者显式补录：
+本地 ai-assistant 知识库里已有、但 AI Radar 从未摄取的微信文章，可由维护者用 `./run.sh admin wechat-kb import` 显式补录。
 
-```bash
-./run.sh admin wechat-kb import \
-  --assistant-root ~/research/ai-assistant \
-  --user dong_lin
-```
-
-先加 `--dry-run` 可只看将导入多少篇，加 `--limit N` 可分批执行。命令只导入目录中索引、文件和向量都有效的微信文章，并跳过 AI Radar 已有 URL；每次成功运行打印用于审计和 postcheck 的 run id。失败运行在事务内零提交；成功批次不提供删除式回滚，因为归档项可能已成为后续实时 feed 的去重锚点。网站请求仍只读 `data/radar.db`，不依赖 ai-assistant 文件系统。脚本 I/O 契约与启用条件见 [`docs/references/ai-assistant-contract.md`](docs/references/ai-assistant-contract.md)，完整导入和故障判读见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#手动补录-ai-assistant-知识库归档)。
+可复制的 dry-run、全量/分批导入命令及成功、无变化、跳过、失败信号，以 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md#手动补录-ai-assistant-知识库归档) 为唯一运维说明；脚本 I/O 契约见 [`docs/references/ai-assistant-contract.md`](docs/references/ai-assistant-contract.md)。网站请求只读运行时配置的 AI Radar 数据库（默认 `data/radar.db`），不依赖 ai-assistant 文件系统。
 
 ### LLM Provider
 
@@ -262,9 +256,9 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 ./test.sh
 ```
 
-`test.sh` 就是 `uv run python -m pytest tests -v`（额外参数会透传），只跑 Python 测试；仓内当前收集到约 1800 条用例（2026-08-20 的 `--collect-only` 读数为 1835），预期全绿。
+`test.sh` 就是 `uv run python -m pytest tests -v`（额外参数会透传），只跑 Python 测试；用例数随仓库演化，不作为契约。退出码 0 才表示本次所选测试通过；任何非零都表示本轮未通过，应按失败列表排查，不要把它默认解释成“已知基线”。
 
-套件里带 `integration` 标记的用例会访问外部服务，无网或未配 key 时会失败（当前 2 条）——排除它们跑：
+套件里带 `integration` 标记的用例会访问外部服务（当前收集为 2 个参数化 case），默认会跳过；只有显式设置 `AIRADAR_RUN_LIVE_WECHAT=1` 才会访问 live `mp.weixin.qq.com`，这条路径不需要 API key。要明确排除它们可运行：
 
 ```bash
 ./test.sh -m 'not integration'
@@ -272,7 +266,7 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 
 ## 服务
 
-下表只列**长期在后台运行**的服务（一次性 CLI 不在此列）。
+下表概览从当前 checkout 可以找到入口的通用服务。脚本管理的服务用本节 lifecycle 命令；Docker、DB sync 等非标准入口跟随表内 runbook。
 
 | 服务 | 作用 |
 |---|---|
@@ -282,11 +276,20 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 | `alert` | 定期执行 `admin alert-check`；A1–A7 使用 severity lifecycle，D3 定价提醒独立去重 |
 | `performance-probe` | 可选的同机用户旅程性能探针（见上文） |
 | `cost-report` | 定期发送上一自然周的 LLM 成本报表 |
-| `performance-remediate` | 探针确认退化后生成仅供人工审阅的候选修复 commit |
-| DB sync | 把主库同步到只读副本主机（维护者实例用；单机部署不需要） |
+| `performance-remediate` | 探针确认退化后生成仅供人工审阅的候选修复 commit；启用 gate 与 cron 入口见 [`monitoring-alerting.md`](docs/operations/monitoring-alerting.md#安装-remediation-cron启用-gate-全文) |
+| DB sync | 把主库同步到只读副本主机（维护者实例用；单机部署不需要）；职责、手动入口与终态判据见 [`services.md`](docs/operations/services.md#db-sync-职责验证与故障证据) |
 | Wechat2RSS | 自建微信公众号 feed 服务，用 `docker compose` 起在 `127.0.0.1:8080`，供 `WECHAT2RSS_FEED_URL` 消费；**配这个变量前先把它起起来**。bring-up 与运维见 [`deploy/wechat2rss/RUNBOOK.md`](deploy/wechat2rss/RUNBOOK.md) |
+| Wechat2RSS healthcheck | 从服务外部探活 Wechat2RSS，并在异常时独立告警；当前手动检查入口与尚未收口的 lifecycle 缺口见 [`docs/operations/services.md`](docs/operations/services.md) |
 
-**每个服务当前装没装、跑在哪个端口、排期是多少，权威在 [`docs/operations/services.md`](docs/operations/services.md)**——这张表只说明各服务是干什么的。
+要看自己这份 checkout 的状态：脚本管理的服务运行 `./status.sh`，Wechat2RSS 用 Docker Compose 原生入口，其余按各行链接的 runbook 检查。
+
+### 维护者实例附加库存（fork 跳过）
+
+维护者实例还有一项不属于 fork 安装面的后台任务：`shadow-observe` 每 30 分钟比较 Mp2RSS 与 Wechat2RSS 覆盖率。它是评估期临时 cron，入口未入 git 且不受标准 lifecycle 脚本管理；fork 无需安装或操作。仍在运行期间按服务协议保留这条可发现记录；当前排期、live 入口边界与临时性质见 [`docs/operations/services.md`](docs/operations/services.md)。
+
+维护者实例绑定具体机器的已记录安装状态与拓扑快照也在该 operations 文档；不要把那份产线记录当成 fork 的目标配置。
+
+### X 图片出口代理
 
 X 的图片还需要一条出口代理：`.env` 未配 `AI_RADAR_IMG_PROXY_URL` 时 `/img` 对 `pbs.twimg.com` 直接返回 404（这是有意的快速失败，退回直连会让每张图挂满超时）。维护者实例的产线拓扑与诊断顺序见 [`docs/operations/services.md`](docs/operations/services.md)。
 
@@ -298,7 +301,7 @@ X 的图片还需要一条出口代理：`.env` 未配 `AI_RADAR_IMG_PROXY_URL` 
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）。**显式逐个安装你需要的服务**，不要用无参数全量安装。单服务安装幂等——重复跑不报错。DB sync 与 Wechat2RSS 不由这三个脚本管理。
+服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）。**显式逐个安装你需要的服务**，不要用无参数全量安装。单服务安装幂等——重复跑不报错。DB sync、Wechat2RSS、Wechat2RSS healthcheck 与 `performance-remediate` 不由这三个脚本管理，各自入口见服务表链接的运维文档；`shadow-observe` 只属于上面的维护者实例附加库存。
 
 `./install.sh` 会先检查该服务脚本可判定的依赖（LLM key、飞书 webhook、`im-notify`、tunnel 配置文件等），缺失时在交互式终端询问并追加到 `./.env`、非交互环境自动跳过，跳过原因列在命令末尾的 summary 里。变量按当前进程环境、项目 `./.env`、`~/.claude/.env` 依次查找。Playwright Chromium 是 `install.sh` **不会**自动下载或校验的运行时前置，按快速开始那一步先装好。逐服务的依赖清单、隐含依赖与验证命令见 [`docs/operations/services.md`](docs/operations/services.md)。
 
@@ -312,12 +315,23 @@ pipeline 所在主机还必须先由 system-config 安装并启用 healthy `doma
 
 ### Cloudflare Tunnel
 
+这是 fork / 自托管可选的公网入口，不是维护者实例当前 `news.aiplanet.live` 的生产路径；后者走腾讯服务器部署，现役拓扑见 [`docs/operations/services.md`](docs/operations/services.md)。
+
 ```bash
 cp deploy/cloudflared/config.yml.example deploy/cloudflared/config.yml
 # 编辑 config.yml 填入 tunnel UUID 和域名
 ```
 
-起完之后按 [`docs/operations/services.md`](docs/operations/services.md) 的「验证（新机器 bring-up / 大改动后跑一遍）」一节确认公网入口确实打得开本机 serve，而不是只看 tunnel 进程活着。同一台机器上的 tunnel 常同时承载别的站点，ingress 规则的写法见同文档「Cloudflare tunnel shared ingress」。
+起完后同时检查 tunnel supervisor、本地 origin 与你在 `config.yml` 填入的公网 hostname；下面的公网读数只证明该 hostname 可达，不单独证明响应来自这一份本地 checkout：
+
+```bash
+./status.sh tunnel
+curl -sf http://127.0.0.1:8000/api/v1/healthz && echo origin_ok
+public_url='https://your-site.example.com' # 替换为 config.yml 中的 hostname
+curl -sf "${public_url%/}/api/v1/healthz" && echo public_ok
+```
+
+同一台机器上的 tunnel 常同时承载别的站点；改 ingress 前先读 [`docs/operations/services.md`](docs/operations/services.md) 的「Cloudflare tunnel shared ingress」，保留其它站点的规则。
 
 ### 运维监控
 
@@ -329,7 +343,7 @@ serve 会自动对公开分页路径（`/`、`/wechat` 及其 API）的安全变
 
 维护者实例当前的边缘层是 **EdgeOne**（`news.aiplanet.live` 以 DNS-only CNAME 接入，见 [ADR-039](docs/adr/039-route-news-through-edgeone-dns-only-cname.md)）。它对 `/app.js` 与 `/style.css` 两个精确路径强制节点缓存 7 天。
 
-因此改前端资产（`web/static/app.js` / `web/static/style.css`）后必须重算 `?v=` 版本串（`uv run python scripts/bump_frontend_assets.py`），并在部署前用 `./run.sh admin edgeone check` 核对边缘强制缓存规则有没有漂移——它的退出码 `0`=无漂移、`1`=有漂移、`2`=**未核实（不等于通过）**。漏做就是「部署了但线上不生效」；完整纪律见项目 [`CLAUDE.md`](CLAUDE.md) 的「Frontend Asset Cache Busting」，凭据配置与 purge 步骤见 [`docs/operations/services.md`](docs/operations/services.md) 的「EdgeOne 节点缓存规则对账与 purge」。
+因此改前端资产（`web/static/app.js` / `web/static/style.css`）后必须重算 `?v=` 版本串（`uv run python scripts/bump_frontend_assets.py`），并在部署前用 `./run.sh admin edgeone check` 核对边缘强制缓存规则有没有漂移——它的退出码 `0`=无漂移、`1`=有漂移、`2`=**未核实（不等于通过）**。漏做就是「部署了但线上不生效」；凭据配置、规则对账与 purge 步骤见 [`docs/operations/services.md`](docs/operations/services.md) 的「EdgeOne 节点缓存规则对账与 purge」。
 
 （前端 app.js 会自动预取下一页，这是纯客户端优化，与任何边缘缓存独立。）
 

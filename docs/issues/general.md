@@ -4,6 +4,13 @@
 
 ---
 
+## [open] ISSUE-GENERAL-20260901-b6ad · WeChat KB import receipt does not identify its target namespace
+
+- Type: operability / observability · Priority: medium · Discovered: 2026-09-01 documentation sync final review
+- Description: `./run.sh admin wechat-kb import` accepts `--assistant-root`, `--user`, and `--db-path`, but its receipt only prints the run id, counts, postcheck, changed flag, skipped reasons, and next action. A dry-run or real import can therefore report a plausible success after resolving to another existing ai-assistant checkout, Summary Agent user, or database, while the operator cannot verify the target identity from the receipt itself. The runbook currently mitigates this by requiring all three target arguments on first use and whenever the target changes, and explicitly warns that the CLI does not echo them.
+- Fix direction: include normalized, non-secret target identity in every dry-run and real-import receipt: resolved assistant root, Summary Agent user, and resolved database path. Keep the fields present on success, no-op, validation failure, and postcheck failure so the receipt remains self-identifying across every terminal outcome; add CLI tests for explicit and default paths.
+- Closure: tests run the command against two distinct temporary roots/users/databases and every receipt unambiguously identifies the selected target. The matrix covers explicit arguments and the default database path, plus success, no-op rerun, catalog/argument validation failure, and failed postcheck outcomes.
+
 ## [open] ISSUE-GENERAL-20260901-7c2e · Playwright Sync egress test depends on full-suite asyncio state
 
 - Type: test reliability · Priority: low · Discovered: 2026-09-01 WeChat search/import full-suite verification
@@ -44,7 +51,8 @@
 - Description: 跨源去重（`src/airadar/fetcher/dedup.py` 的 `wechat_duplicate_id`）只匹配 `s.enabled=1` 的来源，`/wechat` 也按同一个 flag 过滤。实测四步：候选源先发现一篇 → `items=1` 可见 1；停用该源 → 可见 0（文章从站上消失）；另一源随后带来同一篇 → `items=2` 可见 1；重新启用候选源 → **可见 2，同一篇两张卡**。
 - 为什么不改成匹配全部行: 那样隐藏行会持续拦住每一次插入，停用源独有的文章**永久补不回来**（这是 reviewer 报的原 HIGH-1）。当前取舍选了"补得回来"这一面，重复只出现在"停用后又重新启用"这一条路径上，而当前方向是停掉后不再启用。
 - Fix 方向: 命中的行属于已停用来源时，不插新行而是把该行改归属到新来源（`source_id` / `url` / 正文一并更新），始终只保留一行；需处理 `items` 上的唯一索引冲突，并另走一轮评审。
-- 缓解: 重新启用前先跑 [operations/wechat-ingestion.md](../operations/wechat-ingestion.md)「停用其中一个微信源时会发生什么」里的清重查询。
+- 当前缓解: 不重新启用已停用的微信源。旧 runbook 的一次性清重脚本没有完整复用运行时的可见源谓词、同源排除与标题规范化，已在 2026-09-01 移除。
+- 闭合条件: 提供受测的只读重复候选枚举入口，逐对显示身份依据与来源；删除必须是另一个显式、可审计的操作，并验证 `items`、`wechat_interpretations`、FTS 与 `/wechat` 消费面一致。完成前不要用 ad hoc SQL 修改生产库。
 
 ---
 
@@ -263,7 +271,7 @@
 
 **状态**：open · **优先级**：low
 
-`HotCandidateCache.bind()` 换库时会清空候选（ADR-060），但那只覆盖**顺序调用**。并发时序仍有一个缺口：keeper 已在旧库上开始水合 → `bind(db-b)` 清空 → 旧那轮水合返回并**无条件发布**它从 db-a 读到的行。只读探针实测：`after_bind` 为 `None`，`after_old_publish` 为 `[{'id': 'db-a'}]`，而此时 `_db_path` 已是 `db-b`。
+`HotCandidateCache.bind()` 换库时会清空候选（[060-hot-cache](../adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md)），但那只覆盖**顺序调用**。并发时序仍有一个缺口：keeper 已在旧库上开始水合 → `bind(db-b)` 清空 → 旧那轮水合返回并**无条件发布**它从 db-a 读到的行。只读探针实测：`after_bind` 为 `None`，`after_old_publish` 为 `[{'id': 'db-a'}]`，而此时 `_db_path` 已是 `db-b`。
 
 **触发前提**：同一进程内换库，且恰好与一轮旧库水合重叠。生产是单 app 单库、`bind` 只在 lifespan 调用一次，碰不到；进程内 lifespan 重启、同进程嵌入第二个 app、以及测试套件会碰到（表现为偶发的跨库串数据）。
 
