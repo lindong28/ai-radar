@@ -415,6 +415,9 @@ def _match_ids(
     return {"count": len(item_ids), "item_ids": item_ids}
 
 
+_SQL_VARIABLE_CHUNK = 900
+
+
 def _timeline_http_match_ids(
     connection: sqlite3.Connection,
     term: str,
@@ -432,18 +435,28 @@ def _timeline_http_match_ids(
     ).fetchone()
     if has_prefilter is not None:
         visibility.append(_PREFILTER_SCORING_CLAUSE)
-    placeholders = ", ".join("?" for _ in search_ids)
-    rows = connection.execute(
-        f"""
-        SELECT i.id
-        FROM items i
-        JOIN sources s ON s.id=i.source_id
-        WHERE i.id IN ({placeholders})
-          AND {' AND '.join(f'({clause})' for clause in visibility)}
-        """,
-        search_ids,
-    ).fetchall()
-    item_ids = sorted({_raw_text(row[0]) for row in rows})
+    visibility_sql = " AND ".join(f"({clause})" for clause in visibility)
+    matched: set[str] = set()
+    # Chunk the id list: a single IN (?,?,...) over every hit blows SQLite's
+    # variable cap (SQLITE_MAX_VARIABLE_NUMBER, 32766 on modern builds) once a
+    # probe term matches tens of thousands of items, which fail-closed the whole
+    # production db-sync. The visibility clauses carry no bound parameters, so
+    # search ids are the only variables and 900 stays safe on old SQLite too.
+    for start in range(0, len(search_ids), _SQL_VARIABLE_CHUNK):
+        chunk = search_ids[start : start + _SQL_VARIABLE_CHUNK]
+        placeholders = ", ".join("?" for _ in chunk)
+        rows = connection.execute(
+            f"""
+            SELECT i.id
+            FROM items i
+            JOIN sources s ON s.id=i.source_id
+            WHERE i.id IN ({placeholders})
+              AND {visibility_sql}
+            """,
+            chunk,
+        ).fetchall()
+        matched.update(_raw_text(row[0]) for row in rows)
+    item_ids = sorted(matched)
     return {"count": len(item_ids), "item_ids": item_ids}
 
 

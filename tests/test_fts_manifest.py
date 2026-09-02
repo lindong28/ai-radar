@@ -613,3 +613,95 @@ def test_manifest_identity_and_self_hash_reject_tampering(tmp_path: Path) -> Non
     tampered["snapshot_id"] = "0" * 64
     with pytest.raises(manifest_module.ManifestError, match="self-hash"):
         manifest_module.validate_manifest(tampered)
+
+
+def test_manifest_http_match_survives_more_than_999_fts_hits(
+    tmp_path: Path,
+) -> None:
+    """A probe term matching >999 items must not blow the SQLite variable cap.
+
+    Regression for the production db-sync outage: _timeline_http_match_ids put
+    every search id into one IN (?,?,...) clause, so once the corpus grew past
+    ~999 hits on the oracle term the manifest build raised
+    'too many SQL variables' and fail-closed the whole sync.
+    """
+    snapshot = tmp_path / "snapshot.db"
+    artifact = tmp_path / "shipping.db"
+    output = tmp_path / "manifest.json"
+    _create_snapshot(snapshot)
+    _create_artifact(artifact)
+    with sqlite3.connect(snapshot) as connection:
+        bulk = [f"bulk-title-{i:05d}" for i in range(1200)]
+        connection.executemany(
+            "INSERT INTO items_fts "
+            "(item_id, title, content_text, source_name, author, title_zh) "
+            "VALUES (?, 'TitleOnlyBeacon', 'generic body', "
+            "'Generic Source', 'Generic Author', ?)",
+            [(item_id, f"通用译名{i}") for i, item_id in enumerate(bulk)],
+        )
+        connection.executemany(
+            "INSERT INTO items "
+            "(id, source_id, url, title, content_text, author, "
+            "published_at, fetched_at) "
+            "VALUES (?, 'source', ?, 'TitleOnlyBeacon', 'generic body', "
+            "'Generic Author', '2026-01-09T00:00:00Z', '2026-01-09T00:00:00Z')",
+            [(item_id, f"https://example.invalid/{item_id}") for item_id in bulk],
+        )
+        connection.executemany(
+            "INSERT INTO item_evaluations (item_id, stage, numeric_json, error) "
+            "VALUES (?, 'prefilter', '{\"is_ai_related\":1}', NULL)",
+            [(item_id,) for item_id in bulk],
+        )
+
+    payload = manifest_module.build_manifest(
+        snapshot=snapshot,
+        artifact=artifact,
+        output=output,
+    )
+
+    title_probe = payload["probes"]["title"]
+    matched = title_probe["timeline_http_matches"]["item_ids"]
+    assert "bulk-title-00000" in matched
+    assert "bulk-title-01199" in matched
+    assert title_probe["timeline_http_matches"]["count"] >= 1200
+
+
+def test_manifest_http_match_chunks_cover_all_ids(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Chunked IN batches must union to the same visible set as one query."""
+    monkeypatch.setattr(manifest_module, "_SQL_VARIABLE_CHUNK", 2)
+    snapshot = tmp_path / "snapshot.db"
+    artifact = tmp_path / "shipping.db"
+    output = tmp_path / "manifest.json"
+    _create_snapshot(snapshot)
+    _create_artifact(artifact)
+    with sqlite3.connect(snapshot) as connection:
+        five = [f"chunk-title-{i}" for i in range(5)]
+        connection.executemany(
+            "INSERT INTO items_fts "
+            "(item_id, title, content_text, source_name, author, title_zh) "
+            "VALUES (?, 'TitleOnlyBeacon', 'generic body', "
+            "'Generic Source', 'Generic Author', ?)",
+            [(item_id, f"通用译名c{i}") for i, item_id in enumerate(five)],
+        )
+        connection.executemany(
+            "INSERT INTO items "
+            "(id, source_id, url, title, content_text, author, "
+            "published_at, fetched_at) "
+            "VALUES (?, 'source', ?, 'TitleOnlyBeacon', 'generic body', "
+            "'Generic Author', '2026-01-09T00:00:00Z', '2026-01-09T00:00:00Z')",
+            [(item_id, f"https://example.invalid/{item_id}") for item_id in five],
+        )
+        connection.executemany(
+            "INSERT INTO item_evaluations (item_id, stage, numeric_json, error) "
+            "VALUES (?, 'prefilter', '{\"is_ai_related\":1}', NULL)",
+            [(item_id,) for item_id in five],
+        )
+
+    payload = manifest_module.build_manifest(
+        snapshot=snapshot, artifact=artifact, output=output
+    )
+    matched = set(payload["probes"]["title"]["timeline_http_matches"]["item_ids"])
+    assert set(five) <= matched, "a chunk boundary dropped visible ids"
