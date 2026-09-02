@@ -24,8 +24,8 @@ from openai import OpenAI
 from playwright.sync_api import ProxySettings
 
 EXPECTED_AGENT_PROXY = "http://127.0.0.1:59521"
-EXPECTED_POLICY_ID = "domain-routing-v1"
-EXPECTED_STATUS_SCHEMA_ID = "agent-domain-routing-status-v1"
+EXPECTED_POLICY_ID = "domain-routing-v2"
+EXPECTED_STATUS_SCHEMA_ID = "agent-domain-routing-status-v2"
 EXPECTED_TENCENT_STATUS_SCOPE = "openai-provider-route-aggregate"
 STATUS_COMMAND = (
     "/bin/zsh",
@@ -49,7 +49,7 @@ _REQUIRED_VALUES = {
     "policy_id": EXPECTED_POLICY_ID,
     "policy_projection": "matched",
     "router_status": "running",
-    "gcp_sg_status": "healthy",
+    "gcp_sg_standard_status": "healthy",
     "tencent_status": "healthy",
     "tencent_status_scope": EXPECTED_TENCENT_STATUS_SCOPE,
     "direct_status": "healthy",
@@ -121,7 +121,7 @@ def _run_status(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
 
 

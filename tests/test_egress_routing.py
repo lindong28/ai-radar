@@ -41,13 +41,13 @@ def _healthy_status(*, proxy: str) -> str:
             "stored_mode=domain-routing",
             "effective_mode=domain-routing",
             f"agent_proxy={proxy}",
-            "status_schema_id=agent-domain-routing-status-v1",
-            "policy_id=domain-routing-v1",
+            "status_schema_id=agent-domain-routing-status-v2",
+            "policy_id=domain-routing-v2",
             f"policy_sha256={POLICY_SHA}",
             "policy_projection=matched",
             "router_status=running",
             "route_attribution=available",
-            "gcp_sg_status=healthy",
+            "gcp_sg_standard_status=healthy",
             "tencent_status=healthy",
             "tencent_status_scope=openai-provider-route-aggregate",
             "direct_status=healthy",
@@ -128,7 +128,7 @@ def test_parse_proxy_status_accepts_only_complete_healthy_contract() -> None:
 
     assert policy == SelectorPolicy(
         agent_proxy=proxy,
-        policy_id="domain-routing-v1",
+        policy_id="domain-routing-v2",
         policy_sha256=POLICY_SHA,
     )
 
@@ -181,7 +181,7 @@ def test_missing_status_command_is_fail_closed(monkeypatch: pytest.MonkeyPatch) 
         (lambda rows: [row for row in rows if not row.startswith("policy_id=")], "missing"),
         (lambda rows: [row for row in rows if not row.startswith("status_schema_id=")], "missing"),
         (lambda rows: [row for row in rows if not row.startswith("tencent_status_scope=")], "missing"),
-        (lambda rows: [*rows, "policy_id=domain-routing-v1"], "duplicate"),
+        (lambda rows: [*rows, "policy_id=domain-routing-v2"], "duplicate"),
         (lambda rows: [*rows, "not-kv"], "malformed"),
         (
             lambda rows: ["overall_status=degraded" if row.startswith("overall_status=") else row for row in rows],
@@ -199,7 +199,7 @@ def test_missing_status_command_is_fail_closed(monkeypatch: pytest.MonkeyPatch) 
         ),
         (
             lambda rows: [
-                "status_schema_id=agent-domain-routing-status-v2"
+                "status_schema_id=agent-domain-routing-status-v1"
                 if row.startswith("status_schema_id=")
                 else row
                 for row in rows
@@ -584,7 +584,7 @@ def test_cli_preflight_reports_policy_identity_without_proxy_url(
 
     output = capsys.readouterr().out
     assert "egress-preflight status=healthy" in output
-    assert "policy_id=domain-routing-v1" in output
+    assert "policy_id=domain-routing-v2" in output
     assert POLICY_SHA in output
     assert policy.agent_proxy not in output
 
