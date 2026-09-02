@@ -55,7 +55,7 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 
 抓取整批失败时先读 `logs/pipeline-*.log` 最新一轮的 `=== egress preflight START/OK/FAIL ===`，再按结果分流：
 
-1. `preflight FAIL`：运行 `check-proxy-status --format=kv`。只有 stored/effective `domain-routing`、`domain-routing-v1` identity、policy projection matched、router/三路 upstream/route attribution/overall 全部 healthy 才可重跑；缺字段、重复/畸形字段、mismatch 或 status 命令失败都不是可降级状态。
+1. `preflight FAIL`：运行 `check-proxy-status --format=kv`。只有 stored/effective `domain-routing`、`domain-routing-v2` identity、policy projection matched、router/三路 upstream/route attribution/overall 全部 healthy 才可重跑；缺字段、重复/畸形字段、mismatch 或 status 命令失败都不是可降级状态。
 2. `preflight OK` 但请求仍失败：运行 `agent-proxy-route-audit --format=jsonl`，按 hostname 联合读取 `selected_route`、`outcome` 与 `outcome_scope`。`upstream-application + unknown` 表示线路已归因但该事件不观测应用结果，`proxy-connect + success|failure` 表示代理 CONNECT 结果，`direct-sentinel + success` 只证明受控直连哨兵。`OK` 只证明 AI Radar 接受了当时的 selector machine status，不证明后续每个请求的 route 或 upstream 成功。
 
 应用的 `airadar.egress.audit` 是调用点审计，不是 route authority。selector-owned transport 记录已知 hostname、launch、policy identity 与本地 outcome；显式 direct 的 loopback/synthetic 请求不依赖 selector status，也不产生带 policy identity 的应用 audit。`local_outcome=request:http:*|request:error:*` 表示真实请求结果；`subprocess_env:prepared` 与 `playwright_proxy_config:prepared` 只表示本地准备完成。managed-standard-env subprocess 使用 `hostname=null`，不表示子进程已经启动，也不表示其最终访问了哪个 hostname。不要用 listener 端口探活、父进程 proxy 环境或应用 intent 反推 GCP/Tencent/direct。

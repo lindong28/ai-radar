@@ -37,7 +37,7 @@ Interpret remains disabled for an external root unless `$AI_ASSISTANT_ROOT/ai-ra
 ```json
 {
   "schema_version": 2,
-  "policy_id": "domain-routing-v1",
+  "policy_id": "domain-routing-v2",
   "policy_sha256": "<64 lowercase hex of the tested T1 policy>",
   "egress_implementation_sha256": "<64 lowercase hex of the framed code/lock closure>",
   "parent_gcp_env_selector_only_test": "passed",

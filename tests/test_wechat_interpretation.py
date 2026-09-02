@@ -52,7 +52,7 @@ def _isolated_selector_policy(monkeypatch: pytest.MonkeyPatch) -> None:
         "airadar.interpret.runner.require_selector_policy",
         lambda: SelectorPolicy(
             agent_proxy="http://selector.invalid:1",
-            policy_id="domain-routing-v1",
+            policy_id="domain-routing-v2",
             policy_sha256="a" * 64,
         ),
     )
@@ -2320,6 +2320,7 @@ def test_interpret_runner_skips_external_root_without_selector_compatibility_rec
         "missing_field",
         "old_v1_schema",
         "wrong_policy_id",
+        "stale_pre_migration_domain_routing_v1_policy_id",
         "wrong_policy_sha256",
         "wrong_implementation_sha256",
         "failed_parent_env_test",
@@ -2357,6 +2358,12 @@ def test_interpret_runner_rejects_unproven_selector_compatibility_receipts(
         }
     elif case == "wrong_policy_id":
         receipt["policy_id"] = "domain-routing-v0"
+    elif case == "stale_pre_migration_domain_routing_v1_policy_id":
+        # A genuine pre-migration receipt attested against the old T1 policy
+        # (domain-routing-v1) must be rejected once the live policy is v2 —
+        # distinct from "wrong_policy_id" above, which uses a value that was
+        # never a real policy identity.
+        receipt["policy_id"] = "domain-routing-v1"
     elif case == "wrong_policy_sha256":
         receipt["policy_sha256"] = "b" * 64
     elif case == "wrong_implementation_sha256":

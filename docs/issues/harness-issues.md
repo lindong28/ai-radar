@@ -127,3 +127,10 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - **现象**：看到 `.more-page{width:min(640px,100%); max-width:1160px}` 就断定 `max-width` 永不可能生效、reviewer 报的回归是误报、修复是 no-op。实测 computed `width` 是 **1160px** ——`width:min(640px,100%)` 被更高优先级规则覆盖，从来没生效过；`max-width` 确实在起作用，回归与修复都是真的。
 - **性质**：`web-ui-observation.md` 已有「某属性是否生效 → 读 `getComputedStyle`，而非 grep 源码」。本例是**同一条规则的另一种违反形态**——不是 grep 找存在性，而是**阅读源码推演层叠优先级**。既有措辞（"grep 源码"）不足以覆盖"我读了完整规则并推理"这种更自信、也更容易出错的形态。
 - **建议**：把该行的错误做法从「grep 源码」扩写为「grep 或阅读源码推演层叠结果」，并点明多 media / 多 selector 叠加时源码推演不可靠。
+
+### HARNESS-20260902-e9c2 域名路由器 status schema v1→v2 升级无下游契约通知，生产摄取硬断约 2 小时
+
+- **现象**：2026-09-02 18:15 起 ai-radar pipeline 每轮 egress preflight FAIL，全部 fetch/enrich 停摆。表层签名有三种（status command returned 1 / TimeoutExpired / missing status fields: gcp_sg_status），前两种与线路探针抖动混淆，掩盖了真根因约 1.5 小时。
+- **根因**：harness 侧 `agent-domain-router`/`check-proxy-status` 升级为 v2（`policy_id=domain-routing-v2`、`status_schema_id=agent-domain-routing-status-v2`、字段 `gcp_sg_status`→`gcp_sg_standard_status`），而本仓 `src/airadar/egress.py` 钉死 v1 契约——探针全健康时 preflight 也永远失败。升级来源非本仓改动（另一 session 或路由器自动更新）。
+- **已处置**：本仓侧 `09256f0` 把钉值翻 v2、STATUS 子进程超时 30→60s（实测命令耗时 10-29s 波动，30s 贴边）；严格度语义不变。interpret 的录制收据按设计保留 v1、安全跳过，待其证明流程在 v2 下重跑（独立待办）。
+- **仍开放的 harness 侧问题**：路由器 schema 升级没有任何下游消费者通知/兼容期机制——ai-radar 是已知消费者（egress preflight+interpret 出网证明），升级瞬间静默破坏。候选方向：路由器升级脚本枚举已知契约消费者并提示；或 status 输出并行携带一版兼容字段过渡期。归 harness 仓（ai-agent-config）triage，本条先落本仓因牵涉本仓钉值。

@@ -163,7 +163,7 @@ def expected_selector_compatibility_receipt(
 
     return {
         "schema_version": 2,
-        "policy_id": "domain-routing-v1",
+        "policy_id": "domain-routing-v2",
         "policy_sha256": policy_sha256,
         "egress_implementation_sha256": egress_implementation_sha256,
         "parent_gcp_env_selector_only_test": "passed",
