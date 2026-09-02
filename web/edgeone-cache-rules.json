@@ -67,7 +67,7 @@
       "Description": null,
       "RuleId": "rule-3tqd7hwdvi49",
       "RuleName": "news public lists follow origin cache",
-      "RulePriority": 3,
+      "RulePriority": 4,
       "Status": "enable"
     },
     {
@@ -135,7 +135,7 @@
       "Description": null,
       "RuleId": "rule-3tqexfbhd95r",
       "RuleName": "news versioned css js edge cache",
-      "RulePriority": 2,
+      "RulePriority": 3,
       "Status": "enable"
     },
     {
@@ -204,6 +204,75 @@
       "Description": null,
       "RuleId": "rule-3tzlygp68ka0",
       "RuleName": "news img proxy follow origin cache",
+      "RulePriority": 2,
+      "Status": "enable"
+    },
+    {
+      "Branches": [
+        {
+          "Actions": [
+            {
+              "AccessURLRedirectParameters": null,
+              "AdvancedOriginRoutingParameters": null,
+              "AuthenticationParameters": null,
+              "CacheKeyParameters": null,
+              "CacheParameters": {
+                "CustomTime": null,
+                "FollowOrigin": {
+                  "DefaultCache": "on",
+                  "DefaultCacheStrategy": "on",
+                  "DefaultCacheTime": 0,
+                  "Switch": "on"
+                },
+                "NoCache": null
+              },
+              "CachePrefreshParameters": null,
+              "ClientIPCountryParameters": null,
+              "ClientIPHeaderParameters": null,
+              "CompressionParameters": null,
+              "ContentCompressionParameters": null,
+              "CustomActionParameters": null,
+              "ErrorPageParameters": null,
+              "ForceRedirectHTTPSParameters": null,
+              "HSTSParameters": null,
+              "HTTP2Parameters": null,
+              "HTTPUpstreamTimeoutParameters": null,
+              "HostHeaderParameters": null,
+              "HttpResponseParameters": null,
+              "MaxAgeParameters": null,
+              "ModifyOriginParameters": null,
+              "ModifyRequestHeaderParameters": null,
+              "ModifyResponseHeaderParameters": null,
+              "Name": "Cache",
+              "OCSPStaplingParameters": null,
+              "OfflineCacheParameters": null,
+              "OriginAuthenticationParameters": null,
+              "OriginPullProtocolParameters": null,
+              "PostMaxSizeParameters": null,
+              "QUICParameters": null,
+              "RangeOriginPullParameters": null,
+              "ResponseSpeedLimitParameters": null,
+              "SetContentIdentifierParameters": null,
+              "ShieldParameters": null,
+              "SiteFailoverParameters": null,
+              "SmartRoutingParameters": null,
+              "StatusCodeCacheParameters": null,
+              "TLSConfigParameters": null,
+              "UpstreamFollowRedirectParameters": null,
+              "UpstreamHTTP2Parameters": null,
+              "UpstreamRequestParameters": null,
+              "UpstreamURLRewriteParameters": null,
+              "VaryParameters": null,
+              "WebSocketParameters": null
+            }
+          ],
+          "Condition": "${http.request.host} in ['prompts.aiplanet.live']",
+          "SubRules": null
+        }
+      ],
+      "Description": null,
+      "RuleId": "rule-3uihh0m4timl",
+      "RuleName": "prompts follow origin cache",
       "RulePriority": 1,
       "Status": "enable"
     }

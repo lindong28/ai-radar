@@ -282,6 +282,12 @@ def check_asset_coverage(rules: list[dict[str, Any]], assets: tuple[str, ...]) -
             condition = branch.get("Condition") or ""
             paths = None if nested else understood_paths(condition)
             if paths is None:
+                if defers and not overrides and not nested:
+                    # A branch that only defers to the origin cannot create a stale
+                    # force-cached path, so an unreadable condition here is surfaced
+                    # for review instead of permanently failing verification.
+                    origin_governed.append(f"{condition} (condition not path-parsed)")
+                    continue
                 unparseable.append(f"{condition} (nested)" if nested else condition)
                 continue
             if overrides:

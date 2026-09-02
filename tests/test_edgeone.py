@@ -576,3 +576,27 @@ def test_cli_surfaces_origin_governed_paths_before_reporting_clean(monkeypatch, 
     assert code == edgeone.EXIT_CLEAN
     assert "ORIGIN-GOVERNED: /wechat" in out
     assert "not checked here" in out, "a clean exit must still say what it did not check"
+
+
+def test_host_only_follow_origin_rule_does_not_block_pinning() -> None:
+    """Measured against the live zone 2026-09-02: a `${http.request.host} in
+    ['prompts.aiplanet.live']` follow-origin rule (no path clause) turned every
+    check run red and made --update-snapshot refuse to pin. A branch that only
+    defers to the origin cannot create a stale force-cached path, so it must be
+    surfaced for review, not fail verification."""
+    cond = "${http.request.host} in ['prompts.aiplanet.live']"
+    coverage = edgeone.check_asset_coverage(
+        edgeone.normalize_rules(_rule_with(cond, REAL_FOLLOW_ORIGIN)), ASSETS
+    )
+    assert coverage.verified, "an unparsed follow-origin condition must not be a permanent red"
+    assert any("prompts.aiplanet.live" in item for item in coverage.origin_governed)
+
+
+def test_host_only_force_cache_rule_still_fails_closed() -> None:
+    """The mirror image must stay red: force-cache with unreadable paths is exactly
+    the stale-asset risk the gate exists for."""
+    cond = "${http.request.host} in ['prompts.aiplanet.live']"
+    coverage = edgeone.check_asset_coverage(
+        edgeone.normalize_rules(_rule_with(cond, REAL_FORCE_CACHE)), ASSETS
+    )
+    assert not coverage.verified and coverage.unparseable
