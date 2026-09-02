@@ -37,6 +37,7 @@ from .curator.select import curate
 from .curator.weights import load_weights
 from .egress import EgressPreflightError, require_selector_policy
 from .enrich.runner import run_enrich
+from .enrich.runner_v2 import run_enrich as run_enrich_v2
 from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
 from .fetcher.runner import fetch_all, refresh_wechat_avatar, reload_sources
 from .interpret.runner import run_interpret
@@ -355,16 +356,33 @@ def _enrich(args: argparse.Namespace) -> int:
             )
 
         workers = args.workers or int(os.environ.get("AI_RADAR_ENRICH_WORKERS", "1"))
-        summary = run_enrich(
-            conn,
-            since=args.since,
-            limit=args.limit,
-            ruleset_version=args.ruleset,
-            item_ids=item_ids,
-            workers=workers,
-            progress_callback=progress,
-        )
-    print(f"enrich processed={summary.processed}, errors={summary.errors}")
+        use_v2 = bool(getattr(args, "v2", False)) or os.environ.get("AI_RADAR_ENRICH_V2") == "1"
+        if use_v2:
+            # v2 pipeline pins its own r2 ruleset version internally (see
+            # ruleset.current_version_v2); --ruleset/$AI_RADAR_ENRICH_RULESET
+            # has no effect on this branch, matching the v1/v2 data isolation
+            # design (item_evaluations.ruleset_version r1 vs r2).
+            summary_v2 = run_enrich_v2(
+                conn,
+                since=args.since,
+                limit=args.limit,
+                item_ids=item_ids,
+                workers=workers,
+                progress_callback=progress,
+            )
+            processed, errors = summary_v2.processed, summary_v2.errors
+        else:
+            summary_v1 = run_enrich(
+                conn,
+                since=args.since,
+                limit=args.limit,
+                ruleset_version=args.ruleset,
+                item_ids=item_ids,
+                workers=workers,
+                progress_callback=progress,
+            )
+            processed, errors = summary_v1.processed, summary_v1.errors
+    print(f"enrich processed={processed}, errors={errors}")
     return 0
 
 
@@ -1761,6 +1779,11 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_parser.add_argument("--since", default="24h")
     enrich_parser.add_argument("--limit", type=int)
     enrich_parser.add_argument("--ruleset")
+    enrich_parser.add_argument(
+        "--v2",
+        action="store_true",
+        help="Use the content-v2 enrichment pipeline (equivalent to AI_RADAR_ENRICH_V2=1); default is v1",
+    )
     enrich_parser.add_argument("--curated-run", help="Enrich only items from a curated run id, or 'latest'")
     enrich_parser.add_argument("--item-id-file", help="JSON list/object or newline file of item ids to enrich")
     enrich_parser.add_argument("--workers", type=int, help="Concurrent enrich LLM calls")

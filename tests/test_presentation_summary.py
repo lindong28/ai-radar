@@ -76,6 +76,11 @@ def test_item_summary_preserves_serialized_output_contract() -> None:
         "why_recommend": "这是固定推荐理由",
         "enriched_tags": [],
         "topic_tags": [],
+        "primary_category": None,
+        "is_opinion": None,
+        "classification_projection_status": "unclassified",
+        "classification_projection_authority": "none",
+        "classification_projection_evidence": [],
         "reasoning": "这是固定推荐理由",
         "related_discussions": [],
         "media_assets": [

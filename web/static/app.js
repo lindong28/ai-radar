@@ -2011,6 +2011,17 @@ const DAILY_SECTION_DEFS = [
   },
 ];
 
+// content-v2's five primary_category values map onto this page's five existing
+// sections; "tutorial" folds into "practice" (main has no separate tutorial
+// section — it already groups tutorial/opinion tags there).
+const PRIMARY_CATEGORY_SECTION_MAP = {
+  model: "model",
+  product: "product",
+  industry: "industry",
+  paper: "paper",
+  tutorial: "practice",
+};
+
 const CHINESE_DIGITS = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
 
 export function dailyDateFromPath() {
@@ -2105,9 +2116,16 @@ export function dailyMetrics(items) {
   for (const item of items || []) {
     if (item?.source_id) sourceIds.add(item.source_id);
     if (item?.source_kind !== "x" && item?.tier === "T1") firstParty += 1;
-    const tags = Array.isArray(item?.topic_tags) ? item.topic_tags : [];
-    if (modelRule?.metricTag && tags.includes(modelRule.metricTag)
-      && !(modelRule.metricExcludeTags || []).some((tag) => tags.includes(tag))) newModels += 1;
+    // primary_category (content-v2 classification projection) is populated for
+    // every item once enriched, legacy tag-only items included; fall back to the
+    // legacy tag rule only when it's genuinely absent (item never enriched).
+    if (item?.primary_category != null) {
+      if (item.primary_category === "model") newModels += 1;
+    } else {
+      const tags = Array.isArray(item?.topic_tags) ? item.topic_tags : [];
+      if (modelRule?.metricTag && tags.includes(modelRule.metricTag)
+        && !(modelRule.metricExcludeTags || []).some((tag) => tags.includes(tag))) newModels += 1;
+    }
   }
   return { events: (items || []).length, first_party: firstParty, new_models: newModels, sources: sourceIds.size };
 }
@@ -2157,6 +2175,8 @@ export function createDailyLoadGate() {
 }
 
 function dailySectionKey(item) {
+  const mappedSection = PRIMARY_CATEGORY_SECTION_MAP[item?.primary_category];
+  if (mappedSection) return mappedSection;
   const tags = Array.isArray(item.topic_tags) ? item.topic_tags : [];
   const matched = DAILY_SECTION_DEFS.find((section) => section.tags.some((tag) => tags.includes(tag)));
   if (matched) return matched.key;
@@ -2198,9 +2218,10 @@ export function renderDailyReport(container, items, activeDate) {
         const title = itemTitleText(item);
         const source = dailySourceParts(item);
         const avatar = source.avatar ? `<img class="daily-source-avatar" src="${esc(safeCssUrl(source.avatar))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true">` : "";
-        return `<article class="daily-article" data-published-date="${esc(itemDateBucket(item))}">
+        const opinionBadge = item.is_opinion ? '<span class="role-tag">观点</span>' : "";
+        return `<article class="daily-article" data-published-date="${esc(itemDateBucket(item))}" data-opinion="${item.is_opinion ? "true" : "false"}">
           <h3 class="daily-article-title"><a href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(title)}</a></h3>
-          <div class="daily-article-source daily-article-meta"><span class="role-tag">${esc(source.role)}</span>${avatar}<span>${esc(source.label)}</span></div>
+          <div class="daily-article-source daily-article-meta"><span class="role-tag">${esc(source.role)}</span>${opinionBadge}${avatar}<span>${esc(source.label)}</span></div>
           <p class="daily-article-summary">${esc(excerpt(item))}</p>
         </article>`;
       }).join("");

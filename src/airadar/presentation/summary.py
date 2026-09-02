@@ -7,7 +7,10 @@ from typing import Any
 
 from ..curator.score import weighted_score
 from ..curator.weights import DEFAULT_WEIGHTS
+from ..enrich.classification import classification_projection
+from ..enrich.normalizers.production_enrich_provider_output_v2 import topic_tags_v2
 from ..enrich.schema import EnrichOutput
+from ..enrich.schema_v2 import EnrichOutputV2
 from ..topics import topic_tags
 from .media import _visible_media_assets, proxy_image_url
 from .related import related_discussions
@@ -59,7 +62,7 @@ def content_preview(row: sqlite3.Row, preview_query: str | None = None) -> str |
     return text[:320]
 
 
-def latest_enrichment(conn: sqlite3.Connection | None, item_id: str) -> EnrichOutput | None:
+def latest_enrichment(conn: sqlite3.Connection | None, item_id: str) -> EnrichOutput | EnrichOutputV2 | None:
     if conn is None:
         return None
     row = conn.execute(
@@ -79,11 +82,13 @@ def latest_enrichment(conn: sqlite3.Connection | None, item_id: str) -> EnrichOu
     return parse_enrichment(row["output_json"])
 
 
-def parse_enrichment(value: str | None) -> EnrichOutput | None:
+def parse_enrichment(value: str | None) -> EnrichOutput | EnrichOutputV2 | None:
     parsed = json_loads(value, None)
     if parsed is None:
         return None
     try:
+        if isinstance(parsed, dict) and ("primary_category" in parsed or "is_opinion" in parsed):
+            return EnrichOutputV2.model_validate(parsed)
         return EnrichOutput.model_validate(parsed)
     except ValueError:
         return None
@@ -94,15 +99,17 @@ def item_summary(
     preview_query: str | None = None,
     conn: sqlite3.Connection | None = None,
     include_related: bool = True,
-    enrichment: EnrichOutput | None = None,
+    enrichment: EnrichOutput | EnrichOutputV2 | None = None,
     enrichment_loaded: bool = False,
 ) -> dict[str, Any]:
     row_keys = row.keys()
     source_kind = row["source_kind"] if "source_kind" in row_keys else "feed"
     preview = None if source_kind == "wechat" else content_preview(row, preview_query)
     enrichment = enrichment if enrichment is not None or enrichment_loaded else latest_enrichment(conn, row["id"])
+    classification = classification_projection(enrichment)
+    tag_renderer = topic_tags_v2 if isinstance(enrichment, EnrichOutputV2) else topic_tags
     enriched_tags = (
-        topic_tags(
+        tag_renderer(
             enrichment.tags,
             source_id=row["source_id"],
             source_name=row["source_name"],
@@ -133,6 +140,11 @@ def item_summary(
         "why_recommend": enrichment.why_recommend if enrichment else None,
         "enriched_tags": enriched_tags,
         "topic_tags": enriched_tags,
+        "primary_category": classification.primary_category,
+        "is_opinion": classification.is_opinion,
+        "classification_projection_status": classification.projection_status,
+        "classification_projection_authority": classification.authority,
+        "classification_projection_evidence": classification.evidence,
         "reasoning": enrichment.why_recommend if enrichment else None,
         "related_discussions": related_discussions(conn, row) if include_related else [],
         "media_assets": _visible_media_assets(row),
