@@ -16,6 +16,28 @@ def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+# A failed enrich attempt is retried at most once per this window. items.fetched_at is
+# bumped every time a feed re-lists an item, so a failed item never ages out of the
+# `--since` window on its own; without this backoff every failure is retried every round
+# and, under a per-round `--limit`, crowds out never-attempted items.
+ENRICH_FAILED_RETRY_BACKOFF_HOURS = 24
+# Only deterministic rejections (schema / controlled-vocabulary / normalizer errors) back
+# off: a transient provider failure (connection error, 5xx, rate limit) should be retried
+# on the next round. The prefixes are written by the enrich runners' error classifier.
+# The third prefix is legacy: rows written before 2026-09-03 wrapped normalizer rejections
+# as ``enrich failed after retry: tags ...``; provider failures never start with "tags".
+DETERMINISTIC_ENRICH_ERROR_PREFIXES = (
+    "schema validation failed",
+    "output rejected",
+    "enrich failed after retry: tags",
+)
+
+
+def failed_retry_cutoff() -> str:
+    cutoff = datetime.now(UTC) - timedelta(hours=ENRICH_FAILED_RETRY_BACKOFF_HOURS)
+    return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def parse_since(value: str) -> datetime:
     value = value.strip()
     unit = value[-1:].lower()

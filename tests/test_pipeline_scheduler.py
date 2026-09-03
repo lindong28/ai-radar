@@ -123,7 +123,7 @@ def test_pipeline_script_runs_stages_in_order_and_logs_success(tmp_path: Path) -
         "fetch",
         "prefilter --since 24h",
         "score --since 24h",
-        "enrich --since 24h",
+        "enrich --since 24h --limit 40",
         "curate",
         "interpret --limit 30",
     ]
@@ -161,7 +161,7 @@ def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
         "fetch",
         "prefilter --since 24h",
         "score --since 24h",
-        "enrich --since 24h",
+        "enrich --since 24h --limit 40",
         "curate",
         "interpret --limit 30",
     ]

@@ -54,3 +54,6 @@ deploy/wechat2rss/data/
 
 # Execution-plan workspace (audit trail is promoted to docs/plans/ after completion)
 /plans/
+
+# Human-eval / labeling tooling and served bundles (never committed).
+/.label-serve/

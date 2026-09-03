@@ -195,3 +195,118 @@ def test_run_enrich_parallel_workers_commit_and_report_progress(tmp_path: Path) 
     assert summary.errors == 0
     assert provider.max_active > 1
     assert committed_counts == [1, 2, 3, 4]
+
+
+def _add_failed_enrich_row(
+    conn: sqlite3.Connection,
+    item_id: str,
+    ruleset_version: str,
+    minutes_ago: int,
+    error: str = "output rejected after retry: tags outside controlled vocabulary: ['NVIDIA']",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO item_evaluations (
+          item_id, stage, ruleset_version, model_id, input_json, output_json,
+          numeric_json, latency_ms, cost_usd, evaluated_at, error
+        )
+        VALUES (?, 'enrich', ?, 'fake', '{}', '{}', NULL, 1, 0, ?, ?)
+        """,
+        (item_id, ruleset_version, _recent_iso(minutes_ago), error),
+    )
+    conn.commit()
+
+
+def test_candidate_rows_back_off_recently_failed_items_v1_and_v2(tmp_path: Path) -> None:
+    # fetched_at is bumped on every fetch that re-lists an item, so a failed item never
+    # leaves the --since window on its own; without a backoff it would be retried every
+    # round and, under --limit, crowd out never-attempted items.
+    from airadar.enrich import runner as runner_v1
+    from airadar.enrich import runner_v2
+
+    conn = _db(tmp_path)
+    item_id = conn.execute("SELECT id FROM items").fetchone()[0]
+
+    assert [row[0] for row in runner_v1._candidate_rows(conn, "24h", "enrich.r1", None)] == [item_id]
+    assert [row[0] for row in runner_v2._candidate_rows(conn, "24h", "enrich.r2", None)] == [item_id]
+
+    _add_failed_enrich_row(conn, item_id, "enrich.r1", minutes_ago=10)
+    _add_failed_enrich_row(conn, item_id, "enrich.r2", minutes_ago=10)
+    assert runner_v1._candidate_rows(conn, "24h", "enrich.r1", None) == []
+    assert runner_v2._candidate_rows(conn, "24h", "enrich.r2", None) == []
+
+    # a failure for another ruleset does not shadow this one
+    assert [row[0] for row in runner_v2._candidate_rows(conn, "24h", "enrich.r3", None)] == [item_id]
+
+    # once the backoff elapses the item becomes a candidate again
+    conn.execute(
+        "UPDATE item_evaluations SET evaluated_at=? WHERE stage='enrich' AND error IS NOT NULL",
+        (_recent_iso(25 * 60),),
+    )
+    conn.commit()
+    assert [row[0] for row in runner_v1._candidate_rows(conn, "24h", "enrich.r1", None)] == [item_id]
+    assert [row[0] for row in runner_v2._candidate_rows(conn, "24h", "enrich.r2", None)] == [item_id]
+
+
+def test_candidate_rows_limit_prefers_never_attempted_items(tmp_path: Path) -> None:
+    from airadar.enrich import runner_v2
+
+    conn = _db(tmp_path)
+    failed_id = conn.execute("SELECT id FROM items").fetchone()[0]
+    fresh_id = _add_prefiltered_item(conn, "Fresh benchmark", 5)
+    conn.commit()
+    _add_failed_enrich_row(conn, failed_id, "enrich.r2", minutes_ago=10)
+    # the failed item was re-listed by its feed after the fresh one arrived (fetched_at bump)
+    conn.execute("UPDATE items SET fetched_at=? WHERE id=?", (_recent_iso(1), failed_id))
+    conn.commit()
+
+    rows = runner_v2._candidate_rows(conn, "24h", "enrich.r2", 1)
+
+    assert [row[0] for row in rows] == [fresh_id]
+
+
+def test_candidate_rows_do_not_back_off_transient_provider_failures(tmp_path: Path) -> None:
+    from airadar.enrich import runner_v2
+
+    conn = _db(tmp_path)
+    item_id = conn.execute("SELECT id FROM items").fetchone()[0]
+    _add_failed_enrich_row(
+        conn,
+        item_id,
+        "enrich.r2",
+        minutes_ago=10,
+        error="enrich failed after retry: all DeepSeek provider endpoints failed: Connection error.",
+    )
+
+    assert [row[0] for row in runner_v2._candidate_rows(conn, "24h", "enrich.r2", None)] == [item_id]
+
+
+def test_candidate_rows_explicit_item_ids_ignore_backoff(tmp_path: Path) -> None:
+    from airadar.enrich import runner_v2
+
+    conn = _db(tmp_path)
+    item_id = conn.execute("SELECT id FROM items").fetchone()[0]
+    _add_failed_enrich_row(conn, item_id, "enrich.r2", minutes_ago=10)
+
+    assert runner_v2._candidate_rows(conn, "24h", "enrich.r2", None) == []
+    assert [row[0] for row in runner_v2._candidate_rows(conn, "24h", "enrich.r2", None, [item_id])] == [item_id]
+
+
+def test_evaluate_item_classifies_normalizer_rejection_as_output_rejected() -> None:
+    from airadar.enrich import runner_v2
+
+    class RejectingProvider:
+        model_id = "fake-v2"
+
+        def enrich(self, item: ProviderItem) -> object:
+            raise ValueError("tags must contain 2-4 provider-selected values")
+
+    item = ProviderItem(
+        id="i", title="t", url="https://example.com/t", source_id="example", tier="T1.5",
+        author=None, published_at=_recent_iso(1), content_text="body",
+    )
+    enriched, output, error, _latency = runner_v2._evaluate_item(RejectingProvider(), item)  # type: ignore[arg-type]
+
+    assert enriched is None
+    assert error is not None and error.startswith("output rejected after retry: tags must contain")
+    assert output["attempts"] == 2

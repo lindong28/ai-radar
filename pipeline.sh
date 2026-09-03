@@ -101,7 +101,12 @@ run_stage() {
 run_stage fetch
 run_stage prefilter --since 24h
 run_stage score --since 24h
-run_stage enrich --since 24h
+# Bounded batch per run (same reasoning as interpret below): switching the
+# enrich ruleset turns every prefilter-passed item in the window into a new
+# candidate at once (2026-09-02: 4295 items, ~6s each, lock held 5h+ and every
+# later round skipped). Steady-state volume is 10-20 items per cycle; the
+# backlog drains across rounds instead of starving fetch/curate.
+run_stage enrich --since 24h --limit 40
 run_stage curate
 # Bounded batch per run: an unbounded interpret over a large error backlog can
 # hold the pipeline lock for hours, starving fetch in later rounds.

@@ -15,6 +15,8 @@ from ..provider.base_v2 import EnrichProviderV2, EnrichResultV2
 from ..provider.deepseek_v4_flash_v2 import DeepSeekV4FlashEnricherV2
 from ..provider.deepseek_v4_pro_v2 import DeepSeekV4ProEnricherV2
 from ..ruleset import current_version_v2
+from ..stage_common import DETERMINISTIC_ENRICH_ERROR_PREFIXES as _DETERMINISTIC_PREFIXES
+from ..stage_common import failed_retry_cutoff as _failed_retry_cutoff
 from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
 from ..stage_common import provider_item_from_row as _to_provider_item
@@ -68,6 +70,22 @@ def _candidate_rows(
         item_filter = "i.fetched_at >= ?"
         params.append(cutoff)
     params.append(ruleset_version)
+    backoff_filter = ""
+    if item_ids is None:
+        # Explicit ids are operator intent (targeted backfill) and never back off.
+        prefix_clauses = " OR ".join("failed.error LIKE ?" for _ in _DETERMINISTIC_PREFIXES)
+        backoff_filter = f"""
+        AND NOT EXISTS (
+          SELECT 1 FROM item_evaluations failed
+          WHERE failed.item_id=i.id
+            AND failed.stage='enrich'
+            AND failed.ruleset_version=?
+            AND failed.evaluated_at >= ?
+            AND ({prefix_clauses})
+        )"""
+        params.append(ruleset_version)
+        params.append(_failed_retry_cutoff())
+        params.extend(f"{prefix}%" for prefix in _DETERMINISTIC_PREFIXES)
     sql = f"""
       SELECT i.id, i.title, i.url, i.source_id, s.tier, i.author, i.published_at, i.content_text
       FROM items i
@@ -87,6 +105,7 @@ def _candidate_rows(
             AND enriched.ruleset_version=?
             AND enriched.error IS NULL
         )
+        {backoff_filter}
       ORDER BY i.fetched_at DESC, i.published_at DESC
     """
     if limit is not None:
@@ -133,6 +152,9 @@ def _evaluate_item(
             return enriched, output, None, latency_ms
         except ValidationError as exc:
             last_error = f"schema validation failed after retry: {exc}" if attempts == 2 else str(exc)
+        except (ValueError, TypeError) as exc:
+            # Deterministic output rejection (normalizer / vocabulary), not a transport failure.
+            last_error = f"output rejected after retry: {exc}" if attempts == 2 else str(exc)
         except Exception as exc:
             last_error = f"enrich failed after retry: {exc}" if attempts == 2 else str(exc)
     latency_ms = int((time.monotonic() - start) * 1000)

@@ -297,3 +297,21 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 **本轮刻意没有在这里改**：同一次改动里既动性能又动"哪些写入使缓存失效"，会让日后总数真的开始发陈旧时无法分辨是哪一半造成的。当前那次改动只给这三个 `curation_runs` 子查询加了索引与 `id DESC` tie-break，覆盖面一个维度没动。
 
 **Fix 方向**：items / evaluations 的原地更新需要一个随更新前进的信号（`updated_at` 列，或由触发器维护的 generation——`archive_cache_generations` 是现成的形态）。`sources` 那一维**没有现成范式可抄**：把 `COUNT(*)` / `SUM(enabled)` / `kind` 取值集合并进 tuple 是最直觉的写法，但它分不出「停用 A、同时启用 B」这种等量交换——三个聚合值都不变而可见集合已经变了。所以这一维要么按 `sources` 的 `MAX(rowid)` 加一个由触发器维护的 generation，要么把 enabled 集合的某种顺序无关摘要（如 `group_concat(id ORDER BY id)` 的哈希）并进去；两种都比三个聚合值贵，值不值得要连着「这个缺口实际造成过什么」一起判。
+
+### 精选 freshness_quota 疑似饿死历史高分条目（v1 curator 既有机制，未实证）
+
+- **现象**（2026-09-02 精选对齐诊断 §3.3 推断）：AIHOT 精选而我站未选的 37 条中，9 条（24%）按当前公式重算 ≥ 阈值 6.5、却从未被任何一次 curation run 选中。推断机制：`freshness_quota` 每天先填满 36 名额，`filtered` 池只剩 ~4 名额与全历史最高分竞争，稍旧的高分条目永远排不进。
+- **状态**：推断未逐条实证；与 v2 无关（v1 既有）。诊断报告 `.label-serve/round45-human/curation-gap/report.md` §3.3（工具目录不入 git，读数已摘入本条）。
+- **处置候选**：验证饿死是否真实（对这 9 条逐 run 查 rank/quota 路径）；若属实，配额策略是精选对齐方案 B（来源形态配额）要一并设计的对象，不单独修。
+
+### enrich v2 约 8% 条目因标签词表/数量校验重试后仍失败，且每轮重复重试（成本泄漏）
+
+- **现象**（2026-09-02 首个 v2 全量回填轮，3249 条）：256 条 `enrich failed after retry`（7.9%），按 DB 复核构成：`tags must contain 2-4 provider-selected values` 129、`tags outside controlled vocabulary` 113（NVIDIA 38 / Mistral 20 / PyTorch 6 …，另有 `Nvidia`、`Mistral AI` 等变体）、`why_recommend` 超长 11、`summary_zh` 校验 3（超 400 字 2、句数不在 3–5 之间 1）。这些是 v2 prompt 与受控词表（`enrich/prompts_v2.py` / `schema_v2.py`）之间的系统性错配，不是偶发。
+- **成本面**：候选 SQL 只把 `error IS NULL` 的成功行视为已处理；而 `items.fetched_at` 每次被信源重新列出都会 bump（`fetcher/dedup.py`），所以失败项只要还在 feed 里就**永不**滑出 `--since 24h` 窗口。2026-09-03 已加 24h 失败退避（`stage_common.ENRICH_FAILED_RETRY_BACKOFF_HOURS`，只对 `schema validation failed` / `output rejected` 两类确定性错误生效，供应商瞬时故障与显式 `--item-id-file` 路径不退避）：每条这类失败项每天最多重试一次（含一次即时重试=2 次调用），不再与新条目争单轮 40 个名额；根因（词表错配）仍未修。事故当日的 242 行旧前缀为 `enrich failed after retry: tags…`（另 14 行已是 `schema validation failed`），已作为 legacy 前缀纳入退避判据，不再有过渡期重试。
+- **处置候选**：① 词表侧把高频厂商/框架名（NVIDIA、Mistral、PyTorch…）纳入受控词表或在 normalizer 里做别名映射；② 数量校验不足 2 个时降级为接受 1 个而非整条失败。修改 prompt 前先读 `prompt-writing-guidelines.md`；改动走 T3 回归。
+- **可观测性缺口**（review 附带）：`cli._enrich` 无论 errors 多少都 `return 0`，pipeline 日志永远是 `=== enrich OK ===`；40/40 失败也看不出。
+
+### enrich 错误分类只活在字符串前缀里，且写方/读方已有两套并行定义
+
+- **现象**（2026-09-03 review 附带，基线独立）：错误类别由 runner 写入的 error 前缀承载（写方三处：enrich v1/v2 runner、`scorer/runner.py`），读方三处各认自己的词表：候选 SQL 的 `stage_common.DETERMINISTIC_ENRICH_ERROR_PREFIXES`、`admin/calibration.py` 的 `SCHEMA_ERROR_RE`（只认 `schema validation failed`）、`alerts._recent_upstream_stats` 复用的 `UPSTREAM_ERROR_RE`。v2 主导失败类（`output rejected` / 旧 `enrich failed after retry: tags…`，事故当日 242/256）在 A2 schema 错误率里过去看不见、现在也看不见。
+- **处置候选**：让 calibration 消费 `DETERMINISTIC_ENRICH_ERROR_PREFIXES`；或给 `item_evaluations` 加 `error_kind` 列（schema 改动，走 review-schema）。
