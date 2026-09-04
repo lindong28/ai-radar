@@ -15,7 +15,7 @@ program 20260820-content-align 以 AIHOT 当前内容效果为对齐目标。精
 2. 配额开启时同一轮**再填一遍无配额基线**：每条 `curated_items.reason_json.source_quota = {policy:"source-quota-v1", kind, kind_cap, source_cap, baseline:"same_run_without_source_quota", baseline_selected}`——`kind_cap` / `source_cap` 是本轮生效的整数上限，**该 kind 未配置配额 / 无单源上限时写 `null`**（不是 limit，审计者据此分得出「未限制」与「上限恰等于 limit」）；`baseline` 常量键点明反事实定义（同轮、同候选与排序、仅关闭来源配额）。基线独有条目写入 `curation_runs.shadow_json = {policy, baseline, score_semantics:"tier_adjusted_before_rank_calibration", baseline_only:[{item_id, raw_weighted_score}], quota_only_count}`（migration 021 加列，唯一的表结构改动）；`raw_weighted_score` 是 tier 乘数之后、rank-linear 校准之前的分。
 3. 默认开启；`AI_RADAR_CURATE_SOURCE_QUOTA=off`（生产回退面，pipeline.sh 不带参数）或 `./run.sh curate --source-quota off` 停用后续轮。
 4. 归档回退 = `admin curate rollback-quota --since <run_id> [--dry-run]`：逐 run 事务化：先按冻结的 v1 形状整体校验（`shadow_json` 的 policy/baseline/score_semantics/`baseline_only` 条目/`quota_only_count`，每行 `source_quota` 的六键与类型，且 `quota_only_count` 必须等于 `baseline_selected=false` 的行数；任一不合即该 run 零写入并报错——早期草稿形状的 run 因此不会被当作干净 run 回退）→ 删除配额独有行 → 剩余行**保持原 rank 相对次序**连续重编号 → 重跑 rank-linear 校准（剩 1 行时按 `curate()` 单行语义：raw 分、无校准块）→ 清 `summary_json`（最新 run 随即重算）→ 改写 `output_curated_ids` → `shadow_json` 追加 `rollback:{at, removed_item_ids}` 并把 `quota_only_count` 改为回退后实际值（0），使 run 级计数与逐行标记不漂移、被删身份可审计。没有配额独有行的 run 是纯 no-op。`--dry-run` 以只读连接预览、不 migrate、不改任何精选行（SQLite 仍可能为 WAL 库创建空 `-wal/-shm` sidecar）。基线独有条目不补回（用户接受：它们正是要压的 X 条目）。这是「撤除配额新增」，不是完整反事实恢复。
-5. 验收仪器（用户 2026-09-03 09:30 指令）：**判官阶梯**——gained=Q−B 与 lost=B−Q（窗口级差集）各 n=60（下限 30）由两个判官（J1 glm-5.3@ARK、J2 deepseek-v4-pro@ARK）绝对评分，一致即读数；分歧由 J3=Claude Code（`claude-fable-5-1`，裁定指令记 SHA）裁定并记置信度；不确定项交用户附推荐。主指标 Δ=worth 率(gained)−worth 率(lost)，随机基线 0；阈值 `T=max(k_bias·|Δ_neg|, floor, 2σ(n))`，k_bias=2、floor=0.15、σ=√(2·0.25/n)，单边；可用性闸 fail-closed：阳性对照 ≤0.20、两判官一致率 ≥0.70、人工锚（用户一次性盲评 K=60 固定样本，阶梯最终判定与用户一致率）≥0.80、invalid ≤0.05。触发：上线后第 3 自然日或 gained ≥60；不确定项 7 日未答 → 标「未验收（配额仍开）」，不自动回退。判「变差」→ off + rollback。
+5. 验收仪器（用户 2026-09-03 09:30 指令）：**判官阶梯**——gained=Q−B 与 lost=B−Q（窗口级差集）各 n=60（下限 30）由两个判官（J1 glm-5.3@ARK、J2 deepseek-v4-pro@ARK）绝对评分，一致即读数；分歧由 J3=Claude Code（`claude-fable-5-1`，裁定指令记 SHA）裁定并记置信度；不确定项交用户附推荐。主指标 Δ=worth 率(gained)−worth 率(lost)，随机基线 0；阈值 `T=max(floor, 2σ(n))`，floor=0.15、σ=√(2·0.25/n)、n=min(n_gained,n_lost)，单边；阴性对照 Δ_neg（lost 分半）只作有效性闸：|Δ_neg| > 2σ_neg 判仪器无效需重抽，不进阈值（2026-09-04 用户裁决，替换原 `k_bias·|Δ_neg|` 项——对抗审算得该项把 20pp 真劣化的漏判率抬到 63%）；首轮 n≈53/60 即跑，每组 n≥100 时复跑确认；可用性闸 fail-closed：阳性对照 ≤0.20、两判官一致率 ≥0.70、人工锚（用户一次性盲评 K=60 固定样本，阶梯最终判定与用户一致率）≥0.80、invalid ≤0.05。触发：上线后第 3 自然日或 gained ≥60；不确定项 7 日未答 → 标「未验收（配额仍开）」，不自动回退。判「变差」→ off + rollback。
 
 ## Rejected alternatives
 
@@ -37,6 +37,10 @@ program 20260820-content-align 以 AIHOT 当前内容效果为对齐目标。精
 - 未验证：AIHOT `selected` 语义 ≡ 我站 `curated`；仿真按每天 4 时点回放；配额后新增条目的读者感知质量（由第 5 条验收）；候选池不足日的少选行为。
 - API：`reason.source_quota` 是 `/api/v1/curated` 与 timeline `reason` 字段的加法式嵌套扩展；前端只消费 `reasoning`。
 - 已知边界（review-gate 对抗审残留，用户裁定收口）：`--source-quota off` 逐字节复现 HEAD 选择，**唯一**例外是 fresh 池含重复 `item_id` 时（HEAD 会重复入选、新实现去重）——生产加载链按 `items.id` 主键与 dedup 保证不可达；`rollback-quota --dry-run` 走只读连接、不改任何精选行，但 SQLite 仍可能为 WAL 库创建空 `-wal/-shm` sidecar。
+
+## Acceptance record
+
+- **首轮（2026-09-04，窗口 09-03T03:50Z→09-04T01:31Z，n=53 gained / 60 lost）**：结论「不可用（闸未过）」。判官侧 gained worth 0.623 / lost 0.467、Δ=+0.156（T=0.194）、阳性对照 0.033、一致率 0.769、invalid 0.024、阴性对照 0.067——四闸过；人工锚（用户委托 Claude Code 代评 60 条，5 条经用户补票）与阶梯终判一致率 0.717（非自证部分 0.622）<0.80 未过。诊断：分歧为结构性——判官把只有标题的研究帖判不值得、把例行发布说明判值得，人评相反；按人评尺子 Δ_anchor=+0.467。两把尺子均无「变差」迹象。用户裁决：修订判官评分定义（只有标题按题材价值评；例行版本发布说明/变更日志不值得）后每组 n≥100 复跑，配额保持开启。仪器与产物在 `.label-serve/quota-accept/`（不入 git）。
 
 ## Decision review
 
