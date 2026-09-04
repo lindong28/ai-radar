@@ -7,10 +7,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
+from urllib.parse import quote
 
 from . import db, runtime_env
 from .admin import edgeone
@@ -33,7 +34,17 @@ from .curator.precompute import (
     precompute_curated_summaries,
     retain_curated_summaries,
 )
-from .curator.select import curate
+from .curator.score import ScoredCandidate
+from .curator.select import (
+    DEFAULT_SOURCE_QUOTA,
+    SOURCE_QUOTA_BASELINE,
+    SOURCE_QUOTA_POLICY,
+    SOURCE_QUOTA_SCORE_SEMANTICS,
+    SourceQuota,
+    _calibrate_selected_scores,
+    curate,
+    parse_source_quota,
+)
 from .curator.weights import load_weights
 from .egress import EgressPreflightError, require_selector_policy
 from .enrich.runner import run_enrich
@@ -102,6 +113,20 @@ from .wechat_discovery.store import (
     DiscoveryStore,
     DiscoveryStoreVersionError,
 )
+
+_SOURCE_QUOTA_FROM_ENV = object()
+
+
+def _resolve_source_quota(value: object) -> SourceQuota | None:
+    if value is not _SOURCE_QUOTA_FROM_ENV:
+        if value is None or isinstance(value, SourceQuota):
+            return value
+        raise TypeError("source quota argument has an unsupported value")
+    source_quota_text = os.environ.get("AI_RADAR_CURATE_SOURCE_QUOTA")
+    if source_quota_text is None or not source_quota_text.strip():
+        return DEFAULT_SOURCE_QUOTA
+    return parse_source_quota(source_quota_text)
+
 
 _load_runtime_env = runtime_env.load_runtime_env
 
@@ -387,6 +412,16 @@ def _enrich(args: argparse.Namespace) -> int:
 
 
 def _curate(args: argparse.Namespace) -> int:
+    try:
+        source_quota = _resolve_source_quota(args.source_quota)
+    except (TypeError, ValueError) as exc:
+        print(
+            f"curate blocked: AI_RADAR_CURATE_SOURCE_QUOTA is invalid ({exc}); "
+            "expected e.g. x=0.20,source=0.075 or off; curate did not run - "
+            "fix or unset the variable, then rerun",
+            file=sys.stderr,
+        )
+        return 2
     db.migrate()
     selected_weights = load_weights(Path(args.weights)) if getattr(args, "weights", None) else None
     ruleset = getattr(args, "ruleset", None)
@@ -402,10 +437,292 @@ def _curate(args: argparse.Namespace) -> int:
             limit=args.limit,
             freshness_quota=args.freshness_quota,
             freshness_floor=args.freshness_floor,
+            source_quota=source_quota,
         )
         precompute_curated_summaries(conn, run.id)
         retain_curated_summaries(conn, DEFAULT_KEEP_DAYS)
     print(f"curate run_id={run.id} selected={len(run.output_curated_ids)} threshold={run.threshold}")
+    return 0
+
+
+def _validate_source_quota_shadow(shadow: dict[str, object]) -> None:
+    """Reject anything that is not the complete, frozen source-quota-v1 run shape."""
+    if shadow.get("baseline") != SOURCE_QUOTA_BASELINE:
+        raise ValueError(f"shadow_json.baseline is {shadow.get('baseline')!r}")
+    if shadow.get("score_semantics") != SOURCE_QUOTA_SCORE_SEMANTICS:
+        raise ValueError(f"shadow_json.score_semantics is {shadow.get('score_semantics')!r}")
+    baseline_only = shadow.get("baseline_only")
+    if not isinstance(baseline_only, list):
+        raise ValueError("shadow_json.baseline_only is not a list")
+    seen: set[str] = set()
+    for entry in baseline_only:
+        if not isinstance(entry, dict) or set(entry) != {"item_id", "raw_weighted_score"}:
+            raise ValueError("shadow_json.baseline_only entry is not {item_id, raw_weighted_score}")
+        item_id = entry["item_id"]
+        score = entry["raw_weighted_score"]
+        if not isinstance(item_id, str) or not item_id or item_id in seen:
+            raise ValueError(f"shadow_json.baseline_only has a missing or duplicate item_id {item_id!r}")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or score != score:
+            raise ValueError(f"shadow_json.baseline_only[{item_id}] has a non-numeric raw_weighted_score")
+        seen.add(item_id)
+    count = shadow.get("quota_only_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError(f"shadow_json.quota_only_count is {count!r}")
+
+
+def _validate_source_quota_block(item_id: str, block: dict[str, object]) -> None:
+    """Reject a per-row source_quota block that is not the complete frozen v1 shape."""
+    expected = {"policy", "kind", "kind_cap", "source_cap", "baseline", "baseline_selected"}
+    if set(block) != expected:
+        raise ValueError(f"curated item {item_id} source_quota keys are {sorted(block)}")
+    if block["policy"] != SOURCE_QUOTA_POLICY:
+        raise ValueError(
+            f"curated item {item_id} has source_quota policy {block['policy']!r}, expected {SOURCE_QUOTA_POLICY!r}"
+        )
+    if block["baseline"] != SOURCE_QUOTA_BASELINE:
+        raise ValueError(f"curated item {item_id} has source_quota baseline {block['baseline']!r}")
+    if not isinstance(block["kind"], str) or not block["kind"]:
+        raise ValueError(f"curated item {item_id} has an empty source_quota kind")
+    for key in ("kind_cap", "source_cap"):
+        cap = block[key]
+        if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+            raise ValueError(f"curated item {item_id} has {key}={cap!r}; expected a positive int or null")
+    if not isinstance(block["baseline_selected"], bool):
+        raise ValueError(f"curated item {item_id} has non-boolean baseline_selected")
+
+
+def _rollback_quota_conn(dry_run: bool) -> sqlite3.Connection:
+    """dry-run opens the database read-only (no file creation, no journal-mode pragma)."""
+    if not dry_run:
+        db.migrate()
+        return db.get_conn()
+    db_path = db.resolve_db_path(None)
+    if not db_path.exists():
+        raise FileNotFoundError(f"database not found: {db_path}")
+    conn = sqlite3.connect(f"file:{quote(str(db_path))}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _admin_curate_rollback_quota(args: argparse.Namespace) -> int:
+    try:
+        conn_cm = _rollback_quota_conn(args.dry_run)
+    except FileNotFoundError as exc:
+        print(f"curate rollback-quota FAILED: {exc}; dry-run creates nothing; check AI_RADAR_DB", file=sys.stderr)
+        return 1
+    total_runs = 0
+    total_removed = 0
+    total_kept = 0
+    rewritten_runs = 0
+    with conn_cm as conn:
+        try:
+            run_ids = [
+                row["id"]
+                for row in conn.execute(
+                    """
+                    SELECT id
+                    FROM curation_runs
+                    WHERE id >= ? AND shadow_json IS NOT NULL AND shadow_json != ''
+                    ORDER BY id
+                    """,
+                    (args.since,),
+                )
+            ]
+        except sqlite3.OperationalError as exc:
+            if "shadow_json" not in str(exc):
+                raise
+            print(
+                f"curate rollback-quota no matching runs since={args.since} "
+                "(this database has no quota shadow column yet, so no quota run exists; "
+                "dry-run applies no migration); nothing to do"
+            )
+            return 0
+        latest_run = conn.execute("SELECT id FROM curation_runs ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
+        latest_run_id = latest_run["id"] if latest_run is not None else None
+        for index, run_id in enumerate(run_ids):
+            try:
+                shadow_row = conn.execute("SELECT shadow_json FROM curation_runs WHERE id=?", (run_id,)).fetchone()
+                shadow = json.loads(shadow_row["shadow_json"])
+                shadow_policy = shadow.get("policy") if isinstance(shadow, dict) else None
+                if shadow_policy != SOURCE_QUOTA_POLICY:
+                    raise ValueError(
+                        f"run has shadow policy {shadow_policy!r}; this command only understands "
+                        f"{SOURCE_QUOTA_POLICY!r}"
+                    )
+                _validate_source_quota_shadow(shadow)
+                rows = conn.execute(
+                    """
+                    SELECT item_id, reason_json
+                    FROM curated_items
+                    WHERE run_id=?
+                    ORDER BY rank
+                    """,
+                    (run_id,),
+                ).fetchall()
+                removed_item_ids: list[str] = []
+                kept: list[tuple[str, dict[str, object]]] = []
+                for row in rows:
+                    reason = json.loads(row["reason_json"])
+                    if not isinstance(reason, dict):
+                        raise ValueError(f"curated item {row['item_id']} has non-object reason_json")
+                    source_quota = reason.get("source_quota")
+                    if not isinstance(source_quota, dict):
+                        raise ValueError(f"curated item {row['item_id']} has no source_quota block")
+                    _validate_source_quota_block(row["item_id"], source_quota)
+                    baseline_selected = source_quota["baseline_selected"]
+                    if baseline_selected is False:
+                        removed_item_ids.append(row["item_id"])
+                    else:
+                        kept.append((row["item_id"], reason))
+
+                uncalibrated: list[ScoredCandidate] = []
+                for item_id, reason in kept:
+                    # curate() only writes raw_weighted_score when it calibrated a
+                    # multi-row list; a single-row run keeps the raw score in
+                    # reason.weighted_score.
+                    raw_score = reason.get("raw_weighted_score", reason.get("weighted_score"))
+                    if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+                        raise ValueError(f"curated item {item_id} has no numeric raw_weighted_score/weighted_score")
+                    uncalibrated.append(
+                        ScoredCandidate(
+                            eval_id=0,
+                            item_id=item_id,
+                            content_hash="",
+                            url="",
+                            published_at="",
+                            weighted_score=float(raw_score),
+                            reason=reason,
+                        )
+                    )
+                calibrated = _calibrate_selected_scores(uncalibrated)
+                if len(calibrated) == 1:
+                    # Mirror what curate() stores for a single selected row: the raw
+                    # score with no rank-linear calibration block.
+                    single = calibrated[0]
+                    reason = {
+                        key: value
+                        for key, value in single.reason.items()
+                        if key not in {"score_calibration", "raw_weighted_score"}
+                    }
+                    calibrated = [replace(single, reason=reason)]
+                # run-level count must agree with the row-level flags on every path,
+                # including the already-rolled-back no-op path
+                if shadow["quota_only_count"] != len(removed_item_ids):
+                    raise ValueError(
+                        f"shadow_json.quota_only_count={shadow['quota_only_count']} but "
+                        f"{len(removed_item_ids)} rows carry baseline_selected=false"
+                    )
+                if not args.dry_run and removed_item_ids:
+                    # A run with nothing to remove is already in its rolled-back state:
+                    # leave ranks, scores and cached summaries untouched.
+                    with conn:
+                        conn.executemany(
+                            "DELETE FROM curated_items WHERE run_id=? AND item_id=?",
+                            [(run_id, item_id) for item_id in removed_item_ids],
+                        )
+                        for rank, candidate in enumerate(calibrated, start=1):
+                            conn.execute(
+                                """
+                                UPDATE curated_items
+                                SET rank=?, weighted_score=?, reason_json=?, summary_json=NULL
+                                WHERE run_id=? AND item_id=?
+                                """,
+                                (
+                                    rank,
+                                    candidate.weighted_score,
+                                    json.dumps(
+                                        candidate.reason,
+                                        ensure_ascii=False,
+                                        sort_keys=True,
+                                        separators=(",", ":"),
+                                    ),
+                                    run_id,
+                                    candidate.item_id,
+                                ),
+                            )
+                        shadow["quota_only_count"] = 0
+                        shadow["rollback"] = {
+                            "at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                            "removed_item_ids": list(removed_item_ids),
+                        }
+                        conn.execute(
+                            "UPDATE curation_runs SET output_curated_ids=?, shadow_json=? WHERE id=?",
+                            (
+                                json.dumps(
+                                    [candidate.item_id for candidate in calibrated],
+                                    separators=(",", ":"),
+                                ),
+                                json.dumps(shadow, ensure_ascii=False, separators=(",", ":")),
+                                run_id,
+                            ),
+                        )
+                    rewritten_runs += 1
+            except (json.JSONDecodeError, sqlite3.Error, TypeError, ValueError) as exc:
+                later = len(run_ids) - index - 1
+                if args.dry_run:
+                    earlier = "dry-run, no curated rows were changed"
+                elif total_runs and total_removed:
+                    earlier = (
+                        f"{total_runs} processed before this one (rows_removed={total_removed}, their changes are kept)"
+                    )
+                elif total_runs:
+                    earlier = f"{total_runs} processed before this one (no rows were removed)"
+                else:
+                    earlier = "none"
+                print(
+                    f"curate rollback-quota FAILED at run_id={run_id}: {exc}\n"
+                    f"  this run: not changed; earlier runs: {earlier}; "
+                    f"later matching runs: {later} not processed\n"
+                    "  next: fix the offending run/item named above (reason_json needs a "
+                    "source-quota-v1 block with boolean baseline_selected and a numeric "
+                    "raw_weighted_score), then rerun the same command",
+                    file=sys.stderr,
+                )
+                return 1
+
+            removed_count = len(removed_item_ids)
+            kept_count = len(kept)
+            if args.dry_run:
+                print(
+                    f"curate rollback-quota run_id={run_id} "
+                    f"rows_would_remove={removed_count} rows_kept={kept_count} mode=dry-run"
+                )
+            else:
+                print(
+                    f"curate rollback-quota run_id={run_id} "
+                    f"rows_removed={removed_count} rows_kept={kept_count} mode=write"
+                )
+                if run_id == latest_run_id and removed_count:
+                    count = precompute_curated_summaries(conn, run_id)
+                    print(f"curate rollback-quota run_id={run_id} summaries recomputed for {count} rows (latest run)")
+            total_runs += 1
+            total_removed += removed_count
+            total_kept += kept_count
+
+    if not total_runs:
+        print(
+            f"curate rollback-quota no matching runs since={args.since} "
+            "(a run qualifies when its id >= since and it has a quota shadow); nothing to do"
+        )
+    elif args.dry_run:
+        print(
+            f"curate rollback-quota DRY RUN complete runs={total_runs} "
+            f"rows_would_remove={total_removed} rows_kept={total_kept}; no curated rows were changed; "
+            "rerun without --dry-run to apply"
+        )
+    elif total_removed:
+        print(
+            f"curate rollback-quota complete runs={total_runs} "
+            f"rows_removed={total_removed} rows_kept={total_kept}; "
+            f"rank/display metadata rewritten for {rewritten_runs} of {total_runs} run(s); "
+            "the next db-sync publishes it; no further action needed"
+        )
+    else:
+        print(
+            f"curate rollback-quota complete runs={total_runs} "
+            f"rows_removed=0 rows_kept={total_kept}; already rolled back, nothing to remove; "
+            "no further action needed"
+        )
     return 0
 
 
@@ -1538,6 +1855,8 @@ def _admin(args: argparse.Namespace) -> int:
             print("Next: inspect a redacted response shape before changing the parser")
         return 1
     if args.admin_command == "curate":
+        if getattr(args, "admin_curate_command", None) == "rollback-quota":
+            return _admin_curate_rollback_quota(args)
         return _curate(args)
     if args.admin_command == "alert-check":
         now = datetime.fromisoformat(args.now) if args.now else None
@@ -1788,13 +2107,25 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_parser.add_argument("--item-id-file", help="JSON list/object or newline file of item ids to enrich")
     enrich_parser.add_argument("--workers", type=int, help="Concurrent enrich LLM calls")
 
-    curate_parser = subparsers.add_parser("curate")
+    curate_parser = subparsers.add_parser(
+        "curate",
+        description=(
+            "Select the curated set for the latest run. Exit 0: run written. "
+            "Exit 2: AI_RADAR_CURATE_SOURCE_QUOTA is invalid (expected e.g. x=0.20,source=0.075 "
+            "or off); nothing was run. An empty value means the default quota."
+        ),
+    )
     curate_parser.add_argument("--threshold", type=float)
     curate_parser.add_argument("--weights")
     curate_parser.add_argument("--ruleset")
     curate_parser.add_argument("--limit", type=int, default=40)
     curate_parser.add_argument("--freshness-quota", type=int, default=36)
     curate_parser.add_argument("--freshness-floor", type=float, default=4.0)
+    curate_parser.add_argument(
+        "--source-quota",
+        type=parse_source_quota,
+        default=_SOURCE_QUOTA_FROM_ENV,
+    )
 
     interpret_parser = subparsers.add_parser("interpret")
     interpret_parser.add_argument("--backfill", action="store_true")
@@ -1940,7 +2271,14 @@ def build_parser() -> argparse.ArgumentParser:
     wechat_discovery_login.add_argument("--session-file", default=str(DEFAULT_SESSION_PATH))
     wechat_discovery_login.add_argument("--browser-profile", default=str(DEFAULT_BROWSER_PROFILE))
     wechat_discovery_login.add_argument("--timeout-seconds", type=_positive_int, default=300)
-    admin_curate = admin_subparsers.add_parser("curate")
+    admin_curate = admin_subparsers.add_parser(
+        "curate",
+        description=(
+            "Select the curated set for the latest run. Exit 0: run written. "
+            "Exit 2: AI_RADAR_CURATE_SOURCE_QUOTA is invalid (expected e.g. x=0.20,source=0.075 "
+            "or off); nothing was run. An empty value means the default quota."
+        ),
+    )
     admin_curate.add_argument("--threshold", type=float)
     admin_curate.add_argument("--weights")
     admin_curate.add_argument("--ruleset")
@@ -1948,6 +2286,31 @@ def build_parser() -> argparse.ArgumentParser:
     admin_curate.add_argument("--limit", type=int, default=40)
     admin_curate.add_argument("--freshness-quota", type=int, default=36)
     admin_curate.add_argument("--freshness-floor", type=float, default=4.0)
+    admin_curate.add_argument(
+        "--source-quota",
+        type=parse_source_quota,
+        default=_SOURCE_QUOTA_FROM_ENV,
+    )
+    admin_curate_subparsers = admin_curate.add_subparsers(dest="admin_curate_command")
+    rollback_quota = admin_curate_subparsers.add_parser(
+        "rollback-quota",
+        description=(
+            "Remove quota-only curated rows (reason_json.source_quota.baseline_selected=false) "
+            "from every curation run whose id >= SINCE and that has a quota shadow, then "
+            "renumber ranks, recalibrate display scores and clear cached summaries. "
+            "Progress goes to stdout, failure diagnostics to stderr. "
+            "Exit 0: every matching run processed (or none matched). "
+            "Exit 1: stopped at a run that could not be processed; earlier runs keep their "
+            "changes, later matching runs are untouched; rerun after fixing it. "
+            "Counts are curated rows (rows_removed/rows_kept) per run."
+        ),
+    )
+    rollback_quota.add_argument("--since", required=True, help="First run id to include (lexical order)")
+    rollback_quota.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Read-only preview: print counts, change no curated rows (SQLite may still create empty -wal/-shm sidecars)",
+    )
     admin_subparsers.add_parser("rerun-eval")
     alert_check = admin_subparsers.add_parser("alert-check")
     alert_check.add_argument("--state-path", default=str(db.PROJECT_ROOT / "data" / "alert-state.json"))

@@ -250,3 +250,9 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 - **现象**：2026-09-02 FTS manifest bug 致本地 sync 连续失败，02:34:58 最后一次成功→00:21:25 本地 sync 首次成功（该轮仍以 exit 4 报 replica stale），21h46m 零次成功。`run-or-alert --key ai-radar-db-sync` 在**第一轮**失败（07:04 本地，exit 3）就 `push=sent`（`~/.local/state/im-notify/alert-sent.log` 2026-09-01T23:04:35Z），延迟一个 cron 周期（4.5h）——本地失败并非无告警。但随后各轮 exit 仍是 3 → `skipped(unchanged)`；到 replica 超过 660min 阈值、消息内容已从"sync 失败"升级为"sync 失败 + replica 已 stale"时，exit code 未变，仍被 dedup 吞掉，直到 00:21 exit 4 才再次 `push=sent`。这与 `sync-db-cron.sh` 头注释"cause 变化会 re-alert"矛盾。
 - **加固候选**：让 staleness 升级改变 dedup 身份（独立 exit code 或独立 key），使"已 stale"这一严重度跃迁能再次投递；对齐 alerting 设计原则（值不值得 page/严重度/去重）后再定。
 - **附带竞态**：run-or-alert 退出时读的是 apply committed 之前的旧 replica 时间戳，即使本轮 apply 最终成功也会先报一次 stale 假阳性（00:21:25 同秒出现 `sync OK` 与 `FAIL(4)`；下个成功周期 re-arm 清除）。加固时一并看这个时点。
+
+### Playwright 浏览器缺失时微信全文抓取静默降级为 RSS-only，无任何告警
+
+- **现象**：2026-09-02 15:30 起 `~/Library/Caches/ms-playwright/` 为空（删除来源未核实），此后每轮 fetch 对全部微信条目打 `Failed to scrape WeChat article; using RSS item only … BrowserType.launch: Executable doesn't exist`，阶段仍 `fetch OK`、pipeline 全绿，持续 16.5h 才被人读日志发现（2026-09-03 08:02）。
+- **为什么值得告警**：这是「产出还在但质量明显变差」的一类——微信条目退化成只有标题/摘要的 RSS 项，`/wechat` 解读链路（interpret）拿到的是残缺正文。现有 A1–A7/D3 无「抓取降级路径命中率」维度。
+- **闭合方向**：fetch 阶段对「降级路径」计数并暴露（如 `wechat_scrape_fallback_count` 进 `/admin` 或 pipeline 末行汇总），连续 N 轮 100% 降级即 notice；或在 egress-preflight 同一位置加一条 Playwright 可执行文件存在性预检（README 已把它列为运行时前置）。

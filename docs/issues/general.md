@@ -315,3 +315,15 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 
 - **现象**（2026-09-03 review 附带，基线独立）：错误类别由 runner 写入的 error 前缀承载（写方三处：enrich v1/v2 runner、`scorer/runner.py`），读方三处各认自己的词表：候选 SQL 的 `stage_common.DETERMINISTIC_ENRICH_ERROR_PREFIXES`、`admin/calibration.py` 的 `SCHEMA_ERROR_RE`（只认 `schema validation failed`）、`alerts._recent_upstream_stats` 复用的 `UPSTREAM_ERROR_RE`。v2 主导失败类（`output rejected` / 旧 `enrich failed after retry: tags…`，事故当日 242/256）在 A2 schema 错误率里过去看不见、现在也看不见。
 - **处置候选**：让 calibration 消费 `DETERMINISTIC_ENRICH_ERROR_PREFIXES`；或给 `item_evaluations` 加 `error_kind` 列（schema 改动，走 review-schema）。
+
+### fetch 阶段 lxml HTML 解析在线程池内 SIGABRT（首次出现，2026-09-03 08:31）
+
+- **现象**：pipeline 08:30 轮 `fetch FAIL (exit 134)`，`~/Library/Logs/DiagnosticReports/python3.13-2026-09-03-083152.ips`：faulting thread 栈 `lxml etree._fixHtmlDictNames ← _BaseParser._parseUnicodeDoc ← fromstring`，libmalloc 报 `pointer being freed was not allocated`。fetch 用 `ThreadPoolExecutor` 并发抓源（`fetcher/runner.py:311,546`），HTML 解析发生在工作线程；lxml 6.1.0 / libxml2 2.14.6（uv.lock 未变）。该轮其余阶段照常，下一轮 fetch 正常与否见 journal。
+- **判断**：libxml2 HTML parser 的 dict/名字表在多线程下的已知类缺陷形态；单次出现不足以定复现率。
+- **处置候选**：① 观察复发率（DiagnosticReports 有无新 python 崩溃）；② 复发则给 HTML 解析加进程级互斥、或改用 `html.parser`/`selectolax` 等纯 Python/独立实现；③ 把 fetch 的非零退出与 crash report 关联进 A 系告警（现状是 `fetch FAIL` 记日志、pipeline 继续、无告警）。
+
+### `rollback-quota` 的 source-quota-v1 校验器只核形状与计数，不核引用与语义一致（review-schema 复审保留项，2026-09-03）
+
+- **现状**：`cli.py` 的 `_validate_source_quota_shadow` / `_validate_source_quota_block` 拒绝缺键、错类型、`quota_only_count` 与逐行 `baseline_selected=false` 不一致的 run；不核：① `baseline_only[].item_id` 是否存在于 `items` 且与当前精选集互斥；② 逐行 `kind` 是否等于 `sources.kind`、同 run 各行 `kind_cap`/`source_cap` 是否一致、实际逐 kind/逐源计数是否 ≤ cap；③ `shadow_json` 未知顶层键与回退后 `rollback:{at, removed_item_ids}` 块的形状；④ `reason_json.raw_weighted_score` 与 `weighted_score` 同时存在且不等时取前者、不拒绝。
+- **为什么值得跟踪**：这些漂移在当前唯一写入端（`curate()` 同一事务写入）下不会自然发生，只在人工改库或未来第二写入端出现时才会；届时回退会把不一致输入带进成功路径（重算 rank/展示分）。
+- **处置候选**：把校验器扩成接收 `conn`/`run_id` 的语义校验（join `items`/`sources`、整 run cap 一致性、rollback 块封闭键集），复用于 curate 落库与 rollback 两处；配套否定用例。`source_cap:null` 分支尚无真实实例（默认 policy 总配单源上限），若上线后需要该分支，先在副本用 `per_source=None` 产一份实例接地。

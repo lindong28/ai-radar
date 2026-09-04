@@ -17,6 +17,8 @@ class ScoredCandidate:
     published_at: str
     weighted_score: float
     reason: dict[str, Any]
+    source_id: str = ""
+    kind: str = "feed"
 
 
 def tier_multiplier(tier: str) -> float:

@@ -68,6 +68,8 @@ DEEPSEEK_API_KEY=sk-xxx
 ./run.sh interpret   # 可选：微信文章解读 + ai-assistant 兼容知识库回写（默认关闭）
 ```
 
+`curate` 默认限制每轮 X 推文约占两成、同一来源最多约 7.5%（默认 40 条时为 3 条）；需要恢复旧选择行为时设置 `AI_RADAR_CURATE_SOURCE_QUOTA=off`。
+
 成功读数：`fetch` 逐源打印 `OK <source_id> fetched=… inserted=…`（失败的源打 `FAIL <source_id> <错误>`），末行汇总 `=== attempted=… inserted=… failed=…`——先看 `failed` 是不是 0，再看 `inserted` 是不是大于 0。`prefilter` / `score` 打印 `processed=… errors=…`，`enrich` 同形，`curate` 打印 `curate run_id=… selected=… threshold=…`，`interpret` 未启用时打印 `interpret skipped=true message=…` 并正常退出。
 
 **新库首轮 `curate` 很可能 `selected=0`，首页因此是空的，这是正常的**：默认阈值 6.5，而首轮抓到的多是普通条目。此时用 `/all`（完整时间线，不过阈值）确认数据确实进来了，或用 `./run.sh curate --threshold 3` 把阈值调低重跑一次，观察 `selected` 是否变大。阈值没有环境变量入口，只有这个命令行参数。

@@ -72,7 +72,7 @@ src/airadar/
 │   └── schema.py       #   EnrichOutput Pydantic schema
 │
 ├── curator/            # 阶段 4：精选
-│   ├── select.py       #   curate 主流程：加权评分 + 新鲜度配额 + 去重 + 排名校准
+│   ├── select.py       #   curate 主流程：加权评分 + 新鲜度配额 + 来源形态配额 + 影子基线 + 去重 + 排名校准
 │   ├── precompute.py   #   预计算最新精选轮的展示摘要
 │   ├── score.py        #   weighted_score 计算 + 信源层级乘数
 │   ├── dedup.py        #   候选去重（content_hash / URL）
