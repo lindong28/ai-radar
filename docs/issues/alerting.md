@@ -263,3 +263,9 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 - **未覆盖的保证**：全对象与独立存量问题（wechat2rss 五类 key 的严重度分档、与 A7 来源静默的合并、去抖——容器重启期间的一次 unreachable 即 page）、恢复通知的 P7 证据形态是否与 A 系列 resolve 一致。
 - **归属**：ai-radar；下一次改 healthcheck 或 wechat2rss 告警面时随该轮一并跑 `/custom:review-alerting`。
 - **对抗审（Codex，4 轮）后按 stakes 保留为 MEDIUM、用户 2026-09-04 裁定收口不再修的残余**（都要探针自身管道先坏才触发）：① 两次 20 分钟探测之间「恢复又复发」观察不到，按同一事故延续；② 手动运行与 cron 重叠时状态/清键无串行化，可能一次错序或重复通知；③ 状态文件被改成持续不可写且跨两次同类事故时，第二次的恢复通知与上一次文案相同、被 `wechat2rss-recovered` 去重吞掉；④ 事故首次观测时间只到 UTC 分钟，同一分钟内同类事故结束又开始（仅手动与 cron 重叠）第二次恢复通知被吞；⑤ 恢复通知走 `--alert` 通道而正文写「无需动作」，是否改走 notification 通道待定；⑥ `im-notify --dedup-clear` 吞掉 unlink 错误并 exit 0（harness 仓 `HARNESS-20260904-ca88`）。修法候选：状态改为单调事故序号 + 不可写时恢复通知降为无去重。
+
+### fetch 汇总把账户层失败（401/402）与网络层失败同形计入 failed，付费层用尽 9 小时无人被告知
+
+- **现象**（2026-09-03T21:17Z → 09-04T06:17Z）：109/109 X 源每轮 `FAIL … 402 Payment Required`，`=== attempted=163 … failed=109/111` 连续 30+ 轮；现有 A 系告警没有按 HTTP 状态码分桶的维度，X 摄取归零 9 小时后才被人从日志读出（完整读数见 `archive/closed.md`「[resolved] X 源全部 402 Payment Required」）。
+- **为什么值得告警**：402/401 只能由账户持有人处理（充值/换 key），与网络层失败的处置完全不同；混在同一个 failed 计数里，读者拿不到「要做什么」。
+- **闭合方向**：fetch 汇总按状态码分桶输出（`failed_by_status={402: n, 5xx: m, …}`），当单一状态码占失败 ≥50% 且属账户层（401/402/403）时单独 page，文案指向账户而非网络；严重度/去重/文案按 `alerting-review-principles.md` 与 service-operations-protocol §6 走 `/custom:review-alerting` 落地。归属：独立单元，不在 program 20260820-content-align 内。
