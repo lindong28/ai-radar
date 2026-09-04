@@ -489,3 +489,11 @@ P3 为把慢变 prompt 前缀移到文章前而执行 before/after 成对评测�
 | 归档债剩余范围（`harness-issues.md`） | 该文件现存 11 个 `##` 条目全部为 `[open]`（含显式声明"部分已修故仍留 open"的 H8），无终态条目滞留；终态的 H2/H5/H7/H10/H13 已在本文件「2026-08-20 harness-issues.md lifecycle 清理迁入」批次内 |
 
 **未随本条覆盖**：`architecture.md` 其它维度（描述文字是否与实现一致、数据流叙述是否过时）不在本条原始范围内，本次也未核。
+
+### [resolved] X 源全部 402 Payment Required，X 摄取自 2026-09-03 21:17Z 起归零（账户付费层问题）
+
+- **现象**（2026-09-04 08:45 轮 `logs/pipeline-20260904-084500.log`）：109/109 `sources.kind='x'`（官方 `https://api.x.com/2/users/<id>/tweets`）每轮 `FAIL … HTTPStatusError: Client error '402 Payment Required'`；最后一条 X 条目 `fetched_at=2026-09-03T21:16:58Z`。精选轮次 X 类目为 0（方案 B 配额 x≤8/40 不是原因，是无候选）。
+- **区分检查（2026-09-04 08:5x）**：同一 `X_BEARER_TOKEN` 打最便宜的查询端点 `/2/users/by/username/x` 同样 402（凭证错应为 401/403；仅 tweets 端点受限应为 200）；`src/airadar/fetcher` 自 09-02 无提交、工作树无改动；402 起于本地 09-04 05:30 轮、05:15 轮仍正常。三者合取 → 账户层（额度用尽或付费层失效），不是凭证或代码。
+- **归属**：只能由账户持有人处理付费/额度；代码侧无可修项。
+- **告警面缺口**：`=== attempted=163 … failed=109/111` 连续多轮，未见针对「同一 HTTP 状态码占全部失败」的分类告警；402/401 这类账户层失败与网络层失败同形地计入 failed。候选：fetch 汇总按状态码分桶，402/401 占比 ≥50% 单独 page（文案指向账户，不指向网络）。
+- **Resolved 2026-09-04 14:15 (+0800)**：用户为 X API 账户充值后，同一凭证探针 `/2/users/by/username/x` 与 `/2/users/<id>/tweets` 均 200；14:15 轮 fetch 109/109 X 源 OK、失败 0、入库 7 条（`logs/pipeline-20260904-141500.log`）。断流窗口 2026-09-03T21:17Z → 2026-09-04T06:17Z。**告警面缺口未修**（402/401 占比分桶告警仍是候选），按 docs/issues/alerting.md 域另行跟踪。
