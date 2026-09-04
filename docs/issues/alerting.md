@@ -256,3 +256,10 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 - **现象**：2026-09-02 15:30 起 `~/Library/Caches/ms-playwright/` 为空（删除来源未核实），此后每轮 fetch 对全部微信条目打 `Failed to scrape WeChat article; using RSS item only … BrowserType.launch: Executable doesn't exist`，阶段仍 `fetch OK`、pipeline 全绿，持续 16.5h 才被人读日志发现（2026-09-03 08:02）。
 - **为什么值得告警**：这是「产出还在但质量明显变差」的一类——微信条目退化成只有标题/摘要的 RSS 项，`/wechat` 解读链路（interpret）拿到的是残缺正文。现有 A1–A7/D3 无「抓取降级路径命中率」维度。
 - **闭合方向**：fetch 阶段对「降级路径」计数并暴露（如 `wechat_scrape_fallback_count` 进 `/admin` 或 pipeline 末行汇总），连续 N 轮 100% 降级即 notice；或在 egress-preflight 同一位置加一条 Playwright 可执行文件存在性预检（README 已把它列为运行时前置）。
+
+### wechat2rss healthcheck 的恢复通知与清键逻辑未经 /custom:review-alerting 全量审
+
+- **现象**：2026-09-04 修 `deploy/wechat2rss/healthcheck.sh`（健康时 `--dedup-clear` 全部五个 key、firing→healthy 转换发一条恢复通知，状态记 `deploy/wechat2rss/data/healthcheck.state`）。review-gate 要求服务告警改动叠加跑 `/custom:review-alerting`，用户本轮裁定 waive：只跑了 Codex 对抗审（含按 `human-facing-message-principles` 与成本 so-what 审这条恢复通知），未跑全项目告警审。
+- **未覆盖的保证**：全对象与独立存量问题（wechat2rss 五类 key 的严重度分档、与 A7 来源静默的合并、去抖——容器重启期间的一次 unreachable 即 page）、恢复通知的 P7 证据形态是否与 A 系列 resolve 一致。
+- **归属**：ai-radar；下一次改 healthcheck 或 wechat2rss 告警面时随该轮一并跑 `/custom:review-alerting`。
+- **对抗审（Codex，4 轮）后按 stakes 保留为 MEDIUM、用户 2026-09-04 裁定收口不再修的残余**（都要探针自身管道先坏才触发）：① 两次 20 分钟探测之间「恢复又复发」观察不到，按同一事故延续；② 手动运行与 cron 重叠时状态/清键无串行化，可能一次错序或重复通知；③ 状态文件被改成持续不可写且跨两次同类事故时，第二次的恢复通知与上一次文案相同、被 `wechat2rss-recovered` 去重吞掉；④ 事故首次观测时间只到 UTC 分钟，同一分钟内同类事故结束又开始（仅手动与 cron 重叠）第二次恢复通知被吞；⑤ 恢复通知走 `--alert` 通道而正文写「无需动作」，是否改走 notification 通道待定；⑥ `im-notify --dedup-clear` 吞掉 unlink 错误并 exit 0（harness 仓 `HARNESS-20260904-ca88`）。修法候选：状态改为单调事故序号 + 不可写时恢复通知降为无去重。
