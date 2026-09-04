@@ -54,6 +54,57 @@ Service health is not consumer verification. Complete the AI Radar-side fetch an
 
 This section applies only after program assembly has supplied and reviewed `compose.sh` plus the flag-aware healthcheck. At that point, run all Compose operations through `compose.sh`; use `logs.sh` for logs so both credential-redaction channels remain active.
 
+## Subscription management
+
+The runtime subscription set has 22 accounts as of 2026-09-04. The numeric ID is the WeChat Official Account ID returned by `atob(biz)` on an article page and is stored as `rsses.biz_id`:
+
+| Account | `biz_id` |
+|---|---:|
+| AI前线 | `3554086560` |
+| AI寒武纪 | `3871912638` |
+| AI科技评论 | `3098132220` |
+| Draco正在VibeCoding | `3267381402` |
+| Founder Park | `3698401914` |
+| InfoQ | `2390142780` |
+| 数字生命卡兹克 | `3223096120` |
+| 暗涌Waves | `3940324519` |
+| 歸藏的AI工具箱 | `3540975510` |
+| 海外独角兽 | `3869640945` |
+| 硅星人Pro | `3926568365` |
+| 虎嗅APP | `1432156401` |
+| 赛博禅心 | `3934419561` |
+| 量子位 | `3236757533` |
+| 机器之心 | `3073282833` |
+| AGI Hunt | `3087832081` |
+| 十字路口Crossing | `3010319264` |
+| 记忆承载 | `3542604563` |
+| 记忆承载3 | `3574797745` |
+| 西风的罗盘 | `3903453739` |
+| 人间罗盘 | `3881863572` |
+| DeepSeek | `3949607775` |
+
+Add subscriptions through the loopback management API, one at a time. Start in `deploy/wechat2rss/`, replace `<BIZ_ID>` with a numeric ID from the table, and keep the real token only in the local `.env` (`RSS_TOKEN=<RSS_TOKEN>` is the placeholder form; never paste the value into the command or print it):
+
+```bash
+sqlite3 -readonly data/res.db \
+  'SELECT biz_id,name,check_time FROM rsses WHERE biz_id=<BIZ_ID>;'
+# Any row means the account is already subscribed: stop here and do not call /add.
+
+started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+set -a
+source .env
+set +a
+curl --noproxy '*' -fsS --get \
+  --data-urlencode "k=$RSS_TOKEN" \
+  'http://127.0.0.1:8080/add/<BIZ_ID>'
+```
+
+A successful request returns JSON with an empty `err` and enqueues an initial update. If the response is lost or times out, query the database first and never retry `/add` blindly: calling `/add` for an existing ID also enqueues an update. Before adding the next account, repeat the read-only query above until its `biz_id` and `name` exactly match the selected table row and `check_time` is non-zero; the preflight absence check binds that new row to this add. Then run `./healthcheck.sh` and inspect only this operation's redacted log window with `./logs.sh --since "$started_at"`.
+
+Stop submitting new adds if that window reports WeChat risk-control or login-timeout codes such as `-2041` or `-2012`. Resume only after the same window shows recovery followed by a successful `checked <expected name> <BIZ_ID>` event and `./healthcheck.sh` is healthy; otherwise let the service follow its configured backoff and retry schedule.
+
+Use these lifecycle and verification entries from `deploy/wechat2rss/`:
+
 ```bash
 ./compose.sh ps
 ./healthcheck.sh
