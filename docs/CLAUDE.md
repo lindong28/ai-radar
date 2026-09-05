@@ -76,6 +76,7 @@
 | [alerting.md](issues/alerting.md) | 服务故障告警的设计质量债（值不值得 page、严重度、消息说什么、要不要合并、基线可行性、留痕） |
 | [cost-observability.md](issues/cost-observability.md) | LLM 成本计量、定价、报告与告警消费面的未闭合项；金额口径只覆盖 `llm_usage` 记录行 |
 | [general.md](issues/general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
+| [aihot-fit-eval.md](issues/aihot-fit-eval.md) | aihot-fit 评测体系（以 AIHOT 输出为参考输出）的未闭合项：判官刻度天花板、身份归属、评测支出污染生产成本库 |
 | [harness-issues.md](issues/harness-issues.md) | Agent harness、wrapper、hook、plugin 或 skill 行为问题，**限牵涉本项目的**；纯 user-scope 的 harness 问题按协议 §4.8 的写入路由归 harness 仓（`~/research/ai-agent-config`），不留在本仓 |
 | [archive/closed.md](issues/archive/closed.md) | 已 resolved / wontfix 的历史 issue 归档 |
 
@@ -156,6 +157,7 @@
 | [20260828-c3a5-retry-missing-criteria-reason-once.md](adr/20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 |
 | [20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md](adr/20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 |
 | [20260905-b00f-write-egress-receipt-after-live-policy-recheck.md](adr/20260905-b00f-write-egress-receipt-after-live-policy-recheck.md) | 出网收据只在写盘前复核生产策略后生成 |
+| [20260905-499e-aihot-reference-fit-eval-system.md](adr/20260905-499e-aihot-reference-fit-eval-system.md) | 以 AIHOT 历史输出为参考输出建立内容链拟合评测体系（eval-fit 四槽位），达标线在基线跑出后另定 |
 | [20260829-a7f1-suppress-actionless-x-silence.md](adr/20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 |
 | [20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md](adr/20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并通过内部归档来源显式补录 ai-assistant KB |
 | [20260831-8b7c-control-wechat-review-term-aliases.md](adr/20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，并保持 raw 作者优先 |

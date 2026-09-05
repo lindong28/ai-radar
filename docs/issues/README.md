@@ -13,5 +13,6 @@
 | [alerting.md](alerting.md) | 服务故障告警的设计质量债（值不值得 page、严重度、消息说什么、要不要合并、基线可行性、留痕） |
 | [cost-observability.md](cost-observability.md) | LLM 成本计量、定价、报告与告警消费面的未闭合项；金额口径只覆盖 `llm_usage` 记录行 |
 | [general.md](general.md) | 项目级未分类问题（reliability / 工具链 / 文档错位等） |
+| [aihot-fit-eval.md](aihot-fit-eval.md) | aihot-fit 评测体系（以 AIHOT 输出为参考输出）的未闭合项：判官刻度天花板、身份归属、评测支出污染生产成本库 |
 | [harness-issues.md](harness-issues.md) | Agent harness、wrapper、hook、plugin 或 skill 行为问题——**限牵涉本项目的那些**；纯 user-scope 的按协议 §4.8 写入路由归 harness 仓 |
 | [archive/closed.md](archive/closed.md) | 已 resolved / wontfix 的历史 issue 归档 |

@@ -61,6 +61,7 @@ from .curator.weights import load_weights
 from .egress import EgressPreflightError, require_selector_policy
 from .enrich.runner import run_enrich
 from .enrich.runner_v2 import run_enrich as run_enrich_v2
+from .eval.aihot_fit.cli import add_eval_fit_parser, run_eval_fit
 from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
 from .fetcher.runner import fetch_all, refresh_wechat_avatar, reload_sources
 from .fetcher.wechat import (
@@ -2582,6 +2583,8 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--match-scope", choices=("curated", "all-db-url"), default="curated")
     eval_parser.add_argument("--audit", action="store_true")
 
+    add_eval_fit_parser(subparsers)
+
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -2821,6 +2824,8 @@ def main() -> None:
         raise SystemExit(_interpret(args))
     if args.command == "eval":
         raise SystemExit(_eval(args))
+    if args.command == "eval-fit":
+        raise SystemExit(run_eval_fit(args))
     if args.command == "serve":
         raise SystemExit(_serve(args))
     if args.command == "performance-probe":
