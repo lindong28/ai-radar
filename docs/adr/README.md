@@ -79,3 +79,4 @@
 | [20260831-8b7c](./20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，不放宽多词交集 | accepted | 2026-08-31 |
 | [20260901-a31f](./20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 | accepted | 2026-09-01 |
 | [20260903-bc36](./20260903-bc36-quota-curated-selection-by-source-form.md) | 精选按来源形态配额（X ≤20%、单源 ≤7.5%），同轮记无配额基线并支持定向回退 | accepted; partially supersedes ADR-010（配额独有行可定向删除） | 2026-09-03 |
+| [20260904-51d2](./20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮的信号；账户层失败（401/402）升为 page 并按来源组给处置 | accepted | 2026-09-04 |

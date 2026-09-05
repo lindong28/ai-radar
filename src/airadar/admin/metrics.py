@@ -11,11 +11,15 @@ from zoneinfo import ZoneInfo
 
 from .. import db
 from .access_log import aggregate_access_log, parse_access_log_line
+from .thresholds import ALERT_THRESHOLDS
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 STAGE_ORDER = ("fetch", "prefilter", "scoring", "enrich", "curate")
 DB_STAGES = ("prefilter", "scoring", "enrich")
 EVAL_P95_WINDOW = timedelta(hours=2)
+# How far ahead of "now" a fetch round's completed_at may sit before the round
+# is treated as unusable evidence (clock skew tolerance).
+FUTURE_COMPLETED_AT_TOLERANCE_MINUTES = 5
 LOG_STAGE_TO_DASHBOARD = {"score": "scoring"}
 PIPELINE_FILE_RE = re.compile(r"pipeline-(?P<stamp>\d{8}-\d{6})\.log$")
 STAGE_EVENT_RE = re.compile(
@@ -23,6 +27,7 @@ STAGE_EVENT_RE = re.compile(
 )
 FETCH_OK_RE = re.compile(r"^OK\s+(?P<source>\S+)\s+fetched=(?P<fetched>\d+)\s+inserted=(?P<inserted>\d+)")
 FETCH_FAIL_RE = re.compile(r"^FAIL\s+(?P<source>\S+)\s+(?P<error>.+)$")
+FETCH_HTTP_STATUS_RE = re.compile(r"Client error '(?P<status>\d{3})")
 FETCH_SUMMARY_RE = re.compile(
     r"^===\s+attempted=(?P<attempted>\d+)\s+inserted=(?P<inserted>\d+)\s+failed=(?P<failed>\d+)"
 )
@@ -99,13 +104,13 @@ def _pipeline_start_from_path(path: Path) -> datetime | None:
 
 
 def _parse_pipeline_timestamp(value: str) -> datetime | None:
-    parsed = _parse_dt(value)
-    if parsed is not None:
-        return parsed
     try:
-        return datetime.fromisoformat(value).replace(tzinfo=SHANGHAI_TZ)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SHANGHAI_TZ)
+    return parsed.astimezone(SHANGHAI_TZ)
 
 
 def _dashboard_stage(stage: str) -> str:
@@ -125,8 +130,12 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
             "attempted": 0,
             "inserted": 0,
             "failed": 0,
+            "summary_seen": False,
+            "completed_at": None,
             "ok_sources": 0,
             "failed_sources": [],
+            "failed_by_status": {},
+            "failed_sources_by_status": {},
             "sources": [],
         },
     }
@@ -160,6 +169,11 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
                 stage_entry["status"] = "ok" if event == "ok" else "fail"
                 if timestamp is not None and stage in stage_starts:
                     stage_entry["duration_ms"] = int((timestamp - stage_starts[stage]).total_seconds() * 1000)
+                if stage == "fetch":
+                    fetch = run["fetch"]
+                    assert isinstance(fetch, dict)
+                    if fetch.get("summary_seen") and timestamp is not None:
+                        fetch["completed_at"] = timestamp
             continue
         if ok_match := FETCH_OK_RE.match(line):
             fetch = run["fetch"]
@@ -177,16 +191,28 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
         if fail_match := FETCH_FAIL_RE.match(line):
             fetch = run["fetch"]
             assert isinstance(fetch, dict)
+            error = fail_match.group("error")
+            status_match = FETCH_HTTP_STATUS_RE.search(error)
+            status = int(status_match.group("status")) if status_match else None
             source = {
                 "source_id": fail_match.group("source"),
                 "fetched": 0,
                 "inserted": 0,
-                "error": fail_match.group("error"),
+                "error": error,
             }
             assert isinstance(fetch["failed_sources"], list)
             assert isinstance(fetch["sources"], list)
             fetch["failed_sources"].append(fail_match.group("source"))
             fetch["sources"].append(source)
+            if status is not None:
+                failed_by_status = fetch["failed_by_status"]
+                failed_sources_by_status = fetch["failed_sources_by_status"]
+                assert isinstance(failed_by_status, dict)
+                assert isinstance(failed_sources_by_status, dict)
+                failed_by_status[status] = int(failed_by_status.get(status, 0)) + 1
+                status_sources = failed_sources_by_status.setdefault(status, [])
+                assert isinstance(status_sources, list)
+                status_sources.append(fail_match.group("source"))
             continue
         if summary_match := FETCH_SUMMARY_RE.match(line):
             fetch = run["fetch"]
@@ -194,6 +220,7 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
             fetch["attempted"] = int(summary_match.group("attempted"))
             fetch["inserted"] = int(summary_match.group("inserted"))
             fetch["failed"] = int(summary_match.group("failed"))
+            fetch["summary_seen"] = True
             continue
         if stage_summary_match := STAGE_SUMMARY_RE.match(line):
             stage = _dashboard_stage(stage_summary_match.group("stage"))
@@ -333,16 +360,59 @@ def collect_metrics(
     access_summary = aggregate_access_log(access_lines)
     runs = _load_pipeline_runs(log_dir)
     latest_run = next((run for run in reversed(runs) if not run.get("skip")), runs[-1] if runs else None)
-    default_fetch: dict[str, object] = {
-        "attempted": 0,
-        "inserted": 0,
-        "failed": 0,
-        "ok_sources": 0,
-        "failed_sources": [],
-        "sources": [],
-    }
-    latest_fetch_obj = latest_run.get("fetch") if latest_run else default_fetch
-    latest_fetch = latest_fetch_obj if isinstance(latest_fetch_obj, dict) else default_fetch
+    a4_thresholds = ALERT_THRESHOLDS.get("a4", {})
+    a4_thresholds = a4_thresholds if isinstance(a4_thresholds, dict) else {}
+    resolve_rounds = max(1, int(a4_thresholds.get("account_resolve_rounds", 2) or 2))
+    stale_limit_minutes = int(a4_thresholds.get("fetch_stale_minutes", 90) or 90)
+    complete_fetches: list[dict[str, object]] = []
+    completed_at_seen: set[str] = set()
+    for run in reversed(runs):
+        fetch_obj = run.get("fetch")
+        if not isinstance(fetch_obj, dict) or not fetch_obj.get("summary_seen"):
+            continue
+        completed_at = fetch_obj.get("completed_at")
+        if not isinstance(completed_at, datetime):
+            continue
+        completed_key = completed_at.isoformat()
+        if completed_key in completed_at_seen:
+            continue
+        completed_at_seen.add(completed_key)
+        complete_fetches.append(fetch_obj)
+        if len(complete_fetches) == resolve_rounds:
+            break
+
+    latest_fetch: dict[str, object] | None = None
+    if complete_fetches:
+        completed_at = complete_fetches[0]["completed_at"]
+        assert isinstance(completed_at, datetime)
+        age_seconds = (current - completed_at).total_seconds()
+        stale_minutes = max(0, int(age_seconds / 60))
+        # A round that "completed" in the future (clock skew, malformed log)
+        # is not fresh evidence either: clamping its age to 0 would let it pass
+        # as brand-new until the clock catches up. Allow a small tolerance.
+        future_minutes = max(0, int(-age_seconds / 60))
+        stale_reason: str | None = None
+        if future_minutes > FUTURE_COMPLETED_AT_TOLERANCE_MINUTES:
+            stale_reason = "future_timestamp"
+        elif stale_minutes > stale_limit_minutes:
+            stale_reason = "expired"
+        latest_fetch = {
+            **complete_fetches[0],
+            "stale_minutes": stale_minutes,
+            "stale_limit_minutes": stale_limit_minutes,
+            "stale": stale_reason is not None,
+            "stale_reason": stale_reason,
+        }
+    recent_complete_fetches: list[dict[str, object]] = []
+    for fetch in complete_fetches:
+        failed_by_status = fetch.get("failed_by_status")
+        recent_complete_fetches.append(
+            {
+                "completed_at": fetch["completed_at"],
+                "attempted": int(str(fetch.get("attempted", 0))),
+                "failed_by_status": dict(failed_by_status) if isinstance(failed_by_status, dict) else {},
+            }
+        )
 
     stages = _base_stage_metrics()
     for stage, values in _evaluation_stage_metrics(
@@ -362,8 +432,16 @@ def collect_metrics(
             stages[stage]["latest_run_status"] = values.get("status")
             stages[stage]["latest_run_duration_ms"] = values.get("duration_ms")
             if stage in {"fetch", "curate"}:
-                processed = int(str(latest_fetch.get("attempted", 0))) if stage == "fetch" else 0
-                errors = int(str(latest_fetch.get("failed", 0))) if stage == "fetch" else 0
+                processed = (
+                    int(str(latest_fetch.get("attempted", 0)))
+                    if stage == "fetch" and latest_fetch is not None
+                    else 0
+                )
+                errors = (
+                    int(str(latest_fetch.get("failed", 0)))
+                    if stage == "fetch" and latest_fetch is not None
+                    else 0
+                )
                 stages[stage]["processed"] = processed
                 stages[stage]["errors"] = errors
                 stages[stage]["error_rate"] = errors / processed if processed else 0.0
@@ -388,6 +466,7 @@ def collect_metrics(
             "items_today": _count_rows_in_window(db_path, "items", "fetched_at", start, end),
             "curation_runs_today": _count_rows_in_window(db_path, "curation_runs", "created_at", start, end),
             "latest_fetch": latest_fetch,
+            "recent_complete_fetches": recent_complete_fetches,
         },
         "pipeline": {
             "stages": stages,

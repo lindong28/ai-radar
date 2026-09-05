@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-04（A4 能识别账户层抓取故障，不再把未完成轮当作恢复）
+
+- A4 现在只用已写完汇总和终态的 fetch 轮；最近完整轮过期或不存在时会明确显示「未评估」，不再把未完成轮的默认 0% 当成健康。401/402 账户层失败超过既有比例阈值时直接 page，并按来源组给出凭证或付费层处置；该 page 需连续两个不同的完整轮降回阈值内才恢复。
+- `/admin` 的「文章摄取」面板改读最近完整一轮：没有完整轮时显示「fetch 读数未评估」，完整轮过期时给出过期分钟数，不再显示 0 或报错；`/api/v1/admin/metrics` 的 `ingestion.latest_fetch` 在无完整轮时为 `null`，有完整轮时新增 `completed_at`、`failed_by_status`、`failed_sources_by_status`、`stale_minutes`、`stale_limit_minutes`、`stale`，并新增 `recent_complete_fetches`。A4 的恢复消息附带复核入口，运维 runbook 新增「A4 账户层失败（401/402）的处置与恢复判定」小节。
+
 ## 2026-09-04（微信供稿恢复：自建 Wechat2RSS 重新上线，其健康检查恢复后能再次告警）
 
 - `/wechat` 自 2026-09-03 起停止出现新文章：自建 Wechat2RSS 容器早在 2026-08-30 就随 OrbStack 重启后未自启而停摆（当时被仍在供稿的 Mp2RSS 掩盖），付费 Mp2RSS 订阅随后于 2026-09-03 到期（feed 404，最后入库的是一条「会员已到期」占位文章），两路至此都断。09-04 拉起 OrbStack 后 Wechat2RSS 已恢复抓取，目前是唯一在供稿的微信源（14 个公众号）；Mp2RSS 是否续费待定。

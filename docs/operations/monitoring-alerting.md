@@ -46,10 +46,28 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 | A1 | 上游模型不可用 | DeepSeek/OpenAI/GLM/ARK 返回 endpoint/model/权限/余额类错误；`schema validation failed` 已排除 | 查 provider 控制台余额、模型权限、API key；必要时切换 provider 或充值 |
 | A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 的错误 numerator/denominator **各自只取最近 15 分钟**；样本数分别至少为 `4/4/2` 才让错误率支路参与 page。独立的 P95 与**超过 120 分钟没有成功 pipeline**支路不受该样本门影响。prefilter 等后台 LLM 阶段的 P95 仍用最近 2 小时口径，只在持续达到真挂起量级时 page。SKIP 日志表示 pipeline 已在运行，不单独视为故障 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
 | A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测从已安装 serve plist 的 `ProgramArguments` 解析端口，连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
-| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 按 error 分组读 `logs/pipeline-*.log` 最新一轮的 FAIL 行，见下方「出网 selector 的 preflight 与实际 route」；X 源走官方 `api.x.com`（另查 bearer token 与配额），微信源走 Mp2RSS + Wechat2RSS 双跑（见 [wechat-ingestion.md](wechat-ingestion.md)） |
+| A4 | 文章摄取骤降 | fetch 只读最近一个同时含汇总行及其后 `fetch OK/FAIL` 终态行的完整轮；没有完整轮或该轮超过 `fetch_stale_minutes`（默认 90 分钟）时，fetch 维度明确标为未评估，items-floor 仍照常评估。普通 fetch 失败率超过 `fetch_failed_ratio`（默认 0.4）、但 items 正常时是 `notice`；401/402 账户层失败数占 attempted 的比例超过同一阈值时是 `page`；今日 items 增量低于动态 floor 时也是 `page` | 账户层 page 按状态码和来源组给动作：402 检查并恢复对应 API 账户的付费层/额度；X API 的 401 核对 `X_BEARER_TOKEN`，其它来源的 401 按 `data/sources.toml` 的 `required_env` 核对运行环境。普通失败按 error 分组读 `logs/pipeline-*.log`，并见下方「出网 selector 的 preflight 与实际 route」；微信源走 Mp2RSS + Wechat2RSS 双跑（见 [wechat-ingestion.md](wechat-ingestion.md)） |
 | A5 | 微信解读产出停滞 | 解读启用、4 小时无成功解读，且存在 fetched 至少 4 小时、仍符合重试资格的微信 pending 时 page；无近期成功且 pending 因退避/冻结归零时标为不可评估，不发「已恢复」 | 先查近 4 小时 pipeline/interpret 日志与 provider 成功/错误，再核对余额/配额；`ark-breaker.json` 只有 `opened_at` 仍在 2 小时 cooldown 内才是当前证据 |
 | A6 | 已记录 LLM 调用近 24 小时成本突变 | 当前窗与基线按同一现行费率、cache 全未命中重算。阈值两档：超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。金额与次数只统计 `llm_usage` 记录行，所以**任何越线判定都是在一个下界上做的**——未写入该表的付费调用（失败链路、未接入计量的调用点）不在内，resolve 也因此不表示 attempt-level 健康。在途窗（`.pipeline.flock` 证明本轮在跑）按 `in-progress` 用下界继续判 firing 与 notice→page，下界未越线时保留既有 episode 等封口。`baseline_days` 的实际取值与「至少 3 个有记录日」的缺口见 [ISSUE-023](../issues/cost-observability.md#issue-023--a6-的至少-3-个基线日门当前不可达) | 先按消息中的 Top 驱动核查；它复用 A6 的 cache 中性已知成本聚合。未定价调用在 `/admin/usage` 单列，nominal 目录价不是账单实付 |
 | A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时进入静默候选。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。X API 来源若最近一次 timeline 读取仍在 A2 的 120 分钟 heartbeat 内、状态为 `verified` 且 pagination 已到 `checkpointed`，说明本地最近一次读取已追平持久游标：该来源保留在健康详情中并标成上游未更新，但不 page；`blocked`、`pending`、`draining`、非法、未来时间或过期 receipt 均不抑制。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数（firing 与非 firing 两条分支都给，2026-08-23 前只在非 firing 分支给），不按健康处理。这批来源里，累计条目已达 5 条、且静默超过其最近 5 条典型间隔两倍的判为**褪色**——一个真死掉的来源会先 firing，再随旧条目滑出 30 天窗掉出评估集，若不加区分就会在它最彻底死掉的那一刻发出 ✅「已恢复」；褪色存在时 A7 改发 🟡「转为不可评估」并点名该来源。所有仍需处置的静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该来源的 OK/FAIL 行：整批同时静默多为出网链路，见下方「出网 selector 的 preflight 与实际 route」；单源静默则查该源站点或其上游订阅服务 |
+
+### A4 账户层失败（401/402）的处置与恢复判定
+
+A4 只读**完整 fetch 轮**（`=== attempted=… failed=…` 汇总行、且其后有 `=== fetch OK|FAIL ===` 终态行）。从 `FAIL <source> … Client error '<状态码>'` 抽出 HTTP 状态码，401/402 计入账户层：
+
+| 状态码 | 含义 | 处置（消息里也会写） |
+|---|---|---|
+| 402 Payment Required | 该来源组的 API 账户付费层 / 额度用尽 | 为该来源组的 API 账户充值或恢复付费层，然后重跑 `./run.sh fetch`（或等下一轮 cron） |
+| 401 · 来源组 X API | `X_BEARER_TOKEN` 被拒 | 更换或确认 `X_BEARER_TOKEN`，重跑 fetch |
+| 401 / 402 · 其它来源组 | 该组来源被上游拒绝；前缀组不是账户，原因要逐源核对 | 核对该组来源的配置与响应；来源声明了 `required_env` 时按 `data/sources.toml` 检查对应环境变量或付费层，重跑 fetch |
+
+来源组按 source_id 前缀聚合：`x_*` → 「X API」是真实账户（共用一个 `X_BEARER_TOKEN`）；**其余前缀只是命名约定，不是账户身份**（如 `google_*` 是 5 个各自独立、不共享凭据的公开来源：4 个 feed + 1 个网页抓取），消息会写成「来源组 <前缀>（按 slug 前缀聚合，非账户身份）」，处置是核对该组来源的配置与响应、来源声明了 `required_env` 才查凭证。消息正文最多列 5 组、影响行最多点名 3 组，其余以「另有 N 组同此 / 等 N 组」计数。
+
+- **入口**：账户层失败数 / attempted > `a4.fetch_failed_ratio`（0.4，与普通失败率同一阈值）→ 🔴 page，`page` debounce 为 0（首轮即发）。
+- **恢复（无状态滞回）**：最近 `a4.account_resolve_rounds`（2）个 `completed_at` 互不相同的完整轮都回到阈值内才 resolved；同一轮被多次评估只算一轮；`attempted=0` 的轮不算证据（既不算恢复也不打断）；比最新可用轮早超过 `fetch_stale_minutes`（90 分钟）的旧轮不计——长时间断流后不会拿断流前的旧轮凑数。恢复消息会写明「无需立即处置」，断流期间的缺口按本节自行判断是否补抓。只有 1 个可用完整轮时消息写「恢复证据不足」，不写「已回落」。
+- **未评估**：没有完整轮、最近完整轮超过 `a4.fetch_stale_minutes`（90 分钟）、该轮 `completed_at` 比现在晚超过 5 分钟（时钟异常，`stale_reason=future_timestamp`）、或该轮 `attempted=0` 时，fetch 维度标为未评估（不是健康）；items-floor 照常评估，两者同时命中时处置先查 pipeline 是否仍在跑（A2 心跳）与 preflight，再按 FAIL 行分流。
+- **复核入口**：`logs/pipeline-*.log` 最近两个完整轮的 FAIL 行与 `/api/v1/admin/metrics` 的 `ingestion.latest_fetch.failed_by_status` / `recent_complete_fetches`。
+- **已知边界**：无 HTTP 状态码的账户层失败（SDK 抛的配额异常）仍走普通 notice 路径；单个来源的凭证失效由 A7 兜底。
 
 ### 出网 selector 的 preflight 与实际 route（A4、A7 的处置指引都指向这里）
 
@@ -89,7 +107,7 @@ D3 每轮按 provider/model 检查 unpriced、stale、due-review 与 active tari
 
 installer 当前只检查 notification webhook，`status.sh` 只检查 crontab marker；上述 dry-run 也不覆盖 cron wrapper 或实际通知投递。首次计划执行后仍须检查 crontab 重定向目标 `logs/cost-report-cron.log`。这是 ISSUE-014 的已知 lifecycle 边界。
 
-告警状态存储在 `data/alert-state.json`。每个 `rule_id` 内的 `page` / `notice` 有各自的 lifecycle、debounce、`since`、`last_notified` 与 30 分钟 cooldown，不会被另一 severity 的计时器节流。A4 的 `page` debounce 为 0（items-floor 首轮即 page），`notice` debounce 为 30 分钟（fetch-only 持续超窗才通知）。severity 转换沿同一个 `since` episode 递进：notice→page 只发送新的 firing，不发送中间 resolved；只有条件真正清除或证据真实降级时才结束 episode。仍在 debounce 且从未成功投递的旧 severity 可静默关闭，不伪造 resolved。firing 仅在 transport 成功后才记为 announced 并进入 cooldown；未投递成功的 pending firing 或 resolved 都在下轮重试。投递语义是 at-least-once：发送前持久化的 notification nonce 保持重试 signature 稳定，由 `im-notify` 的持久 signature dedup 抑制同一意图的用户可见重复，不宣称 exactly-once。
+告警状态存储在 `data/alert-state.json`。每个 `rule_id` 内的 `page` / `notice` 有各自的 lifecycle、debounce、`since`、`last_notified` 与 30 分钟 cooldown，不会被另一 severity 的计时器节流。A4 的 `page` debounce 为 0（items-floor 或账户层失败首轮即 page），`notice` debounce 为 30 分钟（fetch-only 持续超窗才通知）。A4 账户层 page 的恢复证据无状态地取自日志：最近两个 `completed_at` 不同的完整 fetch 轮，其 401/402 失败数占 attempted 的比例都不超过 `fetch_failed_ratio` 后才 resolve；重复评估同一轮不算第二轮，少量残余失败允许关闭 page。fetch 过期或缺失时是未评估，不等于健康，也不能单独结束 episode。severity 转换沿同一个 `since` episode 递进：notice→page 只发送新的 firing，不发送中间 resolved；只有条件真正清除或证据真实降级时才结束 episode。仍在 debounce 且从未成功投递的旧 severity 可静默关闭，不伪造 resolved。firing 仅在 transport 成功后才记为 announced 并进入 cooldown；未投递成功的 pending firing 或 resolved 都在下轮重试。投递语义是 at-least-once：发送前持久化的 notification nonce 保持重试 signature 稳定，由 `im-notify` 的持久 signature dedup 抑制同一意图的用户可见重复，不宣称 exactly-once。
 
 ### 已送达通知历史
 

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import plistlib
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from airadar.admin.alerts import (
     AlertRuleResult,
     AlertSignals,
     _project_lifecycles,
+    collect_alert_signals,
     evaluate_rules,
     reserve_alert_evaluation_sequence,
     run_alert_results_state_machine,
@@ -34,6 +36,7 @@ from airadar.admin.alerts import (
     send_alert_message,
 )
 from airadar.admin.thresholds import ALERT_THRESHOLDS
+from airadar.db import migrate
 from airadar.egress import SelectorPolicy
 
 
@@ -61,6 +64,26 @@ def _normal_signals() -> AlertSignals:
         items_today=300,
         stage_sample_count={"prefilter": 20, "scoring": 20, "enrich": 20},
         server_pv=100,
+    )
+
+
+PIPELINE_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "pipeline_logs"
+
+
+def _copy_a4_pipeline_fixtures(log_dir: Path, *, include_complete: bool = True) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    if include_complete:
+        shutil.copyfile(
+            PIPELINE_FIXTURE_DIR / "pipeline-20260904-053000.txt",
+            log_dir / "pipeline-20260904-053000.log",
+        )
+    shutil.copyfile(
+        PIPELINE_FIXTURE_DIR / "pipeline-20260904-054500-before-summary.txt",
+        log_dir / "pipeline-20260904-054500.log",
+    )
+    shutil.copyfile(
+        PIPELINE_FIXTURE_DIR / "pipeline-20260904-190000.txt",
+        log_dir / "pipeline-20260904-190000.log",
     )
 
 
@@ -532,6 +555,487 @@ def _a4_items_floor_firing() -> AlertSignals:
     signals.items_today = 0
     signals.minutes_elapsed_today = 720
     return signals
+
+
+def _a4_account_signals(
+    *,
+    completed_at: str,
+    status: int = 402,
+    count: int = 109,
+    sources: list[str] | None = None,
+    recent_complete_fetches: list[dict[str, object]] | None = None,
+) -> AlertSignals:
+    signals = _normal_signals()
+    attempted = 163
+    failed_sources = sources or [f"x_source_{index}" for index in range(count)]
+    signals.fetch_attempted = attempted
+    signals.fetch_failed_ratio = count / attempted
+    signals.fetch_evaluated = True
+    signals.fetch_stale_minutes = 0
+    signals.failed_by_status = {status: count}
+    signals.failed_sources_by_status = {status: failed_sources}
+    signals.recent_complete_fetches = recent_complete_fetches or [
+        {
+            "completed_at": datetime.fromisoformat(completed_at),
+            "attempted": attempted,
+            "failed_by_status": {status: count},
+        }
+    ]
+    return signals
+
+
+def test_a4_real_pipeline_replay_pages_for_x_account_402(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    log_dir = tmp_path / "logs"
+    _copy_a4_pipeline_fixtures(log_dir)
+
+    signals = collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T06:00:00+08:00"),
+    )
+    signals.items_today = 300
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert signals.failed_by_status[402] == 109
+    assert a4.firing is True
+    assert a4.severity == "page"
+    assert "402" in a4.detail
+    assert "X API" in a4.detail
+    assert "109/163" in a4.detail
+    assert "充值/恢复付费层后重跑 fetch" in a4.action
+    # Recovery mechanics live in the runbook, not in the one-screen push body.
+    assert "才会 resolved" not in a4.action
+    assert a4.values["failed_by_status"] == {402: 109}
+    assert a4.impact == "X API 账户层失败使 109/163 个来源无法抓取文章"
+    assert a4.urgency.startswith("是")
+
+
+def test_a4_non_account_source_group_is_not_described_as_an_account() -> None:
+    signals = _a4_account_signals(
+        completed_at="2026-09-04T05:40:51+08:00",
+        status=402,
+        sources=["google_ai_blog"] * 109,
+    )
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is True
+    assert a4.severity == "page"
+    assert "来源组 google（按 slug 前缀聚合，非账户身份）109/163 源返回 402" in a4.detail
+    assert "核对来源组 google 各来源的配置与响应" in a4.action
+    assert "充值" not in a4.action
+    assert "非账户身份" in a4.impact
+    assert "109/163 个来源无法抓取文章" in a4.impact
+    assert "账户层失败使" not in a4.impact
+
+
+def test_a4_mixed_account_and_prefix_groups_keep_the_account_verdict() -> None:
+    sources = ["x_openai"] * 70 + ["google_ai_blog"] * 10
+    signals = _a4_account_signals(
+        completed_at="2026-09-04T05:40:51+08:00",
+        status=402,
+        count=len(sources),
+        sources=sources,
+    )
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is True
+    assert a4.impact.startswith("X API 账户层失败使 80/163 个来源无法抓取文章")
+    assert "另有来源组 google 返回同类状态码（非账户身份，先核对配置与响应）" in a4.impact
+    assert a4.urgency.startswith("是——账户层失败不会自愈")
+
+
+def test_a4_future_completed_at_is_unevaluated_not_fresh(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    log_dir = tmp_path / "logs"
+    _copy_a4_pipeline_fixtures(log_dir)
+
+    # Clock skew: evaluation instant is 11 minutes before the round's terminal line.
+    signals = collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T05:30:00+08:00"),
+    )
+    signals.items_today = 300
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert signals.fetch_evaluated is False
+    assert signals.fetch_stale_reason == "future_timestamp"
+    assert a4.firing is False
+    assert a4.evaluation_state == "in_progress"
+    assert "时间戳在未来" in a4.detail
+    assert "均在阈值内" not in a4.detail
+
+
+def test_a4_fetch_dimension_is_unassessed_for_stale_or_missing_complete_round(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+
+    stale_log_dir = tmp_path / "stale-logs"
+    _copy_a4_pipeline_fixtures(stale_log_dir)
+    stale = collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=stale_log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T19:05:00+08:00"),
+    )
+    stale.items_today = 300
+    stale_result = next(result for result in evaluate_rules(stale) if result.rule_id == "A4")
+
+    missing_log_dir = tmp_path / "missing-logs"
+    _copy_a4_pipeline_fixtures(missing_log_dir, include_complete=False)
+    missing = collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=missing_log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T19:05:00+08:00"),
+    )
+    missing.items_today = 300
+    missing_result = next(result for result in evaluate_rules(missing) if result.rule_id == "A4")
+
+    assert stale.fetch_evaluated is False
+    assert stale.fetch_stale_minutes == 804
+    assert stale_result.firing is False
+    assert stale_result.evaluation_state == "in_progress"
+    assert stale_result.values["fetch_evaluated"] is False
+    assert "最近完整 fetch 已过期 804 分钟" in stale_result.detail
+    assert "均在阈值内" not in stale_result.detail
+
+    assert missing.fetch_evaluated is False
+    assert missing.fetch_stale_minutes is None
+    assert missing_result.firing is False
+    assert missing_result.evaluation_state == "in_progress"
+    assert missing_result.values["fetch_evaluated"] is False
+    assert "无完整 fetch" in missing_result.detail
+    assert "均在阈值内" not in missing_result.detail
+
+
+@pytest.mark.parametrize(
+    ("status", "source_id", "detail_text", "action_text"),
+    [
+        (401, "x_openai", "X API 109/163 源返回 401（凭证被拒）", "更换/确认 X_BEARER_TOKEN 后重跑 fetch"),
+        (
+            401,
+            "vendor_primary",
+            "来源组 vendor（按 slug 前缀聚合，非账户身份）109/163 源返回 401（凭证被拒）",
+            "核对来源组 vendor 各来源的配置与响应；来源有 required_env 时按 data/sources.toml 检查对应环境变量后重跑 fetch",
+        ),
+    ],
+)
+def test_a4_401_action_is_scoped_to_source_group(
+    status: int,
+    source_id: str,
+    detail_text: str,
+    action_text: str,
+) -> None:
+    signals = _a4_account_signals(
+        completed_at="2026-09-04T05:40:51+08:00",
+        status=status,
+        sources=[source_id] * 109,
+    )
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is True
+    assert a4.severity == "page"
+    assert detail_text in a4.detail
+    assert action_text in a4.action
+    if source_id.startswith("x_"):
+        assert "required_env" not in a4.action
+    else:
+        assert "X_BEARER_TOKEN" not in a4.action
+
+
+def test_a4_account_page_resolves_only_after_two_distinct_healthy_complete_rounds(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "a4-account-state.json"
+    event_path = tmp_path / "a4-account-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    bad_time = "2026-09-04T05:40:51+08:00"
+    healthy_time_1 = "2026-09-04T06:10:00+08:00"
+    healthy_time_2 = "2026-09-04T06:40:00+08:00"
+    bad_summary = {
+        "completed_at": datetime.fromisoformat(bad_time),
+        "attempted": 163,
+        "failed_by_status": {402: 109},
+    }
+    healthy_summary_1 = {
+        "completed_at": datetime.fromisoformat(healthy_time_1),
+        "attempted": 163,
+        "failed_by_status": {402: 1},
+    }
+    healthy_summary_2 = {
+        "completed_at": datetime.fromisoformat(healthy_time_2),
+        "attempted": 163,
+        "failed_by_status": {402: 1},
+    }
+
+    firing_result = next(
+        result
+        for result in evaluate_rules(
+            _a4_account_signals(completed_at=bad_time, recent_complete_fetches=[bad_summary])
+        )
+        if result.rule_id == "A4"
+    )
+    duplicate_round = _a4_account_signals(
+        completed_at=healthy_time_1,
+        count=1,
+        sources=["x_residual"],
+        recent_complete_fetches=[healthy_summary_1, healthy_summary_1],
+    )
+    one_healthy_round = _a4_account_signals(
+        completed_at=healthy_time_1,
+        count=1,
+        sources=["x_residual"],
+        recent_complete_fetches=[healthy_summary_1, bad_summary],
+    )
+    two_healthy_rounds = _a4_account_signals(
+        completed_at=healthy_time_2,
+        count=1,
+        sources=["x_residual"],
+        recent_complete_fetches=[healthy_summary_2, healthy_summary_1],
+    )
+    duplicate_result = next(r for r in evaluate_rules(duplicate_round) if r.rule_id == "A4")
+    one_healthy_result = next(r for r in evaluate_rules(one_healthy_round) if r.rule_id == "A4")
+    two_healthy_result = next(r for r in evaluate_rules(two_healthy_rounds) if r.rule_id == "A4")
+
+    fired = run_alert_results_state_machine(
+        [firing_result],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T05:41:00+08:00"),
+        send=_recording_sender(deliveries),
+    )
+    repeated = run_alert_results_state_machine(
+        [duplicate_result],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T06:11:00+08:00"),
+        send=_recording_sender(deliveries),
+    )
+    held = run_alert_results_state_machine(
+        [one_healthy_result],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T06:12:00+08:00"),
+        send=_recording_sender(deliveries),
+    )
+    resolved = run_alert_results_state_machine(
+        [two_healthy_result],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T06:41:00+08:00"),
+        send=_recording_sender(deliveries),
+    )
+
+    assert firing_result.firing is True
+    assert duplicate_result.firing is False
+    assert duplicate_result.evaluation_state == "in_progress"
+    assert one_healthy_result.firing is False
+    assert one_healthy_result.evaluation_state == "in_progress"
+    assert two_healthy_result.firing is False
+    assert two_healthy_result.evaluation_state == "healthy"
+    assert _receipt_identities(fired) == [("A4", "page", "firing")]
+    assert repeated["sent"] == []
+    assert held["sent"] == []
+    assert _receipt_identities(resolved) == [("A4", "page", "resolved")]
+    assert [severity for _text, severity in deliveries] == ["page", "page"]
+
+
+def test_a4_thresholds_use_existing_failure_ratio_for_account_statuses() -> None:
+    a4 = ALERT_THRESHOLDS["a4"]
+    assert isinstance(a4, dict)
+    assert a4["fetch_failed_ratio"] == 0.4
+    assert a4["fetch_stale_minutes"] == 90
+    assert a4["account_status_codes"] == [401, 402]
+    assert a4["account_resolve_rounds"] == 2
+    assert "account_failed_ratio" not in a4
+
+
+def test_a4_unevaluated_fetch_with_items_floor_breach_points_to_pipeline_liveness() -> None:
+    signals = _normal_signals()
+    signals.fetch_evaluated = False
+    signals.fetch_stale_minutes = 200
+    signals.fetch_failed_ratio = 0.68  # stale value from the last complete round
+    signals.items_today = 0
+    signals.minutes_elapsed_today = 720
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is True
+    assert a4.severity == "page"
+    assert "fetch 维度未评估" in a4.detail
+    assert "先确认 pipeline 是否仍在跑" in a4.action
+    assert "最新一轮的 FAIL 行" not in a4.action
+    assert "items 亦已跌破 floor" in a4.action
+    # Log markers are runbook material, not push-body material.
+    assert "=== fetch OK|FAIL ===" not in a4.action
+
+
+def test_a4_zero_attempted_complete_round_is_unevaluated_not_healthy() -> None:
+    signals = _a4_account_signals(completed_at="2026-09-04T06:10:00+08:00", count=0, sources=[])
+    signals.fetch_attempted = 0
+    signals.fetch_failed_ratio = 0.0
+    signals.failed_by_status = {}
+    signals.failed_sources_by_status = {}
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is False
+    assert a4.evaluation_state == "in_progress"
+    assert a4.values["fetch_evaluated"] is False
+    assert "attempted=0" in a4.detail
+    assert "均在阈值内" not in a4.detail
+
+
+def test_a4_zero_attempted_round_does_not_count_toward_account_recovery() -> None:
+    bad = {
+        "completed_at": datetime.fromisoformat("2026-09-04T05:40:51+08:00"),
+        "attempted": 163,
+        "failed_by_status": {402: 109},
+    }
+    empty = {
+        "completed_at": datetime.fromisoformat("2026-09-04T06:10:00+08:00"),
+        "attempted": 0,
+        "failed_by_status": {},
+    }
+    healthy = {
+        "completed_at": datetime.fromisoformat("2026-09-04T06:40:00+08:00"),
+        "attempted": 163,
+        "failed_by_status": {402: 1},
+    }
+    signals = _a4_account_signals(
+        completed_at="2026-09-04T06:40:00+08:00",
+        count=1,
+        sources=["x_residual"],
+        recent_complete_fetches=[healthy, empty, bad],
+    )
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is False
+    assert a4.evaluation_state == "in_progress"
+    assert a4.values["account_healthy_rounds"] == 1
+
+
+def test_a4_account_detail_truncates_many_source_groups() -> None:
+    sources = [f"vendor{index}_feed{slot}" for index in range(14) for slot in range(5)]
+    signals = _a4_account_signals(
+        completed_at="2026-09-04T05:40:51+08:00",
+        status=402,
+        count=len(sources),
+        sources=sources,
+    )
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is True
+    assert a4.severity == "page"
+    assert a4.detail.count("源返回 402") == 5
+    assert "另有 9 组同此" in a4.detail
+    assert "等 14 组" in a4.impact
+    assert "70/163" in a4.impact
+    # Prefix groups share one remedy, so the action names them once instead of
+    # repeating a near-identical sentence per group.
+    assert a4.action.count("核对来源组") == 1
+    assert "等 14 组 各来源的配置与响应" in a4.action
+
+
+def test_a4_stale_second_round_does_not_confirm_account_recovery() -> None:
+    fresh_healthy = {
+        "completed_at": datetime.fromisoformat("2026-09-04T06:40:00+08:00"),
+        "attempted": 163,
+        "failed_by_status": {402: 1},
+    }
+    # The previous complete round predates a 2h40m outage: not sustained recovery.
+    old_healthy = {
+        "completed_at": datetime.fromisoformat("2026-09-04T04:00:00+08:00"),
+        "attempted": 163,
+        "failed_by_status": {402: 0},
+    }
+    signals = _a4_account_signals(
+        completed_at="2026-09-04T06:40:00+08:00",
+        count=1,
+        sources=["x_residual"],
+        recent_complete_fetches=[fresh_healthy, old_healthy],
+    )
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is False
+    assert a4.evaluation_state == "in_progress"
+    assert a4.values["account_healthy_rounds"] == 1
+
+
+def test_a4_single_complete_round_reports_insufficient_evidence_not_recovery() -> None:
+    healthy = {
+        "completed_at": datetime.fromisoformat("2026-09-04T06:10:00+08:00"),
+        "attempted": 163,
+        "failed_by_status": {402: 1},
+    }
+    signals = _a4_account_signals(
+        completed_at="2026-09-04T06:10:00+08:00",
+        count=1,
+        sources=["x_residual"],
+        recent_complete_fetches=[healthy],
+    )
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is False
+    assert a4.evaluation_state == "in_progress"
+    assert "已回落" not in a4.detail
+    assert "仅有 1 个可用完整 fetch 轮" in a4.detail
+
+
+def test_a4_account_page_impact_mentions_items_floor_when_both_breach() -> None:
+    signals = _a4_account_signals(completed_at="2026-09-04T05:40:51+08:00")
+    signals.items_today = 0
+    signals.minutes_elapsed_today = 720
+
+    a4 = next(result for result in evaluate_rules(signals) if result.rule_id == "A4")
+
+    assert a4.firing is True
+    assert a4.severity == "page"
+    assert a4.impact.startswith("X API 账户层失败使 109/163 个来源无法抓取文章")
+    assert "今日 items 增量已低于日内 floor" in a4.impact
+
+
+def test_a4_account_action_and_resolved_message_point_to_existing_runbook_section() -> None:
+    from airadar.admin.alerts import _format_resolved
+
+    runbook = (Path(__file__).resolve().parents[1] / "docs" / "operations" / "monitoring-alerting.md").read_text(
+        encoding="utf-8"
+    )
+    heading = "A4 账户层失败（401/402）的处置与恢复判定"
+    assert f"### {heading}" in runbook
+
+    firing = next(
+        result
+        for result in evaluate_rules(_a4_account_signals(completed_at="2026-09-04T05:40:51+08:00"))
+        if result.rule_id == "A4"
+    )
+    assert f"「{heading}」" in firing.action
+    assert "的 A4 段" not in firing.action
+
+    healthy = next(result for result in evaluate_rules(_normal_signals()) if result.rule_id == "A4")
+    resolved = _format_resolved(healthy, "2026-09-04T05:41:00+08:00")
+    assert "logs/pipeline-*.log" in resolved
+    # A4 resolves for account-layer, egress and items-floor episodes alike, so the
+    # pointer must route the reader instead of assuming the account branch.
+    assert f"「{heading}」" in resolved
+    assert "「出网 selector 的 preflight 与实际 route」" in resolved
+    # A resolved push must say whether anything is still expected of the reader.
+    assert "无需立即处置" in resolved
 
 
 @pytest.mark.parametrize(

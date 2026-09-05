@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import textwrap
 from datetime import datetime
@@ -8,6 +9,15 @@ from pathlib import Path
 from airadar.admin.alerts import AlertSignals, collect_alert_signals, evaluate_rules
 from airadar.admin.metrics import collect_metrics
 from airadar.db import migrate
+
+PIPELINE_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "pipeline_logs"
+
+
+def _copy_pipeline_fixture(source_name: str, log_dir: Path, target_name: str | None = None) -> Path:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    target = log_dir / (target_name or source_name)
+    shutil.copyfile(PIPELINE_FIXTURE_DIR / source_name, target)
+    return target
 
 
 def _seed_metrics_db(tmp_path: Path) -> Path:
@@ -124,6 +134,115 @@ def test_collect_metrics_combines_db_and_pipeline_logs_with_score_mapping(tmp_pa
     assert stages["scoring"]["latest_run_status"] == "ok"
     assert stages["scoring"]["latest_run_duration_ms"] == 120000
     assert stages["curate"]["latest_run_duration_ms"] == 90000
+
+
+def test_latest_fetch_replays_last_complete_round_and_buckets_http_statuses(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    log_dir = tmp_path / "logs"
+    _copy_pipeline_fixture("pipeline-20260904-053000.txt", log_dir, "pipeline-20260904-053000.log")
+    _copy_pipeline_fixture(
+        "pipeline-20260904-054500-before-summary.txt",
+        log_dir,
+        "pipeline-20260904-054500.log",
+    )
+    _copy_pipeline_fixture("pipeline-20260904-190000.txt", log_dir, "pipeline-20260904-190000.log")
+
+    metrics = collect_metrics(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T06:00:00+08:00"),
+    )
+
+    latest = metrics["ingestion"]["latest_fetch"]
+    assert latest is not None
+    assert latest["summary_seen"] is True
+    assert latest["attempted"] == 163
+    assert latest["failed"] == 111
+    assert latest["failed_by_status"][402] == 109
+    assert len(latest["failed_sources_by_status"][402]) == 109
+    assert latest["completed_at"] == datetime.fromisoformat("2026-09-04T05:40:51+08:00")
+    assert latest["stale_minutes"] == 19
+    assert latest["stale"] is False
+    assert latest["stale_reason"] is None
+    assert latest["stale_limit_minutes"] == 90
+
+    skewed = collect_metrics(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T05:30:00+08:00"),
+    )
+    skewed_ingestion = skewed["ingestion"]
+    assert isinstance(skewed_ingestion, dict)
+    skewed_latest = skewed_ingestion["latest_fetch"]
+    assert isinstance(skewed_latest, dict)
+    # completed_at (05:40:51) is 10+ minutes after "now": a future round is not fresh.
+    assert skewed_latest["stale_minutes"] == 0
+    assert skewed_latest["stale"] is True
+    assert skewed_latest["stale_reason"] == "future_timestamp"
+    assert metrics["ingestion"]["recent_complete_fetches"] == [
+        {
+            "completed_at": datetime.fromisoformat("2026-09-04T05:40:51+08:00"),
+            "attempted": 163,
+            "failed_by_status": {402: 109},
+        }
+    ]
+
+
+def test_fetch_summary_without_later_terminal_line_is_not_complete(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    log_dir = tmp_path / "logs"
+    log = _copy_pipeline_fixture(
+        "pipeline-20260904-054500-before-summary.txt",
+        log_dir,
+        "pipeline-20260904-054500.log",
+    )
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write("=== attempted=163 inserted=0 failed=111\n")
+
+    metrics = collect_metrics(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T06:00:00+08:00"),
+    )
+
+    latest_run = metrics["pipeline"]["latest_run"]
+    assert latest_run["fetch"]["summary_seen"] is True
+    assert latest_run["fetch"]["completed_at"] is None
+    assert metrics["ingestion"]["latest_fetch"] is None
+    assert metrics["ingestion"]["recent_complete_fetches"] == []
+
+
+def test_later_incomplete_and_preflight_fail_rounds_do_not_replace_stale_complete_fetch(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    log_dir = tmp_path / "logs"
+    _copy_pipeline_fixture("pipeline-20260904-053000.txt", log_dir, "pipeline-20260904-053000.log")
+    _copy_pipeline_fixture(
+        "pipeline-20260904-054500-before-summary.txt",
+        log_dir,
+        "pipeline-20260904-054500.log",
+    )
+    _copy_pipeline_fixture("pipeline-20260904-190000.txt", log_dir, "pipeline-20260904-190000.log")
+
+    metrics = collect_metrics(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-09-04T19:05:00+08:00"),
+    )
+
+    latest = metrics["ingestion"]["latest_fetch"]
+    assert latest is not None
+    assert latest["completed_at"] == datetime.fromisoformat("2026-09-04T05:40:51+08:00")
+    assert latest["stale_minutes"] == 804
+    assert latest["stale"] is True
 
 
 def _a2_result_from_metrics(metrics: dict[str, object]):

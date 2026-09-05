@@ -100,6 +100,25 @@ class AlertSignals:
     fetch_failed_ratio: float
     items_today: int
     minutes_elapsed_today: int = MINUTES_PER_DAY
+    # A4 fetch dimension. `fetch_evaluated` is False when the log directory has
+    # no complete fetch round (summary line followed by a `=== fetch OK|FAIL ===`
+    # terminal line) or the newest complete round is older than
+    # a4.fetch_stale_minutes — the fetch ratio is then unknown, not 0%.
+    fetch_evaluated: bool = True
+    fetch_stale_minutes: int | None = 0
+    # Why the newest complete round is not usable: "expired" | "future_timestamp".
+    fetch_stale_reason: str | None = None
+    # None = count not carried by this signal set (synthetic signals); 0 = a real
+    # complete round that tried no source, which the rule treats as unevaluated.
+    fetch_attempted: int | None = None
+    # HTTP status → failed source count / source ids, from `FAIL <src> ...
+    # Client error '<status> ...'` lines of the newest complete round.
+    failed_by_status: dict[int, int] = field(default_factory=dict)
+    failed_sources_by_status: dict[int, list[str]] = field(default_factory=dict)
+    # Newest-first summaries ({completed_at, attempted, failed_by_status}) of the
+    # most recent complete rounds; the account-layer page resolves only after two
+    # rounds with distinct completed_at are back under the ratio threshold.
+    recent_complete_fetches: list[dict[str, object]] = field(default_factory=list)
     healthz_consecutive_failures: int = 0
     stage_sample_count: dict[str, int] = field(default_factory=dict)
     server_pv: int = 0
@@ -199,6 +218,134 @@ def _daily_inserted_floor_elapsed(daily_floor: int, minutes_elapsed_today: int) 
     return int(daily_floor * elapsed / MINUTES_PER_DAY)
 
 
+A4_ACCOUNT_RUNBOOK_SECTION = "A4 账户层失败（401/402）的处置与恢复判定"
+# Push bodies are one screen: list this many per-group lines / group names and
+# summarise the rest as a count (same pattern as A7's silent-source list).
+A4_ACCOUNT_DETAIL_GROUPS = 5
+A4_ACCOUNT_IMPACT_GROUPS = 3
+A4_ACCOUNT_STATUS_LABELS: dict[int, str] = {
+    401: "401（凭证被拒）",
+    402: "402 Payment Required（付费层/额度）",
+}
+
+
+def _a4_source_group(source_id: str) -> str:
+    """Aggregate source ids by slug prefix for the message.
+
+    `x_*` sources all share one X API account (one bearer token), so that group
+    is a real account. Every other prefix is only a naming convention — e.g.
+    `google_*` are unrelated public feeds — and must not be described as one.
+    """
+    prefix = source_id.split("_", 1)[0]
+    return "X API" if prefix == "x" else prefix
+
+
+def _a4_group_is_account(group: str) -> bool:
+    return group == "X API"
+
+
+def _a4_group_label(group: str) -> str:
+    if _a4_group_is_account(group):
+        return group
+    return f"来源组 {group}（按 slug 前缀聚合，非账户身份）"
+
+
+def _int_keyed_counts(value: object) -> dict[int, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[int, int] = {}
+    for key, count in value.items():
+        try:
+            counts[int(key)] = int(count)
+        except (TypeError, ValueError):
+            continue
+    return counts
+
+
+def _account_status_codes(section: dict[str, Any]) -> list[int]:
+    raw = section.get("account_status_codes", [401, 402])
+    if not isinstance(raw, (list, tuple)):
+        return [401, 402]
+    return [int(code) for code in raw]
+
+
+def _account_failed_count(failed_by_status: object, codes: list[int]) -> int:
+    counts = _int_keyed_counts(failed_by_status)
+    return sum(counts.get(code, 0) for code in codes)
+
+
+def _a4_prefix_groups_action(status: int, groups: list[str]) -> str:
+    """One action for all prefix groups hit by `status`.
+
+    A prefix group is not an account: the remedy is to look at the sources
+    themselves (credentials only exist where a source declares required_env), so
+    the remedy is identical across groups and is written once.
+    """
+    remedy = "检查对应环境变量" if status == 401 else "检查凭证/付费层"
+    names = "、".join(groups[:A4_ACCOUNT_DETAIL_GROUPS])
+    if len(groups) > A4_ACCOUNT_DETAIL_GROUPS:
+        names += f" 等 {len(groups)} 组"
+    return f"核对来源组 {names} 各来源的配置与响应；来源有 required_env 时按 data/sources.toml {remedy}后重跑 fetch"
+
+
+def _a4_account_action(status: int, group: str) -> str:
+    if not _a4_group_is_account(group):
+        return _a4_prefix_groups_action(status, [group])
+    if status == 402:
+        return f"为 {group} 的 API 账户充值/恢复付费层后重跑 fetch"
+    if status == 401:
+        return "更换/确认 X_BEARER_TOKEN 后重跑 fetch"
+    return f"核查 {group} 的 API 账户状态（HTTP {status}）后重跑 fetch"
+
+
+def _a4_healthy_complete_rounds(
+    recent_complete_fetches: list[dict[str, object]],
+    *,
+    codes: list[int],
+    ratio_threshold: float,
+    max_gap_minutes: int = 90,
+) -> tuple[int, int]:
+    """Return (distinct complete rounds, leading rounds under the account ratio).
+
+    Rounds sharing a `completed_at` are one round: the same log evaluated twice
+    must not count as two recoveries. Rounds more than `max_gap_minutes` older
+    than the newest usable round are not consulted either.
+    """
+    seen: set[str] = set()
+    distinct = 0
+    healthy_leading = 0
+    streak_alive = True
+    newest_completed_at: datetime | None = None
+    for summary in recent_complete_fetches:
+        if not isinstance(summary, dict):
+            continue
+        completed_at = summary.get("completed_at")
+        key = completed_at.isoformat() if isinstance(completed_at, datetime) else str(completed_at)
+        if key in seen:
+            continue
+        seen.add(key)
+        attempted = int(str(summary.get("attempted", 0) or 0))
+        if attempted <= 0:
+            # A round that tried no source is no evidence either way: it must
+            # not count as a recovery round (0/0 is not 0%), nor break a streak.
+            continue
+        if isinstance(completed_at, datetime):
+            if newest_completed_at is None:
+                newest_completed_at = completed_at
+            elif (newest_completed_at - completed_at) > timedelta(minutes=max_gap_minutes):
+                # After a long outage the previous complete round may predate it
+                # by hours; a stale round is not evidence of a sustained recovery.
+                break
+        distinct += 1
+        account_failed = _account_failed_count(summary.get("failed_by_status"), codes)
+        ratio = account_failed / attempted
+        if streak_alive and ratio <= ratio_threshold:
+            healthy_leading += 1
+        else:
+            streak_alive = False
+    return distinct, healthy_leading
+
+
 def evaluate_rules(
     signals: AlertSignals,
     thresholds: dict[str, object] | None = None,
@@ -274,13 +421,95 @@ def evaluate_rules(
         daily_inserted_floor,
         signals.minutes_elapsed_today,
     )
-    a4_fetch_failed = signals.fetch_failed_ratio > a4_fetch_ratio
+    a4_stale_limit = _int_threshold(a4, "fetch_stale_minutes", 90)
+    a4_account_codes = _account_status_codes(a4)
+    a4_resolve_rounds = max(1, _int_threshold(a4, "account_resolve_rounds", 2))
+    # A complete round that attempted nothing carries no ratio: 0/0 is "unknown",
+    # not 0%. Treat it like a missing round for the fetch dimension.
+    a4_zero_attempted = signals.fetch_evaluated and signals.fetch_attempted == 0
+    a4_fetch_evaluated = signals.fetch_evaluated and not a4_zero_attempted
+    a4_attempted = signals.fetch_attempted or 0
+    # Fetch dimension is three-state: an unevaluated round (no complete round,
+    # or the newest complete round is stale) must not read as 0% failures.
+    a4_fetch_failed = a4_fetch_evaluated and signals.fetch_failed_ratio > a4_fetch_ratio
     a4_items_low = signals.items_today < daily_inserted_floor_elapsed
-    a4_firing = a4_fetch_failed or a4_items_low
+    a4_account_failed = _account_failed_count(signals.failed_by_status, a4_account_codes)
+    a4_account_ratio = a4_account_failed / a4_attempted if a4_attempted else 0.0
+    a4_account_breached = a4_fetch_evaluated and a4_account_ratio > a4_fetch_ratio
+    # Stateless hysteresis for the account-layer page: the newest two complete
+    # rounds with distinct completed_at must both be under the ratio before the
+    # rule reports healthy (which is what lets the page resolve).
+    a4_distinct_rounds, a4_healthy_rounds = _a4_healthy_complete_rounds(
+        signals.recent_complete_fetches,
+        codes=a4_account_codes,
+        ratio_threshold=a4_fetch_ratio,
+        max_gap_minutes=a4_stale_limit,
+    )
+    a4_account_pending = (
+        a4_fetch_evaluated
+        and not a4_account_breached
+        and a4_distinct_rounds > 0
+        and a4_healthy_rounds < a4_resolve_rounds
+    )
+    if a4_healthy_rounds >= a4_distinct_rounds:
+        # Every usable round is healthy but there are too few of them: that is
+        # missing evidence, not a recovery from a breach we never saw.
+        a4_pending_text = (
+            f"仅有 {a4_distinct_rounds} 个可用完整 fetch 轮，账户层恢复证据不足"
+            f"（需 {a4_resolve_rounds} 个 completed_at 不同的完整轮）"
+        )
+    else:
+        a4_pending_text = (
+            f"账户层失败已回落到 {a4_account_ratio:.1%}，"
+            f"等待第 {a4_healthy_rounds + 1} 个完整 fetch 轮确认"
+            f"（已确认 {a4_healthy_rounds}/{a4_resolve_rounds} 轮）后才 resolve"
+        )
+    a4_firing = a4_fetch_failed or a4_items_low or a4_account_breached
     a4_severity: AlertSeverity = (
-        PAGE_SEVERITY if a4_items_low or not a4_fetch_failed else NOTICE_SEVERITY
+        PAGE_SEVERITY
+        if a4_items_low or a4_account_breached or not a4_fetch_failed
+        else NOTICE_SEVERITY
     )
     a4_reasons: list[str] = []
+    a4_account_lines: list[tuple[str, str]] = []
+    a4_account_actions: list[str] = []
+    a4_account_groups: list[str] = []
+    if a4_account_breached:
+        for status in a4_account_codes:
+            status_sources = signals.failed_sources_by_status.get(status, [])
+            status_count = _int_keyed_counts(signals.failed_by_status).get(status, 0)
+            per_group: dict[str, int] = {}
+            for source_id in status_sources:
+                group = _a4_source_group(str(source_id))
+                per_group[group] = per_group.get(group, 0) + 1
+            if not per_group and status_count:
+                per_group["未知来源组"] = status_count
+            label = A4_ACCOUNT_STATUS_LABELS.get(status, f"{status}（账户层）")
+            status_prefix_groups: list[str] = []
+            for group, count in per_group.items():
+                a4_account_lines.append(
+                    (group, f"{_a4_group_label(group)}{'' if not _a4_group_is_account(group) else ' '}{count}/{a4_attempted} 源返回 {label}")
+                )
+                if _a4_group_is_account(group):
+                    action = _a4_account_action(status, group)
+                    if action not in a4_account_actions:
+                        a4_account_actions.append(action)
+                else:
+                    status_prefix_groups.append(group)
+                if group not in a4_account_groups:
+                    a4_account_groups.append(group)
+            if status_prefix_groups:
+                # Same remedy for every prefix group: one sentence naming them all.
+                a4_account_actions.append(_a4_prefix_groups_action(status, status_prefix_groups))
+        # A shared-host outage can hit dozens of one-source groups at once; the
+        # push body is one screen, so list the first few and count the rest
+        # (by group: one group can contribute a 401 line and a 402 line).
+        a4_shown_lines = a4_account_lines[:A4_ACCOUNT_DETAIL_GROUPS]
+        a4_reasons.extend(text for _group, text in a4_shown_lines)
+        a4_shown_groups = {group for group, _text in a4_shown_lines}
+        a4_hidden_groups = len([group for group in a4_account_groups if group not in a4_shown_groups])
+        if a4_hidden_groups > 0:
+            a4_reasons.append(f"另有 {a4_hidden_groups} 组同此")
     if a4_fetch_failed:
         a4_reasons.append(f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%} > {a4_fetch_ratio:.1%}")
     if a4_items_low:
@@ -288,7 +517,53 @@ def evaluate_rules(
             f"今日 items 增量 {signals.items_today} < 按日内进度 floor "
             f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}"
         )
-    if a4_items_low:
+    if a4_fetch_evaluated:
+        a4_fetch_state_text = ""
+    elif a4_zero_attempted:
+        a4_fetch_state_text = "最近完整 fetch 轮 attempted=0（没有任何来源被尝试），fetch 维度未评估"
+    elif signals.fetch_stale_reason == "future_timestamp":
+        a4_fetch_state_text = "最近完整 fetch 的时间戳在未来（时钟异常），fetch 维度未评估"
+    elif signals.fetch_stale_minutes is None:
+        a4_fetch_state_text = "无完整 fetch（日志里没有含汇总行与 fetch OK/FAIL 终态行的轮次），fetch 维度未评估"
+    else:
+        a4_fetch_state_text = (
+            f"最近完整 fetch 已过期 {signals.fetch_stale_minutes} 分钟"
+            f"（> {a4_stale_limit} 分钟），fetch 维度未评估"
+        )
+    if a4_account_breached:
+        a4_items_suffix = "；同时今日 items 增量已低于日内 floor" if a4_items_low else ""
+        a4_true_accounts = [group for group in a4_account_groups if _a4_group_is_account(group)]
+        a4_prefix_groups = [group for group in a4_account_groups if not _a4_group_is_account(group)]
+
+        def _group_list(groups: list[str], prefix: str = "") -> str:
+            # Same shape as _a4_prefix_groups_action: the prefix is written once.
+            text = prefix + "、".join(groups[:A4_ACCOUNT_IMPACT_GROUPS])
+            if len(groups) > A4_ACCOUNT_IMPACT_GROUPS:
+                text += f" 等 {len(groups)} 组"
+            return text
+
+        if a4_true_accounts:
+            # A real account (X API) is a definite verdict; prefix groups riding
+            # along must not water it down into "please check".
+            a4_impact = (
+                f"{_group_list(a4_true_accounts)} 账户层失败使 "
+                f"{a4_account_failed}/{a4_attempted} 个来源无法抓取文章"
+                + (
+                    f"；另有{_group_list(a4_prefix_groups, '来源组 ')} 返回同类状态码（非账户身份，先核对配置与响应）"
+                    if a4_prefix_groups
+                    else ""
+                )
+                + a4_items_suffix
+            )
+            a4_urgency = "是——账户层失败不会自愈，需人工恢复凭证/付费层后重跑 fetch"
+        else:
+            a4_impact = (
+                f"{_group_list(a4_prefix_groups, '来源组 ')} 返回账户层状态码（401/402），"
+                f"{a4_account_failed}/{a4_attempted} 个来源无法抓取文章"
+                f"（前缀组非账户身份，先核对配置与响应）{a4_items_suffix}"
+            )
+            a4_urgency = "是——需人工核对来源配置与响应；若确为凭证/付费问题则不会自愈"
+    elif a4_items_low:
         a4_impact = "文章更新可能停滞"
         a4_urgency = "是——需立即核查"
     elif a4_fetch_failed:
@@ -456,23 +731,57 @@ def evaluate_rules(
             title="文章摄取骤降",
             firing=a4_firing,
             detail=(
-                "；".join(a4_reasons)
+                "；".join(a4_reasons + ([a4_fetch_state_text] if a4_fetch_state_text else []))
                 if a4_reasons
                 else (
-                    f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，"
-                    f"今日 items 增量 {signals.items_today}，按日内进度 floor "
-                    f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}，均在阈值内"
+                    f"{a4_fetch_state_text}；今日 items 增量 {signals.items_today}，"
+                    f"按日内进度 floor {daily_inserted_floor_elapsed}/{daily_inserted_floor}"
+                    if a4_fetch_state_text
+                    else (
+                        f"{a4_pending_text}；"
+                        f"今日 items 增量 {signals.items_today}，按日内进度 floor "
+                        f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}"
+                        if a4_account_pending
+                        else (
+                            f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，"
+                            f"今日 items 增量 {signals.items_today}，按日内进度 floor "
+                            f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}，均在阈值内"
+                        )
+                    )
                 )
             ),
             action=(
-                "先按 error 分组读 logs/pipeline-*.log 最新一轮的 FAIL 行。"
-                "整批 ConnectError 多为出网链路：先看 === egress preflight FAIL/OK ===；"
-                "FAIL 时按 runbook 检查 selector，OK 但请求仍失败时按 hostname 查 route audit。"
-                "X 源走官方 api.x.com（另查 bearer token 与配额），微信源走 Mp2RSS。"
-                "详见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
+                "；".join(a4_account_actions)
+                + f"。详见 docs/operations/monitoring-alerting.md 的「{A4_ACCOUNT_RUNBOOK_SECTION}」。"
+                if a4_account_breached
+                else (
+                    "先确认 pipeline 是否仍在跑（A2 心跳），再看 logs/pipeline-*.log 最新一轮"
+                    "是否跑完 fetch；preflight FAIL 的轮不产生完整 fetch，按 runbook 检查 selector。"
+                    + (
+                        "items 亦已跌破 floor：若 pipeline 与 preflight 正常，再按最新完整轮的 FAIL 行分流处置。"
+                        if a4_items_low
+                        else ""
+                    )
+                    + "详见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
+                    if not a4_fetch_evaluated
+                    else (
+                        "先按 error 分组读 logs/pipeline-*.log 最新一轮的 FAIL 行。"
+                        "整批 ConnectError 多为出网链路：先看 === egress preflight FAIL/OK ===；"
+                        "FAIL 时按 runbook 检查 selector，OK 但请求仍失败时按 hostname 查 route audit。"
+                        "X 源走官方 api.x.com（另查 bearer token 与配额），微信源走 Mp2RSS。"
+                        "详见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
+                    )
+                )
             ),
             values={
                 "fetch_failed_ratio": signals.fetch_failed_ratio,
+                "fetch_evaluated": a4_fetch_evaluated,
+                "fetch_stale_minutes": signals.fetch_stale_minutes,
+                "fetch_attempted": signals.fetch_attempted,
+                "failed_by_status": dict(_int_keyed_counts(signals.failed_by_status)),
+                "account_failed_ratio": a4_account_ratio,
+                "account_healthy_rounds": a4_healthy_rounds,
+                "account_resolve_rounds": a4_resolve_rounds,
                 "items_today": signals.items_today,
                 "minutes_elapsed_today": signals.minutes_elapsed_today,
                 "daily_inserted_floor": daily_inserted_floor,
@@ -481,6 +790,11 @@ def evaluate_rules(
             severity=a4_severity,
             impact=a4_impact,
             urgency=a4_urgency,
+            evaluation_state=(
+                "in_progress"
+                if not a4_firing and (not a4_fetch_evaluated or a4_account_pending)
+                else "healthy"
+            ),
         ),
         AlertRuleResult(
             rule_id="A5",
@@ -668,6 +982,12 @@ _SCOPE_LIMITED_RESOLVED_COPY: dict[str, tuple[str, str, str]] = {
 }
 _SCOPE_LIMITED_RESOLVED_FALLBACK = ("已恢复", "；评估范围受限", "恢复证据")
 _RESOLVED_EVIDENCE_POINTERS = {
+    "A4": (
+        "无需立即处置；恢复结论只覆盖当前抓取，断流期间的缺口按 runbook 判是否补抓。"
+        "复核入口：logs/pipeline-*.log 最近完整轮的 FAIL 行与 /api/v1/admin/metrics 的 ingestion.latest_fetch；"
+        f"runbook：401/402 账户层见 docs/operations/monitoring-alerting.md 的「{A4_ACCOUNT_RUNBOOK_SECTION}」，"
+        "整批失败/出网见「出网 selector 的 preflight 与实际 route」。"
+    ),
     "A7": (
         "复核入口：logs/pipeline-*.log；runbook：docs/operations/monitoring-alerting.md "
         "的「出网 selector 的 preflight 与实际 route」。"
@@ -2405,9 +2725,44 @@ def collect_alert_signals(
     ingestion = metrics["ingestion"]
     assert isinstance(users, dict)
     assert isinstance(ingestion, dict)
-    latest_fetch = ingestion.get("latest_fetch", {})
-    attempted = int(latest_fetch.get("attempted", 0)) if isinstance(latest_fetch, dict) else 0
-    failed = int(latest_fetch.get("failed", 0)) if isinstance(latest_fetch, dict) else 0
+    latest_fetch = ingestion.get("latest_fetch")
+    a4_thresholds = _threshold_section(ALERT_THRESHOLDS, "a4")
+    fetch_stale_limit = _int_threshold(a4_thresholds, "fetch_stale_minutes", 90)
+    attempted = 0
+    failed = 0
+    fetch_stale_minutes: int | None = None
+    fetch_stale_reason: str | None = None
+    fetch_evaluated = False
+    failed_by_status: dict[int, int] = {}
+    failed_sources_by_status: dict[int, list[str]] = {}
+    if isinstance(latest_fetch, dict):
+        attempted = int(str(latest_fetch.get("attempted", 0) or 0))
+        failed = int(str(latest_fetch.get("failed", 0) or 0))
+        fetch_stale_minutes = int(str(latest_fetch.get("stale_minutes", 0) or 0))
+        # metrics owns the staleness predicate (expiry and future-timestamp
+        # tolerance); the rule only consumes its verdict.
+        fetch_evaluated = not bool(latest_fetch.get("stale", fetch_stale_minutes > fetch_stale_limit))
+        raw_reason = latest_fetch.get("stale_reason")
+        fetch_stale_reason = str(raw_reason) if raw_reason else None
+        failed_by_status = _int_keyed_counts(latest_fetch.get("failed_by_status"))
+        raw_sources_by_status = latest_fetch.get("failed_sources_by_status")
+        if isinstance(raw_sources_by_status, dict):
+            for status, sources in raw_sources_by_status.items():
+                if isinstance(sources, list):
+                    failed_sources_by_status[int(status)] = [str(source) for source in sources]
+    recent_complete_fetches: list[dict[str, object]] = []
+    raw_recent = ingestion.get("recent_complete_fetches", [])
+    if isinstance(raw_recent, list):
+        for summary in raw_recent:
+            if not isinstance(summary, dict):
+                continue
+            recent_complete_fetches.append(
+                {
+                    "completed_at": summary.get("completed_at"),
+                    "attempted": int(str(summary.get("attempted", 0) or 0)),
+                    "failed_by_status": _int_keyed_counts(summary.get("failed_by_status")),
+                }
+            )
     a7 = _threshold_section(ALERT_THRESHOLDS, "a7")
     (
         silent_sources,
@@ -2476,6 +2831,13 @@ def collect_alert_signals(
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
         items_today=int(ingestion.get("items_today") or 0),
         minutes_elapsed_today=_minutes_elapsed_today(current),
+        fetch_evaluated=fetch_evaluated,
+        fetch_stale_minutes=fetch_stale_minutes,
+        fetch_stale_reason=fetch_stale_reason,
+        fetch_attempted=attempted,
+        failed_by_status=failed_by_status,
+        failed_sources_by_status=failed_sources_by_status,
+        recent_complete_fetches=recent_complete_fetches,
         stage_sample_count=stage_sample_count,
         server_pv=int(users.get("pv") or 0),
         hours_since_successful_interpretation=hours_since_interpret,

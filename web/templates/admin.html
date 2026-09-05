@@ -145,15 +145,26 @@
           <h2>文章摄取</h2>
           <div class="metric-row">
             <div class="metric"><span class="metric-label">今日 items 增量</span><span class="metric-value">{{ ingestion.items_today }}</span></div>
-            <div class="metric"><span class="metric-label">最近一轮 inserted</span><span class="metric-value">{{ latest_fetch.inserted }}</span></div>
+            {% if latest_fetch %}
+            <div class="metric"><span class="metric-label">最近完整一轮 inserted</span><span class="metric-value">{{ latest_fetch.inserted }}</span></div>
             <div class="metric"><span class="metric-label">失败源数</span><span class="metric-value">{{ latest_fetch.failed }}</span></div>
+            {% else %}
+            <div class="metric"><span class="metric-label">最近完整一轮</span><span class="metric-value">无</span></div>
+            {% endif %}
           </div>
           <ul class="admin-list">
+            {% if latest_fetch %}
+            {% if latest_fetch.stale %}
+            <li class="status-warn">最近完整 fetch 已过期 {{ latest_fetch.stale_minutes }} 分钟（之后的轮次未走到 fetch 终态行）</li>
+            {% endif %}
             {% for source_id in latest_fetch.failed_sources[:5] %}
             <li class="status-warn">{{ source_id }}</li>
             {% else %}
-            <li class="status-ok">最近一轮无失败源</li>
+            <li class="status-ok">最近完整一轮无失败源</li>
             {% endfor %}
+            {% else %}
+            <li class="status-warn">日志里没有含汇总行与 fetch OK/FAIL 终态行的完整轮，fetch 读数未评估</li>
+            {% endif %}
           </ul>
         </article>
 

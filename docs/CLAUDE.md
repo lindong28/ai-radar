@@ -160,6 +160,7 @@
 | [20260831-8b7c-control-wechat-review-term-aliases.md](adr/20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，并保持 raw 作者优先 |
 | [20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md](adr/20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 |
 | [20260903-bc36-quota-curated-selection-by-source-form.md](adr/20260903-bc36-quota-curated-selection-by-source-form.md) | 精选按来源形态配额（X ≤20%、单源 ≤7.5%），同轮记无配额基线并支持定向回退；部分 supersede ADR-010 |
+| [20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md](adr/20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮、过期即「未评估」；401/402 账户层失败升 page 并按来源组给处置 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

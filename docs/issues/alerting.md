@@ -269,3 +269,70 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 - **现象**（2026-09-03T21:17Z → 09-04T06:17Z）：109/109 X 源每轮 `FAIL … 402 Payment Required`，`=== attempted=163 … failed=109/111` 连续 30+ 轮；现有 A 系告警没有按 HTTP 状态码分桶的维度，X 摄取归零 9 小时后才被人从日志读出（完整读数见 `archive/closed.md`「[resolved] X 源全部 402 Payment Required」）。
 - **为什么值得告警**：402/401 只能由账户持有人处理（充值/换 key），与网络层失败的处置完全不同；混在同一个 failed 计数里，读者拿不到「要做什么」。
 - **闭合方向**：fetch 汇总按状态码分桶输出（`failed_by_status={402: n, 5xx: m, …}`），当单一状态码占失败 ≥50% 且属账户层（401/402/403）时单独 page，文案指向账户而非网络；严重度/去重/文案按 `alerting-review-principles.md` 与 service-operations-protocol §6 走 `/custom:review-alerting` 落地。归属：独立单元，不在 program 20260820-content-align 内。
+
+### 出网 preflight 连续失败 2h15m 使整条 pipeline 停跑，A2 虽 page 但归因文案指向「卡死/僵尸锁」（2026-09-04 18:15–20:30）
+
+- **现象**：`logs/pipeline-20260904-{181501…203001}.log` 共 10 轮只有 `egress-preflight status=unavailable reason=status command returned 1` → `egress preflight FAIL (exit 1)`，fetch/score/curate 全未启动；20:45 轮 `status=healthy` 自愈（同类事件 09-03 06:29–07:45 也出现过）。`data/alert-events.jsonl`（键 `ts`，+08:00）：A2 page 于 19:32 firing（起停 77 分钟后，`no_success_minutes=120`）、20:05/20:38 续报，文案「最近成功 pipeline 已超过 122 分钟（期间连续 SKIP 1 次，疑似卡死/僵尸锁）」——真因是 preflight `status=unavailable`，日志里每轮都写着，告警没读它；A4 的 `latest_fetch` 读最近非 skip 轮，preflight FAIL 轮无 fetch 段、读数落回 0%（未 fire）。
+- **缺口**：不是静默，是归因——A2 把「出网 preflight 不可用」报成「疑似卡死/僵尸锁」，读者会去查锁而不是 selector（消息原则 §1：系统已算出的结论没写进消息）；且 77 分钟的探测延迟对整条 pipeline 停跑偏长。
+- **闭合方向**：① A2 的 detail/action 读最近轮的 preflight 状态行，`status=unavailable` 时归因写「出网 selector 不可用（reason=…）」并指向 selector runbook，而非「疑似卡死」；连续 ≥3 轮 preflight FAIL（45 min）可作为 A2 的提前触发；② A4/A2 的信号源不把无 fetch 段/preflight FAIL 的轮当作有效读数（与 plans/20260904-a4-account-layer-alert 的 (a) 同源，那一单元只修 A4 侧）。归属：独立单元，走 `/custom:review-alerting`。
+- **追加读数（2026-09-04 21:30–23:00，同一根因再发）**：`domain-router-error.jsonl` 记 12:33Z（20:33 本地）router 进程 `exit_code=-15` 后重启，20:45 轮恢复；21:30/21:45/22:00 三轮再 `preflight FAIL`；22:15 与 22:45 两轮 preflight `status=healthy`（policy `domain-routing-v2`）**但 fetch 阶段 162/163 源 `EgressPreflightError: status command returned 1`**——preflight 与 fetch 是两个进程、各自跑一次 `check-proxy-status`，后者那一刻 rc=1，整轮 `inserted=0`；23:00 轮再 `preflight FAIL`；23:03 起交互与非交互 shell 各三次实测 rc=0、`overall_status=healthy`（每次约 5 s）。selector 侧 `domain-router-route.jsonl` 在 15:00Z 有 2 条 `outcome=failure` 与 2 条 `selected_route=zyt-fallback`。归因候选（未证实）：Tencent 线路瞬时失败 → `tencent_status_evidence=live-provider-probe` 判 degraded → 状态命令 rc=1 → 应用 fail-closed 让整轮作废。新 A4（完整轮 + 状态码分桶）对 22:49 轮的读数是 `fetch_evaluated=True、失败率 99.4%、failed_by_status={}` → notice（非账户层），与设计一致；但「同一次瞬时探测失败让整轮 163 源全废」这一放大效应属 selector/应用 preflight 的取舍，归 system-config 与 `airadar.egress`，不在 A4 单元内。
+- **2026-09-04 23:20–09-05 07:00 续发与恢复读数**：受管 Tencent 隧道 master（`enable-proxy-tencent` 起的 pid 14796/74762，以及本 session 用逐字相同参数重建的 97908）都在建立后数分钟内停摆——ssh 与 ProxyCommand 的 `nc` 都活着、`ssh -O check` 报 Master running，但 socks/mux 不再响应；独立前台 `ssh -N -D` 隧道 3 分钟内 6/6 通；主机路由 mtu 列 1500；非交互 `check-proxy-status --repair` 两次 `repair=failed`。用户 09-05 早晨 `enable-proxy-domain-routing` 后 07:15 轮恢复（163/3 失败/35 入库）。根因未证实（候选：受管 MTU 主机路由未写入 → 大包黑洞；或守护流程干扰），归 system-config。
+
+### A4 账户层 page 的分母与"来源组"身份：按 source_id 前缀聚合不等于账户（2026-09-05）
+
+- **现象**：ADR 20260904-51d2 (b) 用「Σ(401+402 失败) / 全站 attempted > 0.4」判账户层 page，来源组只用于消息文案、按 source_id 前缀聚合。review-alerting P1 指出两向偏离：小份额账户（如 5 个源的组）100% 失效只贡献 3%，永不 page；两个各自轻微的失效（22% + 20%）跨账户、跨状态码求和可叠加成 page。
+- **决策评审读数（`plans/20260904-a4-account-layer-alert/decision-p1-per-group.md`，Codex 01a06eef…）**：「按前缀组分母」方案 6 条 blocker——前缀 ≠ 账户（`google_*` 是 5 个互不相关的公开 feed，却会被当成一个 API 账户给出充值/换凭证处置）；小组交 A7 兜底不成立（A7 要 30 天 ≥5 条 item 且静默超阈值）；ADR-008 状态机按 `rule_id+severity` 分 lifecycle、无组身份，多组先后失效串成同一 episode；新公式仍把 401+402 相加；`min_group=5` 只来自单轮拓扑；漏报无有界发现时间。
+- **闭合方向**：需要「账户身份」作为一等契约（`data/sources.toml` 的 adapter/`required_env`，不是前缀）→ metrics 按账户输出 attempted 与按状态码分桶 → 按账户 × 状态码判定 → 账户级 lifecycle 或合并规则。属新决策包 + schema 改动，用户 2026-09-05 裁决另开；本轮保留 v5 全站分母并写进 ADR 已知边界。归属：独立单元（先 `/custom:create-plan`，实现前重走 decision-review）。
+
+### 同一 X API 402 会让 A4 与 A7 各发一条 page 且处置方向冲突（2026-09-05）
+
+- **现象**：review-alerting P5：X 组 402 持续超过 A7 的静默阈值（对高频 X 账号约 6h）后，A4 以 page 发「X API 109/163 源返回 402…充值」，A7 同时以 page 发「来源静默」并给「查出网 selector」的通用文案；`_correlate_alert_results` 只覆盖 A1/A2/A5，不含 A4/A7。ADR 20260829-a7f1 的新鲜收据抑制只在 X 读取仍成功时生效，402 时不成立。
+- **闭合方向**：A7 计算静默时，对「最近一次失败可追溯到 A4 当前 firing 的同一账户/状态码」的来源标 `suppressed_by="A4"`（复用既有 carrier 模式），或让 A7 的 action 在与 A4 账户层重合时改用账户层归因。归属：与上一条同一决策包（账户身份是前提）。
+
+### A4 共享一条 lifecycle：账户层已恢复而普通 fetch 仍超阈时 resolve 被掩盖（2026-09-05）
+
+- **现象**：review-alerting P7：A4 三个子条件共享一条 page/notice lifecycle。账户层 page 宣告后，若账户已连续两轮回落但普通 `fetch_failed_ratio` 仍 > 0.4（如 egress 抖动接踵而至），本轮结果为 notice，状态机命中「已宣告 page 扛住 notice」分支——不发 resolved、不重发，运维等不到「账户已恢复」；最终 resolved 文案用那一刻的 detail，不提账户。2026-09-04 同一天先后出现 402 断流与 preflight 断流，这个交叉窗口真实存在。
+- **闭合方向**：让 lifecycle 记住触发原因标签、resolved 引用最初原因；或给账户层独立 dedup 身份。需补「账户先恢复、普通条件仍 firing」的组合测试。归属：与账户身份决策包一并处理。
+
+### A4 items 跌破 floor 时 `evaluation_state` 把「fetch 未评估」塌缩成 healthy（2026-09-05）
+
+- **现象**：review-alerting P9-F2：`evaluation_state` 只在 `not firing` 时才取 `in_progress`；fetch 未评估 + items_low 同时成立时结果 firing=True、`evaluation_state="healthy"`，尽管 `values.fetch_evaluated=false` 与 detail 文字仍在。受影响的是依赖该结构化字段的下游（`/admin` 降级栏、`_format_resolved` 分支），读消息的人不受影响。
+- **闭合方向**：允许 firing 与「部分维度未评估」并存（新增取值或独立字段）；需先确认状态机对 firing + in_progress 的投影语义。归属：独立小单元，走 `/custom:review-alerting`。
+
+### fetch 失败里无 HTTP 状态码的部分没有覆盖率提示（2026-09-05）
+
+- **现象**：review-alerting P9-F4：只有匹配 `Client error '<3 位>'` 的 FAIL 行进 `failed_by_status`；若 401/402 的错误文案形态变化（依赖库改消息、不同 HTTP 客户端），这批真实账户层失败会从 page 静默降为普通 notice，且没有信号说明「有 N 条失败未能分类」。ADR 51d2 只声明了「非 HTTP 的账户层异常走 notice」这一已知边界，未覆盖「是 HTTP 但正则不匹配」。
+- **闭合方向**：metrics 统计 `unclassified_failed = failed − Σfailed_by_status` 并透传；差额大时在 detail 提示「部分失败原因未能分类」。归属：独立小单元。
+
+### 同一 selector 事故会让 A2、A4（长期还有 A7）各自通知，无跨规则 rollup（2026-09-05）
+
+- **现象**：review-alerting P5-2：selector/preflight 故障让 fetch 阶段整批 `EgressPreflightError` 并阻断成功 pipeline——A4 经 notice debounce 通知，A2 随 120 分钟心跳过期 page，持续更久后 A7 再 page；`_correlate_alert_results` 只覆盖 A1/A2/A5。本轮 A4 不再被未完成轮重置，反而让第二条通知更可能发生。2026-09-04 21:30–23:45 的断流正是这一形态。
+- **闭合方向**：从完整轮携带规范化的 preflight/error-class/route 事故键（`egress-preflight status=unavailable reason=…` 与 FAIL 行的 error class），A2/A4/A7 键一致时合成一条带各规则症状清单的通知。归属：与「A2 归因」条同一单元。
+
+### A4 普通 fetch notice 的 fire 与 resolve 确认强度不对称（2026-09-05）
+
+- **现象**：review-alerting P7-2：notice 的 fire 要 30 分钟 debounce，但任一轮 `firing=False` 立即 resolve（`test_admin_alerts.py` 也固化了一次健康评估即 resolve）；持续故障中偶尔一个健康完整轮会发 ✅ 并把 30 分钟计时归零，交替抖动可让事故在错误 resolve 后长期静默。账户层 page 已有两轮滞回，普通 notice 没有。基线独立、边界命中。
+- **闭合方向**：resolve 也按多个 `completed_at` 不同的健康完整轮确认（复用 `account_resolve_rounds` 的机制），或 M/N 轮判据。归属：独立小单元。
+
+### review-alerting 2026-09-05 第 2 轮的基线独立发现（汇总，各自独立成立）
+
+均为本轮 A4 改动之前就存在、与 A4 diff 非边界的问题，按原则编号列出，供后续按规则逐条立项：
+
+- P1/P2：A2 的后台阶段 P95 单独命中即 page，代码注释自陈"无用户影响、总能自愈"（见 ISSUE-A14）；A7 单源到全站静默都无条件 page（见 ISSUE-A07）；A4 普通 fetch 故障靠当日累计 items floor 降为 notice，该背书不覆盖同一失败面（见 ISSUE-A09）。
+- P3：A1 标题把窗口内多数失败扩大成「上游模型不可用」且无 impact；A3 healthz-only 分支把本地探针失败写成「网站用户侧异常」（见 ISSUE-A02/A10）；A5 的 urgency 把已判定的互斥分支塞回同一句（见 ISSUE-A16）。
+- P4：A7 把需处置与「已追平无需处置」的 X 源等权放进主视图；A6 主视图同时承载结论、比较值、全部降级说明与计价方法；A5 首次处置正文塞进 breaker/错误码分流；A1 附带已排除的 schema 噪声率；所有 firing 消息把标题重复为「故障类别」一行。
+- P5：A1/A2/A5 关联器在没有共因证据（provider/model/stage 身份）时会把独立事故误压成一条；一次 pricing catalog 刷新失败按 model 扇出多条 D3 stale 通知。
+- P6：A1/A2/A3/A5/A6 的 resolved 没有「去哪看」（`_RESOLVED_EVIDENCE_POINTERS` 只有 A4/A7，边界命中）；A1 firing 无具体证据落点（见 ISSUE-A12）；A2「pipeline 最新日志」无路径；A3 5xx 支路、A5 主日志、A6 已定价成本突变的入口均为泛称。
+- P7：A4 items-floor 在每日首轮完成前把调度空窗当事故（见 ISSUE-A08）；A1/A2 rate/A3 5xx 把滑动窗口饿空当成恢复；A2 P95 单个慢样本即 page；A5 功能被关闭时把「退役」报成「恢复」；（P7 报告第 7、8 条未在本汇总展开，见 `.label-serve` 外的评审原文——本仓不保存评审输出，若要立项按原则 7 重审 A5/A6/D3 的 resolve 证据）。
+- P8：`alert-check` 的 stdout/stderr 无 rotation（见 ISSUE-A11）；D3 resolved 的 `episode_since` 固定为 `None`，无法与 firing 按 episode 配对；64 MiB 熔断触发后永久生效且不可观测；未成功投递的 fire 在 ledger 与 state 两侧都不留痕（ADR-009 有意取舍，缺"发生过"的最小可查事实）。
+- P9：A1/A2/A3 样本门不足时统一塌缩为健康并可 resolve 既有 episode（见 ISSUE-A15/A02）；A5 无法区分「明确关闭」与「启用配置丢失」；A6/D3 看不到已付费但未落 `llm_usage` 的调用（见 cost-observability ISSUE-023 相关）。
+
+### A4 单元 review-gate 保留的 LOW（2026-09-05，不阻塞）
+
+- `stages["fetch"]` 的 status/duration 取最近非 skip 轮而 processed/errors 取最近完整轮，两者可能不是同一轮（只影响 `/admin` 阶段面板与 JSON）。
+- `recent_complete_fetches` 的「最近」按文件名（启动时间）排序而非 `completed_at`；依赖 pipeline.sh 的 flock 互斥使其等价（包络内不可达，已在 `AlertSignals` 注释写明依赖）。
+- 负向对照缺口：无「403/429/5xx 不进账户层、只出 notice」的直接用例；`Server error '5xx'` 不抽取也无用例。
+- A2 的 action 只说「查看 pipeline 最新日志」，没有 `logs/pipeline-*.log` 与 runbook 指针（P6 边界命中，A4 新文案把 A2 心跳列为第一步）。
+- A4 的 resolve 消息（`_format_resolved` 通用分支）不提这次恢复的是哪个账户/状态码（本轮已加证据指针，原因标签随 lifecycle 记忆一并在上面「共享 lifecycle」条处理）。
+- 「另有 N 组同此」按组计数后，同一组的第二个状态码行（如 a 组既有 401 又有 402）不再单独显示也不计入 N；数据仍在 `values.failed_by_status`。
+- A4 resolved 的证据指针对账户层 / 出网两条路径并列给出、不按触发分支收窄（中性入口是有意选择，分支记忆见「共享 lifecycle」条）。

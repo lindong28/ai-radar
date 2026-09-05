@@ -171,6 +171,9 @@ def test_admin_page_renders_four_dashboard_sections(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "用户量" in response.text
     assert "文章摄取" in response.text
+    # No pipeline log in tmp_path → no complete fetch round → the panel must say
+    # so instead of rendering 0 / 500-ing on a None latest_fetch.
+    assert "fetch 读数未评估" in response.text
     assert "Pipeline 阶段健康" in response.text
     assert "当前告警" in response.text
     assert "公开页面性能" in response.text

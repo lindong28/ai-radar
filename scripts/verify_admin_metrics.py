@@ -90,13 +90,18 @@ def parse_pipeline_start(path: Path) -> datetime | None:
 
 
 def parse_pipeline_ts(value: str) -> datetime | None:
-    parsed = parse_dt(value)
-    if parsed is not None:
-        return parsed
+    # pipeline.sh writes naive local (Asia/Shanghai) timestamps; an explicit
+    # offset or Z is honoured as-is. Mirrors airadar.admin.metrics.
     try:
-        return datetime.fromisoformat(value).replace(tzinfo=SHANGHAI_TZ)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SHANGHAI_TZ)
+    return parsed.astimezone(SHANGHAI_TZ)
+
+
+FETCH_HTTP_STATUS_RE = re.compile(r"Client error '(?P<status>\d{3})")
 
 
 def parse_pipeline_log(path: Path) -> dict[str, Any]:
@@ -112,8 +117,12 @@ def parse_pipeline_log(path: Path) -> dict[str, Any]:
             "attempted": 0,
             "inserted": 0,
             "failed": 0,
+            "summary_seen": False,
+            "completed_at": None,
             "ok_sources": 0,
             "failed_sources": [],
+            "failed_by_status": {},
+            "failed_sources_by_status": {},
             "sources": [],
         },
     }
@@ -146,6 +155,8 @@ def parse_pipeline_log(path: Path) -> dict[str, Any]:
                 entry["status"] = "ok" if event == "ok" else "fail"
                 if ts is not None and stage in starts:
                     entry["duration_ms"] = int((ts - starts[stage]).total_seconds() * 1000)
+                if stage == "fetch" and fetch["summary_seen"] and ts is not None:
+                    fetch["completed_at"] = ts
             continue
         if ok_match := FETCH_OK_RE.match(line):
             source = {
@@ -158,19 +169,26 @@ def parse_pipeline_log(path: Path) -> dict[str, Any]:
             fetch["sources"].append(source)
             continue
         if fail_match := FETCH_FAIL_RE.match(line):
+            error = fail_match.group("error")
             source = {
                 "source_id": fail_match.group("source"),
                 "fetched": 0,
                 "inserted": 0,
-                "error": fail_match.group("error"),
+                "error": error,
             }
             fetch["failed_sources"].append(fail_match.group("source"))
             fetch["sources"].append(source)
+            status_match = FETCH_HTTP_STATUS_RE.search(error)
+            if status_match:
+                status = int(status_match.group("status"))
+                fetch["failed_by_status"][status] = fetch["failed_by_status"].get(status, 0) + 1
+                fetch["failed_sources_by_status"].setdefault(status, []).append(fail_match.group("source"))
             continue
         if summary_match := FETCH_SUMMARY_RE.match(line):
             fetch["attempted"] = int(summary_match.group("attempted"))
             fetch["inserted"] = int(summary_match.group("inserted"))
             fetch["failed"] = int(summary_match.group("failed"))
+            fetch["summary_seen"] = True
             continue
         if stage_match := STAGE_SUMMARY_RE.match(line):
             stage = dashboard_stage(stage_match.group("stage"))
@@ -259,6 +277,38 @@ def latest_non_skip_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not run.get("skip"):
             return run
     return runs[-1] if runs else None
+
+
+def latest_complete_fetch(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Newest fetch block that has both the summary line and a later terminal line.
+
+    Same contract as airadar.admin.metrics: incomplete or preflight-failed rounds
+    never replace the last complete reading, and no complete round means None.
+    """
+    for run in reversed(runs):
+        fetch = run.get("fetch")
+        if isinstance(fetch, dict) and fetch.get("summary_seen") and isinstance(fetch.get("completed_at"), datetime):
+            return fetch
+    return None
+
+
+STALE_KEYS = ("stale_minutes", "stale_limit_minutes", "stale", "stale_reason")
+
+
+def expected_latest_fetch_payload(fetch: dict[str, Any] | None) -> dict[str, Any] | None:
+    if fetch is None:
+        return None
+    payload = {key: value for key, value in fetch.items() if key not in STALE_KEYS}
+    completed_at = payload.get("completed_at")
+    if isinstance(completed_at, datetime):
+        payload["completed_at"] = completed_at.isoformat()
+    return payload
+
+
+def strip_stale_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: val for key, val in value.items() if key not in STALE_KEYS}
+    return value
 
 
 def today_pipeline_inserted(runs: list[dict[str, Any]], start: datetime, end: datetime) -> int:
@@ -374,8 +424,30 @@ def main() -> int:
 
     runs = load_pipeline_runs(args.pipeline_log_dir)
     latest = latest_non_skip_run(runs)
-    expected_fetch = latest["fetch"] if latest else {"attempted": 0, "inserted": 0, "failed": 0, "ok_sources": 0, "failed_sources": [], "sources": []}
-    check("ingestion.latest_fetch", expected_fetch, actual["ingestion"]["latest_fetch"], failures)
+    complete_fetch = latest_complete_fetch(runs)
+    actual_latest_fetch = actual["ingestion"]["latest_fetch"]
+    # stale_* depend on the server's evaluation instant, so they are checked
+    # for internal consistency rather than against a value recomputed here.
+    check("ingestion.latest_fetch", expected_latest_fetch_payload(complete_fetch), strip_stale_keys(actual_latest_fetch), failures)
+    if isinstance(actual_latest_fetch, dict):
+        stale_minutes = actual_latest_fetch.get("stale_minutes")
+        stale_limit = actual_latest_fetch.get("stale_limit_minutes")
+        check("ingestion.latest_fetch.stale_minutes_is_non_negative_int", True, isinstance(stale_minutes, int) and stale_minutes >= 0, failures)
+        stale_reason = actual_latest_fetch.get("stale_reason")
+        check(
+            "ingestion.latest_fetch.stale_matches_reason",
+            stale_reason is not None,
+            actual_latest_fetch.get("stale"),
+            failures,
+        )
+        if stale_reason != "future_timestamp":
+            check(
+                "ingestion.latest_fetch.stale_matches_limit",
+                isinstance(stale_minutes, int) and isinstance(stale_limit, int) and stale_minutes > stale_limit,
+                actual_latest_fetch.get("stale"),
+                failures,
+            )
+    expected_fetch = complete_fetch or {"attempted": 0, "inserted": 0, "failed": 0, "ok_sources": 0, "failed_sources": [], "sources": []}
     emit_fetch_consistency(expected_fetch, int(actual["ingestion"]["items_today"]), today_pipeline_inserted(runs, start, end), failures)
 
     expected_db_stages = evaluation_stage_metrics(args.db, start, end)

@@ -44,6 +44,14 @@ ALERT_THRESHOLDS: dict[str, object] = {
     },
     "a4": {
         "fetch_failed_ratio": 0.4,
+        "fetch_stale_minutes": 90,
+        "account_status_codes": [401, 402],
+        # The account-layer page resolves only after this many complete fetch
+        # rounds (distinct completed_at) are back under fetch_failed_ratio. Read
+        # by both metrics (how many rounds to expose) and the A4 rule, so it
+        # must not be overridden per evaluate_rules() call: metrics would keep
+        # exposing the global count and the rule could then never resolve.
+        "account_resolve_rounds": 2,
         "daily_inserted_floor": 127,
         # Fetch sources (esp. the X/nitter feeds) can flap for one round, while
         # a real items-floor breach must page immediately.
