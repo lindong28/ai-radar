@@ -8,6 +8,22 @@
 - Solution: 摘要正文必须从文件读，不从 stdout 取——`src/airadar/interpret/runner.py:_summarize_item` 先 `summary_payload.get("result")` 拿元数据（L487）、`summary_payload.get("batch_dir")` 拿目录（L492），再 `_read_summary_file(_summary_path(batch_dir, batch_slug))` 从 `<batch_dir>/<slug>_summary.md` 读正文（L498）。另一条省钱路径：先 `run.sh --check-url <url>` 探测；若 URL 已在 KB，返回里带 `summary_file_path`（fallback `summary_file`），直接读该文件复用已有摘要，**不重跑 LLM**（runner.py L456-484：命中即 `save_decision=True` / `kb_synced=True` / `saved=False`）。
 - Applies when: 改 interpret runner、或新接入任何复用 ai-assistant `summarize.sh` / `run.sh` 的集成时——不要假设 stdout 自带正文，正文一律走 `<batch_dir>/<slug>_summary.md`；处理已可能在 KB 的 URL 时先 `--check-url` 走缓存，省一次 LLM 调用。这是 ai-assistant 的接口约定，从 runner.py 调用代码本身看不出来，需要知道上游 stdout schema 的设计。
 
+## 2026-09-05 在自己的 shell 里手工调组件函数诊断 selector，会得出与真实入口相反的结论
+
+`check-proxy-status` 间歇返回 1 时，我为定位是哪个组件失败，在 `zsh -fc 'source ~/.zshrc'` 里逐个调 `_gcp_tunnel_alive` / `_domain_routing_probe_gcp_component`，读到 gcp 组件 exit 1、`ssh -O check` exit 255、控制 socket 文件不存在，据此判定「GCP 隧道脱管」并进一步判定 `check-proxy-status --repair` 谎报成功。
+
+**三条结论全是假的。** 真实入口 `_domain_routing_live_status` 在起探测前先跑 `_gcp_select_target sg-standard`（zshrc:3457），把 `GCP_CTL` 切到 `tunnel-sg-standard.sock`；而我的 shell 里 `GCP_TARGET` 是 `agent-proxy-runtime.sh:230` 的模块默认值 `sg`，`GCP_CTL` 因此指向 `tunnel.sock`——一个不存在的路径。按真实顺序补上 `_gcp_select_target sg-standard` 后重测，三个组件全部 exit 0，`ssh -O check` 用正确 ControlPath 返回 `Master running (pid=43986)`。
+
+教训：**这些组件函数依赖调用前设置的模块级状态，脱离真实调用序列单独调用不构成对它们的观测**。要定位间歇失败，应在真实入口内加逐组件耗时/退出码留痕，而不是在外部 shell 里复现调用。判据是「我这次调用的前置状态，和真实路径调用它时一样吗」——答不出就别把读数当证据。
+
+## 2026-09-05 egress 前置的收窄点不在退出码闸，而在 `_REQUIRED_VALUES`
+
+`docs/issues/general.md` 记的闭合方向是「把前置收窄到 `parse_proxy_status` 用到的字段」。照字面改 `require_selector_policy()` 的 `returncode != 0` 分支是**空操作**：`parse_proxy_status` 的 `_REQUIRED_VALUES` 本身就要求 `gcp_sg_standard_status: "healthy"`、`tencent_status: "healthy"`、`direct_status: "healthy"`、`overall_status: "healthy"`——任一路由不健康它照样拒绝。
+
+真要收窄得动 `_REQUIRED_VALUES`，而那是安全边界：attestation 的意义就是证明流量确实走了受管路由。动它之前必须先回答「某条路由不健康时 selector 会不会静默回落直连」。该问题可由 `agent-proxy-route-audit` 回答——它给出 `expected_route` / `selected_route` / `error_class`，是权威归因，比一次 curl 的 http 码强得多。
+
+改 `src/airadar/egress.py` 会改变 `egress_implementation_sha256`、使收据失效并需重新 attestation，所以别为了一个未经验证的假设去改它。
+
 ## 2026-09-05 `/wechat` 停更而抓取正常时，先查 interpret 的 egress 收据闸——它 fail-closed 且干净退出 0
 
 - **Problem**: `/wechat` 只显示有解读的文章（`JOIN wechat_interpretations WHERE save_decision=1`），所以「抓取入库正常、页面停更」这个组合的第一嫌疑不是抓取层，而是 `interpret`。该阶段的前置校验一旦不通过就**干净退出 0、一个外部脚本都不启动**，pipeline 仍打印 `=== interpret OK ===`，A1–A7 全部沉默。实测代价：2026-09-01 15:00 起连续跳过 138 轮、215 篇微信文章无解读，无任何告警，直到用户肉眼发现页面不动。

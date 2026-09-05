@@ -2,6 +2,22 @@
 
 > Append-only. 部署和调度相关的坑点和 pattern.
 
+## 2026-09-05 容器有 restart 策略不等于重启后会回来——daemon 本身也要有人启动
+
+`/wechat` 停更五天，根因是 Aug 31 21:49 那次重启后 OrbStack 没有自启（`uptime` 与停更窗口精确吻合，且 `~/Library/LaunchAgents` 下当时没有任何 OrbStack 条目）。Wechat2RSS 容器一直带着 `restart=unless-stopped`，但那条策略只在 Docker daemon 起来之后才起作用——daemon 不启动，它一次也不会被求值。
+
+修法是 `./install.sh orbstack`：一个登录时跑 `orbctl start` 的 LaunchAgent。**不要指望 OrbStack 自带的 `app.start_at_login`**：`orbctl config set app.start_at_login true` 退出 0 而回读仍是 `false`，磁盘上也找不到该键——它只能从图形界面改，而这套部署的前提正是不依赖图形界面。
+
+验证要覆盖真正起作用的那条路径：`launchctl print` 显示 `last exit code = 0` 只证明了 OrbStack 已在跑时的 no-op 分支。要证明它能**从停止状态**启动，得清空日志 → `orbctl stop` → 确认 `Stopped` → **单次** `kickstart`（带 `-k` 会让 job 跑两次，stderr 里那句 `already running` 会污染归因）→ 回读 `Running` 且 agent 输出为空。
+
+## 2026-09-05 给 ai-radar 加一个 launchd 服务要改七处，而 plan 文档只写了三处
+
+`docs/plans/20260601-monitoring-alerting/plan.md` 记的是「三个 dispatch 点对称闭合」（install.sh / uninstall.sh / status.sh）。实际注册面是七处：另有 `deploy/lib/services.sh` 的 `ALL_SERVICES`、`service_label`、`service_plist_name`、服务描述表、`service_dependency_missing_reason`，以及三份 usage 注释。
+
+漏掉 `service_label` 的症状具有误导性——`./status.sh <slug>` 报 `status unavailable (unsafe HOME)`，因为 `service_launch_agent_path` 在标签为空时提前返回，而它的错误文案说的是 HOME。查的时候别从 HOME 入手。
+
+`deploy/launchd/*.plist` 被 `.gitignore` 覆盖，仓内只跟踪 `.example`；实例文件由 `install.sh` 从模板生成。
+
 ## 2026-05-15 非交互调度不会继承 shell 环境变量
 
 - Problem: cron/launchd 触发的 pipeline 不继承当前 shell session 中 `export` 的 API key。首次 launchd RunAtLoad 因缺少 `DEEPSEEK_API_KEY` 导致 enrich 阶段逐条报错。临时用 `launchctl setenv` 注入后才通过。

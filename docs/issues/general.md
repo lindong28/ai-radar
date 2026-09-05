@@ -6,6 +6,21 @@
 
 **迁出记录 2026-09-05**：用户点名的「interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态」在本分支基线中尚无条目；本轮已补录完整事实并直接按终态生命周期写入 [`archive/closed.md`](archive/closed.md)，未把已闭合事项留在 open 清单。
 
+## [open] ISSUE-GENERAL-20260905-e7a1 · `check-proxy-status` 间歇返回 1 会静默停掉整轮 pipeline
+
+- **现象**：2026-09-05 20:45、21:00 两轮 `=== egress preflight FAIL (exit 1) ===`，interpret/enrich 一个都没跑；21:15 起自行恢复。同日 15:00 轮也失败过一次。
+- **未定位**：事后按真实入口 `check-proxy-status --format=kv` 连测 10 次全部 exit 0（耗时 5.2–7.7 秒，它做多个带超时的真实网络探测），**复现不出**。失败时 stderr 无任何 `✗`/`⚠` 行，故也拿不到否决项。
+- **已排除**：不是 GCP 隧道问题——隧道健康且可管理（`ssh -O check` 用 `tunnel-sg-standard.sock` 返回 `Master running`），`agent-proxy-route-audit` 证明流量走了正确路由。先前判定的「隧道脱管」源于诊断方法错误，见 `docs/experiences/integration.md` 同日条目。
+- **闭合方向**：在 `_domain_routing_live_status` 内对四个组件探测各留一行退出码与耗时（该函数已并行起它们，加留痕不改语义），让下次失败当场可归因。**不要**在外部 shell 手工调组件函数复现——那会因模块级状态不同而得出相反结论。
+- **影响**：每次发生丢一轮抓取与解读；下一轮会重试，故表现为积压偶尔停滞而非持续中断。
+
+## [open] ISSUE-GENERAL-20260905-b3f2 · `check-gcp-server-status` 报 TERMINATED 与工作中的隧道矛盾
+
+- **现象**：`check-gcp-server-status sg` 报 `instance_status=TERMINATED`、`tunnel=down`、`vm_usage_billing=no`，同一时刻经 `GCP_PROXY` 直测 `api.openai.com/v1/models` 返回 401（该代码判健康的信号），`ssh -O check` 报 `Master running (pid=43986)`，`agent-proxy-route-audit` 确认 gcp-sg-standard 路由被正确选中。
+- **另一半读数**：`nc -z 35.198.217.6 22` 不可达、直连 ssh 超时——新连接建不起来，而既有的 multiplexed 会话仍在工作。
+- **未解决**：不清楚是 status 查询指向了错误/陈旧的实例记录，还是实例确已终止而既有连接尚未断。**它不是 2026-09-05 生产中断的原因**（见上一条）。
+- **风险**：若实例确已终止，现有隧道断开后将无法重建，届时 17 个 gcp-sg-standard 路由域名全部不可达。
+
 ## [open] AI Assistant contract 对 archive import receipt 使用了无限定的 `receipt`
 
 - Type: documentation / terminology · Priority: low · Discovered: 2026-09-05 selector receipt contract review（基线独立、非本任务边界）
