@@ -551,6 +551,371 @@ def test_fixed_page_rules_preserve_success_cooldown_and_resolve_timing(
     assert f"✅ {rule_id}" in deliveries[-1][0]
 
 
+def test_w1_suppresses_only_causally_attributed_a2_heartbeat(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    run_alert_results_state_machine(
+        [
+            AlertRuleResult(
+                "W1",
+                "微信全文浏览器依赖不可用",
+                True,
+                "status=unavailable",
+                "安装 Chromium",
+            )
+        ],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=_recording_sender(deliveries),
+    )
+    signals = _normal_signals()
+    signals.minutes_since_successful_pipeline = 180
+    signals.last_successful_pipeline_at = now - timedelta(minutes=59)
+    signals.browser_preflight_only_failed_runs = 55
+    signals.a5_enabled = True
+    signals.hours_since_successful_interpretation = 5.0
+    signals.wechat_pending_count = 2
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(hours=2, minutes=1),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    a2 = next(row for row in result["results"] if row["rule_id"] == "A2")
+    assert a2["firing"] is True
+    assert a2["suppressed_by"] == "W1"
+    assert "55 轮非 SKIP" in a2["suppression_reason"]
+    a5 = next(row for row in result["results"] if row["rule_id"] == "A5")
+    assert a5["firing"] is True
+    assert a5["suppressed_by"] is None
+    assert len(deliveries) == 2
+    rows = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    suppressed = [row for row in rows if row["type"] == "suppressed"]
+    assert {row["rule_id"] for row in suppressed} == {"A2"}
+    assert all(row["carrier"] == "W1" for row in suppressed)
+
+
+def test_w1_does_not_suppress_a2_heartbeat_that_breached_before_it(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    w1_started = datetime.fromisoformat("2026-09-04T11:01:00+08:00")
+    run_alert_results_state_machine(
+        [AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")],
+        state_path=state_path,
+        event_path=event_path,
+        now=w1_started,
+        send=_recording_sender(deliveries),
+    )
+    signals = _normal_signals()
+    signals.minutes_since_successful_pipeline = 182
+    signals.last_successful_pipeline_at = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    signals.browser_preflight_only_failed_runs = 1
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=w1_started + timedelta(minutes=1),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    a2 = next(row for row in result["results"] if row["rule_id"] == "A2")
+    assert a2["firing"] is True
+    assert a2["suppressed_by"] is None
+    assert len(deliveries) == 2
+
+
+def test_w1_does_not_suppress_a2_when_exact_heartbeat_breach_precedes_it_by_seconds(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    last_success = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    w1_started = datetime.fromisoformat("2026-09-04T10:00:30+08:00")
+    run_alert_results_state_machine(
+        [AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")],
+        state_path=state_path,
+        event_path=event_path,
+        now=w1_started,
+        send=_recording_sender(deliveries),
+    )
+    signals = _normal_signals()
+    signals.minutes_since_successful_pipeline = 121
+    signals.last_successful_pipeline_at = last_success
+    signals.browser_preflight_only_failed_runs = 1
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=w1_started + timedelta(minutes=1),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    a2 = next(row for row in result["results"] if row["rule_id"] == "A2")
+    assert a2["firing"] is True
+    assert a2["suppressed_by"] is None
+    assert len(deliveries) == 2
+
+
+def test_w1_does_not_suppress_a5_that_started_before_browser_incident(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    signals = _normal_signals()
+    signals.a5_enabled = True
+    signals.hours_since_successful_interpretation = 5.0
+    signals.wechat_pending_count = 2
+    run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+    run_alert_results_state_machine(
+        [AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=1),
+        send=_recording_sender(deliveries),
+    )
+    signals.minutes_since_successful_pipeline = 180
+    signals.last_successful_pipeline_at = now + timedelta(hours=2, minutes=2) - timedelta(minutes=180)
+    signals.browser_preflight_only_failed_runs = 3
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(hours=2, minutes=2),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    a2 = next(row for row in result["results"] if row["rule_id"] == "A2")
+    a5 = next(row for row in result["results"] if row["rule_id"] == "A5")
+    assert a2["suppressed_by"] == "W1"
+    assert a5["firing"] is True
+    assert a5["suppressed_by"] is None
+    rows = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    assert any(row["type"] == "suppressed" and row["rule_id"] == "A2" for row in rows)
+    assert not any(row["type"] == "suppressed" and row["rule_id"] == "A5" for row in rows)
+
+
+def test_w1_does_not_suppress_other_failure_surfaces_during_browser_incident(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    run_alert_results_state_machine(
+        [AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=_recording_sender(deliveries),
+    )
+    signals = _normal_signals()
+    signals.minutes_since_successful_pipeline = 420
+    signals.last_successful_pipeline_at = now
+    signals.browser_preflight_only_failed_runs = 28
+    signals.items_today = 0
+    signals.minutes_elapsed_today = 720
+    signals.silent_sources = [("wx_test", "测试公众号", 7.0, 6.0)]
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(hours=7),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    results = {row["rule_id"]: row for row in result["results"]}
+    assert results["A2"]["suppressed_by"] == "W1"
+    assert results["A4"]["suppressed_by"] is None
+    assert results["A7"]["suppressed_by"] is None
+    assert len(deliveries) == 3
+
+
+def test_w1_does_not_use_first_alert_observation_as_downstream_symptom_onset(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    run_alert_results_state_machine(
+        [AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=_recording_sender(deliveries),
+    )
+    signals = _normal_signals()
+    signals.minutes_since_successful_pipeline = 180
+    signals.last_successful_pipeline_at = now + timedelta(hours=2, minutes=1) - timedelta(minutes=180)
+    signals.browser_preflight_only_failed_runs = 3
+    signals.a5_enabled = True
+    signals.hours_since_successful_interpretation = 5.0
+    signals.wechat_pending_count = 2
+    signals.silent_sources = [("wx_test", "测试公众号", 7.0, 6.0)]
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(hours=2, minutes=1),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    results = {row["rule_id"]: row for row in result["results"]}
+    assert results["A2"]["suppressed_by"] == "W1"
+    assert results["A5"]["suppressed_by"] is None
+    assert results["A7"]["suppressed_by"] is None
+
+
+def test_w1_does_not_suppress_downstream_alerts_that_started_before_it(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    signals = _normal_signals()
+    signals.items_today = 0
+    signals.minutes_elapsed_today = 720
+    signals.silent_sources = [("wx_test", "测试公众号", 7.0, 6.0)]
+    run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+    run_alert_results_state_machine(
+        [AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=1),
+        send=_recording_sender(deliveries),
+    )
+    signals.minutes_since_successful_pipeline = 480
+    signals.last_successful_pipeline_at = now + timedelta(hours=7, minutes=2) - timedelta(minutes=480)
+    signals.browser_preflight_only_failed_runs = 28
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(hours=7, minutes=2),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    results = {row["rule_id"]: row for row in result["results"]}
+    assert results["A2"]["suppressed_by"] == "W1"
+    assert results["A4"]["suppressed_by"] is None
+    assert results["A7"]["suppressed_by"] is None
+
+
+def test_w1_new_episode_pages_inside_previous_episode_cooldown(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    firing = AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")
+    resolved = AlertRuleResult("W1", "浏览器", False, "present", "无需处置")
+
+    run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=_recording_sender(deliveries),
+    )
+    run_alert_results_state_machine(
+        [resolved],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=10),
+        send=_recording_sender(deliveries),
+    )
+    recurring = run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=15),
+        send=_recording_sender(deliveries),
+    )
+    reminder = run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=20),
+        send=_recording_sender(deliveries),
+    )
+
+    assert recurring["sent_count"] == 1
+    assert reminder["sent_count"] == 0
+    assert [severity for _text, severity in deliveries] == ["page", "notice", "page"]
+
+
+def test_w1_does_not_suppress_a2_stage_failure(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-04T08:00:00+08:00")
+    run_alert_results_state_machine(
+        [AlertRuleResult("W1", "浏览器", True, "unavailable", "安装")],
+        state_path=state_path,
+        event_path=event_path,
+        now=now,
+        send=_recording_sender(deliveries),
+    )
+    signals = _normal_signals()
+    signals.minutes_since_successful_pipeline = 180
+    signals.last_successful_pipeline_at = now + timedelta(hours=3) - timedelta(minutes=180)
+    signals.browser_preflight_only_failed_runs = 3
+    signals.stage_error_rate["prefilter"] = 0.8
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=event_path,
+        now=now + timedelta(minutes=1),
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+    a2 = next(row for row in result["results"] if row["rule_id"] == "A2")
+    assert a2["firing"] is True
+    assert a2["suppressed_by"] is None
+    assert any("🔴 A2" in text for text, _severity in deliveries)
+
+
 def _a4_firing() -> AlertSignals:
     signals = _normal_signals()
     signals.fetch_failed_ratio = 0.8  # > a4 fetch_failed_ratio threshold (0.4)
@@ -3625,7 +3990,10 @@ def test_notification_ledger_failure_survives_raising_logging_handler(
     assert state["announced"] is True
 
 
-@pytest.mark.parametrize("alias_case", ["same", "state-is-lock", "event-is-own-lock"])
+@pytest.mark.parametrize(
+    "alias_case",
+    ["same", "state-is-lock", "event-is-own-lock", "state-lock-is-ledger-lock"],
+)
 def test_notification_ledger_rejects_state_event_and_lock_path_aliases(
     tmp_path: Path,
     alias_case: str,
@@ -3636,11 +4004,14 @@ def test_notification_ledger_rejects_state_event_and_lock_path_aliases(
         event_path = state_path
     elif alias_case == "state-is-lock":
         state_path = event_path.with_suffix(".lock")
+    elif alias_case == "state-lock-is-ledger-lock":
+        state_path = tmp_path / "alert-state"
+        event_path = tmp_path / "alert-state.events"
     else:
         event_path = tmp_path / "alert-events.lock"
     calls: list[tuple[str, str]] = []
 
-    with pytest.raises(ValueError, match="state_path, event_path, and ledger lock path must be distinct"):
+    with pytest.raises(ValueError, match="state_path, event_path, state lock path, and ledger lock path"):
         run_alert_results_state_machine(
             [_ledger_result("ALIAS")],
             state_path=state_path,

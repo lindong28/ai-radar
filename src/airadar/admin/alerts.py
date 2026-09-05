@@ -32,10 +32,11 @@ from .cost_report import (
     _window_metering,
     evaluate_a6_cost,
 )
-from .metrics import SHANGHAI_TZ, _parse_dt, collect_metrics
+from .metrics import SHANGHAI_TZ, _load_pipeline_runs, _parse_dt, collect_metrics
 from .thresholds import ALERT_THRESHOLDS
 
 RULESET = ("A1", "A2", "A3", "A4", "A5", "A6", "A7")
+WECHAT_BROWSER_PREFLIGHT_RULE_ID = "W1"
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
 DEFAULT_EVENT_PATH = db.PROJECT_ROOT / "data" / "alert-events.jsonl"
 COOLDOWN = timedelta(minutes=30)
@@ -100,6 +101,7 @@ class AlertSignals:
     server_error_rate: float
     fetch_failed_ratio: float
     items_today: int
+    last_successful_pipeline_at: datetime | None = None
     minutes_elapsed_today: int = MINUTES_PER_DAY
     # A4 fetch dimension. `fetch_evaluated` is False when the log directory has
     # no complete fetch round (summary line followed by a `=== fetch OK|FAIL ===`
@@ -169,6 +171,7 @@ class AlertSignals:
     # metadata, not unevaluable observations: A7 uses them only to close an
     # already-announced episode without claiming recovery.
     paused_source_ids: list[str] = field(default_factory=list)
+    browser_preflight_only_failed_runs: int = 0
 
 
 @dataclass(frozen=True)
@@ -970,13 +973,9 @@ def _format_firing(result: AlertRuleResult) -> str:
         lines.append(f"影响：{result.impact}")
     if result.urgency:
         lines.append(f"需否立即处置：{result.urgency}")
-    lines.extend(
-        (
-            f"故障类别：{result.title}",
-            f"具体故障对象/数值：{result.detail}",
-            f"处置方向：{result.action}",
-        )
-    )
+    if result.rule_id != WECHAT_BROWSER_PREFLIGHT_RULE_ID:
+        lines.append(f"故障类别：{result.title}")
+    lines.extend((f"具体故障对象/数值：{result.detail}", f"处置方向：{result.action}"))
     return "\n".join(lines)
 
 
@@ -1004,7 +1003,11 @@ _RESOLVED_EVIDENCE_POINTERS = {
     "A7": (
         "复核入口：logs/pipeline-*.log；runbook：docs/operations/monitoring-alerting.md "
         "的「出网 selector 的 preflight 与实际 route」。"
-    )
+    ),
+    "W1": (
+        "复核入口：logs/pipeline-*.log；runbook：docs/operations/monitoring-alerting.md "
+        "的「微信 Chromium 前置检查」。"
+    ),
 }
 
 
@@ -1025,21 +1028,64 @@ def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
             f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title}：{headline}{suffix}{caveat}\n"
             f"{evidence_label}：{result.detail}{pointer_suffix}"
         )
+    action_suffix = (
+        f"\n处置方向：{result.action}"
+        if result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID
+        else ""
+    )
     return (
         f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}\n"
-        f"恢复证据：{result.detail}{pointer_suffix}"
+        f"恢复证据：{result.detail}{pointer_suffix}{action_suffix}"
     )
 
 
+def _correlate_wechat_browser_preflight_result(
+    results: list[AlertRuleResult],
+    *,
+    browser_preflight_carrier_active: bool,
+    browser_preflight_blocked_runs: int,
+    a2_heartbeat_only: bool,
+    browser_preflight_started_before_heartbeat_breach: bool,
+) -> list[AlertRuleResult]:
+    if not (
+        browser_preflight_carrier_active
+        and browser_preflight_blocked_runs > 0
+        and a2_heartbeat_only
+        and browser_preflight_started_before_heartbeat_breach
+    ):
+        return results
+    return [
+        replace(
+            result,
+            suppressed_by=WECHAT_BROWSER_PREFLIGHT_RULE_ID,
+            suppression_reason=(
+                f"最近成功 pipeline 后 {browser_preflight_blocked_runs} 轮非 SKIP "
+                "运行均终止于 wechat_browser_preflight FAIL，且把心跳年龄置 0 后 "
+                "A2 不再 firing，W1 episode 也不晚于 A2 heartbeat 阈值越线；"
+                "同一阻断事故由 W1 合并通知"
+            ),
+        )
+        if result.rule_id == "A2" and result.firing
+        else result
+        for result in results
+    ]
+
+
 def _correlate_alert_results(
-    results: list[AlertRuleResult], *, heartbeat_fresh: bool
+    results: list[AlertRuleResult],
+    *,
+    heartbeat_fresh: bool,
 ) -> list[AlertRuleResult]:
     by_id = {result.rule_id: result for result in results}
     if not (by_id.get("A5") and by_id["A5"].firing):
         return results
     carrier = "A5" if heartbeat_fresh else "A2"
     carrier_result = by_id.get(carrier)
-    if carrier_result is None or not carrier_result.firing:
+    if (
+        carrier_result is None
+        or not carrier_result.firing
+        or carrier_result.suppressed_by is not None
+    ):
         return results
     suppressed_ids = (
         {"A1", "A2"}
@@ -1047,7 +1093,13 @@ def _correlate_alert_results(
         else {"A5"}
     )
     correlated = []
-    related = [rule_id for rule_id in sorted(suppressed_ids) if by_id.get(rule_id) and by_id[rule_id].firing]
+    related = [
+        rule_id
+        for rule_id in sorted(suppressed_ids)
+        if by_id.get(rule_id)
+        and by_id[rule_id].firing
+        and by_id[rule_id].suppressed_by is None
+    ]
     for result in results:
         if result.rule_id == carrier and related:
             correlated.append(
@@ -1354,8 +1406,17 @@ def _ledger_lock_path(event_path: Path) -> Path:
     return event_path.with_suffix(".lock")
 
 
+def _state_lock_path(state_path: Path) -> Path:
+    return state_path.with_suffix(state_path.suffix + ".lock")
+
+
 def _validate_alert_paths(*, state_path: Path, event_path: Path) -> None:
-    paths = (state_path, event_path, _ledger_lock_path(event_path))
+    paths = (
+        state_path,
+        event_path,
+        _state_lock_path(state_path),
+        _ledger_lock_path(event_path),
+    )
     resolved = tuple(path.resolve(strict=False) for path in paths)
     aliased = len(set(resolved)) != len(resolved)
     if not aliased:
@@ -1370,7 +1431,9 @@ def _validate_alert_paths(*, state_path: Path, event_path: Path) -> None:
             if aliased:
                 break
     if aliased:
-        raise ValueError("state_path, event_path, and ledger lock path must be distinct")
+        raise ValueError(
+            "state_path, event_path, state lock path, and ledger lock path must be distinct"
+        )
 
 
 def _require_regular_file_if_present(path: Path, *, label: str) -> os.stat_result | None:
@@ -1914,7 +1977,7 @@ def _write_state(path: Path, state: dict[str, dict[str, object]]) -> None:
 
 @contextmanager
 def _alert_state_lock(state_path: Path) -> Iterator[None]:
-    lock_path = state_path.with_suffix(state_path.suffix + ".lock")
+    lock_path = _state_lock_path(state_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
@@ -2114,6 +2177,8 @@ def _apply_alert_results(
             projected["last_evaluated_at"] = current.isoformat()
             projected["last_evaluation_sequence"] = evaluation_sequence
             projected["evaluation_state"] = result.evaluation_state
+            if result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID:
+                projected["status"] = result.values.get("status")
             return projected
 
         def prepare_notification(
@@ -2306,6 +2371,13 @@ def _apply_alert_results(
                     "evaluation_state": result.evaluation_state,
                 },
             )
+            pending_notification = lifecycle.get("pending_notification")
+            if (
+                result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID
+                and isinstance(pending_notification, dict)
+                and pending_notification.get("event_type") == "resolved"
+            ):
+                lifecycle = {**lifecycle, "pending_notification": None}
             lifecycle_was_firing = lifecycle.get("state") == "firing"
             previously_announced = lifecycle_was_firing and _entry_announced(lifecycle)
             existing_firing_basis = _normalize_firing_basis(
@@ -2327,8 +2399,17 @@ def _apply_alert_results(
             since_dt = _parse_dt(since)
             confirmed = since_dt is None or current - since_dt >= debounce
             last_notified = _parse_dt(lifecycle.get("last_notified"))
-            should_notify = result.suppressed_by is None and confirmed and (
+            cooldown_elapsed = (
                 last_notified is None or current - last_notified >= COOLDOWN
+            )
+            new_w1_episode = (
+                result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID
+                and not lifecycle_was_firing
+            )
+            should_notify = (
+                result.suppressed_by is None
+                and confirmed
+                and (new_w1_episode or cooldown_elapsed)
             )
             lifecycle = {
                 **lifecycle,
@@ -2427,7 +2508,11 @@ def _apply_alert_results(
                             resolved_result,
                             str(lifecycle.get("since") or ""),
                         ),
-                        severity=severity,
+                        severity=(
+                            NOTICE_SEVERITY
+                            if result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID
+                            else severity
+                        ),
                         sender=sender,
                         episode_since=lifecycle.get("since"),
                         notification_nonce=notification_nonce,
@@ -2547,6 +2632,57 @@ def run_alert_state_machine(
         )
         signals = replace(signals, healthz_consecutive_failures=healthz_consecutive_failures)
         results = evaluate_rules(signals, thresholds=active_thresholds)
+        a2_result = next(result for result in results if result.rule_id == "A2")
+        counterfactual_a2 = next(
+            result
+            for result in evaluate_rules(
+                replace(signals, minutes_since_successful_pipeline=0),
+                thresholds=active_thresholds,
+            )
+            if result.rule_id == "A2"
+        )
+        browser_entry = state.get(WECHAT_BROWSER_PREFLIGHT_RULE_ID)
+        browser_started_at = (
+            _parse_dt(browser_entry.get("since"))
+            if isinstance(browser_entry, dict)
+            else None
+        )
+        a2_threshold = _int_threshold(
+            _threshold_section(active_thresholds, "a2"),
+            "no_success_minutes",
+            120,
+        )
+        last_successful_pipeline_at = signals.last_successful_pipeline_at
+        if last_successful_pipeline_at is not None:
+            if last_successful_pipeline_at.tzinfo is None:
+                last_successful_pipeline_at = last_successful_pipeline_at.replace(
+                    tzinfo=SHANGHAI_TZ
+                )
+            else:
+                last_successful_pipeline_at = last_successful_pipeline_at.astimezone(
+                    SHANGHAI_TZ
+                )
+        heartbeat_breached_at = (
+            last_successful_pipeline_at + timedelta(minutes=a2_threshold)
+            if last_successful_pipeline_at is not None
+            else None
+        )
+        browser_preflight_carrier_active = bool(
+            isinstance(browser_entry, dict)
+            and browser_entry.get("state") == "firing"
+            and _entry_announced(browser_entry)
+        )
+        results = _correlate_wechat_browser_preflight_result(
+            results,
+            browser_preflight_carrier_active=browser_preflight_carrier_active,
+            browser_preflight_blocked_runs=signals.browser_preflight_only_failed_runs,
+            a2_heartbeat_only=a2_result.firing and not counterfactual_a2.firing,
+            browser_preflight_started_before_heartbeat_breach=(
+                browser_started_at is not None
+                and heartbeat_breached_at is not None
+                and browser_started_at <= heartbeat_breached_at
+            ),
+        )
         results = _correlate_alert_results(
             results,
             heartbeat_fresh=(
@@ -3174,6 +3310,8 @@ def collect_alert_signals(
     access_since = current - timedelta(minutes=_int_threshold(a3, "window_minutes", 15))
     sample_size, upstream_rate, schema_rate = _recent_upstream_stats(db_path, recent_since)
 
+    log_dir = Path(pipeline_log_dir) if pipeline_log_dir is not None else db.PROJECT_ROOT / "logs"
+    pipeline_runs = _load_pipeline_runs(log_dir)
     metrics = collect_metrics(
         db_path=db_path,
         pipeline_log_dir=pipeline_log_dir,
@@ -3181,6 +3319,7 @@ def collect_alert_signals(
         now=current,
         stage_since=stage_since,
         access_since=access_since,
+        pipeline_runs=pipeline_runs,
     )
     pipeline = metrics.get("pipeline", {})
     assert isinstance(pipeline, dict)
@@ -3198,20 +3337,41 @@ def collect_alert_signals(
         p95 = row.get("p95_latency_ms")
         stage_p95_latency_ms[stage] = int(p95) if p95 is not None else 0
 
-    recent_runs = pipeline.get("recent_runs", [])
+    recent_runs = pipeline_runs
     last_success: datetime | None = None
     consecutive_skip_logs = 0
+    runs_after_last_success: list[dict[str, object]] = []
     if isinstance(recent_runs, list):
         for run in reversed(recent_runs):
             if not isinstance(run, dict):
                 continue
             if run.get("skip") and last_success is None:
                 consecutive_skip_logs += 1
+                continue
             started_at = run.get("started_at")
             if run.get("status") == "done" and int(str(run.get("failed") or 0)) == 0 and isinstance(started_at, datetime):
                 last_success = started_at
                 break
+            runs_after_last_success.append(run)
     minutes_since_success = int((current - last_success).total_seconds() / 60) if last_success else 10_000
+    browser_preflight_only_failed_runs = 0
+    if last_success is not None and runs_after_last_success:
+        data_stages = {"fetch", "prefilter", "scoring", "enrich", "curate", "interpret"}
+
+        def ended_at_browser_preflight(run: dict[str, object]) -> bool:
+            run_stages = run.get("stages")
+            if not isinstance(run_stages, dict):
+                return False
+            browser_stage = run_stages.get("wechat_browser_preflight")
+            return bool(
+                run.get("status") != "done"
+                and isinstance(browser_stage, dict)
+                and browser_stage.get("status") == "fail"
+                and not data_stages.intersection(run_stages)
+            )
+
+        if all(ended_at_browser_preflight(run) for run in runs_after_last_success):
+            browser_preflight_only_failed_runs = len(runs_after_last_success)
 
     users = metrics["users"]
     ingestion = metrics["ingestion"]
@@ -3283,7 +3443,6 @@ def collect_alert_signals(
         start=current.astimezone(UTC) - timedelta(days=15),
         end=current.astimezone(UTC),
     )
-    log_dir = Path(pipeline_log_dir) if pipeline_log_dir is not None else db.PROJECT_ROOT / "logs"
     metering_start = current - timedelta(hours=24)
     a6_activity = _pipeline_activity(log_dir, metering_start, current)
     metering = _window_metering(a6_activity, metering_start, current)
@@ -3321,6 +3480,7 @@ def collect_alert_signals(
         stage_error_rate=stage_error_rate,
         stage_p95_latency_ms=stage_p95_latency_ms,
         minutes_since_successful_pipeline=minutes_since_success,
+        last_successful_pipeline_at=last_success,
         consecutive_skip_logs=consecutive_skip_logs,
         server_error_rate=_server_error_rate(users),
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
@@ -3362,6 +3522,7 @@ def collect_alert_signals(
         faded_sources=faded_sources,
         quiet_x_sources=quiet_x_sources,
         paused_source_ids=paused_source_ids,
+        browser_preflight_only_failed_runs=browser_preflight_only_failed_runs,
         a6_metering_complete=bool(a6_signal["metering_complete"]),
         a6_metering_failure_count=int(a6_signal["metering_failure_count"]),
     )

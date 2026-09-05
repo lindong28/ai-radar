@@ -88,6 +88,8 @@ DEEPSEEK_API_KEY=sk-xxx
 
 每轮在第一个外部阶段前执行 `./run.sh egress-preflight`。它只接受 `check-proxy-status --format=kv` 返回完整、healthy、policy matched 的 `domain-routing-v2` 状态；失败时整轮在发出外部请求前退出，不会退回父 Claude Code/Codex 的 proxy 环境或直连。域名路由由外部 domain router 持有：Anthropic → GCP SG 且 fail closed，OpenAI/ChatGPT/X → OpenAI provider route（Tencent primary，建隧道前失败时 ZYT fallback；两者均不可用则 fail closed），Ark/DeepSeek/RSS/新闻/网页 → direct。AI Radar 不维护第二份域名表；实际出口以 system-config 的 `tencent_route_mode` 与 route audit `selected_route` 为准，生产安装前置与排障见 [服务 runbook](docs/operations/services.md#ai-radar-域名-selector-出网)。
 
+egress 通过后、fetch 之前还会执行 `./run.sh wechat-browser-preflight`。exit 0 只表示 Playwright 预期的 Chromium 路径存在且可执行；exit 1 表示缺失或不可执行，exit 2 表示无法核实。非零会在 fetch 前终止整轮；终端和同轮日志都会明确写出未运行的 RSS/X 抓取与后续阶段、日志路径，以及安装或诊断动作，不会再让微信正文静默降级为 RSS-only 后把轮次报成全绿。缺失时运行 `uv run playwright install chromium`，再重跑 preflight；它不验证实际 launch、版本兼容、网络或微信页面可达，这些仍由「快速开始」中的真实 launch 命令验证。首次健康运行不发通知；失败会建立 W1 page，只有后续整轮 pipeline 成功且末端复检仍通过才以 notice 明确恢复。最终日志的 `failed=N` 只表示数据阶段，`alert_recovery=OK|DEGRADED|NOT_RUN` 单独表示 W1 恢复生命周期。直接运行 `./run.sh fetch` 不经过这条 scheduled preflight，仍保留逐条 RSS fallback。
+
 默认 cron 频率是 `*/15 * * * *`，即每 15 分钟执行一次。
 
 cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调度前确认项目根目录 `.env`、`~/.claude/.env` 或 supervisor 环境已配 LLM API Key。

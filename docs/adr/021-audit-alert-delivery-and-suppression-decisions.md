@@ -4,6 +4,7 @@
 - 日期：2026-08-11
 - 范围：`data/alert-events.jsonl`；不把它提升为告警状态或 transport 去重真源
 - Supersedes：ADR-009 中「notification-only、D3 不写入」的范围陈述
+- Superseded in part：64 MiB 硬上限与可靠 14 天边界陈述由 ADR-20260904-d708 supersede；当前仅在成功写入时裁掉 14 天前记录
 
 ## 决策
 

@@ -12,7 +12,7 @@
 | [006](./006-curated-archive-mode.md) | 精选页改为跨 run 去重的累积归档（复用 ADR-005 真实计数 pattern） | accepted | 2026-06-04 |
 | [007](./007-interpret-via-ai-assistant-summarizer.md) | 微信文章解读复用 ai-assistant summarizer，save_decision 作单一闸门 | accepted；「interpret 回填无法并发」issue 已 resolved 移入 archive，见文末修订记录 | 2026-06-06 |
 | [008](./008-alert-severity-lifecycles.md) | 告警按 severity 维护独立 lifecycle | accepted; PERF F1/F4 superseded by ADR-011 | 2026-07-22 |
-| [009](./009-alert-notification-ledger.md) | 用有界 JSONL 记录已送达告警通知 | accepted; scope superseded by ADR-021 | 2026-07-22 |
+| [009](./009-alert-notification-ledger.md) | 用有界 JSONL 记录已送达告警通知 | accepted; scope superseded by ADR-021; 64 MiB boundedness superseded by ADR-20260904-d708 | 2026-07-22 |
 | [010](./010-db-slimming-clear-regenerable-cache.md) | radar.db 瘦身选清可再生 summary 缓存（Option A）+ 常驻保留 + 历史 digest TTL | accepted | 2026-07-22 |
 | [011](./011-perf-idle-only-probing.md) | PERF 改为 idle-only 探测并用 per-file launchd 调度 | accepted; supersedes ADR-008 PERF F1/F4 only | 2026-07-26 |
 | [012](./012-single-dom-mobile-layer.md) | 移动层用单套 DOM + media query 重塑，不复制参考站的双 DOM | accepted | 2026-08-03 |
@@ -24,7 +24,7 @@
 | [018](./018-normalize-a6-to-current-tariff.md) | A6 只比较现行可报价 cohort 的量结构成本 | accepted; cache gates superseded by ADR-020 | 2026-08-11 |
 | [019](./019-reference-interpret-unit-cost-to-comparable-window.md) | 单篇解读成本只与自身可比前窗对照 | accepted; interpret cache gate superseded by ADR-020 | 2026-08-11 |
 | [020](./020-normalize-cost-comparisons-to-cache-all-miss.md) | 成本比较统一归一化为 cache 全未命中 | accepted; supersedes ADR-018/019 cache gates; in-progress handling superseded by ADR-022 | 2026-08-11 |
-| [021](./021-audit-alert-delivery-and-suppression-decisions.md) | 告警事件 ledger 同时审计投递与合并抑制决策 | accepted; supersedes ADR-009 scope | 2026-08-11 |
+| [021](./021-audit-alert-delivery-and-suppression-decisions.md) | 告警事件 ledger 同时审计投递与合并抑制决策 | accepted; supersedes ADR-009 scope; boundedness superseded by ADR-20260904-d708 | 2026-08-11 |
 | [022](./022-evaluate-a6-in-progress-cost-as-lower-bound.md) | A6 在途成本作为下界继续正向评估 | accepted; supersedes ADR-020 in-progress handling | 2026-08-11 |
 | [023](./023-define-recorded-row-measurement-scope.md) | 以记录行为 LLM 用量派生指标定义测量范围 | accepted | 2026-08-12 |
 | [024](./024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md) | 以 shadow canary 验证公众号后台发现适配器后再替换 Mp2RSS | deprecated（后台 family 平台级不可用，见 [061-wechat-discovery](./061-deprecate-wechat-admin-discovery-line.md)）; cadence/page-size superseded by ADR-025; identity mapping 与旧 evidence 语义 superseded by ADR-028 | 2026-08-13 |
@@ -83,3 +83,4 @@
 | [20260903-bc36](./20260903-bc36-quota-curated-selection-by-source-form.md) | 精选按来源形态配额（X ≤20%、单源 ≤7.5%），同轮记无配额基线并支持定向回退 | accepted; partially supersedes ADR-010（配额独有行可定向删除） | 2026-09-03 |
 | [20260904-51d2](./20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮的信号；账户层失败（401/402）升为 page 并按来源组给处置 | accepted | 2026-09-04 |
 | [20260905-b00f](./20260905-b00f-write-egress-receipt-after-live-policy-recheck.md) | 出网收据只在写盘前复核生产策略后生成 | accepted; extends ADR-20260829-c0e8 receipt generation | 2026-09-05 |
+| [20260904-d708](./20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline，W1 复用共享告警状态机 | accepted; relates ADR-20260826-68e2 and ADR-059; supersedes ADR-009/021 boundedness only | 2026-09-04 |

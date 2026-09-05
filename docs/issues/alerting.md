@@ -104,11 +104,11 @@ A7 尚未在生产 firing 过，故两条都是代码路径分析、无生产实
 
 ## ISSUE-A06 · 同一根因的多条告警无合并，且缺可核验的共因判据
 
-**状态**：open · **优先级**：high · **原则**：P5
+**状态**：open · **优先级**：high · **原则**：P1 / P5
 
 2026-08-17 15:35 → 08-18 08:57 的出网事故窗口内，A2 与 A4 在同一轮检测里同时 firing 但分两次独立投递，全窗口约 25 次 `send A2 firing` + 约 14 次 `send A4 firing`，零合并。`_correlate_alert_results()` 以 `A5.firing` 为总闸，A5 全程 `degraded`，关联逻辑一次都没进入函数体；且 A2/A4 这一对本就不在它的 `suppressed_ids` 覆盖内。A7 一旦上膛会成为同一事故的第三路。
 
-前置缺口：`AlertSignals` 里没有任何字段承载 fetch 失败的**错误类别**，所以现有信号面只支持「同一轮都 firing 就并」这种时间巧合式合并，而 P5 恰恰点名这种做法有并掉第二个独立事故的风险。要合规合并，先得把「本轮失败的主导 error class」提升为一个 signal 字段。
+前置缺口：`AlertSignals` 里没有任何字段承载 fetch 失败的**错误类别**，所以现有信号面只支持「同一轮都 firing 就并」这种时间巧合式合并，而 P5 恰恰点名这种做法有并掉第二个独立事故的风险。既有 A1/A2/A5 rollup 同样只按 heartbeat freshness 与 co-fire 选 carrier，没有 provider/error-class 或 episode onset 共因，可吞掉独立的模型、阶段和解读事故。要合规合并，先得把「本轮失败的主导 error class」提升为一个 signal 字段，并为既有 A1/A2/A5 补因果锚。
 
 **闭合方向**：先加 error-class 信号，再以它为共因锚点做 rollup。
 
@@ -153,21 +153,21 @@ fetch 失败率破线、items floor 未破线时，A4 无条件降级为 notice�
 
 这三条 `AlertRuleResult` 未传 `impact` / `urgency`，`_format_firing()` 对空值直接跳过该行。读者拿到的是标题与 `故障类别：` 行的逐字重复加一个内部指标，没有一句说「哪个用户的什么体验坏了」。同一通道里 A4/A5/A6/A7 都写了这两行，读到没有的那条时「省略」与「漏写」不可区分。这不是体长预算问题——A1 正文只有四行。
 
-**闭合方向**：三条补齐 `impact` / `urgency`；顺带去掉 `故障类别：` 行对标题的逐字重复（7 条规则全部命中，零信息增量）。
+**闭合方向**：三条补齐 `impact` / `urgency`；顺带去掉共享 formatter 的 `故障类别：` 行对标题的逐字重复（A1–A7 与 PERF 均有零信息增量）。
 
 ## ISSUE-A11 · alert-check 日志无 rotation：告警侧的消费面
 
 **状态**：open · **优先级**：high · **原则**：P8
 
-runbook 把「人工监看 `logs/alert-check.log` 大小」写成缓解措施，但 `status.sh alert` 只打印路径、不报大小（`status.sh:72`），该缓解因此不可执行；`logs/alert-check.err.log` 连这层纸面缓解都没有，而它是 ledger fail-open 的唯一证据通道——`_record_event_rows()` 捕获异常后只 `LOGGER.error("notification ledger write failed …")`，本批 ledger 行就此丢弃（阴性读数：至今 `grep -c "notification ledger"` = 0，尚未发生过写失败）。对照之下 `data/alert-events.jsonl` 侧是合格的（14 天 + 64 MiB 双门，当前 101 KB / 247 行，runbook 给了 jq 配方）。
+runbook 把「人工监看 `logs/alert-check.log` 大小」写成缓解措施，但 `status.sh alert` 只打印路径、不报大小（`status.sh:72`），该缓解因此不可执行；`logs/alert-check.err.log` 连这层纸面缓解都没有，而它是 ledger fail-open 的唯一证据通道——`_record_event_rows()` 捕获异常后只 `LOGGER.error("notification ledger write failed …")`，本批 ledger 行就此丢弃（阴性读数：至今 `grep -c "notification ledger"` = 0，尚未发生过写失败）。`data/alert-events.jsonl` 在成功写入时会裁掉 14 天前的行，runbook 也给了 jq 配方；但 64 MiB 只是写前 guard，并非硬上限，单批写过界后的持续停录由 `ISSUE-ALERT-20260904-8f2c` 跟踪，不能再称“14 天 + 64 MiB 双门合格”。
 
 **实体缺口 defer 给 [cost-observability.md ISSUE-013](cost-observability.md)**——rotation 本身归那条跟踪。此处只登记告警侧的消费面：`status.sh alert` 应暴露这两个文件的大小，否则 runbook 里那句缓解永远是空的。
 
 ## ISSUE-A12 · 告警消息不指向 runbook，A1 三类落点一个不占
 
-**状态**：open · **优先级**：medium · **原则**：P6
+**状态**：open · **优先级**：medium · **原则**：P3 / P6
 
-`grep -n "runbook\|monitoring-alerting\|docs/operations" src/airadar/admin/alerts.py` 在本轮之前零命中——项目有一份 300 行 runbook 和可查的 `data/alert-events.jsonl`，推送消息里都不出现。本轮已给 A4/A7 各补一条指针，其余五条未补。
+`grep -n "runbook\|monitoring-alerting\|docs/operations" src/airadar/admin/alerts.py` 在本轮之前零命中——项目有一份 300 行 runbook 和可查的 `data/alert-events.jsonl`，推送消息里都不出现。本轮已给 A4/A7/W1 各补一条指针，其余五条未补。`/admin` 当前告警摘要也只显示 A1–A7 的 rule/detail，没有影响、紧迫度与第一步；状态文件不可读/格式无效也只有内部症状，没有说明影响与处置。W1 已在 T4 单独补出 install、logs 与 preflight 动作，并把恢复通知 pending 与“Chromium 仍缺失”区分开，既有 A1–A7 仍待统一。PERF firing 会指向证据文件，但 resolved 只有测量值，没有 evidence/runbook 指针，同属本条 P6 缺口。
 
 其中 A1 是唯一一条 evidence / 日志 / runbook 三类落点一个都不占的（「检查 DeepSeek/模型供应商余额、模型权限与 provider endpoint」，无 URL、无路径、无命令）。A2 不给 `logs/pipeline-*.log` 与 `.pipeline.flock`（ADR-052 之后判活方式已改为内核 flock，凭 `ps` 判不出来）；A3 给了 endpoint 但没给 host:port，也不给 `logs/serve-access*.log`；A5 只有「pipeline 与 interpret 日志」这半句缺路径。
 
@@ -185,7 +185,7 @@ runbook 把「人工监看 `logs/alert-check.log` 大小」写成缓解措施，
 
 ## ISSUE-A14 · A2 的 P95 支路以 page 投递，与它自己写下的影响判断矛盾
 
-**状态**：open · **优先级**：medium · **原则**：P2
+**状态**：open · **优先级**：medium · **原则**：P1 / P2 / P7
 
 `thresholds.py` 的注释明写「延迟本身无用户影响、且总能自愈」「真故障由 stage_error_rate 和 no_success_minutes 兜底，不靠延迟分页」，但 P95 破线会追加进 `stage_reasons`，而 A2 的 `AlertRuleResult` 不带 `severity` 字段、落到 page 默认值。抬高阈值降低了 fire 频率，没改 fire 时的档位。
 
@@ -250,18 +250,22 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 - **现象**：2026-09-02 FTS manifest bug 致本地 sync 连续失败，02:34:58 最后一次成功→00:21:25 本地 sync 首次成功（该轮仍以 exit 4 报 replica stale），21h46m 零次成功。`run-or-alert --key ai-radar-db-sync` 在**第一轮**失败（07:04 本地，exit 3）就 `push=sent`（`~/.local/state/im-notify/alert-sent.log` 2026-09-01T23:04:35Z），延迟一个 cron 周期（4.5h）——本地失败并非无告警。但随后各轮 exit 仍是 3 → `skipped(unchanged)`；到 replica 超过 660min 阈值、消息内容已从"sync 失败"升级为"sync 失败 + replica 已 stale"时，exit code 未变，仍被 dedup 吞掉，直到 00:21 exit 4 才再次 `push=sent`。这与 `sync-db-cron.sh` 头注释"cause 变化会 re-alert"矛盾。
 - **加固候选**：让 staleness 升级改变 dedup 身份（独立 exit code 或独立 key），使"已 stale"这一严重度跃迁能再次投递；对齐 alerting 设计原则（值不值得 page/严重度/去重）后再定。
 - **附带竞态**：run-or-alert 退出时读的是 apply committed 之前的旧 replica 时间戳，即使本轮 apply 最终成功也会先报一次 stale 假阳性（00:21:25 同秒出现 `sync OK` 与 `FAIL(4)`；下个成功周期 re-arm 清除）。加固时一并看这个时点。
+- **未核实的相邻重复面**：Mac sync wrapper 与 server healthcheck 都会在 accepted-snapshot receipt 超过 660 分钟时 page；目标部署是否同时启用两条 timer 本轮未读取远端状态，故尚不能断言已发生双告警。后续核实为同时启用时，将同一 replica-stale 事故的跨主机 rollup 纳入本条。
 
 ### Playwright 浏览器缺失时微信全文抓取静默降级为 RSS-only，无任何告警
 
-- **现象**：2026-09-02 15:30 起 `~/Library/Caches/ms-playwright/` 为空（删除来源未核实），此后每轮 fetch 对全部微信条目打 `Failed to scrape WeChat article; using RSS item only … BrowserType.launch: Executable doesn't exist`，阶段仍 `fetch OK`、pipeline 全绿，持续 16.5h 才被人读日志发现（2026-09-03 08:02）。
+**状态**：closed（2026-09-04） · **原则**：P1 / P3 / P5 / P6 / P7 / P8 / P9
+
+- **现象**：2026-09-02 15:30 起 `~/Library/Caches/ms-playwright/` 为空（删除来源未核实），此后每轮 fetch 对全部微信条目打 `Failed to scrape WeChat article; using RSS item only … BrowserType.launch: Executable doesn't exist`，阶段仍 `fetch OK`、pipeline 全绿，持续 55 轮才被人读日志发现。
 - **为什么值得告警**：这是「产出还在但质量明显变差」的一类——微信条目退化成只有标题/摘要的 RSS 项，`/wechat` 解读链路（interpret）拿到的是残缺正文。现有 A1–A7/D3 无「抓取降级路径命中率」维度。
-- **闭合方向**：fetch 阶段对「降级路径」计数并暴露（如 `wechat_scrape_fallback_count` 进 `/admin` 或 pipeline 末行汇总），连续 N 轮 100% 降级即 notice；或在 egress-preflight 同一位置加一条 Playwright 可执行文件存在性预检（README 已把它列为运行时前置）。
+- **闭合结果**：scheduled `pipeline.sh` 在 egress 通过后、fetch 前执行 `wechat-browser-preflight`；预期 executable 缺失/不可执行为 exit 1，自省失败为 exit 2，两者都在任何抓取前终止并建立 W1 page，终端和日志均给出停止范围、日志入口与动作。W1 复用共享 state/ledger，只有继承 pipeline 在 unlink 后仍打开、内容绑定 generation 的 fd capability，同时传入 flock fd、activity generation 与严格同轮 stage 日志共同证明整轮成功，且末端复检仍通过时才以 notice resolved；裸 `--resolve-after-pipeline`、缺 capability、借用其他持锁者的同 inode fd 或陈旧/错序/失败日志保持 W1 open。失败恢复保留 pending 自动重试；pending 期间再次失败会废弃过期恢复投影，恢复后 30 分钟内再次缺失也会作为新 episode 立即 page。只在连续 preflight 阻断、W1 onset 不晚于最后成功时间戳精确算出的 A2 心跳越线与 heartbeat-only 反事实同时成立时由 W1 合并 A2 heartbeat；A2 stage/P95 与 A4/A5/A7 保持独立，避免用取整分钟、不同采样时钟或首次观察时间冒充症状起点而吞掉同时事故。README、operations 与 CHANGELOG 已记录安装、退出码、整轮停止、直接 fetch 边界和 `alert_recovery` 语义。删除缓存的来源仍未核实：本机 09-02 15:00–15:30 统一日志、仓内清理脚本与 shell history 都没有提供可归因删除动作。
 
 ### wechat2rss healthcheck 的恢复通知与清键逻辑未经 /custom:review-alerting 全量审
 
+**状态**：review complete（2026-09-04）；下列实体缺口仍 open
+
 - **现象**：2026-09-04 修 `deploy/wechat2rss/healthcheck.sh`（健康时 `--dedup-clear` 全部五个 key、firing→healthy 转换发一条恢复通知，状态记 `deploy/wechat2rss/data/healthcheck.state`）。review-gate 要求服务告警改动叠加跑 `/custom:review-alerting`，用户本轮裁定 waive：只跑了 Codex 对抗审（含按 `human-facing-message-principles` 与成本 so-what 审这条恢复通知），未跑全项目告警审。
-- **未覆盖的保证**：全对象与独立存量问题（wechat2rss 五类 key 的严重度分档、与 A7 来源静默的合并、去抖——容器重启期间的一次 unreachable 即 page）、恢复通知的 P7 证据形态是否与 A 系列 resolve 一致。
-- **归属**：ai-radar；下一次改 healthcheck 或 wechat2rss 告警面时随该轮一并跑 `/custom:review-alerting`。
+- **复核结果**：T4 的全量 P1–P9 独立审查已覆盖该面，原「尚未全量审」义务闭合。实体缺口仍在：五类 key 的严重度分档、与 A7 的共因合并、一次 unreachable 即 page、恢复 notice 通道、API/parse/noaccount/login 分支缺首个动作或具体 runbook、recovered 只泛指“下一轮 pipeline 日志”而未给 `logs/pipeline-*.log`、上游 raw error 与账号清单无长度上限、覆盖式 state 无有界 fire/resolve 历史，以及 `.env`/`RSS_TOKEN` 缺失时在告警函数建立前静默退出、使探针自身配置漂移不 page。它们独立于 W1 改动，本轮不顺带修改。
 - **对抗审（Codex，4 轮）后按 stakes 保留为 MEDIUM、用户 2026-09-04 裁定收口不再修的残余**（都要探针自身管道先坏才触发）：① 两次 20 分钟探测之间「恢复又复发」观察不到，按同一事故延续；② 手动运行与 cron 重叠时状态/清键无串行化，可能一次错序或重复通知；③ 状态文件被改成持续不可写且跨两次同类事故时，第二次的恢复通知与上一次文案相同、被 `wechat2rss-recovered` 去重吞掉；④ 事故首次观测时间只到 UTC 分钟，同一分钟内同类事故结束又开始（仅手动与 cron 重叠）第二次恢复通知被吞；⑤ 恢复通知走 `--alert` 通道而正文写「无需动作」，是否改走 notification 通道待定；⑥ `im-notify --dedup-clear` 吞掉 unlink 错误并 exit 0（harness 仓 `HARNESS-20260904-ca88`）。修法候选：状态改为单调事故序号 + 不可写时恢复通知降为无去重。
 
 ### fetch 汇总把账户层失败（401/402）与网络层失败同形计入 failed，付费层用尽 9 小时无人被告知
@@ -344,3 +348,74 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 `run_alert_results_state_machine()` 的 non-firing full-pause 路径会收集所有满足 opening source IDs 全部 paused 的 announced firing lifecycles，但把它们合并成一条 INTERNAL `source_paused` ledger，并取列表第一项的 severity、`since` 作为 episode identity。正常状态转换预期不会同时留下多个这样的 lifecycle，但异常或迁移状态若出现多个，单条事件无法准确代表多个 episode。
 
 本次 T1 rollover 修复只在“总共恰有一个 firing lifecycle”时工作，明确不把多 lifecycle 状态吞并为一个事件。后续若要支持该异常形状，应先决定是逐 lifecycle 写独立 ledger 后分别结案，还是把状态判为需要人工修复；需补多 severity/episode 的判别测试，并保持 identity、notification nonce 与 ledger 写失败时的 fail-closed 语义。
+## ISSUE-ALERT-20260904-a21d · server healthcheck 的 page 缺动作与有界事件历史
+
+**状态**：open · **优先级**：high · **原则**：P1 / P3 / P4 / P5 / P6 / P7 / P8 / P9
+
+`deploy/server/health-check.sh` 的 serve、healthz、disk、sync freshness 与 deploy stuck 消息主要给内部症状值，没有正文内影响、可执行第一步或具体日志/runbook；恢复只写 key。active port 已配置但 serve unit inactive 时，它会先发 `serve`、随后仍 curl 同一端口再发 `healthz`，同一 serving-down 根因可扇出两个 key。每条当前状态只靠空的 `*.firing` marker，resolve 在投递前删除 marker 且吞掉发送失败，恢复通知失败后无状态供下一轮重试；仓内也没有结构化、带时间和值且有 retention 的 fire/resolve 历史。repo 外日志是否补足历史能力未核实。
+
+**闭合方向**：先让每类消息写清影响、第一步与证据入口，再把事件接入有界 ledger；当前 marker 只继续承担“是否 firing”的瞬时状态，不冒充历史。
+
+## ISSUE-ALERT-20260904-a22d · performance remediation 的 page 不说明动作，证据目录 retention 未定义
+
+**状态**：open · **优先级**：medium · **原则**：P1 / P2 / P3 / P4 / P8
+
+worker 失败与候选待审都走默认 page，但正文主要是 `reason/violations/evidence` 或 `candidate/worktree/summary` 机器字段，没有说明当前影响、是否需立即处理和首个动作。失败会写 `logs/performance/remediation-evidence/*.json`，但仓内没有 retention/prune 契约，长期是否有界未核实。
+
+**闭合方向**：按“执行失败”和“候选待审”分别重写人读消息并重新定 severity；为 evidence 目录建立可验证 retention，或明确它由哪一现有生命周期清理。
+
+## ISSUE-ALERT-20260904-c30e · 共享 lifecycle 的新 episode 与 resolved 通道未统一校准
+
+**状态**：open · **优先级**：medium · **原则**：P2 / P3 / P7
+
+共享状态机把 `last_notified` 保留到 resolved 后，A1–A7 等规则若在 30 分钟内重新进入同一 severity，新的 episode 仍可能被上一 episode 的 reminder cooldown 压住；T4 已仅对 W1 的 `ok → firing` 新 episode 旁路旧 cooldown，以满足浏览器缺失立即 page，不借此改动既有规则。另一面是除 W1 外的 page episode 仍把 resolved 发到 ALERT 通道，即使恢复无需立即处置；W1 已显式改为 notice resolved。
+
+**闭合方向**：把 cooldown 明确定义为 episode 内 reminder，而不是跨 episode 限流，并为所有规则补 `fire → resolve → 30 分钟内 recur` 对照；随后统一评估 page resolved 是否改走 notice，避免通道迁移与既有 consumer/dedup 契约脱节。
+
+## ISSUE-ALERT-20260904-8f2c · 共享告警 ledger 可先写过上限后永久停录
+
+**状态**：open · **优先级**：medium · **原则**：P8
+
+`_record_event_rows()` 只在写入前检查现有文件是否已超过 64 MiB，对本批追加后的字节数没有边界。因此一批正常事件可以先把文件写过上限，下一批开始后每次都 fail-open：通知可已被 transport 接受、当前 lifecycle 也可已持久化为 firing，但新的 W1/A1–A7/D3/PERF 事件不再有历史行。现有 oversize 测试只证明不覆盖旧文件且状态机继续，没有证明 ledger 会自动恢复。
+
+**闭合方向**：在 replace 前对 retention 后的整批输出实施真正的字节上限或可恢复轮转，并加回归证明「本批写入自身越界后，下一个事件仍可记录」；不把当前 fail-open 当成有界 retention。
+
+## ISSUE-ALERT-20260904-4c8a · central alert collector 的前提异常没有独立失败面
+
+**状态**：open · **优先级**：high · **原则**：P9
+
+全量告警审查发现，central alert 轮在进入共享状态机与 sender 之前若因日志/DB/signal 收集异常退出，本轮不会产出任何规则结果，也没有独立的“alert evaluator 未完成”事件；launchd 进程退出码与项目内告警是否能被外部发现尚未核实。失败形态因此可能与“本轮所有规则都健康且无需发送”同形。
+
+**闭合方向**：为 evaluator 自身建立不依赖其内部规则状态机的失败面，明确谁承载异常退出、如何去重与恢复；用 collector 抛异常的阴性对照证明能发出，正常空结果证明不误发。
+
+## ISSUE-ALERT-20260904-73ad · PERF 样本饥饿可能让旧事故过期关闭
+
+**状态**：open · **优先级**：high · **原则**：P7 / P9
+
+PERF journey monitor 的 lifecycle 以现有样本判定；样本生产者长期不产出、文件损坏或观测窗滑过旧失败样本时，没有独立 freshness/producer-health gate。一个先前 firing 的事故可能在没有新的成功观测时转为 resolved，或探针完全不运行却没有新的 page。当前 `performance-probe` 未安装/禁用只来自版本化服务文档，live 状态未核实。
+
+**闭合方向**：把“最新有效样本年龄/生产者运行状态”作为独立可评估前提；缺新鲜证据时保持事故或转 degraded，不以旧样本滑窗消失证明恢复。
+
+## ISSUE-ALERT-20260904-b19f · A5 与 D3 的非 firing 状态没有完整恢复契约
+
+**状态**：open · **优先级**：medium · **原则**：P7
+
+A5 在微信解读被配置关闭时可从既有 firing 直接进入 resolved，正文没有说明这是能力关闭而非解读链路恢复；D3 定价通知与 `run-or-alert` 型告警则没有统一、用户可见的 resolved 生命周期，读者无法从同一通道知道事故何时真正结束。这两项撤回 T4 后仍成立，本轮不改既有 lifecycle。
+
+**闭合方向**：A5 把“能力关闭”与“有新成功解读”分成不同终态；D3 与 wrapper 告警明确是否需要恢复通知，若需要则保留可重试状态，若不需要则在 firing 文案中声明关闭观察入口。
+
+## ISSUE-ALERT-20260904-d2e6 · sync 与 cost-report 故障证据的有界保留不完整
+
+**状态**：open · **优先级**：medium · **原则**：P2 / P3 / P6 / P8 / P9
+
+`sync-db-cron.sh` 仅在 `.sync.lock` 不存在时裁剪日志；inner sync 崩溃遗留 stale lock 后，每轮失败仍可继续追加而 rotation 永久跳过。DB sync 的 exit 2 page 只给 fingerprint/agent 内部症状与登录动作，没有正文内用户影响；同一 page 通道还同时承载首次/单次同步失败（replica 仍可能新鲜）与已 stale/连续不可核实，影响与紧迫度不等价。`deploy/cron/ai-radar-cost-report` 追加写 `logs/cost-report-cron.log`，仓内未定义 rotation；作为每周 notification 的周报若一次发送失败，也被 `run-or-alert` 统一提升为 page。两个 wrapper 都只有被 cron 实际启动后才可告警，调度器自身缺席对本机制不可见；DB sync 的 scheduler gap 已由 ADR-013 显式 waive，cost-report 尚无独立 owner。外部 transport decision history不含每次故障值，不能替代本地值历史。真实文件增长量与远端 timer 共存状态本轮未核实。
+
+**闭合方向**：把 stale-lock 故障路径纳入 rotation，给 sync exit 2 补用户影响与首个证据入口，并按 replica freshness/连续失败给 sync 与周报失败重新分档；为 cost-report 日志定义可验证的 retention，或迁入保留值的共享事件账本；为 cost-report 调度器缺席指定独立探测 owner。
+
+## ISSUE-ALERT-20260904-e6a4 · D3 定价通知未拒绝 state/event 路径别名
+
+**状态**：open · **优先级**：low · **原则**：P8
+
+`run_pricing_notifications()` 接受独立的 notification state 与 event ledger 路径，却没有像 A1–A7/W1 状态机一样调用 `_validate_alert_paths`。两者指向同一文件时，通知仍可能被 transport 接受且 state 存在，但 event 写入因 JSON 形状冲突而 fail-open，留下无 D3 历史的已送达事件。该机制撤回 T4 后仍成立，本轮只登记，不顺带改 D3。
+
+**闭合方向**：D3 在 sender/state 写入前校验其实际使用的 state/event/ledger-lock，并补 distinct path 正例与 state=event、state/event 对应 ledger-lock 冲突的负例；若后续同时把 D3 纳入 `_alert_state_lock`，再复用 A1–A7/W1 的四向校验。该问题与 [cost-observability.md ISSUE-018](cost-observability.md) 的 episode 配对缺口分别验收。

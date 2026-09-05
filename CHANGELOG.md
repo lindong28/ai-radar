@@ -25,6 +25,11 @@
 
 - program assembly 合入 T3 资产后，Wechat2RSS 目标部署入口使用 Lima ≥2.2 named instance：官方 generated system LaunchDaemon 可在 boot 时启动 VM，`deploy/wechat2rss/compose.sh` 只把该 instance 的 socket 交给 Compose，不依赖 GUI，也不修改其它 Docker 工作负载的全局 context。维护者生产安装、数据切换与真实 reboot 仍须另行授权和验收。
 - 同一组 T3 资产会让健康检查支持无副作用观察、四态输出与隔离记录，并用 `boot-witness.sh` 验收登录前启动。当前 T1 checkout 尚未组装 `compose.sh`、`boot-witness.sh` 和支持 `--observe-only`/`--receipt` 的 healthcheck；旧脚本会忽略这些参数，因此组装前不得运行这些目标命令。
+## 2026-09-04（微信 Chromium 缺失不再让 scheduled pipeline 静默降级）
+
+- scheduled `pipeline.sh` 现在会在 fetch 前检查 Playwright 预期 Chromium executable；缺失/不可执行时给出 `uv run playwright install chromium` 并在任何抓取开始前终止，driver/runtime 无法自省时单独报 `NOT VERIFIED`。终端与同轮日志都会写出停止范围、日志入口和下一动作，不再把微信正文退化成 RSS-only 后仍将整轮报告为成功。
+- 新增 W1 告警生命周期：失败立即 page，首次健康轮不通知；只有继承本轮 pipeline 的 unlink 后 fd capability 与锁、且当前 generation 的严格 stage 日志证明数据阶段全部成功后，末端复检通过才以 notice resolved。恢复知会失败会保持 pending、下一次完整成功轮自动重试，最终 pipeline 日志同时区分数据阶段 `failed=N` 与 `alert_recovery=OK|DEGRADED|NOT_RUN`。
+- W1 复用共享告警状态与事件 ledger（成功写入时保留近 14 天；已知大小上限缺口另有 issue 跟踪）；只有日志证明最近成功轮后的非 SKIP 运行全都终止于 Chromium 前检、W1 episode 不晚于“最后成功 pipeline 的精确时间戳 + A2 阈值”所得越线时刻、且把心跳年龄置 0 后 A2 不再 firing 时，才由 W1 合并 A2 heartbeat。A2 stage error/P95 和 A4/A5/A7 继续独立告警，因为现有证据不能排除同时发生的第二起摄取、解读或来源静默事故。恢复 notice 待投递期间若 Chromium 再次失败，状态会立即回到当前 firing，而不会继续显示路径已恢复；W1 恢复后 30 分钟内再次缺失会作为新 episode 立即 page，同一 episode 的 reminder 仍按 cooldown 去重。直接 `./run.sh fetch` 的既有 RSS fallback 不变。
 
 ## 2026-09-04（微信供稿恢复：自建 Wechat2RSS 重新上线，其健康检查恢复后能再次告警）
 

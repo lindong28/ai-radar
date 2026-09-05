@@ -1,6 +1,6 @@
 # ADR-009: 用有界 JSONL 记录已送达告警通知
 
-- Status: accepted；「notification-only、D3 不写入」的范围陈述由 ADR-021 supersede
+- Status: accepted；「notification-only、D3 不写入」的范围陈述由 ADR-021 supersede；“有界”中的 64 MiB 硬上限陈述由 ADR-20260904-d708 supersede
 - Date: 2026-07-22
 
 ## Context

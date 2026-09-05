@@ -23,7 +23,8 @@ FUTURE_COMPLETED_AT_TOLERANCE_MINUTES = 5
 LOG_STAGE_TO_DASHBOARD = {"score": "scoring"}
 PIPELINE_FILE_RE = re.compile(r"pipeline-(?P<stamp>\d{8}-\d{6})\.log$")
 STAGE_EVENT_RE = re.compile(
-    r"^\[(?P<ts>[^\]]+)\]\s+===\s+(?P<stage>[a-z_]+)\s+(?P<event>START|OK|FAIL)(?:\s+\(exit\s+\d+\))?\s+==="
+    r"^\[(?P<ts>[^\]]+)\]\s+===\s+(?P<stage>[a-z_]+)\s+"
+    r"(?P<event>START|OK|FAIL|DEGRADED)(?:\s+\([^)]*\))?\s+==="
 )
 FETCH_OK_RE = re.compile(r"^OK\s+(?P<source>\S+)\s+fetched=(?P<fetched>\d+)\s+inserted=(?P<inserted>\d+)")
 FETCH_FAIL_RE = re.compile(r"^FAIL\s+(?P<source>\S+)\s+(?P<error>.+)$")
@@ -33,7 +34,8 @@ FETCH_SUMMARY_RE = re.compile(
 )
 STAGE_SUMMARY_RE = re.compile(r"^(?P<stage>prefilter|score|scoring|enrich)\s+processed=(?P<processed>\d+)[, ]+errors=(?P<errors>\d+)")
 PIPELINE_DONE_RE = re.compile(
-    r"^(?:\[[^\]]+\]\s+)?===\s+PIPELINE DONE\s+\(failed=(?P<failed>\d+)\)\s+==="
+    r"^(?:\[[^\]]+\]\s+)?===\s+PIPELINE DONE\s+\(failed=(?P<failed>\d+)"
+    r"(?:;\s+alert_recovery=(?P<alert_recovery>[A-Z_-]+))?\)\s+==="
 )
 # The pid suffix disappeared when the lock moved to a kernel flock (ADR-052):
 # the holder is no longer named in the message. Both spellings are accepted so
@@ -155,6 +157,8 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
         if done_match := PIPELINE_DONE_RE.match(line):
             run["status"] = "done"
             run["failed"] = int(done_match.group("failed"))
+            if done_match.group("alert_recovery"):
+                run["alert_recovery"] = done_match.group("alert_recovery")
             continue
         if event_match := STAGE_EVENT_RE.match(line):
             stage = _dashboard_stage(event_match.group("stage"))
@@ -166,7 +170,7 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
                     stage_starts[stage] = timestamp
                 stage_entry["status"] = "running"
             else:
-                stage_entry["status"] = "ok" if event == "ok" else "fail"
+                stage_entry["status"] = event
                 if timestamp is not None and stage in stage_starts:
                     stage_entry["duration_ms"] = int((timestamp - stage_starts[stage]).total_seconds() * 1000)
                 if stage == "fetch":
@@ -339,6 +343,7 @@ def collect_metrics(
     stage_since: datetime | None = None,
     access_since: datetime | None = None,
     alert_state_path: str | Path | None = None,
+    pipeline_runs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     current = _normalize_now(now)
     normalized_stage_since = _normalize_now(stage_since) if stage_since is not None else None
@@ -358,7 +363,7 @@ def collect_metrics(
     if normalized_access_since is not None:
         access_lines = _access_lines_in_window(access_lines, normalized_access_since, current)
     access_summary = aggregate_access_log(access_lines)
-    runs = _load_pipeline_runs(log_dir)
+    runs = pipeline_runs if pipeline_runs is not None else _load_pipeline_runs(log_dir)
     latest_run = next((run for run in reversed(runs) if not run.get("skip")), runs[-1] if runs else None)
     a4_thresholds = ALERT_THRESHOLDS.get("a4", {})
     a4_thresholds = a4_thresholds if isinstance(a4_thresholds, dict) else {}
@@ -487,11 +492,45 @@ def _load_alert_summary(path: Path) -> dict[str, list[str]]:
     firing: list[str] = []
     degraded: list[str] = []
     for rule_id, raw in sorted(payload.items()):
-        if not isinstance(raw, dict) or not str(rule_id).startswith("A"):
+        if not isinstance(raw, dict) or not (
+            str(rule_id).startswith("A") or rule_id == "W1"
+        ):
             continue
         detail = str(raw.get("detail") or "无详情")
         if raw.get("state") == "firing":
-            firing.append(f"{rule_id} {detail}")
+            lifecycles = raw.get("lifecycles")
+            page = lifecycles.get("page") if isinstance(lifecycles, dict) else None
+            pending = page.get("pending_notification") if isinstance(page, dict) else None
+            if (
+                rule_id == "W1"
+                and isinstance(pending, dict)
+                and pending.get("event_type") == "resolved"
+            ):
+                degraded.append(
+                    "W1 expected executable path is present; recovery notification is pending. "
+                    "No manual state repair is needed; retry occurs after the next fully successful "
+                    "pipeline. Chromium launch, network, and WeChat full-text fetch were not checked."
+                )
+            elif rule_id == "W1":
+                impact = (
+                    "scheduled pipeline is blocked before fetch; RSS/X fetch and later stages "
+                    "were not run."
+                )
+                if raw.get("status") == "not_verified":
+                    action = (
+                        "Inspect now the same-run `logs/pipeline-*.log` for the Playwright "
+                        "driver/runtime error, repair it, then rerun "
+                        "`./run.sh wechat-browser-preflight`."
+                    )
+                else:
+                    action = (
+                        "Run now `uv run playwright install chromium`, then rerun "
+                        "`./run.sh wechat-browser-preflight`; if it still fails, inspect the "
+                        "same-run `logs/pipeline-*.log`."
+                    )
+                firing.append(f"W1 {detail}; {impact} {action}")
+            else:
+                firing.append(f"{rule_id} {detail}")
         elif raw.get("evaluation_state") in {"degraded", "in_progress"}:
             degraded.append(f"{rule_id} {detail}")
     return {"firing": firing, "degraded": degraded}

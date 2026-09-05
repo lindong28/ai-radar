@@ -59,7 +59,7 @@ CALLSITE_REGISTRY = (
     Callsite("src/airadar/fetcher/http_client.py", "selector_httpx_client", 1, "selector-owned"),
     Callsite("src/airadar/fetcher/wechat.py", "playwright_launch_proxy", 1, "selector-owned"),
     Callsite("src/airadar/fetcher/wechat.py", "self.playwright.chromium.launch", 1, "selector-owned"),
-    Callsite("src/airadar/fetcher/wechat.py", "sync_playwright", 1, "selector-owned"),
+    Callsite("src/airadar/fetcher/wechat.py", "sync_playwright", 2, "selector-owned"),
     Callsite("src/airadar/fetcher/x_api.py", "selector_httpx_client", 1, "selector-owned"),
     Callsite("src/airadar/interpret/runner.py", "managed_subprocess_env", 1, "managed-standard-env"),
     Callsite("src/airadar/interpret/runner.py", "subprocess.run", 1, "managed-standard-env"),

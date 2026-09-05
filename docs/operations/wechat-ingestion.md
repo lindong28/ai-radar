@@ -20,6 +20,13 @@ WeWe RSS 的退役状态（服务层移除时间、容器当前状态、回滚�
 
 `wx_wechat2rss` 的 URL 是 loopback 加本部署 token，只在运行容器的机器上有效，放项目根 `.env`，不要放跨机器共享的 `~/.claude/.env`：
 
+## 短链正文抓取与 Chromium 前置检查
+
+微信短链接的完整正文由 Playwright Chromium 抓取。部署时必须显式运行 `uv run playwright install chromium`，再按 README 用真实 `chromium.launch()` 验证；`install.sh` 不下载或校验浏览器。scheduled `pipeline.sh` 还会在 fetch 前运行 `./run.sh wechat-browser-preflight`：exit 0 只证明预期 executable 路径存在且可执行，exit 1 表示缺失/不可执行，exit 2 表示 driver/runtime 无法核实。后两者都会在任何 RSS/X/微信 fetch 前终止整轮并建立 W1 page，处置与恢复语义见 [monitoring-alerting.md §微信 Chromium 前置检查](monitoring-alerting.md#微信-chromium-前置检查)。
+
+这条 fail-closed 边界只覆盖 scheduled pipeline。维护者直接运行 `./run.sh fetch` 时，短链正文抓取失败仍会记录 `Failed to scrape WeChat article; using RSS item only` 并保留 feed 自带内容；它不会被本前检强制中断。Wechat2RSS 的 `?__biz=` 长链则按下一节既有规则主动跳过 Playwright，因为 feed 自带全文，不属于 W1 所防的静默降级。
+
+
 ```bash
 WECHAT2RSS_FEED_URL=http://127.0.0.1:8080/feed/all.xml?k=<RSS_TOKEN>
 ```

@@ -647,3 +647,110 @@ def test_admin_metrics_surfaces_degraded_rules(tmp_path: Path) -> None:
     )
     assert metrics["alerts"]["firing"] == []
     assert metrics["alerts"]["degraded"] == ["A6 基线不足"]
+
+
+def test_admin_metrics_surfaces_active_w1_incident(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "W1": {
+                    "state": "firing",
+                    "detail": "Chromium executable missing",
+                    "status": "unavailable",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    db.migrate(tmp_path / "radar.db")
+
+    metrics = collect_metrics(
+        db_path=tmp_path / "radar.db",
+        pipeline_log_dir=tmp_path / "logs",
+        access_log_paths=[],
+        alert_state_path=state_path,
+    )
+
+    assert len(metrics["alerts"]["firing"]) == 1
+    summary = metrics["alerts"]["firing"][0]
+    assert summary.startswith("W1 Chromium executable missing")
+    assert "scheduled pipeline is blocked before fetch" in summary
+    assert "RSS/X fetch and later stages were not run" in summary
+    assert "Run now" in summary
+    assert "uv run playwright install chromium" in summary
+    assert "logs/pipeline-*.log" in summary
+    assert "./run.sh wechat-browser-preflight" in summary
+
+
+def test_admin_metrics_surfaces_not_verified_w1_with_specific_first_step(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "W1": {
+                    "state": "firing",
+                    "detail": "Playwright driver introspection failed",
+                    "status": "not_verified",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    db.migrate(tmp_path / "radar.db")
+
+    metrics = collect_metrics(
+        db_path=tmp_path / "radar.db",
+        pipeline_log_dir=tmp_path / "logs",
+        access_log_paths=[],
+        alert_state_path=state_path,
+    )
+
+    summary = metrics["alerts"]["firing"][0]
+    assert "scheduled pipeline is blocked before fetch" in summary
+    assert "Inspect now" in summary
+    assert "Playwright driver/runtime" in summary
+    assert "uv run playwright install chromium" not in summary
+
+
+def test_admin_metrics_surfaces_pending_w1_recovery_as_degraded(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "W1": {
+                    "state": "firing",
+                    "detail": "Chromium executable missing",
+                    "lifecycles": {
+                        "page": {
+                            "state": "firing",
+                            "detail": "Chromium executable missing",
+                            "pending_notification": {
+                                "nonce": 2,
+                                "event_type": "resolved",
+                                "episode_since": "2026-09-04T08:00:00+08:00",
+                            },
+                        }
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    db.migrate(tmp_path / "radar.db")
+
+    metrics = collect_metrics(
+        db_path=tmp_path / "radar.db",
+        pipeline_log_dir=tmp_path / "logs",
+        access_log_paths=[],
+        alert_state_path=state_path,
+    )
+
+    assert metrics["alerts"]["firing"] == []
+    assert len(metrics["alerts"]["degraded"]) == 1
+    summary = metrics["alerts"]["degraded"][0]
+    assert "W1" in summary
+    assert "expected executable path is present" in summary
+    assert "recovery notification is pending" in summary
+    assert "next fully successful pipeline" in summary
+    assert "launch, network, and WeChat full-text fetch were not checked" in summary

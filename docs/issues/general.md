@@ -34,6 +34,13 @@
 - Evidence: full suite result was `2404 passed, 4 skipped, 2 failed`; this node was one failure. Immediate isolated rerun was `1 passed in 3.13s`. The WeChat task did not modify `tests/test_egress_routing.py` or the egress implementation.
 - Fix direction: give this sync Playwright probe an execution boundary whose event-loop state is owned by the test, or convert the probe to the async API consistently. Preserve the existing positive assertions for external-via-selector and loopback-direct routing; do not silence the failure by skipping whenever a loop exists.
 
+## [open] ISSUE-GENERAL-20260904-f318 · repository hygiene test把 `/plans/` 错当成 `.gitignore` 最后一条规则
+
+- Type: test reliability · Priority: low · Discovered: 2026-09-04 T4 full-suite independent review
+- Description: `tests/test_repository_hygiene.py::test_execution_plan_workspace_is_ignored_and_untracked` 要求 `/plans/` 后不得再出现任何有效 ignore rule；仓库后来合法加入 `/.label-serve/` 后，全量与单测都稳定失败，尽管 `/plans/` 仍被 ignore 且没有 tracked 文件。该测试把“plans workspace 受保护”的目标误绑到 `.gitignore` 的物理末尾顺序。
+- Evidence: 独立运行得到 `1 failed`，唯一差异为 `later_rules=['/.label-serve/']`；`git check-ignore --no-index --quiet -- plans/.lifecycle-probe` 与 `git ls-files -- plans` 才是该契约的直接观察面，测试后半已有这两个检查。
+- Fix direction: 删除“`/plans/` 必须是最后一条有效规则”的顺序断言，保留并扩充直接的 ignore/tracked 对照；另以 `/.label-serve/` 作为合法后续规则正例，避免同类目录新增再次制造无关全量红灯。
+
 ## [open] 2026-08-26：全量单测有两条与 domain routing 无关的既有基线失败
 
 - Type: test baseline · Priority: low · Discovered: 2026-08-26 domain-routing T2 full-suite 验证

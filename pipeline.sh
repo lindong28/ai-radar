@@ -27,22 +27,36 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/pipeline-$(date +%Y%m%d-%H%M%S).log"
 LOCK_FILE="$SCRIPT_DIR/.pipeline.flock"
 ACTIVITY_FILE="$SCRIPT_DIR/.pipeline.activity"
+PIPELINE_GENERATION=""
 
 log() {
   echo "[$(date +%Y-%m-%dT%H:%M:%S)] $*" | tee -a "$LOG_FILE"
 }
 
 mark_activity() {
-  local generation=""
-  generation="$(python3 -c 'import uuid; print(uuid.uuid4())')" || return 1
+  PIPELINE_GENERATION="$(python3 -c 'import uuid; print(uuid.uuid4())')" || return 1
   local activity_tmp=""
+  local capability_tmp=""
   activity_tmp="$(mktemp "$SCRIPT_DIR/.pipeline.activity.XXXXXX")" || return 1
-  if ! printf '%s\n' "$generation" >"$activity_tmp"; then
+  if ! printf '%s\n' "$PIPELINE_GENERATION" >"$activity_tmp"; then
     rm -f "$activity_tmp"
     return 1
   fi
   if ! mv "$activity_tmp" "$ACTIVITY_FILE"; then
     rm -f "$activity_tmp"
+    return 1
+  fi
+  capability_tmp="$(mktemp "$SCRIPT_DIR/.pipeline.capability.XXXXXX")" || return 1
+  if ! printf '%s\n' "$PIPELINE_GENERATION" >"$capability_tmp"; then
+    rm -f "$capability_tmp"
+    return 1
+  fi
+  if ! exec 8<>"$capability_tmp"; then
+    rm -f "$capability_tmp"
+    return 1
+  fi
+  if ! rm -f "$capability_tmp"; then
+    exec 8>&-
     return 1
   fi
 }
@@ -78,8 +92,11 @@ acquire_lock() {
 }
 
 acquire_lock
+find "$LOG_DIR" -name 'pipeline-*.log' -mtime +7 -delete
+log "=== pipeline RUN generation=$PIPELINE_GENERATION ==="
 
 FAILED=0
+ALERT_RECOVERY="NOT_RUN"
 
 log "=== egress preflight START ==="
 if ./run.sh egress-preflight >>"$LOG_FILE" 2>&1; then
@@ -87,6 +104,21 @@ if ./run.sh egress-preflight >>"$LOG_FILE" 2>&1; then
 else
   code=$?
   log "=== egress preflight FAIL (exit $code) ==="
+  exit 1
+fi
+
+log "=== wechat_browser_preflight START ==="
+if ./run.sh wechat-browser-preflight >>"$LOG_FILE" 2>&1; then
+  log "=== wechat_browser_preflight OK ==="
+else
+  code=$?
+  log "=== wechat_browser_preflight FAIL (exit $code) ==="
+  log "Impact: scheduled pipeline stopped before fetch; RSS/X fetch and later stages were not run"
+  if [[ "$code" -eq 1 ]]; then
+    log "Action now: run uv run playwright install chromium, then ./run.sh wechat-browser-preflight; details: $LOG_FILE"
+  else
+    log "Action now: Inspect the preflight Details in $LOG_FILE, repair the Playwright driver/runtime error, then rerun ./run.sh wechat-browser-preflight"
+  fi
   exit 1
 fi
 
@@ -119,7 +151,17 @@ run_stage curate
 # Steady-state volume is a handful of items per cycle.
 run_stage interpret --limit 30
 
-find "$LOG_DIR" -name 'pipeline-*.log' -mtime +7 -delete
+if (( FAILED == 0 )); then
+  log "=== wechat_browser_preflight_resolve START ==="
+  if ./run.sh wechat-browser-preflight --resolve-after-pipeline --pipeline-log "$LOG_FILE" >>"$LOG_FILE" 2>&1; then
+    ALERT_RECOVERY="OK"
+    log "=== wechat_browser_preflight_resolve OK ==="
+  else
+    code=$?
+    ALERT_RECOVERY="DEGRADED"
+    log "=== wechat_browser_preflight_resolve DEGRADED (exit $code; data pipeline remains successful) ==="
+  fi
+fi
 
-log "=== PIPELINE DONE (failed=$FAILED) ==="
+log "=== PIPELINE DONE (failed=$FAILED; alert_recovery=$ALERT_RECOVERY) ==="
 exit "$FAILED"

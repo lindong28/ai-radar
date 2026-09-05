@@ -452,3 +452,76 @@ def test_alert_windows_exclude_outside_and_unprovable_samples_without_changing_d
     assert signals.stage_error_rate["prefilter"] == 1 / 3
     assert signals.server_pv == 2
     assert signals.server_error_rate == 1 / 2
+
+
+def test_collect_alert_signals_counts_only_post_success_browser_preflight_stops(
+    tmp_path: Path,
+) -> None:
+    db_path = _seed_metrics_db(tmp_path)
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "pipeline-20260602-080000.log").write_text(
+        "\n".join(
+            [
+                "[2026-06-02T08:00:00] === wechat_browser_preflight START ===",
+                "[2026-06-02T08:00:01] === wechat_browser_preflight OK ===",
+                "[2026-06-02T08:10:00] === PIPELINE DONE (failed=0) ===",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    failure_times = [
+        datetime.fromisoformat("2026-06-02T09:00:00+08:00").replace(minute=minute)
+        for minute in range(12)
+    ]
+    for failed_at in failure_times:
+        stamp = failed_at.strftime("%H%M%S")
+        timestamp = failed_at.strftime("%Y-%m-%dT%H:%M:%S")
+        (log_dir / f"pipeline-20260602-{stamp}.log").write_text(
+            "\n".join(
+                [
+                    f"[{timestamp}] === egress_preflight OK ===",
+                    f"[{timestamp}] === wechat_browser_preflight START ===",
+                    f"[{timestamp}] === wechat_browser_preflight FAIL (exit 1) ===",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    signals = collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-06-02T12:00:00+08:00"),
+    )
+
+    assert signals.browser_preflight_only_failed_runs == 12
+    assert signals.last_successful_pipeline_at == datetime.fromisoformat(
+        "2026-06-02T08:00:00+08:00"
+    )
+
+
+def test_collect_alert_signals_does_not_claim_browser_cause_without_success_anchor(
+    tmp_path: Path,
+) -> None:
+    db_path = _seed_metrics_db(tmp_path)
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "pipeline-20260602-090000.log").write_text(
+        "\n".join(
+            [
+                "[2026-06-02T09:00:00] === wechat_browser_preflight START ===",
+                "[2026-06-02T09:00:01] === wechat_browser_preflight FAIL (exit 1) ===",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    signals = collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat("2026-06-02T12:00:00+08:00"),
+    )
+
+    assert signals.browser_preflight_only_failed_runs == 0

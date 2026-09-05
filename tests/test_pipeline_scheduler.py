@@ -7,10 +7,13 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import textwrap
 import time
 from pathlib import Path
 from typing import IO
+
+from airadar.admin.metrics import _parse_pipeline_log
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,6 +27,7 @@ def _copy_pipeline_fixture(
     tmp_path: Path,
     *,
     fail_stage: str | None = None,
+    fail_code: int = 42,
     stage_sleep: float | None = None,
 ) -> tuple[Path, dict[str, str]]:
     source = REPO_ROOT / "pipeline.sh"
@@ -40,8 +44,23 @@ def _copy_pipeline_fixture(
             #!/usr/bin/env bash
             set -u
             printf '%s\\n' "$*" >> run-calls.log
-            if [[ "${1:-}" == "${FAIL_STAGE:-}" ]]; then
-              exit 42
+            if [[ "${EMIT_PREFLIGHT_OUTPUT:-}" == "1" && "${1:-}" == "wechat-browser-preflight" ]]; then
+              if [[ "${2:-}" == "--resolve-after-pipeline" ]]; then
+                printf '%s\\n' \\
+                  'WeChat browser recovery: DEGRADED — data pipeline succeeded; W1 remains open' \\
+                  'Evidence: expected executable is present and the full scheduled pipeline completed' \\
+                  'Action: recovery delivery will retry automatically'
+              else
+                printf '%s\\n' \\
+                  'WeChat browser preflight: UNAVAILABLE — scheduled pipeline blocked before fetch' \\
+                  'Impact: scheduled pipeline will stop before fetch' \\
+                  'Action now: run uv run playwright install chromium' \\
+                  'Alert: accepted rule=W1 severity=page'
+              fi
+            fi
+            if [[ -n "${FAIL_STAGE:-}" ]] && \
+               { [[ "${1:-}" == "$FAIL_STAGE" ]] || [[ "$*" == "$FAIL_STAGE"* ]]; }; then
+              exit "${FAIL_CODE:-42}"
             fi
             if [[ -n "${STAGE_SLEEP:-}" ]]; then
               # exec into a python interpreter so the fd-9 inheritance
@@ -64,6 +83,7 @@ def _copy_pipeline_fixture(
     }
     if fail_stage:
         env["FAIL_STAGE"] = fail_stage
+        env["FAIL_CODE"] = str(fail_code)
     if stage_sleep is not None:
         env["STAGE_SLEEP"] = str(stage_sleep)
     return script, env
@@ -118,8 +138,10 @@ def test_pipeline_script_runs_stages_in_order_and_logs_success(tmp_path: Path) -
     result = subprocess.run([str(script)], cwd="/", env=env, text=True, capture_output=True, timeout=30)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines() == [
+    calls = (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls[:-1] == [
         "egress-preflight",
+        "wechat-browser-preflight",
         "fetch",
         "prefilter --since 24h",
         "score --since 24h",
@@ -127,13 +149,15 @@ def test_pipeline_script_runs_stages_in_order_and_logs_success(tmp_path: Path) -
         "curate",
         "interpret --limit 30",
     ]
+    assert calls[-1].startswith("wechat-browser-preflight --resolve-after-pipeline --pipeline-log ")
     logs = sorted((tmp_path / "logs").glob("pipeline-*.log"))
     assert len(logs) == 1
     assert re.match(r"pipeline-\d{8}-\d{6}\.log", logs[0].name)
     log_text = logs[0].read_text(encoding="utf-8")
+    assert re.search(r"=== pipeline RUN generation=[0-9a-f-]{36} ===", log_text)
     assert "=== fetch START ===" in log_text
     assert "=== enrich OK ===" in log_text
-    assert "=== PIPELINE DONE (failed=0) ===" in log_text
+    assert "=== PIPELINE DONE (failed=0; alert_recovery=OK) ===" in log_text
 
 
 def test_pipeline_fails_before_any_stage_when_egress_preflight_fails(tmp_path: Path) -> None:
@@ -150,6 +174,54 @@ def test_pipeline_fails_before_any_stage_when_egress_preflight_fails(tmp_path: P
     assert "AI_RADAR_PROXY_FILE" not in (tmp_path / "pipeline.sh").read_text(encoding="utf-8")
 
 
+def test_pipeline_fails_before_fetch_when_wechat_browser_preflight_fails(tmp_path: Path) -> None:
+    script, env = _copy_pipeline_fixture(
+        tmp_path, fail_stage="wechat-browser-preflight", fail_code=1
+    )
+    env["EMIT_PREFLIGHT_OUTPUT"] = "1"
+    old_log = tmp_path / "logs" / "pipeline-20260101-000000.log"
+    old_log.parent.mkdir()
+    old_log.write_text("old", encoding="utf-8")
+    old_timestamp = time.time() - 9 * 24 * 60 * 60
+    os.utime(old_log, (old_timestamp, old_timestamp))
+
+    result = subprocess.run([str(script)], cwd="/", env=env, text=True, capture_output=True, timeout=30)
+
+    assert result.returncode == 1
+    assert (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines() == [
+        "egress-preflight",
+        "wechat-browser-preflight",
+    ]
+    log_text = next((tmp_path / "logs").glob("pipeline-*.log")).read_text(encoding="utf-8")
+    assert "=== wechat_browser_preflight FAIL (exit 1) ===" in log_text
+    assert "WeChat browser preflight: UNAVAILABLE" in log_text
+    assert "Impact: scheduled pipeline will stop before fetch" in log_text
+    assert "Action now: run uv run playwright install chromium" in log_text
+    assert "Alert: accepted rule=W1 severity=page" in log_text
+    assert "=== fetch START ===" not in log_text
+    assert not old_log.exists()
+    assert "scheduled pipeline stopped before fetch" in result.stdout
+    assert "RSS/X fetch and later stages were not run" in result.stdout
+    assert "uv run playwright install chromium" in result.stdout
+    assert str(next((tmp_path / "logs").glob("pipeline-*.log"))) in result.stdout
+
+
+def test_pipeline_not_verified_preflight_points_terminal_to_details(tmp_path: Path) -> None:
+    script, env = _copy_pipeline_fixture(
+        tmp_path, fail_stage="wechat-browser-preflight", fail_code=2
+    )
+
+    result = subprocess.run(
+        [str(script)], cwd="/", env=env, text=True, capture_output=True, timeout=30
+    )
+
+    assert result.returncode == 1
+    assert "scheduled pipeline stopped before fetch" in result.stdout
+    assert "Inspect the preflight Details" in result.stdout
+    assert "Playwright driver/runtime" in result.stdout
+    assert "uv run playwright install chromium" not in result.stdout
+
+
 def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
     script, env = _copy_pipeline_fixture(tmp_path, fail_stage="prefilter")
 
@@ -158,6 +230,7 @@ def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines() == [
         "egress-preflight",
+        "wechat-browser-preflight",
         "fetch",
         "prefilter --since 24h",
         "score --since 24h",
@@ -170,7 +243,94 @@ def test_pipeline_script_continues_after_stage_failure(tmp_path: Path) -> None:
     assert "=== score START ===" in log_text
     assert "=== curate OK ===" in log_text
     assert "=== interpret OK ===" in log_text
-    assert "=== PIPELINE DONE (failed=1) ===" in log_text
+    assert "=== PIPELINE DONE (failed=1; alert_recovery=NOT_RUN) ===" in log_text
+
+
+def test_pipeline_reports_recovery_alert_degraded_without_reclassifying_success(
+    tmp_path: Path,
+) -> None:
+    script, env = _copy_pipeline_fixture(tmp_path)
+    env["FAIL_STAGE"] = "wechat-browser-preflight --resolve-after-pipeline"
+    env["EMIT_PREFLIGHT_OUTPUT"] = "1"
+
+    result = subprocess.run([str(script)], cwd="/", env=env, text=True, capture_output=True, timeout=30)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = (tmp_path / "run-calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls[-1].startswith("wechat-browser-preflight --resolve-after-pipeline --pipeline-log ")
+    log_text = next((tmp_path / "logs").glob("pipeline-*.log")).read_text(encoding="utf-8")
+    assert "=== wechat_browser_preflight_resolve DEGRADED (exit 42; data pipeline remains successful) ===" in log_text
+    assert "WeChat browser recovery: DEGRADED" in log_text
+    assert "Action: recovery delivery will retry automatically" in log_text
+    assert "=== PIPELINE DONE (failed=0; alert_recovery=DEGRADED) ===" in log_text
+    parsed = _parse_pipeline_log(next((tmp_path / "logs").glob("pipeline-*.log")))
+    assert parsed["alert_recovery"] == "DEGRADED"
+    assert parsed["stages"]["wechat_browser_preflight_resolve"]["status"] == "degraded"
+
+
+def test_real_run_sh_chain_preserves_pipeline_lock_fd_and_generation(tmp_path: Path) -> None:
+    pipeline_script = tmp_path / "pipeline.sh"
+    shutil.copy2(REPO_ROOT / "pipeline.sh", pipeline_script)
+    pipeline_script.write_text(
+        pipeline_script.read_text(encoding="utf-8").replace(
+            'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"',
+            'export PATH="$HOME/.local/bin:$PATH"',
+        ),
+        encoding="utf-8",
+    )
+    pipeline_script.chmod(0o755)
+    run_script = tmp_path / "run.sh"
+    shutil.copy2(REPO_ROOT / "run.sh", run_script)
+    run_script.chmod(0o755)
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    fake_uv = bin_dir / "uv"
+    fake_uv.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            import os
+            import pathlib
+            import sys
+
+            from airadar.cli import _verify_pipeline_success_evidence
+
+            root = pathlib.Path(os.environ["AI_RADAR_TEST_ROOT"])
+            args = sys.argv[1:]
+            if "--resolve-after-pipeline" in args:
+                log = pathlib.Path(args[args.index("--pipeline-log") + 1])
+                _verify_pipeline_success_evidence(
+                    log,
+                    pipeline_lock_path=root / ".pipeline.flock",
+                    pipeline_lock_fd=9,
+                    pipeline_capability_fd=8,
+                )
+                (root / "verifier-called").write_text("accepted\\n", encoding="utf-8")
+            with (root / "fd9-calls.log").open("a", encoding="utf-8") as stream:
+                stream.write(" ".join(args) + "\\n")
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+    env = {
+        "PATH": CRON_LIKE_PATH,
+        "HOME": str(tmp_path),
+        "AI_RADAR_TEST_ROOT": str(tmp_path),
+        "PYTHONPATH": str(REPO_ROOT / "src"),
+    }
+
+    result = subprocess.run(
+        [str(pipeline_script)], cwd="/", env=env, text=True, capture_output=True, timeout=30
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = (tmp_path / "fd9-calls.log").read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 9
+    assert (tmp_path / "verifier-called").read_text(encoding="utf-8") == "accepted\n"
+    assert calls[-1].startswith(
+        "run python -m airadar.cli wechat-browser-preflight --resolve-after-pipeline --pipeline-log "
+    )
 
 
 def test_pipeline_script_skips_when_another_pipeline_is_running(tmp_path: Path) -> None:

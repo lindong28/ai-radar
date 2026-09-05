@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from html import unescape
+from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -30,6 +32,28 @@ ArticleResult = dict[str, Any]
 ROUND_HEAD_IMG_RE = re.compile(r"round_head_img\s*[=:]\s*(['\"])(.*?)\1", re.S)
 MMBIZ_HTTP_PREFIX = "http://mmbiz.qpic.cn"
 MMBIZ_HTTPS_PREFIX = "https://mmbiz.qpic.cn"
+
+
+class WeChatBrowserUnavailable(RuntimeError):
+    """The Playwright Chromium executable is absent or cannot be executed."""
+
+
+class WeChatBrowserNotVerified(RuntimeError):
+    """Playwright could not report the expected Chromium executable path."""
+
+
+def inspect_wechat_browser_executable() -> Path:
+    try:
+        with sync_playwright() as playwright:
+            executable = Path(playwright.chromium.executable_path)
+    except Exception as exc:
+        raise WeChatBrowserNotVerified(f"{type(exc).__name__}: {exc}") from exc
+
+    if not executable.is_file():
+        raise WeChatBrowserUnavailable(f"chromium executable is missing: {executable}")
+    if not os.access(executable, os.X_OK):
+        raise WeChatBrowserUnavailable(f"chromium executable is not executable: {executable}")
+    return executable
 
 
 def _text_or_default(node: Tag | None, fallback: str) -> str:

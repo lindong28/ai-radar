@@ -29,7 +29,7 @@
 | 文件 | 说明 |
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + DB sync 的职责分工、验证与"已服务"终态判据 + X 图片新加坡出口代理（隧道链路、凭据边界、从内到外的诊断顺序）+ Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
-| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A7 与 D3 告警、domain selector preflight/route audit、周报、飞书 webhook、用户旅程性能监控 runbook |
+| [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A7/W1 与 D3 告警、domain selector preflight/route audit、微信 Chromium preflight、周报、飞书 webhook、用户旅程性能监控 runbook |
 | [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused 后保留历史可见与跨源去重身份；含 ai-assistant KB 手动归档补录、真名头像 backfill，后台发现候选已停止推进（见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)） |
 | [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
 
@@ -164,7 +164,7 @@
 | [20260903-bc36-quota-curated-selection-by-source-form.md](adr/20260903-bc36-quota-curated-selection-by-source-form.md) | 精选按来源形态配额（X ≤20%、单源 ≤7.5%），同轮记无配额基线并支持定向回退；部分 supersede ADR-010 |
 | [20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md](adr/20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮、过期即「未评估」；401/402 账户层失败升 page 并按来源组给处置 |
 
-| [20260904-9890-wechat2rss-lima-boot-runtime.md](adr/20260904-9890-wechat2rss-lima-boot-runtime.md) | Wechat2RSS 使用 Lima generated system LaunchDaemon 作为无 GUI 登录的 boot runtime；生产 live gate 尚未执行 |
+| [20260904-d708-fail-pipeline-before-wechat-browser-degradation.md](adr/20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline；W1 复用共享告警状态机，成功态只证明可执行文件路径存在 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

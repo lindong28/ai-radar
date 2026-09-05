@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
+import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, replace
@@ -12,13 +15,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from urllib.parse import quote
+from uuid import UUID
 
 from . import db, runtime_env
 from .admin import edgeone
 from .admin.alerts import (
+    DEFAULT_EVENT_PATH,
     DEFAULT_SERVE_LAUNCH_AGENT_PATH,
+    DEFAULT_STATE_PATH,
+    PAGE_SEVERITY,
+    WECHAT_BROWSER_PREFLIGHT_RULE_ID,
+    AlertRuleResult,
+    AlertSender,
     collect_alert_signals,
     prepare_alert_source_pause,
+    run_alert_results_state_machine,
     run_alert_state_machine,
     run_pricing_notifications,
     send_alert_message,
@@ -52,11 +63,15 @@ from .enrich.runner import run_enrich
 from .enrich.runner_v2 import run_enrich as run_enrich_v2
 from .eval.judge import DEFAULT_AIHOT_MARKDOWN, DEFAULT_OUTPUT_DIR, run_eval
 from .fetcher.runner import fetch_all, refresh_wechat_avatar, reload_sources
+from .fetcher.wechat import (
+    WeChatBrowserNotVerified,
+    WeChatBrowserUnavailable,
+    inspect_wechat_browser_executable,
+)
 from .interpret.runner import run_interpret
 from .performance.journey_monitor import (
     DEFAULT_ALERT_STATE_PATH,
     DEFAULT_EVIDENCE_DIR,
-    DEFAULT_PIPELINE_LOCK_PATH,
     DEFAULT_SAMPLE_PATH,
     LAUNCHD_INSTALL_HINT,
     run_journey_monitor,
@@ -71,6 +86,7 @@ from .performance.remediation import (
     RemediationConfig,
     remediate_confirmed_incident,
 )
+from .pipeline_lock import DEFAULT_PIPELINE_LOCK_PATH, pipeline_lock_is_held
 from .prefilter.runner import run_prefilter
 from .pricing import get_pricing
 from .scorer.runner import run_scoring
@@ -116,6 +132,128 @@ from .wechat_discovery.store import (
 )
 
 _SOURCE_QUOTA_FROM_ENV = object()
+_WECHAT_BROWSER_INSTALL_COMMAND = "uv run playwright install chromium"
+_PIPELINE_RUN_RE = re.compile(
+    r"^(?:\[[^\]]+\]\s+)?===\s+pipeline RUN generation=(?P<generation>[^\s]+)\s+===$"
+)
+_PIPELINE_CONTROL_RE = re.compile(
+    r"^(?:\[[^\]]+\]\s+)?===\s+"
+    r"(?P<stage>egress preflight|wechat_browser_preflight|fetch|prefilter|score|enrich|curate|"
+    r"interpret|wechat_browser_preflight_resolve)\s+"
+    r"(?P<event>START|OK|FAIL|DEGRADED)(?:\s+\([^)]*\))?\s+===$"
+)
+_PIPELINE_SUCCESS_CONTROL_SEQUENCE = (
+    ("egress preflight", "START"),
+    ("egress preflight", "OK"),
+    ("wechat_browser_preflight", "START"),
+    ("wechat_browser_preflight", "OK"),
+    ("fetch", "START"),
+    ("fetch", "OK"),
+    ("prefilter", "START"),
+    ("prefilter", "OK"),
+    ("score", "START"),
+    ("score", "OK"),
+    ("enrich", "START"),
+    ("enrich", "OK"),
+    ("curate", "START"),
+    ("curate", "OK"),
+    ("interpret", "START"),
+    ("interpret", "OK"),
+    ("wechat_browser_preflight_resolve", "START"),
+)
+
+
+class PipelineSuccessNotVerified(RuntimeError):
+    pass
+
+
+def _verify_pipeline_success_evidence(
+    pipeline_log: str | Path | None,
+    *,
+    pipeline_lock_path: str | Path,
+    pipeline_lock_fd: int,
+    pipeline_capability_fd: int,
+) -> None:
+    if pipeline_log is None:
+        raise PipelineSuccessNotVerified("--pipeline-log is required")
+    lock_path = Path(pipeline_lock_path)
+    try:
+        inherited_lock = os.fstat(pipeline_lock_fd)
+        lock_file = lock_path.stat()
+        inherited_capability = os.fstat(pipeline_capability_fd)
+    except OSError as exc:
+        raise PipelineSuccessNotVerified(
+            "the inherited pipeline descriptors could not be verified"
+        ) from exc
+    if not (
+        stat.S_ISREG(inherited_lock.st_mode)
+        and stat.S_ISREG(lock_file.st_mode)
+        and (inherited_lock.st_dev, inherited_lock.st_ino)
+        == (lock_file.st_dev, lock_file.st_ino)
+        and pipeline_lock_is_held(lock_path) is True
+    ):
+        raise PipelineSuccessNotVerified(
+            "the command is not running inside the active pipeline process tree"
+        )
+
+    activity_path = lock_path.with_suffix(".activity")
+    try:
+        generation = activity_path.read_text(encoding="utf-8").strip()
+        parsed_generation = UUID(generation)
+    except (OSError, ValueError) as exc:
+        raise PipelineSuccessNotVerified("the pipeline activity generation is unavailable") from exc
+    if str(parsed_generation) != generation.lower():
+        raise PipelineSuccessNotVerified("the pipeline activity generation is not canonical")
+    try:
+        capability_generation = os.pread(pipeline_capability_fd, 128, 0).decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PipelineSuccessNotVerified(
+            "the inherited pipeline capability could not be verified"
+        ) from exc
+    if not (
+        stat.S_ISREG(inherited_capability.st_mode)
+        and inherited_capability.st_nlink == 0
+        and capability_generation == generation
+    ):
+        raise PipelineSuccessNotVerified(
+            "the command is not running inside the active pipeline process tree"
+        )
+    try:
+        fcntl.flock(pipeline_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        raise PipelineSuccessNotVerified(
+            "the command is not running inside the active pipeline process tree"
+        ) from exc
+
+    log_path = Path(pipeline_log)
+    if re.fullmatch(r"pipeline-\d{8}-\d{6}\.log", log_path.name) is None:
+        raise PipelineSuccessNotVerified("the pipeline log name is not recognized")
+    if not log_path.is_file():
+        raise PipelineSuccessNotVerified("the pipeline log is not a regular file")
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        raise PipelineSuccessNotVerified("the pipeline log could not be read") from exc
+    log_generations: list[str] = []
+    controls: list[tuple[str, str]] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if "=== PIPELINE DONE " in line or "=== pipeline SKIP:" in line:
+            raise PipelineSuccessNotVerified(
+                "the pipeline log is already complete or belongs to a skipped run"
+            )
+        if match := _PIPELINE_RUN_RE.match(line):
+            log_generations.append(match.group("generation"))
+        if match := _PIPELINE_CONTROL_RE.match(line):
+            controls.append((match.group("stage"), match.group("event")))
+    if log_generations != [generation]:
+        raise PipelineSuccessNotVerified(
+            "the pipeline log generation does not uniquely match the active run"
+        )
+    if tuple(controls) != _PIPELINE_SUCCESS_CONTROL_SEQUENCE:
+        raise PipelineSuccessNotVerified(
+            "the pipeline control events are missing, duplicated, failed, degraded, or out of order"
+        )
 
 
 def _resolve_source_quota(value: object) -> SourceQuota | None:
@@ -160,6 +298,266 @@ def _egress_preflight() -> int:
         return 1
     print(f"egress-preflight status=healthy policy_id={policy.policy_id} policy_sha256={policy.policy_sha256}")
     return 0
+
+
+def _wechat_browser_alert_result(
+    *, status: str, reason: str, firing: bool, after_pipeline: bool = False
+) -> AlertRuleResult:
+    if firing:
+        detail = (
+            "Playwright 无法确认预期 Chromium 可执行文件"
+            if status == "not_verified"
+            else "Playwright 预期 Chromium 可执行文件缺失或不可执行"
+        )
+        action = (
+            "现在查看 `./run.sh wechat-browser-preflight` 的 Details（scheduled 路径见同轮 "
+            "`logs/pipeline-*.log`），修复 Playwright driver/runtime 错误后重试；"
+            "不要在状态未核实时把重新安装浏览器当成已证实修复。"
+            if status == "not_verified"
+            else (
+                f"现在到 AI Radar 仓库运行 `{_WECHAT_BROWSER_INSTALL_COMMAND}`，再运行 "
+                "`./run.sh wechat-browser-preflight`；若仍失败，查看同轮 `logs/pipeline-*.log`。"
+            )
+        )
+        return AlertRuleResult(
+            rule_id=WECHAT_BROWSER_PREFLIGHT_RULE_ID,
+            title="微信全文浏览器依赖不可用",
+            firing=True,
+            detail=detail,
+            action=action,
+            values={"status": status, "reason": reason},
+            severity=PAGE_SEVERITY,
+            impact=(
+                "本轮数据 pipeline 已完成；下一轮在 Chromium 恢复前将在 fetch 前停止"
+                if after_pipeline
+                else "scheduled pipeline 在 fetch 前停止；本轮 RSS/X 抓取与后续处理不会启动"
+            ),
+            urgency="是——需立即恢复 Chromium",
+        )
+    return AlertRuleResult(
+        rule_id=WECHAT_BROWSER_PREFLIGHT_RULE_ID,
+        title="微信全文浏览器依赖不可用",
+        firing=False,
+        detail=(
+            "仅关闭 executable-path incident：Chromium 预期可执行文件存在且整轮 "
+            "pipeline 已成功完成；未验证 Chromium launch、网络或微信全文抓取"
+        ),
+        action="无需处置",
+        values={"status": status, "reason": reason},
+        severity=PAGE_SEVERITY,
+    )
+
+
+def _run_wechat_browser_alert_transition(
+    result: AlertRuleResult,
+    *,
+    state_path: str | Path,
+    event_path: str | Path,
+    send: AlertSender | None,
+) -> dict[str, object]:
+    return run_alert_results_state_machine(
+        [result],
+        state_path=state_path,
+        event_path=event_path,
+        send=send,
+    )
+
+
+def _print_wechat_browser_alert_receipt(transition: dict[str, object]) -> None:
+    sent = transition.get("sent")
+    receipt = sent[0] if isinstance(sent, list) and sent else None
+    if isinstance(receipt, dict) and receipt.get("delivered") is True:
+        print("Alert: accepted rule=W1 severity=page")
+    elif isinstance(receipt, dict):
+        print("Alert: degraded rule=W1 severity=page; notification was not accepted and will retry")
+    else:
+        print("Alert: deduplicated rule=W1 severity=page; existing incident remains active")
+
+
+def _wechat_browser_preflight(
+    *,
+    state_path: str | Path = DEFAULT_STATE_PATH,
+    event_path: str | Path = DEFAULT_EVENT_PATH,
+    resolve_after_pipeline: bool = False,
+    pipeline_log: str | Path | None = None,
+    pipeline_lock_path: str | Path = DEFAULT_PIPELINE_LOCK_PATH,
+    pipeline_lock_fd: int = 9,
+    pipeline_capability_fd: int = 8,
+    send: AlertSender | None = None,
+) -> int:
+    if resolve_after_pipeline:
+        try:
+            _verify_pipeline_success_evidence(
+                pipeline_log,
+                pipeline_lock_path=pipeline_lock_path,
+                pipeline_lock_fd=pipeline_lock_fd,
+                pipeline_capability_fd=pipeline_capability_fd,
+            )
+        except PipelineSuccessNotVerified as exc:
+            print("WeChat browser recovery: NOT VERIFIED — W1 remains open")
+            print(f"Details: pipeline success evidence rejected: {exc}")
+            print("Impact: recovery cannot be claimed; the next scheduled run will preflight again")
+            print(
+                "Action: do not repair W1 state manually; resolve is accepted only from the active "
+                "pipeline after every data stage succeeds"
+            )
+            return 2
+        try:
+            executable = inspect_wechat_browser_executable()
+        except WeChatBrowserUnavailable as exc:
+            status = "unavailable"
+            reason = str(exc)
+            exit_code = 1
+        except WeChatBrowserNotVerified as exc:
+            status = "not_verified"
+            reason = str(exc)
+            exit_code = 2
+        else:
+            status = "present"
+            reason = f"expected executable present: {executable}"
+            exit_code = 0
+        if exit_code:
+            print(
+                f"WeChat browser recovery: {status.replace('_', ' ').upper()} — W1 remains open; "
+                "the data pipeline already succeeded"
+            )
+            print(f"Details: status={status} reason={reason}")
+            print("Impact: the next scheduled pipeline will stop before fetch unless this check passes")
+            if status == "unavailable":
+                print(
+                    f"Action now: run {_WECHAT_BROWSER_INSTALL_COMMAND}, then retry "
+                    "./run.sh wechat-browser-preflight"
+                )
+            else:
+                print(
+                    "Action now: inspect and repair the Playwright driver/runtime error above, then retry "
+                    "./run.sh wechat-browser-preflight"
+                )
+            try:
+                transition = _run_wechat_browser_alert_transition(
+                    _wechat_browser_alert_result(
+                        status=status,
+                        reason=reason,
+                        firing=True,
+                        after_pipeline=True,
+                    ),
+                    state_path=state_path,
+                    event_path=event_path,
+                    send=send,
+                )
+            except Exception as exc:  # noqa: BLE001 - detection result still controls the exit.
+                print(f"Alert: degraded; state/notification failed: {type(exc).__name__}: {exc}")
+                return exit_code
+            _print_wechat_browser_alert_receipt(transition)
+            return exit_code
+        try:
+            transition = _run_wechat_browser_alert_transition(
+                _wechat_browser_alert_result(status="present", reason=reason, firing=False),
+                state_path=state_path,
+                event_path=event_path,
+                send=send,
+            )
+        except Exception as exc:  # noqa: BLE001 - recovery state must remain retryable.
+            print(
+                "WeChat browser recovery: DEGRADED — data pipeline succeeded; W1 remains open"
+            )
+            print(f"Details: state transition failed: {type(exc).__name__}: {exc}")
+            print(
+                "Scope: executable path is present; Chromium launch, network, and WeChat full-text "
+                "fetch were not checked"
+            )
+            print(
+                "Action: no manual W1 state repair is required; the transition will retry after "
+                "the next fully successful pipeline; data integrity is outside this result"
+            )
+            return 2
+        sent = transition.get("sent")
+        receipt = sent[0] if isinstance(sent, list) and sent else None
+        if isinstance(receipt, dict) and receipt.get("delivered") is not True:
+            print(
+                "WeChat browser recovery: DEGRADED — data pipeline succeeded; W1 remains open"
+            )
+            print("Evidence: expected executable is present and the full scheduled pipeline completed")
+            print("Impact: recovery notification was not accepted; W1 remains open")
+            print(
+                "Scope: executable path is present; Chromium launch, network, and WeChat full-text "
+                "fetch were not checked"
+            )
+            print(
+                "Action: no manual W1 state repair is required; recovery delivery will retry "
+                "automatically after the next fully successful pipeline; data integrity is outside this result"
+            )
+            return 2
+        if isinstance(receipt, dict):
+            print("WeChat browser recovery: RESOLVED — W1 executable-path incident closed")
+            print("Evidence: expected executable is present and the full scheduled pipeline completed")
+            print(
+                "Scope: Chromium launch, network, and WeChat full-text fetch were not "
+                "independently checked"
+            )
+            print(
+                "Alert: recovery accepted rule=W1 "
+                f"severity={receipt.get('effective_severity', 'notice')}"
+            )
+        else:
+            print("WeChat browser recovery: NOT NEEDED — no announced W1 firing episode")
+            print("Evidence: expected executable is present and the full scheduled pipeline completed")
+            print(
+                "Scope: Chromium launch, network, and WeChat full-text fetch were not "
+                "independently checked"
+            )
+            print("Alert: not sent")
+        print("Action: none")
+        return 0
+
+    try:
+        executable = inspect_wechat_browser_executable()
+    except WeChatBrowserUnavailable as exc:
+        status = "unavailable"
+        reason = str(exc)
+        exit_code = 1
+    except WeChatBrowserNotVerified as exc:
+        status = "not_verified"
+        reason = str(exc)
+        exit_code = 2
+    else:
+        print("WeChat browser preflight: PRESENT — scheduled pipeline may continue")
+        print(f"Details: status=present executable={executable}")
+        print(
+            "Scope: expected executable only; browser launch, network, and WeChat full-text fetch "
+            "were not checked"
+        )
+        print("Action: none")
+        print("Alert: not sent; recovery is evaluated only after a fully successful pipeline")
+        return 0
+
+    headline = "UNAVAILABLE" if status == "unavailable" else "NOT VERIFIED"
+    print(f"WeChat browser preflight: {headline} — scheduled pipeline blocked before fetch")
+    print(f"Details: status={status} reason={reason}")
+    if status == "unavailable":
+        print("Impact: scheduled pipeline will stop before fetch; no WeChat article will be downgraded to RSS-only")
+        print(
+            f"Action now: run {_WECHAT_BROWSER_INSTALL_COMMAND}, then retry "
+            "./run.sh wechat-browser-preflight"
+        )
+    else:
+        print("Impact: browser availability was not determined; scheduled pipeline stopped before fetch")
+        print(
+            "Action now: inspect and repair the Playwright driver/runtime error above, then retry "
+            "./run.sh wechat-browser-preflight"
+        )
+    try:
+        transition = _run_wechat_browser_alert_transition(
+            _wechat_browser_alert_result(status=status, reason=reason, firing=True),
+            state_path=state_path,
+            event_path=event_path,
+            send=send,
+        )
+    except Exception as exc:  # noqa: BLE001 - detection result still controls the pipeline exit.
+        print(f"Alert: degraded; state/notification failed: {type(exc).__name__}: {exc}")
+        return exit_code
+    _print_wechat_browser_alert_receipt(transition)
+    return exit_code
 
 
 def _remediation_timeout(value: str) -> int:
@@ -2118,6 +2516,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("egress-preflight")
+    wechat_browser_preflight = subparsers.add_parser("wechat-browser-preflight")
+    wechat_browser_preflight.add_argument("--state-path", default=str(DEFAULT_STATE_PATH))
+    wechat_browser_preflight.add_argument("--event-path", default=str(DEFAULT_EVENT_PATH))
+    wechat_browser_preflight.add_argument("--resolve-after-pipeline", action="store_true")
+    wechat_browser_preflight.add_argument("--pipeline-log")
 
     fetch_parser = subparsers.add_parser("fetch")
     fetch_parser.add_argument("--sources", help="Override sources.toml path")
@@ -2395,6 +2798,15 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "egress-preflight":
         raise SystemExit(_egress_preflight())
+    if args.command == "wechat-browser-preflight":
+        raise SystemExit(
+            _wechat_browser_preflight(
+                state_path=args.state_path,
+                event_path=args.event_path,
+                resolve_after_pipeline=args.resolve_after_pipeline,
+                pipeline_log=args.pipeline_log,
+            )
+        )
     if args.command == "fetch":
         raise SystemExit(_fetch(args))
     if args.command == "prefilter":
