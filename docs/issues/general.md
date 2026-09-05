@@ -344,16 +344,9 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 - **为什么值得跟踪**：这些漂移在当前唯一写入端（`curate()` 同一事务写入）下不会自然发生，只在人工改库或未来第二写入端出现时才会；届时回退会把不一致输入带进成功路径（重算 rank/展示分）。
 - **处置候选**：把校验器扩成接收 `conn`/`run_id` 的语义校验（join `items`/`sources`、整 run cap 一致性、rollback 块封闭键集），复用于 curate 落库与 rollback 两处；配套否定用例。`source_cap:null` 分支尚无真实实例（默认 policy 总配单源上限），若上线后需要该分支，先在副本用 `per_source=None` 产一份实例接地。
 
-### interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态，收据落地即失效
-
-- **现象**：`interpret` 自 2026-09-01 15:00 起每轮跳过（`skip interpret: selector compatibility is unproven (receipt does not match egress implementation)`），累计 138 轮；215 篇微信文章无解读（`wx_mp2rss` 130 / `wx_wechat2rss` 85），`/wechat` 因 `JOIN wechat_interpretations WHERE save_decision=1` 而停更。fetch 与告警全绿，无任何告警触发。
-- **逐字段定位**：收据 `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` 只有 `policy_sha256` 不匹配（收据 `6fdcfb9f…` vs 生产 `58a97e64…`）；`egress_implementation_sha256` 完全一致（`9d7d950a…`），`./run.sh egress-preflight` 当时即 `status=healthy`。
-- **根因（竞态，四分钟）**：策略文件 `system-config:config/agent-proxy/policies/domain-routing-v2.tsv` 的两次相邻提交——`a5f3433` 09-02 16:38（SG Standard）产出 sha `6fdcfb9f…`，`236d165` 09-02 20:32（`googleapis.com` 由 5 条 exact 收敛为 1 条 suffix）产出 sha `58a97e64…`。ai-radar 的 `02fce04 fix(interpret): re-attest the selector receipt under domain-routing v2` 于 09-02 20:40 提交、收据文件 mtime 20:36，其 attestation 基于 `a5f3433` 那版策略跑完，写盘时生产已被 `236d165` 换掉 → **收据从落地那一刻起就与生产策略不一致**。
-- **为什么没人发现**：闸 fail-closed 且**干净退出 0**（契约文档明写"no external script is started"），pipeline 阶段报 `interpret OK`；现有 A1–A7 无「interpret 连续 N 轮 skipped」维度。
-- **本次处置（2026-09-05，用户裁决先恢复）**：收据 `policy_sha256` 直接改为 `58a97e64…`（原文件备份 `.bak-20260905-095616`），`_preflight()` 返回 ok。**残余**：收据现 attest 一个未经 attestation 的策略，该闸暂时退化为形式；是否补跑完整 attestation 待定。
-- **闭合方向**：(1) attestation 流程收尾时校验生产 `policy_sha256` 未变，变了即重跑，消除竞态；(2) 给 `interpret skipped=true` 连续 N 轮加一条告警（属「产出还在但质量变差」类静默降级，与 Playwright 那条同族）；(3) 策略仓与收据消费方之间缺跨仓变更通知，考虑让 `egress-preflight` 在 sha 漂移时显式提示收据需重签。
-
 ### interpret 把 `check-proxy-status` 的整体健康当前置，任一无关远端抖动即让整轮 FAIL
+
+- **与已归档竞态条目的关系**：那条 `policy_sha256` 竞态已 resolved 并整条移入 [`archive/closed.md`](archive/closed.md)（由 `airadar.interpret.receipt_writer` 关闭）。本条是它暴露出的**另一个**面，独立存在：即使收据永远正确，本条的整体健康前置仍会让 interpret 整轮失败。
 
 - **现象**：收据 `policy_sha256` 修好、闸已放行之后，interpret 仍间歇整轮失败——`2026-09-05 11:11:03 === interpret FAIL (exit 1) ===`，异常为 `airadar.egress.EgressPreflightError: status command returned 1`（`egress.py:135`，经 `interpret/runner.py:192` 的 `require_selector_policy()`）。同形态在 09-04 18:00 / 20:45 / 22:15 三轮已各发生一次，当时被收据不匹配的跳过掩盖。
 - **机理**：`require_selector_policy()` 只需要「模式是 domain-routing、policy_id/sha 已知」这两项事实，却把 `check-proxy-status --format=kv` 的**退出码**（= 整体健康）当作前置。该命令的非 0 分支包含与 interpret 无关的远端探测结果：`AGENT_PROXY_ADDR` 与 `DOMAIN_ROUTER_PROXY` 不一致（`effective_mode=custom`）、`gcp-data-unreachable`、`gcp-tunnel-unavailable`、`dgx-mode-stale`、`dgx-resources-unavailable`。因此 GCP 隧道或 DGX 侧任一抖动，都会让本轮**一篇文章都不处理**。
