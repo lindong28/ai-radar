@@ -14,6 +14,8 @@
 
 evalset 里 2667 条 AIHOT 参考摘要，用我站自己的 `EnrichOutputV2.summary_zh` 校验器判，只有 **603 条（22.6%）能通过**；AIHOT 摘要句数分布 1 句 849 / 2 句 1114 / 3 句 581，即 **77.4% 是 1–2 句，而我站 schema 强制 3–5 句**。判官 prompt 又把「编辑风格（句式、密度、语气、长度）」算作三分之一权重。
 
+**已量化（2026-09-05，零 LLM 成本，用已有 37 条判分）**：判官 closeness 与「我方句数 − 参考句数」的绝对差单调负相关——差 0 → 80.0（n=2）、1 → 52.5（n=4）、2 → 56.2（n=12）、3 → 46.8（n=17）、4 → 40.0（n=2）；Pearson r = −0.307。我方句数分布 {3:4, 4:28, 5:5}，参考 {1:19, 2:11, 3:7}，故该差值**结构性地**落在 2–3 而非 0。
+
 **失败场景**：`summary_closeness_mean` 里含一个由 `src/airadar/enrich/schema_v2.py` 钉死、prompt 层动不了的固定折扣。照当前读数定达标线，会把这个不可动分量写进刻度，此后任何摘要 prompt 优化都在一个有天花板的尺子上量。`why_recommend` 侧无此问题（79 条参考理由里 75 条能过我们的 35–90 字校验，94.9%）。
 
 **闭合方向**：先测这个天花板的量级（同一批题，把参考摘要按我站 schema 改写后再判一次，看 closeness 抬升多少），再决定是放宽 schema、还是在指标里显式扣除。
@@ -78,7 +80,9 @@ evalset 里 2667 条 AIHOT 参考摘要，用我站自己的 `EnrichOutputV2.sum
 
 `run` 借用生产 `_evaluate_item`，后者一律带 `stage=` 调 `chat_json`，于是 `record_llm_usage_best_effort` 照常写 `data/llm_usage.db`。实测首轮 20 题产生 61 行（enrich 21 / prefilter 20 / score 20），`attribution_json` 里无任何 eval 标记。
 
-**失败场景**：成本审计、单篇成本、阶段成本告警被评测流量污染；跑全量 2741 题会一次注入约 8200 行。**另**：同一链路上 `ark_breaker.record_failure(exc)` 会因评测打出的 ARK 429/quota 写 `data/ark-breaker.json` 并开 2 小时熔断，随后**生产** pipeline 会被推去按量计费的 DeepSeek 通道——评测自己因 `require_ark_only()` 摘掉了 `DEEPSEEK_API_KEY` 不会走那条路，但它给生产开的门是真的。
+**已实测（2026-09-05）**：本轮三次基线 run 的 item 在 `data/llm_usage.db` 留下 **970 行**（enrich 344 / prefilter 313 / score 313），占当日该表 4066 行的 **23.9%**。
+
+**失败场景**：成本审计、单篇成本、阶段成本告警被评测流量污染；跑全量 2741 题会把这个数推到约 8200 行。**另**：同一链路上 `ark_breaker.record_failure(exc)` 会因评测打出的 ARK 429/quota 写 `data/ark-breaker.json` 并开 2 小时熔断，随后**生产** pipeline 会被推去按量计费的 DeepSeek 通道——评测自己因 `require_ark_only()` 摘掉了 `DEEPSEEK_API_KEY` 不会走那条路，但它给生产开的门是真的。
 
 **闭合方向**：给 eval run 的 usage 记录加可过滤标记（`attribution_json` 里一个 `eval_run_id`），并在 eval 路径上跳过 `ark_breaker` 记账。这条与 [cost-observability.md](cost-observability.md) 同域。
 
