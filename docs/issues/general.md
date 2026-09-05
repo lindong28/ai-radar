@@ -12,6 +12,14 @@
 - Description: `docs/references/ai-assistant-contract.md` 前段用 `receipt` 指 selector compatibility receipt，archive import consumer contract 后段又以无 qualifier 的 `receipt` 指 import receipt。两个对象同处一份跨仓接口契约，读者可能把 `postcheck` 错接到 selector receipt。
 - Fix direction: 下一次修改 archive import contract 时，将该处限定为 `archive import receipt` 或权威 schema 类型名；本轮不修改无关基线文本。
 
+## [open] ISSUE-GENERAL-20260904-d8c1 · Source contract duplicates main-timeline membership already determined by kind
+
+- Type: schema debt · Priority: low · Discovered: 2026-09-04 T1 terminal schema review §3（baseline-independent / non-boundary finding）
+- Source: `tests/fixtures/aihot_sources.json` stores `ai_radar_main_timeline_member` on every source row, while `src/airadar/sources/contract.py` requires it to be `false` for `kind="wechat"` and `true` for every other accepted kind; `tests/test_source_contract.py::test_contract_has_no_convenience_copies` asserts the same equivalence. Consumers in the renderer, membership transition checker, audit receipt path and public source counts nevertheless read the copied boolean.
+- Risk: the field has no independent state under the current contract, so every author and consumer must maintain two representations of one fact. The validator currently rejects drift, which limits present runtime risk, but the duplicated authority adds schema surface and makes a future kind or membership evolution easier to implement inconsistently across writers, validators and consumers.
+- Deferred direction: do not expand T1 or change the published source contract for the paused-source cutover. At the next intentional source-contract schema evolution, inventory all consumers, remove the convenience copy from the new schema, derive main-timeline membership from the authoritative `kind` rule at the shared contract boundary, and migrate renderer/checker/audit/API tests and receipts together. Preserve the current 161-member universe and treat any future exception where membership is not determined by kind as a separate explicit schema decision.
+- Closure: a versioned contract evolution removes the independent field, every former consumer derives membership through one shared rule, negative tests reject unsupported kinds or ambiguous exceptions, and generated config/receipts/public counts retain their exact expected member sets.
+
 ## [open] ISSUE-GENERAL-20260901-b6ad · WeChat KB import receipt does not identify its target namespace
 
 - Type: operability / observability · Priority: medium · Discovered: 2026-09-01 documentation sync final review

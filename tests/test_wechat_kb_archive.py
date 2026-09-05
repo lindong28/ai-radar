@@ -398,6 +398,53 @@ def test_archive_item_participates_in_cross_source_wechat_dedup(tmp_path: Path) 
         assert duplicate.startswith("kb-")
 
 
+def test_paused_mp2rss_history_still_deduplicates_active_wechat_source(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    with get_conn(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO sources (id, name, url, tier, enabled, paused, meta_json, synced_at, kind)
+            VALUES ('wx_mp2rss', 'Mp2RSS', 'https://example.com/mp.xml', 'T2', 1, 1, '{}',
+                    '2026-09-04T00:00:00Z', 'wechat')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO sources (id, name, url, tier, enabled, paused, meta_json, synced_at, kind)
+            VALUES ('wx_wechat2rss', 'Wechat2RSS', 'https://example.com/new.xml', 'T2', 1, 0, '{}',
+                    '2026-09-04T00:00:00Z', 'wechat')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO items (
+              id, source_id, url, title, author, published_at, fetched_at,
+              content_text, content_html, content_hash, extra_json
+            ) VALUES (
+              'old-anchor', 'wx_mp2rss', 'https://mp.weixin.qq.com/s/old', '同一篇文章',
+              '测试号', '2026-09-04T01:00:00Z', '2026-09-04T01:01:00Z',
+              'old body', NULL, 'old-hash', '{}'
+            )
+            """
+        )
+        candidate = FetchedItem(
+            source_id="wx_wechat2rss",
+            url="https://mp.weixin.qq.com/s/new-provider-url",
+            title="同一篇文章",
+            author="测试号",
+            published_at="2026-09-04T01:02:00Z",
+            fetched_at="2026-09-04T02:00:00Z",
+            content_text="different body",
+        )
+
+        assert wechat_duplicate_id(conn, candidate) == "old-anchor"
+        conn.execute("UPDATE sources SET enabled=0 WHERE id='wx_mp2rss'")
+        assert wechat_duplicate_id(conn, candidate) is None
+
+
 def test_source_reload_keeps_archive_disabled_and_out_of_runtime_source_loading(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.db"
     assistant_root = tmp_path / "assistant"

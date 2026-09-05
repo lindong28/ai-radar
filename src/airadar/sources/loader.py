@@ -18,8 +18,8 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_]*[a-z0-9]$")
 LOGGER = logging.getLogger(__name__)
 # A WeChat feed URL always carries a subscription token, so it is configured as
 # a single env-var placeholder rather than a literal. Which env var is per
-# source: running two WeChat feeds side by side is how a replacement is proven
-# against the incumbent before either is switched off.
+# source. A paused optional source may retain that unresolved placeholder as an
+# inert identity so reloads preserve its visibility state without fetching it.
 ENV_PLACEHOLDER_RE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
 
 
@@ -30,6 +30,7 @@ class SourceConfig:
     url: str
     tier: str
     enabled: bool = True
+    paused: bool = False
     kind: str = "feed"
     homepage_url: str | None = None
     icon_url: str | None = None
@@ -65,13 +66,35 @@ def _validate_source(
 
     if not SLUG_RE.match(slug):
         raise ValueError(f"invalid source slug: {slug}")
-    url = os.path.expandvars(url)
-    if "${" in url:
+    paused_raw = raw.get("paused", False)
+    if not isinstance(paused_raw, bool):
+        raise ValueError(f"invalid paused for {slug}: must be boolean")
+    paused = paused_raw
+    raw_url = url
+    url = os.path.expandvars(raw_url)
+    placeholder = ENV_PLACEHOLDER_RE.match(raw_url)
+    raw_kind = str(raw.get("kind", "feed"))
+    unresolved_paused_placeholder = (
+        paused
+        and schema_version >= 2
+        and raw_kind == "wechat"
+        and raw.get("optional") is True
+        and raw.get("wechat_only") is True
+        and raw.get("public_url_override") is not None
+        and placeholder is not None
+        and placeholder.group(1) == raw.get("required_env")
+        and not os.environ.get(placeholder.group(1), "").strip()
+    )
+    if unresolved_paused_placeholder:
+        url = raw_url
+    if "${" in url and not unresolved_paused_placeholder:
         raise ValueError(
             f"source {url_field} for {slug} references an unset env var: {raw[url_field]!r}"
         )
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if not unresolved_paused_placeholder and (
+        parsed.scheme not in {"http", "https"} or not parsed.netloc
+    ):
         raise ValueError(f"invalid source url for {slug}: {url}")
     if tier not in VALID_TIERS:
         raise ValueError(f"invalid tier for {slug}: {tier}")
@@ -147,6 +170,7 @@ def _validate_source(
         url=url,
         tier=tier,
         enabled=enabled,
+        paused=paused,
         kind=kind,
         homepage_url=homepage_url,
         icon_url=icon_url,
@@ -189,8 +213,15 @@ def load_sources(path: Path) -> list[SourceConfig]:
 
     sources: list[SourceConfig] = []
     for raw in raw_sources:
+        if schema_version >= 2 and "paused" not in raw:
+            slug = raw.get("slug", "<unknown>")
+            raise ValueError(f"missing source field for {slug}: paused")
+        paused = raw.get("paused", False)
+        if not isinstance(paused, bool):
+            slug = raw.get("slug", "<unknown>")
+            raise ValueError(f"invalid paused for {slug}: must be boolean")
         unset_env = _unconfigured_placeholder_env(raw, schema_version=schema_version)
-        if unset_env is not None:
+        if unset_env is not None and not paused:
             LOGGER.warning(
                 "source %s skipped: %s is not set; set it to enable that feed",
                 raw.get("slug", "<unknown>"),

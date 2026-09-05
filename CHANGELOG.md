@@ -10,6 +10,16 @@
 - A4 现在只用已写完汇总和终态的 fetch 轮；最近完整轮过期或不存在时会明确显示「未评估」，不再把未完成轮的默认 0% 当成健康。401/402 账户层失败超过既有比例阈值时直接 page，并按来源组给出凭证或付费层处置；该 page 需连续两个不同的完整轮降回阈值内才恢复。
 - `/admin` 的「文章摄取」面板改读最近完整一轮：没有完整轮时显示「fetch 读数未评估」，完整轮过期时给出过期分钟数，不再显示 0 或报错；`/api/v1/admin/metrics` 的 `ingestion.latest_fetch` 在无完整轮时为 `null`，有完整轮时新增 `completed_at`、`failed_by_status`、`failed_sources_by_status`、`stale_minutes`、`stale_limit_minutes`、`stale`，并新增 `recent_complete_fetches`。A4 的恢复消息附带复核入口，运维 runbook 新增「A4 账户层失败（401/402）的处置与恢复判定」小节。
 
+## 2026-09-04（本地支持暂停 Mp2RSS 主动工作并保留历史内容）
+
+- 待发布配置把 `wx_mp2rss` 设为 `paused`：它不进入 fetch/A7，已有文章仍可在 `/wechat`、搜索和详情中读取，并继续避免同一篇微信文章重复入库。Wechat2RSS 在该配置中承担主动抓取；仅设置 Mp2RSS 环境变量不会恢复抓取。A7 在受影响来源全部 paused 时静默结案；只暂停部分来源时，其余来源没有当前检查读数就继续报警，不会误发“已恢复”。
+- 这是本 checkout 的代码、配置与运维支持，不表示生产已经迁移或停止全部 Mp2RSS 请求。生产数据库同步、服务发布、真实页面/日志验收，以及仓库外 `shadow-observe` cron 的精确退役或 no-op readback，仍须经单独授权的生产收口步骤完成。
+
+## 2026-09-04（Wechat2RSS 的 Lima 无 GUI 启动能力待 program assembly）
+
+- program assembly 合入 T3 资产后，Wechat2RSS 目标部署入口使用 Lima ≥2.2 named instance：官方 generated system LaunchDaemon 可在 boot 时启动 VM，`deploy/wechat2rss/compose.sh` 只把该 instance 的 socket 交给 Compose，不依赖 GUI，也不修改其它 Docker 工作负载的全局 context。维护者生产安装、数据切换与真实 reboot 仍须另行授权和验收。
+- 同一组 T3 资产会让健康检查支持无副作用观察、四态输出与隔离记录，并用 `boot-witness.sh` 验收登录前启动。当前 T1 checkout 尚未组装 `compose.sh`、`boot-witness.sh` 和支持 `--observe-only`/`--receipt` 的 healthcheck；旧脚本会忽略这些参数，因此组装前不得运行这些目标命令。
+
 ## 2026-09-04（微信供稿恢复：自建 Wechat2RSS 重新上线，其健康检查恢复后能再次告警）
 
 - `/wechat` 自 2026-09-03 起停止出现新文章：自建 Wechat2RSS 容器早在 2026-08-30 就随 OrbStack 重启后未自启而停摆（当时被仍在供稿的 Mp2RSS 掩盖），付费 Mp2RSS 订阅随后于 2026-09-03 到期（feed 404，最后入库的是一条「会员已到期」占位文章），两路至此都断。09-04 拉起 OrbStack 后 Wechat2RSS 已恢复抓取，目前是唯一在供稿的微信源（14 个公众号）；Mp2RSS 是否续费待定。

@@ -38,6 +38,7 @@ def render() -> str:
             f"fetch_url = {_quote(row['fetch_url'])}",
             f"tier = {_quote(row['tier'])}",
             f"enabled = {'true' if row['enabled'] else 'false'}",
+            f"paused = {'true' if row['paused'] else 'false'}",
             f"kind = {_quote(row['kind'])}",
             f"homepage_url = {_quote(row['homepage_url'])}",
             f"icon_url = {_quote(row['icon_url'])}",

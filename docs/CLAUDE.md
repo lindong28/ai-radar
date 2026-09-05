@@ -30,7 +30,7 @@
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + DB sync 的职责分工、验证与"已服务"终态判据 + X 图片新加坡出口代理（隧道链路、凭据边界、从内到外的诊断顺序）+ Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
 | [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A7 与 D3 告警、domain selector preflight/route audit、周报、飞书 webhook、用户旅程性能监控 runbook |
-| [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：Mp2RSS + Wechat2RSS 双跑与跨源去重、ai-assistant KB 手动归档补录、真名头像 backfill；后台发现候选已停止推进（见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)） |
+| [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused 后保留历史可见与跨源去重身份；含 ai-assistant KB 手动归档补录、真名头像 backfill，后台发现候选已停止推进（见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)） |
 | [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
 
 ### docs/references/ [Developer]
@@ -40,9 +40,9 @@
 | 文件 | 说明 |
 |---|---|
 | [ai-assistant-contract.md](references/ai-assistant-contract.md) | 可选外部 summary-agent 的接口契约 [Developer]：interpret 写回、只读文章目录 JSONL、title/跳过语义与验证入口 |
-| [source-maintenance.md](references/source-maintenance.md) | 信源清单维护与验证规则 [Developer]（aihot_sources.json 机器契约、audit 脚本） |
+| [source-maintenance.md](references/source-maintenance.md) | 信源清单维护与验证规则 [Developer]（aihot_sources.json 机器契约、enabled/paused/fetchable 语义、audit 脚本） |
 | [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)，本档只留取证读数 |
-| [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源添加流程 [User]（已停用，微信摄取现走 Mp2RSS + Wechat2RSS 双跑，见 operations/wechat-ingestion.md） |
+| [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源历史 recipe [User]（当前 checkout 不可直接执行；完整 package 须从 `29ca189^` 恢复并迁移 v2 contract；仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused） |
 | [web-contract-golden.md](references/web-contract-golden.md) | 行为等价 Web 重构的冻结 DB + HTTP golden 使用边界、命令与 re-baseline 规则 |
 
 ### docs/prd/ [Developer]
@@ -143,7 +143,7 @@
 | [056-label-the-score-instead-of-showing-a-bare-number.md](adr/056-label-the-score-instead-of-showing-a-bare-number.md) | 评分显示语义标签，且不写死分母 |
 | [057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md](adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md) | X 推文媒体经新加坡出口代理取回，RSS 正文图仍不展示 |
 | [058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md](adr/058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md) | X 媒体缩略图改为收缩包裹左对齐，lightbox 增强而非取代原生链接 |
-| [059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md](adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) | 两个微信来源并行取并集，按账号+归一化标题+5 分钟发布窗跨源去重 |
+| [059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md](adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) | 两个微信来源的跨源文章身份；Mp2RSS 主动运行状态已由 20260904-f427 supersede |
 | [060-hot-cache](adr/060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md) | 热点榜由后台刷新候选缓存供给，未就绪返回 503 |
 | [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md) | 公众号后台发现线整体废弃，发现层改由自建 Wechat2RSS 承担 |
 | [062-page-switch](adr/062-cut-the-switch-cost-at-the-query-the-edge-and-the-navigation.md) | 精选与全部动态的切换成本在查询、边缘和导航三层收敛 |
@@ -159,9 +159,12 @@
 | [20260829-a7f1-suppress-actionless-x-silence.md](adr/20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 |
 | [20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md](adr/20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并通过内部归档来源显式补录 ai-assistant KB |
 | [20260831-8b7c-control-wechat-review-term-aliases.md](adr/20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，并保持 raw 作者优先 |
+| [20260904-f427-pause-source-fetch-without-hiding-history.md](adr/20260904-f427-pause-source-fetch-without-hiding-history.md) | 暂停来源抓取与 A7，同时保留历史可见性、跨源身份和 enabled 语义；生产迁移与发布尚未执行 |
 | [20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md](adr/20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 |
 | [20260903-bc36-quota-curated-selection-by-source-form.md](adr/20260903-bc36-quota-curated-selection-by-source-form.md) | 精选按来源形态配额（X ≤20%、单源 ≤7.5%），同轮记无配额基线并支持定向回退；部分 supersede ADR-010 |
 | [20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md](adr/20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮、过期即「未评估」；401/402 账户层失败升 page 并按来源组给处置 |
+
+| [20260904-9890-wechat2rss-lima-boot-runtime.md](adr/20260904-9890-wechat2rss-lima-boot-runtime.md) | Wechat2RSS 使用 Lima generated system LaunchDaemon 作为无 GUI 登录的 boot runtime；生产 live gate 尚未执行 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

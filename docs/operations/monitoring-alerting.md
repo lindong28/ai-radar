@@ -47,9 +47,31 @@ firing 与 resolved 都沿该 episode 所在 severity 的通道投递；不再�
 | A2 | 阶段错误率/耗时异常 | prefilter/scoring/enrich 的错误 numerator/denominator **各自只取最近 15 分钟**；样本数分别至少为 `4/4/2` 才让错误率支路参与 page。独立的 P95 与**超过 120 分钟没有成功 pipeline**支路不受该样本门影响。prefilter 等后台 LLM 阶段的 P95 仍用最近 2 小时口径，只在持续达到真挂起量级时 page。SKIP 日志表示 pipeline 已在运行，不单独视为故障 | 查 `logs/pipeline-*.log` 的失败阶段；必要时手动跑单阶段复现 |
 | A3 | 网站用户侧异常 | `/admin` 以外用户访问的 5xx numerator 与 PV denominator **同取最近 15 分钟**，且 `PV >= 20` 时 5xx 率才参与 page；无法证明在窗口内的日志行不计入。healthz 主动探测从已安装 serve plist 的 `ProgramArguments` 解析端口，连续失败 2 次是独立 page 支路，计数跨轮持久化于 `data/alert-state.json` | 查 `logs/serve-access.err.log`、`logs/serve-access.log`、`./status.sh serve tunnel`；确认本地 serve 健康 |
 | A4 | 文章摄取骤降 | fetch 只读最近一个同时含汇总行及其后 `fetch OK/FAIL` 终态行的完整轮；没有完整轮或该轮超过 `fetch_stale_minutes`（默认 90 分钟）时，fetch 维度明确标为未评估，items-floor 仍照常评估。普通 fetch 失败率超过 `fetch_failed_ratio`（默认 0.4）、但 items 正常时是 `notice`；401/402 账户层失败数占 attempted 的比例超过同一阈值时是 `page`；今日 items 增量低于动态 floor 时也是 `page` | 账户层 page 按状态码和来源组给动作：402 检查并恢复对应 API 账户的付费层/额度；X API 的 401 核对 `X_BEARER_TOKEN`，其它来源的 401 按 `data/sources.toml` 的 `required_env` 核对运行环境。普通失败按 error 分组读 `logs/pipeline-*.log`，并见下方「出网 selector 的 preflight 与实际 route」；微信源走 Mp2RSS + Wechat2RSS 双跑（见 [wechat-ingestion.md](wechat-ingestion.md)） |
+
+| A4 | 文章摄取骤降 | 只有 fetch 失败率高、但 items 仍正常时是 `notice`；今日 items 增量低于按当日已过分钟缩放的 floor 时是 `page`，两者同时命中也是 `page` | 按 error 分组读 `logs/pipeline-*.log` 最新一轮的 FAIL 行，见下方「出网 selector 的 preflight 与实际 route」；X 源走官方 `api.x.com`（另查 bearer token 与配额），当前主动微信入口是 Wechat2RSS，paused Mp2RSS 不应有 OK/FAIL 行（见 [wechat-ingestion.md](wechat-ingestion.md)） |
 | A5 | 微信解读产出停滞 | 解读启用、4 小时无成功解读，且存在 fetched 至少 4 小时、仍符合重试资格的微信 pending 时 page；无近期成功且 pending 因退避/冻结归零时标为不可评估，不发「已恢复」 | 先查近 4 小时 pipeline/interpret 日志与 provider 成功/错误，再核对余额/配额；`ark-breaker.json` 只有 `opened_at` 仍在 2 小时 cooldown 内才是当前证据 |
 | A6 | 已记录 LLM 调用近 24 小时成本突变 | 当前窗与基线按同一现行费率、cache 全未命中重算。阈值两档：超过 `max(¥20, 3×中位数)` 发 notice，超过 `max(¥100, 6×中位数)` 才 page。金额与次数只统计 `llm_usage` 记录行，所以**任何越线判定都是在一个下界上做的**——未写入该表的付费调用（失败链路、未接入计量的调用点）不在内，resolve 也因此不表示 attempt-level 健康。在途窗（`.pipeline.flock` 证明本轮在跑）按 `in-progress` 用下界继续判 firing 与 notice→page，下界未越线时保留既有 episode 等封口。`baseline_days` 的实际取值与「至少 3 个有记录日」的缺口见 [ISSUE-023](../issues/cost-observability.md#issue-023--a6-的至少-3-个基线日门当前不可达) | 先按消息中的 Top 驱动核查；它复用 A6 的 cache 中性已知成本聚合。未定价调用在 `/admin/usage` 单列，nominal 目录价不是账单实付 |
-| A7 | 来源静默 | 逐源判定，不看全站总量：某个启用来源距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时进入静默候选。阈值按源缩放，因为固定 6 小时会对数天一更的来源常态误报，而被静音的告警等于没有告警。X API 来源若最近一次 timeline 读取仍在 A2 的 120 分钟 heartbeat 内、状态为 `verified` 且 pagination 已到 `checkpointed`，说明本地最近一次读取已追平持久游标：该来源保留在健康详情中并标成上游未更新，但不 page；`blocked`、`pending`、`draining`、非法、未来时间或过期 receipt 均不抑制。近 30 天不足 5 条的来源无法刻画节奏，计入「无法评估」并在消息中给出计数（firing 与非 firing 两条分支都给，2026-08-23 前只在非 firing 分支给），不按健康处理。这批来源里，累计条目已达 5 条、且静默超过其最近 5 条典型间隔两倍的判为**褪色**——一个真死掉的来源会先 firing，再随旧条目滑出 30 天窗掉出评估集，若不加区分就会在它最彻底死掉的那一刻发出 ✅「已恢复」；褪色存在时 A7 改发 🟡「转为不可评估」并点名该来源。所有仍需处置的静默来源合并为一条通知并附清单——共享上游故障会让全部来源同时静默，逐源 page 正是会让人静音它的量 | 先看 `logs/pipeline-*.log` 里该来源的 OK/FAIL 行：整批同时静默多为出网链路，见下方「出网 selector 的 preflight 与实际 route」；单源静默则查该源站点或其上游订阅服务 |
+| A7 | 来源静默 | 逐源判定，不看全站总量：只评估 `enabled=true AND paused=false` 的来源；某个候选距最近一条 item 超过 `max(6 小时, 2×该源近 30 天平均出稿间隔)` 时进入静默。paused 来源明确“不评估”，不进入静默、褪色、quiet-X 或无法评估计数。X API heartbeat、样本不足、褪色与合并通知的既有语义不变 | 先看 `logs/pipeline-*.log` 里该来源的 OK/FAIL 行：整批同时静默多为出网链路，见下方「出网 selector 的 preflight 与实际 route」；单源静默则查该源站点或其上游订阅服务。准备暂停前先走下述 identity prepare，不能让旧 episode 误发恢复 |
+
+### 暂停来源前准备 A7 episode identity
+
+暂停来源前从仓库根目录运行以下 dry-run；`$PWD` 会把 state/event 参数展开为本次实际检查的绝对路径，CLI 也会回显这两个路径与本 runbook：
+
+```bash
+./run.sh admin alert-prepare-source-pause --source-id <id> --state-path "$PWD/data/alert-state.json" --event-path "$PWD/data/alert-events.jsonl" --dry-run
+```
+
+legacy announced-firing episode 以同一 episode 最早追加的 firing ledger 行作为 opening 候选；只有该候选的 parsed `ts`、row `episode_since` 与 lifecycle `since` 表示同一时刻时，才把它的 source identity 作为 opening source snapshot。若有多条 firing 行同时满足该 opening timestamp identity，它们的 normalized source identities 必须完全一致，否则身份不唯一并 fail closed。后续同 episode 的来源集合扩缩不改写该身份，也不能在 true opening row 被 retention 裁掉后冒充 opening。opening timestamp identity 或 source identity 缺失、畸形、为空，或不含请求 source 时输出 `BLOCKED_MISSING_EPISODE_IDENTITY`，不得猜 source identity。若输出 `SEEDABLE`，取得授权后把同次 `input_digest` 传给默认模式的 `--expected-input-digest`，并继续显式传入同一组 state/event 绝对路径：
+
+```bash
+./run.sh admin alert-prepare-source-pause --source-id <id> --state-path "$PWD/data/alert-state.json" --event-path "$PWD/data/alert-events.jsonl" --expected-input-digest <dry-run-input-digest>
+```
+
+默认写入必须返回 `SEEDED`；随后立即重跑上述 dry-run 并得到 `READY`，完整交接为 `SEEDABLE → SEEDED → READY`。任何 state/ledger 漂移都会 fail closed，重新 dry-run 后再决定；新格式或已 seed 的 episode 会直接输出 `READY`。
+
+已 announced 的 A7 episode 若其全部 opening 来源变为 paused，不调用 sender、不增加 `sent_count`，直接写 closed/ok；ledger 恰追加一条 `rule_id=A7, type=resolved, channel=INTERNAL, reason=source_paused`，带 episode identity 与该 episode 内的 paused source ids。同一 closed 状态重跑不重复记账。
+
+若只有部分 opening 来源 paused，episode 不能仅凭集合差值结案：所有未暂停的 opening source ids 都必须出现在本轮 `evaluated_source_ids`，证明它们仍有当前逐源评估证据；否则保持 firing、sender 调用数为 0，且不写 resolved ledger。证据齐全但本轮 A7 仍为 degraded 时，沿用黄色“转为不可评估”结案，不覆盖成绿色恢复；证据齐全且非 degraded 时才发送 scope-limited resolved，分别点名本次恢复与因暂停退出评估的来源。普通 delivered firing/resolved ledger 不持久化 `paused_source_ids` 或 `evaluated_source_ids` 这两个状态机控制字段；只有上面的全暂停 INTERNAL 结案保留 episode-scoped `paused_source_ids`。
 
 ### A4 账户层失败（401/402）的处置与恢复判定
 
@@ -111,16 +133,17 @@ installer 当前只检查 notification webhook，`status.sh` 只检查 crontab m
 
 ### 已送达通知历史
 
-A1–A7、D3 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。**覆盖面仅限这三类**：`deploy/wechat2rss/healthcheck.sh` 那条 cron 走 `im-notify --alert --dedup-key wechat2rss-*` 直发，**不写这个 ledger**（它是外部探活脚本，不经 `alerts.py` 的 lifecycle）。所以「查最近告警」时 ledger 里没有 wechat2rss 记录不表示它没告过警，要另看该 cron 的执行与飞书 ALERT 通道。成功投递的 firing/resolved 写入对应 channel；A1/A2/A5 合并时，被 carrier 吸收的规则另写 `type=suppressed, channel=INTERNAL`，并记录 carrier、reason 与 heartbeat freshness。投递行另含 `episode_since` 与 `notification_nonce`。失败 attempt 不写入。查询推送次数必须排除 INTERNAL，查询事故数必须按 episode identity 去重。例如：
+A1–A7、D3 与 PERF 共用 `data/alert-events.jsonl` 作为查询入口。**覆盖面仅限这三类**：`deploy/wechat2rss/healthcheck.sh` 那条 cron 走 `im-notify --alert --dedup-key wechat2rss-*` 直发，**不写这个 ledger**（它是外部探活脚本，不经 `alerts.py` 的 lifecycle）。所以「查最近告警」时 ledger 里没有 wechat2rss 记录不表示它没告过警，要另看该 cron 的执行与飞书 ALERT 通道。成功投递的 firing/resolved 写入对应 channel；A1/A2/A5 合并时，被 carrier 吸收的规则另写 `type=suppressed, channel=INTERNAL`，并记录 carrier、reason 与 heartbeat freshness；A7 episode 因全部来源暂停而静默结案时写 `channel=INTERNAL,type=resolved,reason=source_paused`，这是该静默结案唯一的历史记录。投递行另含 `episode_since` 与 `notification_nonce`。失败 attempt 不写入。查询推送次数必须排除 INTERNAL，查询事故数必须按 episode identity 去重。例如：
 
 ```bash
 tail -n 50 data/alert-events.jsonl | jq .
 jq -c 'select(.channel != "INTERNAL" and .severity == "page" and .type == "firing")' data/alert-events.jsonl
 jq -c 'select(.type == "suppressed" and .channel == "INTERNAL")' data/alert-events.jsonl
+jq -c 'select(.channel == "INTERNAL" and .type == "resolved" and .reason == "source_paused")' data/alert-events.jsonl
 jq -c 'select(.rule_id | startswith("PERF:"))' data/alert-events.jsonl
 ```
 
-ledger 在每次成功写入时裁掉 14 天前的事件；INTERNAL 抑制行同样计入裁剪与 64 MiB 上限。A1–A7、D3 与 PERF 可并发写入，因此用稳定的 `data/alert-events.lock` sidecar 做 `flock`；锁等待最多 1 秒。损坏 JSON、非普通文件、锁超时、超限或写入失败都 fail-open：记错误日志并跳过本批 ledger，不覆盖原文件，不阻断通知投递或告警状态持久化。因此 ledger 是便于查询的非权威投递与抑制历史，不是 attempt、状态或 exactly-once 真源。
+ledger 在每次成功写入时裁掉 14 天前的事件；INTERNAL 行同样计入裁剪与 64 MiB 上限。A1–A7、D3 与 PERF 可并发写入，因此用稳定的 `data/alert-events.lock` sidecar 做 `flock`；锁等待最多 1 秒。普通通知或抑制留痕遇到损坏 JSON、非普通文件、锁超时、超限或写入失败时 fail-open：记错误日志并跳过本批 ledger，不覆盖原文件，也不撤销已完成的通知/状态动作。A7 `source_paused` 静默结案是例外：其 INTERNAL 行是唯一审计记录，写入失败会保持 episode firing、sender 为 0，留待下一轮重试。ledger 仍只是便于查询的非权威历史，不是 attempt、状态或 exactly-once 真源。
 
 ### 已知限制 / 运维备注
 

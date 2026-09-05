@@ -120,6 +120,7 @@ def test_schema_v2_rejects_canonical_x_api_url_without_adapter(tmp_path: Path) -
             'fetch_url = "https://api.x.com/2/users/by/username/OpenAI/tweets"',
             'tier = "T1.5"',
             'kind = "x"',
+            "paused = false",
         ],
     )
 
@@ -137,6 +138,7 @@ def test_schema_v2_rejects_legacy_url_field(tmp_path: Path) -> None:
             'name = "Example"',
             'url = "https://example.com/feed.xml"',
             'tier = "T2"',
+            "paused = false",
         ],
     )
 
@@ -247,6 +249,35 @@ def test_dataclass_supports_new_fields_directly() -> None:
     assert source.homepage_url == "https://x.com/example"
     assert source.icon_url == "https://abs.twimg.com/favicons/twitter.ico"
     assert source.enabled is True
+    assert source.paused is False
+
+
+def test_schema_v2_rejects_non_boolean_paused_before_optional_env_skip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WECHAT2RSS_FEED_URL", raising=False)
+    path = _write_toml(
+        tmp_path,
+        _wechat_toml_lines(paused='"true"'),
+    )
+
+    with pytest.raises(ValueError, match="paused.*boolean"):
+        load_sources(path)
+
+
+def test_schema_v2_requires_paused_before_optional_env_skip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WECHAT2RSS_FEED_URL", raising=False)
+    path = _write_toml(
+        tmp_path,
+        _wechat_toml_lines(paused=None),
+    )
+
+    with pytest.raises(ValueError, match="missing source field.*paused"):
+        load_sources(path)
 
 
 def test_url_expands_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -267,7 +298,7 @@ def test_url_expands_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("env_value", [None, ""])
-def test_optional_source_skips_when_its_feed_env_is_missing(
+def test_unpaused_optional_source_skips_when_its_feed_env_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -294,6 +325,7 @@ def test_optional_source_skips_when_its_feed_env_is_missing(
             'name = "OpenAI Blog"',
             'fetch_url = "https://openai.com/news/rss.xml"',
             'tier = "T1"',
+            "paused = false",
             "",
             "[[source]]",
             'slug = "wx_mp2rss"',
@@ -301,6 +333,7 @@ def test_optional_source_skips_when_its_feed_env_is_missing(
             'fetch_url = "${MP2RSS_FEED_URL}"',
             'tier = "T2"',
             'kind = "wechat"',
+            "paused = false",
             "optional = true",
             'required_env = "MP2RSS_FEED_URL"',
             "wechat_only = true",
@@ -315,6 +348,89 @@ def test_optional_source_skips_when_its_feed_env_is_missing(
     assert "wx_mp2rss" in caplog.text
     assert "MP2RSS_FEED_URL" in caplog.text
     assert "skipped" in caplog.text
+
+
+@pytest.mark.parametrize("env_value", [None, ""])
+def test_paused_optional_source_loads_inert_when_its_feed_env_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    env_value: str | None,
+) -> None:
+    if env_value is None:
+        monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
+    else:
+        monkeypatch.setenv("MP2RSS_FEED_URL", env_value)
+    path = _write_toml(
+        tmp_path,
+        [
+            "schema_version = 2",
+            "",
+            "[[source]]",
+            'slug = "wx_mp2rss"',
+            'name = "WeChat collection"',
+            'fetch_url = "${MP2RSS_FEED_URL}"',
+            'tier = "T2"',
+            'kind = "wechat"',
+            "paused = true",
+            "optional = true",
+            'required_env = "MP2RSS_FEED_URL"',
+            "wechat_only = true",
+            'public_url_override = "https://mp.weixin.qq.com/"',
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="airadar.sources.loader"):
+        [source] = load_sources(path)
+
+    assert source.slug == "wx_mp2rss"
+    assert source.url == "${MP2RSS_FEED_URL}"
+    assert source.paused is True
+    assert "skipped" not in caplog.text
+
+
+def test_paused_optional_source_stays_paused_when_feed_env_is_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved = "https://mp2rss.example/feed/secret.xml"
+    monkeypatch.setenv("MP2RSS_FEED_URL", resolved)
+    path = _write_toml(
+        tmp_path,
+        [
+            "schema_version = 2",
+            "[[source]]",
+            'slug = "wx_mp2rss"',
+            'name = "WeChat collection"',
+            'fetch_url = "${MP2RSS_FEED_URL}"',
+            'tier = "T2"',
+            'kind = "wechat"',
+            "paused = true",
+            "optional = true",
+            'required_env = "MP2RSS_FEED_URL"',
+            "wechat_only = true",
+            'public_url_override = "https://mp.weixin.qq.com/"',
+        ],
+    )
+
+    [source] = load_sources(path)
+
+    assert source.url == resolved
+    assert source.paused is True
+
+
+def test_paused_placeholder_does_not_bypass_wechat_contract_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WECHAT2RSS_FEED_URL", raising=False)
+    path = _write_toml(
+        tmp_path,
+        _wechat_toml_lines(paused="true", wechat_only="false"),
+    )
+
+    with pytest.raises(ValueError, match="unset env var"):
+        load_sources(path)
 
 
 def test_mp2rss_source_loads_when_feed_env_present(
@@ -366,6 +482,7 @@ def test_url_unset_env_var_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def _wechat_toml_lines(**overrides: str) -> list[str]:
     fields = {
         "fetch_url": '"${WECHAT2RSS_FEED_URL}"',
+        "paused": "false",
         "optional": "true",
         "required_env": '"WECHAT2RSS_FEED_URL"',
         "wechat_only": "true",

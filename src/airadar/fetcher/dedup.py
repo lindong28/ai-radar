@@ -68,12 +68,11 @@ def _iso_z(value: datetime) -> str:
 def wechat_duplicate_id(conn: sqlite3.Connection, item: FetchedItem) -> str | None:
     """Return the id of an already-stored WeChat item that is this same article.
 
-    Running two WeChat feeds side by side means the same article arrives twice
-    under unrelated URLs and with different bodies, so neither the URL nor the
-    content hash above can see that they are one article. Account plus title
-    inside a short publish-time window can. Returns None when this article is
-    new to every WeChat source, which is what makes the dual-run a union rather
-    than a duplication.
+    Articles retained from an earlier WeChat provider can overlap an active
+    provider under unrelated URLs and with different bodies, so neither the
+    URL nor the content hash above can see that they are one article. Account
+    plus title inside a short publish-time window can. Returns None when this
+    article is new to every visible WeChat source.
 
     Two restrictions keep this from suppressing articles it should not:
 

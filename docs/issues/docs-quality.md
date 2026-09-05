@@ -2,6 +2,14 @@
 
 > 文档自身的质量债跟踪（README 定位、重复、可观察性等审查遗留）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
 
+## [open] 2026-09-05：README 的 X 单源探针没有可观察终态
+
+- Type: observability · Priority: low · Discovered: 2026-09-05 微信来源暂停文档终审。
+
+README 要求用 `scripts/probe_x_source.py` 做单源连通性检查，却只给出命令，没有说明如何从退出码与 receipt 的 `status`、`state_scope`、`live_validation` 判断成功、部分覆盖或失败。读者运行后无法仅凭 README 判断是否可继续；同时，简单补一句“exit 0 即成功”会丢掉 receipt 对验证范围的限定。
+
+后续修复应在 README 保留最短的成功/失败读数，并把字段级解释链接到稳定的运维或参考文档；验收需至少覆盖一个完整成功 receipt 与一个 exit 2/部分验证负例，证明文案不会把未覆盖的 live/state scope 报成通过。本 T1 只记录该既有、非本任务边界的文档债，不改 X 探针或扩大暂停来源交付范围。
+
 ## [open] 2026-09-01：ux-contract issue domain 混入非端到端观察
 
 - Type: ownership drift · Priority: medium · Discovered: 2026-09-01 微信搜索与 KB 补录文档同步的 P1 审查。

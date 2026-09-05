@@ -62,7 +62,7 @@
 | [056](./056-label-the-score-instead-of-showing-a-bare-number.md) | 评分显示语义标签，且不写死分母 | accepted | 2026-08-17 |
 | [057](./057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md) | X 推文媒体经新加坡出口代理取回，RSS 正文图仍不展示 | accepted | 2026-08-18 |
 | [058](./058-shrink-wrap-x-media-thumbnails-and-add-a-lightbox.md) | X 媒体缩略图改为收缩包裹左对齐，lightbox 增强而非取代原生链接 | accepted; refines ADR-054 and ADR-057；正文四处 file:line 已漂移，符号名对照见文末修订记录 | 2026-08-18 |
-| [059](./059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) | 两个微信来源并行取并集，按账号+归一化标题+5 分钟发布窗跨源去重 | accepted | 2026-08-20 |
+| [059](./059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md) | 两个微信来源并行取并集，按账号+归一化标题+5 分钟发布窗跨源去重 | accepted；Mp2RSS 主动运行状态由 [20260904-f427](./20260904-f427-pause-source-fetch-without-hiding-history.md) supersede，跨源身份设计保留 | 2026-08-20 |
 | [060-hot-cache](./060-serve-hot-topics-from-a-background-refreshed-candidate-cache.md) | 热点榜由后台刷新的候选缓存供给，请求路径永不同步计算，未就绪返回 503 | accepted; revisits ADR-004 scope | 2026-08-20 |
 | [061-wechat-discovery](./061-deprecate-wechat-admin-discovery-line.md) | 公众号后台发现线整体废弃，发现层改由自建 Wechat2RSS 承担 | accepted; deprecates ADR-024–032、ADR-040 与探路支线 ADR-033–038 | 2026-08-20 |
 | [062-page-switch](./062-cut-the-switch-cost-at-the-query-the-edge-and-the-navigation.md) | 精选 ↔ 全部 AI 动态 的切换成本在查询、边缘与导航三层同时切掉 | accepted; 推翻 ADR-004 的范围结论；沿用 ADR-005 的失效契约但记录其既有缺口；生产侧沿用 ADR-039 的规则权威 | 2026-08-20 |
@@ -77,6 +77,8 @@
 | [20260829-a7f1](./20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 | accepted | 2026-08-29 |
 | [20260831-30ad](./20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并显式补录 ai-assistant KB 归档 | accepted | 2026-08-31 |
 | [20260831-8b7c](./20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，不放宽多词交集 | accepted | 2026-08-31 |
+| [20260904-9890](./20260904-9890-wechat2rss-lima-boot-runtime.md) | Wechat2RSS 使用 Lima generated system LaunchDaemon 实现无 GUI 登录的 boot runtime | accepted；生产切换与真实 reboot 仍须 live gate | 2026-09-04 |
+| [20260904-f427](./20260904-f427-pause-source-fetch-without-hiding-history.md) | 暂停来源的抓取与 A7，同时保留历史可见性、跨源身份和 enabled 语义 | accepted；supersedes ADR-059 的 Mp2RSS 主动运行状态；生产迁移与发布尚未执行 | 2026-09-04 |
 | [20260901-a31f](./20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 | accepted | 2026-09-01 |
 | [20260903-bc36](./20260903-bc36-quota-curated-selection-by-source-form.md) | 精选按来源形态配额（X ≤20%、单源 ≤7.5%），同轮记无配额基线并支持定向回退 | accepted; partially supersedes ADR-010（配额独有行可定向删除） | 2026-09-03 |
 | [20260904-51d2](./20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮的信号；账户层失败（401/402）升为 page 并按来源组给处置 | accepted | 2026-09-04 |

@@ -94,6 +94,135 @@ def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsy
     assert "A6 ok" not in output
 
 
+def test_admin_alert_prepare_source_pause_prints_seedable_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    seen: dict[str, object] = {}
+
+    def fake_prepare(**kwargs: object) -> dict[str, object]:
+        seen.update(kwargs)
+        return {
+            "status": "SEEDABLE",
+            "source_ids": ["wx_mp2rss"],
+            "input_digest": "a" * 64,
+            "changed": False,
+        }
+
+    monkeypatch.setattr(cli, "prepare_alert_source_pause", fake_prepare)
+    args = cli.build_parser().parse_args(
+        [
+            "admin",
+            "alert-prepare-source-pause",
+            "--source-id",
+            "wx_mp2rss",
+            "--state-path",
+            str(state_path),
+            "--event-path",
+            str(event_path),
+            "--dry-run",
+        ]
+    )
+
+    assert cli._admin(args) == 0
+    assert seen == {
+        "source_id": "wx_mp2rss",
+        "state_path": str(state_path),
+        "event_path": str(event_path),
+        "dry_run": True,
+        "expected_input_digest": None,
+    }
+    output = capsys.readouterr().out
+    assert "Alert source-pause preparation: SEEDABLE" in output
+    assert "Episode source ids: wx_mp2rss" in output
+    assert f"State path: {state_path}" in output
+    assert f"Event path: {event_path}" in output
+    assert "Runbook: docs/operations/monitoring-alerting.md" in output
+    assert f"Input digest: {'a' * 64}" in output
+    assert "Changed: no" in output
+    assert "--expected-input-digest" in output
+
+
+def test_admin_alert_prepare_source_pause_blocked_is_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "prepare_alert_source_pause",
+        lambda **kwargs: {
+            "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+            "source_ids": [],
+            "input_digest": "b" * 64,
+            "changed": False,
+            "reason": "ledger identity is not unique",
+        },
+    )
+    state_path = tmp_path / "state.json"
+    event_path = tmp_path / "events.jsonl"
+    args = cli.build_parser().parse_args(
+        [
+            "admin",
+            "alert-prepare-source-pause",
+            "--source-id",
+            "wx_mp2rss",
+            "--state-path",
+            str(state_path),
+            "--event-path",
+            str(event_path),
+            "--expected-input-digest",
+            "b" * 64,
+        ]
+    )
+
+    assert cli._admin(args) == 2
+    output = capsys.readouterr().out
+    assert "BLOCKED_MISSING_EPISODE_IDENTITY" in output
+    assert f"State path: {state_path}" in output
+    assert f"Event path: {event_path}" in output
+    assert "Runbook: docs/operations/monitoring-alerting.md" in output
+    assert "Reason: ledger identity is not unique" in output
+    assert "repair the exact A7 state/ledger identity" in output
+
+
+def test_source_pause_runbook_uses_explicit_state_and_event_paths() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runbook = (root / "docs" / "operations" / "monitoring-alerting.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert '--state-path "$PWD/data/alert-state.json"' in runbook
+    assert '--event-path "$PWD/data/alert-events.jsonl"' in runbook
+    assert "最早追加的 firing ledger 行" in runbook
+    assert "SEEDABLE → SEEDED → READY" in runbook
+    assert "默认写入必须返回 `SEEDED`" in runbook
+    assert "立即重跑上述 dry-run 并得到 `READY`" in runbook
+
+
+def test_source_pause_runbook_documents_internal_resolution_ledger_query() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runbook = (root / "docs" / "operations" / "monitoring-alerting.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "channel=INTERNAL,type=resolved,reason=source_paused" in runbook
+    assert (
+        "jq -c 'select(.channel == \"INTERNAL\" and .type == \"resolved\" "
+        "and .reason == \"source_paused\")' data/alert-events.jsonl"
+    ) in runbook
+
+
+def test_architecture_enumerates_internal_source_paused_resolution() -> None:
+    root = Path(__file__).resolve().parents[1]
+    architecture = (root / "docs" / "architecture.md").read_text(encoding="utf-8")
+
+    assert "channel=INTERNAL,type=resolved,reason=source_paused" in architecture
+
+
 def test_admin_db_checkpoint_command_prints_passive_result(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001
     db_path = tmp_path / "radar.db"
     seen: dict[str, str] = {}

@@ -13,7 +13,8 @@
       "meta": {},
       "name": "AI as Normal Technology",
       "slug": "ai_normal_technology",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -29,7 +30,8 @@
       "meta": {},
       "name": "Apple Machine Learning Research",
       "slug": "apple_ml",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -45,7 +47,8 @@
       "meta": {},
       "name": "Ars Technica: AI",
       "slug": "ars_ai",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -61,7 +64,8 @@
       "meta": {},
       "name": "Artificial Intelligence News",
       "slug": "ai_news",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -77,7 +81,8 @@
       "meta": {},
       "name": "ByteByteGo",
       "slug": "bytebytego",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -93,7 +98,8 @@
       "meta": {},
       "name": "CMU Machine Learning Blog",
       "slug": "cmu_ml",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -109,7 +115,8 @@
       "meta": {},
       "name": "Claude Code GitHub Releases",
       "slug": "claude_code_releases",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -125,7 +132,8 @@
       "meta": {},
       "name": "Claude YouTube",
       "slug": "claude_youtube",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -141,7 +149,8 @@
       "meta": {},
       "name": "Databricks Blog",
       "slug": "databricks",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -157,7 +166,8 @@
       "meta": {},
       "name": "Dwarkesh Patel",
       "slug": "dwarkesh",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -173,7 +183,8 @@
       "meta": {},
       "name": "Gary Marcus",
       "slug": "gary_marcus",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -187,7 +198,8 @@
       "meta": {},
       "name": "GitHub Blog",
       "slug": "github_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -203,7 +215,8 @@
       "meta": {},
       "name": "Google Blog: AI",
       "slug": "google_ai",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -219,7 +232,8 @@
       "meta": {},
       "name": "Google Cloud: Databases",
       "slug": "google_cloud_databases",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -235,7 +249,8 @@
       "meta": {},
       "name": "Google DeepMind Blog",
       "slug": "google_deepmind",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -251,7 +266,8 @@
       "meta": {},
       "name": "Google Developers Blog",
       "slug": "google_developers",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -267,7 +283,8 @@
       "meta": {},
       "name": "Hacker News popular via buzzing.cc",
       "slug": "buzzing_hn",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -283,7 +300,8 @@
       "meta": {},
       "name": "Hugging Face Blog",
       "slug": "huggingface_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -299,7 +317,8 @@
       "meta": {},
       "name": "IT Home",
       "slug": "ithome",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -315,7 +334,8 @@
       "meta": {},
       "name": "Linear Now",
       "slug": "linear_now",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -331,7 +351,8 @@
       "meta": {},
       "name": "MarkTechPost",
       "slug": "marktechpost",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -347,7 +368,8 @@
       "meta": {},
       "name": "Meta Engineering",
       "slug": "meta_engineering",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -363,7 +385,8 @@
       "meta": {},
       "name": "NVIDIA Blog",
       "slug": "nvidia",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -379,7 +402,8 @@
       "meta": {},
       "name": "Nathan Lambert: Interconnects",
       "slug": "interconnects",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -395,7 +419,8 @@
       "meta": {},
       "name": "OpenAI official updates",
       "slug": "openai_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -411,7 +436,8 @@
       "meta": {},
       "name": "OpenRouter Announcements",
       "slug": "openrouter_announcements",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -427,7 +453,8 @@
       "meta": {},
       "name": "Sakana AI Blog",
       "slug": "sakana_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -443,7 +470,8 @@
       "meta": {},
       "name": "Simon Willison Blog",
       "slug": "simonw",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -459,7 +487,8 @@
       "meta": {},
       "name": "TechCrunch AI",
       "slug": "techcrunch_ai",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -475,7 +504,8 @@
       "meta": {},
       "name": "The Decoder",
       "slug": "the_decoder",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -491,7 +521,8 @@
       "meta": {},
       "name": "The Verge AI",
       "slug": "the_verge_ai",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -507,7 +538,8 @@
       "meta": {},
       "name": "Tomer Tunguz",
       "slug": "tomer_tunguz",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -523,7 +555,8 @@
       "meta": {},
       "name": "a16z News",
       "slug": "a16z_news",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -539,7 +572,8 @@
       "meta": {},
       "name": "elsewhere articles",
       "slug": "elsewhere",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -555,7 +589,8 @@
       "meta": {},
       "name": "Anthropic Newsroom",
       "slug": "anthropic_news",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -571,7 +606,8 @@
       "meta": {},
       "name": "Anthropic Research",
       "slug": "anthropic_research",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -587,7 +623,8 @@
       "meta": {},
       "name": "Claude Platform release notes",
       "slug": "claude_platform_releases",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -603,7 +640,8 @@
       "meta": {},
       "name": "Claude Blog",
       "slug": "claude_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -617,7 +655,8 @@
       "meta": {},
       "name": "Cursor Blog",
       "slug": "cursor_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -633,7 +672,8 @@
       "meta": {},
       "name": "Every latest articles",
       "slug": "every_latest",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -649,7 +689,8 @@
       "meta": {},
       "name": "Google Research Blog",
       "slug": "google_research",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -665,7 +706,8 @@
       "meta": {},
       "name": "Hugging Face Daily Papers",
       "slug": "hf_daily_papers",
-      "tier": "T2"
+      "tier": "T2",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -681,7 +723,8 @@
       "meta": {},
       "name": "LMSYS Blog",
       "slug": "lmsys_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -697,7 +740,8 @@
       "meta": {},
       "name": "LangChain Blog",
       "slug": "langchain_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -713,7 +757,8 @@
       "meta": {},
       "name": "Microsoft AI News",
       "slug": "microsoft_ai",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -729,7 +774,8 @@
       "meta": {},
       "name": "Mistral AI News",
       "slug": "mistral_news",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -743,7 +789,8 @@
       "meta": {},
       "name": "Runway News",
       "slug": "runway_news",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -759,7 +806,8 @@
       "meta": {},
       "name": "Sierra Blog",
       "slug": "sierra_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -775,7 +823,8 @@
       "meta": {},
       "name": "Suno Blog",
       "slug": "suno_blog",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -791,7 +840,8 @@
       "meta": {},
       "name": "xAI News",
       "slug": "xai_news",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -807,7 +857,8 @@
       "meta": {},
       "name": "inclusionAI Hugging Face models",
       "slug": "inclusionai_models",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -823,7 +874,8 @@
       "meta": {},
       "name": "DeepSeek API updates",
       "slug": "deepseek_api_updates",
-      "tier": "T1"
+      "tier": "T1",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -840,7 +892,8 @@
       },
       "name": "X：AI Safety Memes",
       "slug": "x_aisafetymemes",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -857,7 +910,8 @@
       },
       "name": "X：AI at Meta",
       "slug": "x_aiatmeta",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -874,7 +928,8 @@
       },
       "name": "X：AK",
       "slug": "x__akhaliq",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -891,7 +946,8 @@
       },
       "name": "X：Aidan Gomez（Cohere CEO）",
       "slug": "x_aidangomez",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -908,7 +964,8 @@
       },
       "name": "X：Alexandr Wang（Scale AI 创始人/Meta 首席 AI 官）",
       "slug": "x_alexandr_wang",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -925,7 +982,8 @@
       },
       "name": "X：Ammaar Reshi",
       "slug": "x_ammaar",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -942,7 +1000,8 @@
       },
       "name": "X：Andrew Milich",
       "slug": "x_milichab",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -959,7 +1018,8 @@
       },
       "name": "X：Andrew Ng（DeepLearning.AI 创始人）",
       "slug": "x_andrewyng",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -976,7 +1036,8 @@
       },
       "name": "X：Anthropic",
       "slug": "x_anthropicai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -993,7 +1054,8 @@
       },
       "name": "X：Aravind Srinivas（Perplexity CEO）",
       "slug": "x_aravsrinivas",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1010,7 +1072,8 @@
       },
       "name": "X：Artificial Analysis",
       "slug": "x_artificialanlys",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1027,7 +1090,8 @@
       },
       "name": "X：Barret 李靖",
       "slug": "x_barret_china",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1044,7 +1108,8 @@
       },
       "name": "X：Boris Cherny",
       "slug": "x_bcherny",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1061,7 +1126,8 @@
       },
       "name": "X：Charlie Holtz",
       "slug": "x_charlieholtz",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1078,7 +1144,8 @@
       },
       "name": "X：Claude",
       "slug": "x_claudeai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1095,7 +1162,8 @@
       },
       "name": "X：Claude Devs",
       "slug": "x_claudedevs",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1112,7 +1180,8 @@
       },
       "name": "X：Clément Delangue（Hugging Face CEO）",
       "slug": "x_clementdelangue",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1129,7 +1198,8 @@
       },
       "name": "X：Cohere",
       "slug": "x_cohere",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1146,7 +1216,8 @@
       },
       "name": "X：Deedy Das",
       "slug": "x_deedydas",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1163,7 +1234,8 @@
       },
       "name": "X：Demis Hassabis",
       "slug": "x_demishassabis",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1180,7 +1252,8 @@
       },
       "name": "X：Dex Horthy（HumanLayer）",
       "slug": "x_dexhorthy",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1197,7 +1270,8 @@
       },
       "name": "X：Elon Musk",
       "slug": "x_elonmusk",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1214,7 +1288,8 @@
       },
       "name": "X：Elvis Saravia",
       "slug": "x_omarsar0",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1231,7 +1306,8 @@
       },
       "name": "X：Emad Mostaque",
       "slug": "x_emostaque",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1248,7 +1324,8 @@
       },
       "name": "X：Epoch AI",
       "slug": "x_epochairesearch",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1265,7 +1342,8 @@
       },
       "name": "X：Eric Mitchell",
       "slug": "x_ericmitchellai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1282,7 +1360,8 @@
       },
       "name": "X：Eric Zakariasson",
       "slug": "x_ericzakariasson",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1299,7 +1378,8 @@
       },
       "name": "X：Ethan Mollick",
       "slug": "x_emollick",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1316,7 +1396,8 @@
       },
       "name": "X：Fei-Fei Li",
       "slug": "x_drfeifei",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1333,7 +1414,8 @@
       },
       "name": "X：Francois Chollet",
       "slug": "x_fchollet",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1350,7 +1432,8 @@
       },
       "name": "X：Frank Wang 玉伯",
       "slug": "x_lifesinger",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1367,7 +1450,8 @@
       },
       "name": "X：Gabriel",
       "slug": "x_gabriel1",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1384,7 +1468,8 @@
       },
       "name": "X：Gemini",
       "slug": "x_geminiapp",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1401,7 +1486,8 @@
       },
       "name": "X：Google AI",
       "slug": "x_googleai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1418,7 +1504,8 @@
       },
       "name": "X：Google AI for Developers",
       "slug": "x_googleaidevs",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1435,7 +1522,8 @@
       },
       "name": "X：Google DeepMind",
       "slug": "x_googledeepmind",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1452,7 +1540,8 @@
       },
       "name": "X：Greg Brockman",
       "slug": "x_gdb",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1469,7 +1558,8 @@
       },
       "name": "X：Jason Liu",
       "slug": "x_jxnlco",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1486,7 +1576,8 @@
       },
       "name": "X：Jeff Dean",
       "slug": "x_jeffdean",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1503,7 +1594,8 @@
       },
       "name": "X：Jensen Huang",
       "slug": "x_jensenhuang",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1520,7 +1612,8 @@
       },
       "name": "X：Josh Woodward",
       "slug": "x_joshwoodward",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1537,7 +1630,8 @@
       },
       "name": "X：Karina Nguyen",
       "slug": "x_karinanguyen",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1554,7 +1648,8 @@
       },
       "name": "X：Kim",
       "slug": "x_kimmonismus",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1571,7 +1666,8 @@
       },
       "name": "X：Kimi.ai",
       "slug": "x_kimi_moonshot",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1588,7 +1684,8 @@
       },
       "name": "X：Krea AI",
       "slug": "x_krea_ai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1605,7 +1702,8 @@
       },
       "name": "X：Lee Robinson",
       "slug": "x_leerob",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1622,7 +1720,8 @@
       },
       "name": "X：Logan Kilpatrick",
       "slug": "x_officiallogank",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1639,7 +1738,8 @@
       },
       "name": "X：Luma AI",
       "slug": "x_lumalabsai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1656,7 +1756,8 @@
       },
       "name": "X：Mark Zuckerberg",
       "slug": "x_finkd",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1673,7 +1774,8 @@
       },
       "name": "X：Michael Truell",
       "slug": "x_mntruell",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1690,7 +1792,8 @@
       },
       "name": "X：Microsoft Research",
       "slug": "x_msftresearch",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1707,7 +1810,8 @@
       },
       "name": "X：MiniMax",
       "slug": "x_minimax_ai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1724,7 +1828,8 @@
       },
       "name": "X：Mistral AI",
       "slug": "x_mistralai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1741,7 +1846,8 @@
       },
       "name": "X：Mustafa Suleyman（Microsoft AI CEO）",
       "slug": "x_mustafasuleyman",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1758,7 +1864,8 @@
       },
       "name": "X：Nathan Lambert",
       "slug": "x_natolambert",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1775,7 +1882,8 @@
       },
       "name": "X：Noah Zweben",
       "slug": "x_noahzweben",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1792,7 +1900,8 @@
       },
       "name": "X：Noam Brown",
       "slug": "x_polynoamial",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1809,7 +1918,8 @@
       },
       "name": "X：Odyssey",
       "slug": "x_odysseyml",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1826,7 +1936,8 @@
       },
       "name": "X：OpenAI",
       "slug": "x_openai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1843,7 +1954,8 @@
       },
       "name": "X：OpenAI Developers",
       "slug": "x_openaidevs",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1860,7 +1972,8 @@
       },
       "name": "X：OpenRouter",
       "slug": "x_openrouter",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1877,7 +1990,8 @@
       },
       "name": "X：Perplexity",
       "slug": "x_perplexity_ai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1894,7 +2008,8 @@
       },
       "name": "X：Peter Steinberger",
       "slug": "x_steipete",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1911,7 +2026,8 @@
       },
       "name": "X：PixVerse",
       "slug": "x_pixverse",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1928,7 +2044,8 @@
       },
       "name": "X：Replit",
       "slug": "x_replit",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1945,7 +2062,8 @@
       },
       "name": "X：Rohan Paul",
       "slug": "x_rohanpaul_ai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1962,7 +2080,8 @@
       },
       "name": "X：Runway",
       "slug": "x_runwayml",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1979,7 +2098,8 @@
       },
       "name": "X：Sam Altman",
       "slug": "x_sama",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -1996,7 +2116,8 @@
       },
       "name": "X：SemiAnalysis",
       "slug": "x_semianalysis",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2013,7 +2134,8 @@
       },
       "name": "X：Sundar Pichai",
       "slug": "x_sundarpichai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2030,7 +2152,8 @@
       },
       "name": "X：Suno",
       "slug": "x_suno",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2047,7 +2170,8 @@
       },
       "name": "X：Testing Catalog",
       "slug": "x_testingcatalog",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2064,7 +2188,8 @@
       },
       "name": "X：Thariq",
       "slug": "x_trq212",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2081,7 +2206,8 @@
       },
       "name": "X：Thomas Wolf（Hugging Face 联创/CSO）",
       "slug": "x_thom_wolf",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2098,7 +2224,8 @@
       },
       "name": "X：Tianyi Cui",
       "slug": "x_tianyi",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2115,7 +2242,8 @@
       },
       "name": "X：Tibo",
       "slug": "x_thsottiaux",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2132,7 +2260,8 @@
       },
       "name": "X：Viggle AI",
       "slug": "x_viggleai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2149,7 +2278,8 @@
       },
       "name": "X：X.PIN",
       "slug": "x_thexpin",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2166,7 +2296,8 @@
       },
       "name": "X：Yuchen Jin",
       "slug": "x_yuchenj_uw",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2183,7 +2314,8 @@
       },
       "name": "X：ZHO",
       "slug": "x_zho_zho_zho",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2200,7 +2332,8 @@
       },
       "name": "X：cb_doge",
       "slug": "x_cb_doge",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2217,7 +2350,8 @@
       },
       "name": "X：fofr",
       "slug": "x_fofrai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2234,7 +2368,8 @@
       },
       "name": "X：karminski",
       "slug": "x_karminski3",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2251,7 +2386,8 @@
       },
       "name": "X：opencode",
       "slug": "x_opencode",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2268,7 +2404,8 @@
       },
       "name": "X：swyx",
       "slug": "x_swyx",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2285,7 +2422,8 @@
       },
       "name": "X：华为云",
       "slug": "x_huaweicloud1",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2302,7 +2440,8 @@
       },
       "name": "X：可灵 Kling AI",
       "slug": "x_kling_ai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2319,7 +2458,8 @@
       },
       "name": "X：唐杰",
       "slug": "x_jietang",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2336,7 +2476,8 @@
       },
       "name": "X：小北",
       "slug": "x_frxiaobei",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2353,7 +2494,8 @@
       },
       "name": "X：智谱 Z.ai",
       "slug": "x_zai_org",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2370,7 +2512,8 @@
       },
       "name": "X：李继刚",
       "slug": "x_lijigang",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2387,7 +2530,8 @@
       },
       "name": "X：洪明",
       "slug": "x_hongming731",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2404,7 +2548,8 @@
       },
       "name": "X：百度 Baidu",
       "slug": "x_baidu_inc",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2421,7 +2566,8 @@
       },
       "name": "X：腾讯混元",
       "slug": "x_tencenthunyuan",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2438,7 +2584,8 @@
       },
       "name": "X：蚂蚁百灵",
       "slug": "x_antlingagi",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2455,7 +2602,8 @@
       },
       "name": "X：赵纯想",
       "slug": "x_chunxiangai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2472,7 +2620,8 @@
       },
       "name": "X：通义千问 / Qwen",
       "slug": "x_alibaba_qwen",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2489,7 +2638,8 @@
       },
       "name": "X：阑夕",
       "slug": "x_foxshuo",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2506,7 +2656,8 @@
       },
       "name": "X：阿易 AI Notes",
       "slug": "x_ayi_ainotes",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2523,7 +2674,8 @@
       },
       "name": "X：阿里云 / Alibaba Cloud",
       "slug": "x_alibaba_cloud",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2540,7 +2692,8 @@
       },
       "name": "X：面壁智能 OpenBMB",
       "slug": "x_openbmb",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2557,7 +2710,8 @@
       },
       "name": "X：马东锡 NLP",
       "slug": "x_dongxi_nlp",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2574,7 +2728,8 @@
       },
       "name": "X：OpenClaw",
       "slug": "x_openclaw",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2591,7 +2746,8 @@
       },
       "name": "X：SpaceXAI",
       "slug": "x_spacexai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2608,7 +2764,8 @@
       },
       "name": "X：Tencent WorkBuddy",
       "slug": "x_workbuddy_ai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [],
@@ -2625,7 +2782,8 @@
       },
       "name": "X：Peter McCrory（Anthropic 首席经济学家）",
       "slug": "x_petermccrory",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -2644,7 +2802,8 @@
       },
       "name": "X：DeepSeek",
       "slug": "x_deepseek_ai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -2663,7 +2822,8 @@
       },
       "name": "X：張小珺 Xiaojùn",
       "slug": "x_zhang_benita",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -2682,7 +2842,8 @@
       },
       "name": "X：硅基流动 SiliconFlow",
       "slug": "x_siliconflowai",
-      "tier": "T1.5"
+      "tier": "T1.5",
+      "paused": false
     },
     {
       "aihot_aliases": [
@@ -2702,7 +2863,8 @@
       "optional": true,
       "required_env": "MP2RSS_FEED_URL",
       "wechat_only": true,
-      "public_url_override": "https://mp.weixin.qq.com/"
+      "public_url_override": "https://mp.weixin.qq.com/",
+      "paused": true
     },
     {
       "aihot_aliases": [
@@ -2722,7 +2884,8 @@
       "optional": true,
       "required_env": "WECHAT2RSS_FEED_URL",
       "wechat_only": true,
-      "public_url_override": "https://mp.weixin.qq.com/"
+      "public_url_override": "https://mp.weixin.qq.com/",
+      "paused": false
     }
   ]
 }

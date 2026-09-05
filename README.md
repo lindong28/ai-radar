@@ -41,7 +41,7 @@ cp .env.example .env
 DEEPSEEK_API_KEY=sk-xxx
 ```
 
-其他配置项都有可用的默认值，第一次本地试跑不用动（部署到公网前再按下文「站点身份与最小配置」改）。X 信源要 `X_BEARER_TOKEN`、微信信源要 `MP2RSS_FEED_URL` / `WECHAT2RSS_FEED_URL`，都可以先不填——不填时对应来源被跳过、其余信源照常加载，口径见下文「信源」。
+其他配置项都有可用的默认值，第一次本地试跑不用动（部署到公网前再按下文「站点身份与最小配置」改）。X 信源要 `X_BEARER_TOKEN`；微信抓取配置可以先不填，此时本 checkout 不会主动抓取微信新文，已有数据库里的历史微信文章仍可查看。待发布的来源角色与恢复要求见下文「信源」。
 
 下面两个变量 `.env.example` **未收录，需要时手动新增**：`AI_RADAR_PUBLIC_URL`（公网站点地址，只被 `performance-probe` 用作 public 视角的测量目标，未设置时探针只测 origin）、`AI_RADAR_ADMIN_ALLOW_LOCAL`（设为 `1`/`true`/`yes` 时允许来自 `127.0.0.1`、`::1`、`localhost` 的请求直接访问 `/admin`，本地开发用；不设置则 `/admin` 要求请求带 Cloudflare Access header）。出网 selector 不从 `.env` 读取代理地址；不要再配置 `AI_RADAR_PROXY_FILE`。
 
@@ -53,7 +53,7 @@ DEEPSEEK_API_KEY=sk-xxx
 ./run.sh admin sources reload
 ```
 
-成功读数：`migrate` 打印 `migrated <radar.db 路径>` 与 `migrated llm_usage <llm_usage.db 路径>` 两行；`backfill-links` 打印 `item_links backfilled for <路径>: <N> links`；`reload` 打印 `reloaded <N> sources`。这里的 N 是本次实际加载数：`data/sources.toml` 中启用但缺少所需环境变量的 optional 来源会被跳过，因此 N 可以小于配置中的 enabled 总数。
+成功读数：`migrate` 打印 `migrated <radar.db 路径>` 与 `migrated llm_usage <llm_usage.db 路径>` 两行；`backfill-links` 打印 `item_links backfilled for <路径>: <N> links`；`reload` 打印 `reloaded <N> sources`。按维护者当前 checkout 的待发布清单，两个微信抓取地址都未配置时加载 162 行（161 个主站来源 + paused Mp2RSS），配置 Wechat2RSS 后加载 163 行。这两个数字是快照派生读数，只能说明加载行数，不能单独证明具体微信来源或其状态。需要验收暂停身份时，按 [微信公众号摄取运维的身份级验证](docs/operations/wechat-ingestion.md#验证) 回读逐来源状态。
 
 `backfill-links` 把文章正文里的外链抽成一张带索引的表，「关联讨论」靠它回答。**可续跑，也可以晚些再补**——没跑完之前该功能回落到旧的全表扫描：结果正确，但每次打开精选页会多花约 1 秒。只需在已有数据库上跑一次，此后由抓取流程自行维护；重跑是安全的。
 
@@ -139,7 +139,7 @@ cron / launchd 不继承交互式 shell 的 `export` 变量——启用自动调
 ## 数据流水线
 
 ```
-RSS / X / 微信公众号源（Mp2RSS + 自建 Wechat2RSS，取并集） → fetch → prefilter → score → enrich → curate → interpret → web 展示 / ai-assistant KB
+RSS / X / 微信公众号源（待发布配置：Wechat2RSS 主动抓取；paused Mp2RSS 保留历史文章） → fetch → prefilter → score → enrich → curate → interpret → web 展示 / ai-assistant KB
 ai-assistant KB 文章目录 → 手动 `admin wechat-kb import` → 内部微信归档 → web 展示
 ```
 
@@ -183,9 +183,9 @@ AI_RADAR_INTERPRET_USER=default
 - `feed`：普通 RSS/Atom 信源
 - `web`：没有可用原始 RSS/Atom 的官方网页或列表 API；每个来源使用代码登记的确定性解析器和允许范围，不做任意链接抓取
 - `x`：X/Twitter 信源。`meta.adapter="x_api"` 的源通过 X API 读取原创帖子，不抓回复或转推；首次只看最近 20 分钟，之后以 checkpoint 增量读取，每轮每源只请求一页、`max_results=5`，繁忙账号通过持久 cursor 在后续轮次逐页排空，不做接入前历史回填；需要 `X_BEARER_TOKEN`。X RSS 源推荐显式声明 `meta.adapter="rss"`，未声明 adapter 的历史配置继续按 RSS 兼容读取
-- `wechat`：微信公众号源。**两个来源并行运行、取并集**：托管的 [Mp2RSS](https://mp2rss.bugcode.dev/) 合集（源 `wx_mp2rss`，URL 用占位符 `${MP2RSS_FEED_URL}`）与自建的 Wechat2RSS 合集（源 `wx_wechat2rss`，占位符 `${WECHAT2RSS_FEED_URL}`）。feed URL 含专属密钥、不入库，loader 用 `os.path.expandvars` 展开；任一未设置时记录 warning、跳过该源并继续加载其余信源，两个都不设置也能跑。同一篇文章只入库一次（按公众号 + 归一化标题 + 5 分钟发布时间窗跨源去重）。文章卡片按 author 显示真实公众号名与头像。配置、跨源去重口径与运维见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
+- `wechat`：微信公众号源。本 checkout 的待发布配置使用 Wechat2RSS 主动抓取；Mp2RSS 为 paused，不进入 fetch/A7，但已有历史文章继续出现在 `/wechat`、搜索和详情中，也继续避免同一篇文章重复入库。仅设置 `MP2RSS_FEED_URL` 不会恢复抓取。配置、恢复门槛和去重口径见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)
 
-维护者实例当前配置了 161 个主站来源（109 个 X 账号、34 个原始 Feed、18 个原始 Web/API 列表）；两个微信来源另计，它们只服务「微信文章解读」，不进入精选、全部动态、搜索或策展。fork 后按自己的关注面增删即可，来源数量不是硬性契约。
+维护者当前 checkout 的待发布清单包含 161 个主站来源（109 个 X 账号、34 个原始 Feed、18 个原始 Web/API 列表），另有 Wechat2RSS 与 Mp2RSS 两个微信来源。这只描述本 checkout/reload 的行为：Wechat2RSS 配置为主动抓取，Mp2RSS 配置为 paused；本 T1 单元未验证生产 migration、数据库同步、服务发布或真实消费端验收，不能由此断定生产已切换，也不能断定生产仍在双跑。About 的“已启用”表示来源已收录、历史仍可见，不保证此刻主动抓取。fork 后按自己的关注面增删即可，来源数量不是硬性契约。
 
 X 的 20 分钟窗口只用于首次接入；空窗口提交时间 checkpoint，有帖子后改用 post ID checkpoint，积压由 cursor 按上述单轮上限排空——不做接入前历史回填，所以刚接入时 X 来源看起来「没产出」是预期行为。**不要用全量账号抓取做连通性测试**，先跑单源探针：
 
@@ -197,7 +197,7 @@ uv run python scripts/probe_x_source.py --source x_openai --db <全新临时数�
 
 改信源不是只改 `data/sources.toml`——还牵动机器契约 fixture、Web/API 解析器登记、退休来源的身份连续性检查与几个审计脚本。完整规则与命令见 [docs/references/source-maintenance.md](docs/references/source-maintenance.md)。
 
-配置 reload 只禁用已移除来源、保留历史 SQLite 行；所有公开 source/timeline/search/selected/wechat 消费面会过滤 disabled 行。
+配置 reload 只禁用已移除来源、保留历史 SQLite 行。`/api/v2/sources`、About 与通常的内容页会过滤 disabled 来源；兼容用的 `/api/v1/sources` 仍可能返回普通 disabled 来源。内部归档来源 `wx_ai_assistant_kb_archive` 是另一个显式例外：它不出现在公开来源清单，但其文章仍可在 `/wechat` 使用，并继续避免微信文章重复入库。
 
 ### AIHOT 私有基准集
 
@@ -280,14 +280,14 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 | `cost-report` | 定期发送上一自然周的 LLM 成本报表 |
 | `performance-remediate` | 探针确认退化后生成仅供人工审阅的候选修复 commit；启用 gate 与 cron 入口见 [`monitoring-alerting.md`](docs/operations/monitoring-alerting.md#安装-remediation-cron启用-gate-全文) |
 | DB sync | 把主库同步到只读副本主机（维护者实例用；单机部署不需要）；职责、手动入口与终态判据见 [`services.md`](docs/operations/services.md#db-sync-职责验证与故障证据) |
-| Wechat2RSS | 自建微信公众号 feed 服务，用 `docker compose` 起在 `127.0.0.1:8080`，供 `WECHAT2RSS_FEED_URL` 消费；**配这个变量前先把它起起来**。bring-up 与运维见 [`deploy/wechat2rss/RUNBOOK.md`](deploy/wechat2rss/RUNBOOK.md) |
-| Wechat2RSS healthcheck | 从服务外部探活 Wechat2RSS，并在异常时独立告警；当前手动检查入口与尚未收口的 lifecycle 缺口见 [`docs/operations/services.md`](docs/operations/services.md) |
+| Wechat2RSS | 自建微信公众号 feed 服务。program assembly 合入 T3 资产后，目标运行时可由 Lima ≥2.2 在开机时恢复；当前 T1 checkout 尚无 `deploy/wechat2rss/compose.sh` 与 `boot-witness.sh`，不能按目标运维流程操作。组装依赖、迁移边界与后续运维见 [`deploy/wechat2rss/RUNBOOK.md`](deploy/wechat2rss/RUNBOOK.md) |
+| Wechat2RSS healthcheck | 当前无参数入口用于对 Wechat2RSS 外部探活和异常告警。program assembly 合入 T3 后才增加 `--observe-only`、四态输出与 receipt；当前 T1 checkout 的旧脚本不支持这些参数，不要传入它们。当前与目标入口见 [`docs/operations/services.md`](docs/operations/services.md) |
 
-要看自己这份 checkout 的状态：脚本管理的服务运行 `./status.sh`，Wechat2RSS 用 Docker Compose 原生入口，其余按各行链接的 runbook 检查。
+要看自己这份 checkout 的状态：脚本管理的服务运行 `./status.sh`。Wechat2RSS 在 program assembly 之前不要运行尚不存在的 `compose.sh`，也不要向旧 `healthcheck.sh` 传入 `--observe-only`；组装后须先确认 T3 资产已存在，再按各行链接的 runbook 检查。
 
 ### 维护者实例附加库存（fork 跳过）
 
-维护者实例还有一项不属于 fork 安装面的后台任务：`shadow-observe` 每 30 分钟比较 Mp2RSS 与 Wechat2RSS 覆盖率。它是评估期临时 cron，入口未入 git 且不受标准 lifecycle 脚本管理；fork 无需安装或操作。仍在运行期间按服务协议保留这条可发现记录；当前排期、live 入口边界与临时性质见 [`docs/operations/services.md`](docs/operations/services.md)。
+维护者 2026-09-01 的现场快照记录了一条不属于 fork 安装面的 `shadow-observe` cron，当时它每 30 分钟直接读取 Mp2RSS 与 Wechat2RSS 比较覆盖率。应用内的 source pause 不会停止这条仓库外 cron；本 T1 单元未重新核实它当前是否仍存在，如果目标行仍在，它就可能继续请求 Mp2RSS。fork 无需安装或操作；尚未完成的生产收口边界见 [ADR-20260904-f427](docs/adr/20260904-f427-pause-source-fetch-without-hiding-history.md) 与 [`docs/operations/services.md`](docs/operations/services.md)。
 
 维护者实例绑定具体机器的已记录安装状态与拓扑快照也在该 operations 文档；不要把那份产线记录当成 fork 的目标配置。
 
@@ -309,7 +309,7 @@ X 的图片还需要一条出口代理：`.env` 未配 `AI_RADAR_IMG_PROXY_URL` 
 
 pipeline 所在主机还必须先由 system-config 安装并启用 healthy `domain-routing-v2` selector；AI Radar 的 installer 不创建、不切换也不修复这项外部服务。部署前先跑 `./run.sh egress-preflight`，看到 `status=healthy` 与 policy identity 后再安装 pipeline；这只验证应用可接受机器状态，不等于真实 GCP/Tencent 出口与断线行为已经在该主机验收。
 
-`/admin`、A1–A7 与 D3 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号摄取（两个来源的接入、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)。架构、设计决策记录与待办清单等开发者细节都在 [`docs/`](docs/)。
+`/admin`、A1–A7 与 D3 告警 runbook 见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。微信公众号摄取（Wechat2RSS 主动入口、Mp2RSS 暂停身份、头像 backfill、文章解读、KB 回写）见 [`docs/operations/wechat-ingestion.md`](docs/operations/wechat-ingestion.md)。架构、设计决策记录与待办清单等开发者细节都在 [`docs/`](docs/)。
 
 ## 部署
 

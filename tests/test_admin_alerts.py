@@ -29,6 +29,7 @@ from airadar.admin.alerts import (
     _project_lifecycles,
     collect_alert_signals,
     evaluate_rules,
+    prepare_alert_source_pause,
     reserve_alert_evaluation_sequence,
     run_alert_results_state_machine,
     run_alert_state_machine,
@@ -187,12 +188,12 @@ def test_a5_collector_covers_fresh_equal_recent_success_and_frozen_boundaries(tm
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
             """
-            CREATE TABLE sources(id TEXT PRIMARY KEY, kind TEXT, enabled INTEGER);
+            CREATE TABLE sources(id TEXT PRIMARY KEY, kind TEXT, enabled INTEGER, paused INTEGER);
             CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, title TEXT, fetched_at TEXT);
             CREATE TABLE wechat_interpretations(
               item_id TEXT PRIMARY KEY, error TEXT, error_retry_count INTEGER, processed_at TEXT
             );
-            INSERT INTO sources VALUES ('wechat', 'wechat', 1);
+            INSERT INTO sources VALUES ('wechat', 'wechat', 1, 1);
             """
         )
         conn.execute("INSERT INTO items VALUES ('fresh','wechat','fresh',?)", ((now - timedelta(hours=4) + timedelta(seconds=1)).isoformat(),))
@@ -210,6 +211,12 @@ def test_a5_collector_covers_fresh_equal_recent_success_and_frozen_boundaries(tm
     assert evaluate_rules(signals)[4].firing is True
 
     with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE sources SET enabled=0 WHERE id='wechat'")
+    hours, count, frozen, title = alerts_module._wechat_interpretation_signal(db_path, now, 4)
+    assert (hours, count, frozen, title) == (None, 0, 0, None)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE sources SET enabled=1 WHERE id='wechat'")
         conn.execute("INSERT INTO wechat_interpretations VALUES ('equal',NULL,0,?)", ((now - timedelta(hours=1)).isoformat(),))
     hours, count, frozen, _ = alerts_module._wechat_interpretation_signal(db_path, now, 4)
     recent = _normal_signals()
@@ -3756,6 +3763,409 @@ def test_a7_rolls_silent_sources_into_one_page() -> None:
     assert next(r for r in evaluate_rules(signals) if r.rule_id == "A7").firing is False
 
 
+def test_a7_announced_episode_closes_silently_when_its_source_is_paused(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    sent: list[tuple[str, str]] = []
+    firing_signals = _normal_signals()
+    firing_signals.silent_sources = [("wx_mp2rss", "Mp2RSS", 80.0, 12.0)]
+    firing_signals.evaluated_sources = 1
+    firing = next(result for result in evaluate_rules(firing_signals) if result.rule_id == "A7")
+
+    opened = run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:00:00+08:00"),
+        send=_recording_sender(sent),
+    )
+
+    assert opened["sent_count"] == 1
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["A7"]["source_ids"] == ["wx_mp2rss"]
+
+    resolved_signals = _normal_signals()
+    resolved_signals.paused_source_ids = ["wx_mp2rss"]
+    resolved = next(
+        result for result in evaluate_rules(resolved_signals) if result.rule_id == "A7"
+    )
+    closed = run_alert_results_state_machine(
+        [resolved],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:05:00+08:00"),
+        send=_recording_sender(sent),
+    )
+    repeated = run_alert_results_state_machine(
+        [resolved],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:10:00+08:00"),
+        send=_recording_sender(sent),
+    )
+
+    assert closed["sent_count"] == 0
+    assert repeated["sent_count"] == 0
+    assert len(sent) == 1, "pause close must not call the sender"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["A7"]["state"] == "ok"
+    rows = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    pause_rows = [row for row in rows if row.get("reason") == "source_paused"]
+    assert len(pause_rows) == 1
+    assert pause_rows[0]["type"] == "resolved"
+    assert pause_rows[0]["channel"] == "INTERNAL"
+    assert pause_rows[0]["values"]["episode_source_ids"] == ["wx_mp2rss"]
+
+
+def test_a7_partial_source_pause_uses_normal_resolved_notification(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    sent: list[tuple[str, str]] = []
+    firing_signals = _normal_signals()
+    firing_signals.silent_sources = [
+        ("active", "Active", 20.0, 12.0),
+        ("wx_mp2rss", "Mp2RSS", 80.0, 12.0),
+    ]
+    firing_signals.evaluated_sources = 2
+    firing = next(result for result in evaluate_rules(firing_signals) if result.rule_id == "A7")
+
+    run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:00:00+08:00"),
+        send=_recording_sender(sent),
+    )
+
+    resolved_signals = _normal_signals()
+    resolved_signals.paused_source_ids = ["wx_mp2rss"]
+    resolved_signals.evaluated_source_ids = ["active"]
+    resolved = next(
+        result for result in evaluate_rules(resolved_signals) if result.rule_id == "A7"
+    )
+    closed = run_alert_results_state_machine(
+        [resolved],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:05:00+08:00"),
+        send=_recording_sender(sent),
+    )
+
+    assert closed["sent_count"] == 1
+    assert len(sent) == 2, "partial pause must call the ordinary resolved sender exactly once"
+    assert "✅" in sent[-1][0]
+    assert json.loads(state_path.read_text(encoding="utf-8"))["A7"]["state"] == "ok"
+    rows = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    assert not [row for row in rows if row.get("reason") == "source_paused"]
+
+
+def test_a7_normal_recovery_still_calls_sender(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    sent: list[tuple[str, str]] = []
+    firing_signals = _normal_signals()
+    firing_signals.silent_sources = [("active", "Active", 20.0, 12.0)]
+    firing_signals.evaluated_sources = 1
+    firing = next(result for result in evaluate_rules(firing_signals) if result.rule_id == "A7")
+    healthy = next(
+        result for result in evaluate_rules(_normal_signals()) if result.rule_id == "A7"
+    )
+
+    run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:00:00+08:00"),
+        send=_recording_sender(sent),
+    )
+    recovered = run_alert_results_state_machine(
+        [healthy],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:05:00+08:00"),
+        send=_recording_sender(sent),
+    )
+
+    assert recovered["sent_count"] == 1
+    assert len(sent) == 2
+    assert "✅" in sent[-1][0]
+
+
+def test_prepare_legacy_a7_episode_seed_then_partial_pause_notifies(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    episode_since = "2026-09-04T08:00:00+08:00"
+    state_path.write_text(
+        json.dumps(
+            {
+                "A7": {
+                    "state": "firing",
+                    "since": episode_since,
+                    "last_notified": episode_since,
+                    "detail": "Mp2RSS silent",
+                    "announced": True,
+                    "severity": "page",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    event_path.write_text(
+        json.dumps(
+            {
+                "ts": episode_since,
+                "rule_id": "A7",
+                "severity": "page",
+                "type": "firing",
+                "channel": "ALERT",
+                "episode_since": episode_since,
+                "values": {
+                    "silent_sources": [
+                        {"source_id": "wx_mp2rss", "name": "Mp2RSS"},
+                        {"source_id": "active", "name": "Active"},
+                    ]
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state_before = state_path.read_bytes()
+    ledger_before = event_path.read_bytes()
+
+    preview = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=True,
+    )
+
+    assert preview["status"] == "SEEDABLE"
+    assert preview["source_ids"] == ["active", "wx_mp2rss"]
+    assert state_path.read_bytes() == state_before
+    assert event_path.read_bytes() == ledger_before
+
+    seeded = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=False,
+        expected_input_digest=str(preview["input_digest"]),
+    )
+
+    assert seeded["status"] == "SEEDED"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["A7"]["source_ids"] == [
+        "active",
+        "wx_mp2rss",
+    ]
+    ready = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=True,
+    )
+    assert ready["status"] == "READY"
+
+    sent: list[tuple[str, str]] = []
+    healthy = _normal_signals()
+    healthy.paused_source_ids = ["wx_mp2rss"]
+    healthy.evaluated_source_ids = ["active"]
+    result = next(rule for rule in evaluate_rules(healthy) if rule.rule_id == "A7")
+    closed = run_alert_results_state_machine(
+        [result],
+        state_path=state_path,
+        event_path=event_path,
+        now=datetime.fromisoformat("2026-09-04T09:00:00+08:00"),
+        send=_recording_sender(sent),
+    )
+    assert closed["sent_count"] == 1
+    assert len(sent) == 1
+    assert "✅" in sent[0][0]
+    rows = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    assert not [row for row in rows if row.get("reason") == "source_paused"]
+
+
+def test_prepare_legacy_a7_episode_without_matching_ledger_fails_closed(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    state_path.write_text(
+        json.dumps(
+            {
+                "A7": {
+                    "state": "firing",
+                    "since": "2026-09-04T08:00:00+08:00",
+                    "last_notified": "2026-09-04T08:00:00+08:00",
+                    "announced": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    event_path.write_text("", encoding="utf-8")
+
+    result = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=True,
+    )
+
+    assert result["status"] == "BLOCKED_MISSING_EPISODE_IDENTITY"
+    assert "found 0" in str(result["reason"])
+
+
+def test_prepare_existing_a7_identity_rejects_unrelated_requested_source(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    episode_since = "2026-09-04T08:00:00+08:00"
+    state_path.write_text(
+        json.dumps(
+            {
+                "A7": {
+                    "state": "firing",
+                    "since": episode_since,
+                    "last_notified": episode_since,
+                    "announced": True,
+                    "severity": "page",
+                    "source_ids": ["active"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    event_path.write_text("", encoding="utf-8")
+
+    result = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=True,
+    )
+
+    assert result["status"] == "BLOCKED_MISSING_EPISODE_IDENTITY"
+    assert result["source_ids"] == ["active"]
+    assert "wx_mp2rss" in str(result["reason"])
+
+
+def test_prepare_legacy_a7_identity_rejects_unrelated_requested_source(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    episode_since = "2026-09-04T08:00:00+08:00"
+    state_path.write_text(
+        json.dumps(
+            {
+                "A7": {
+                    "state": "firing",
+                    "since": episode_since,
+                    "last_notified": episode_since,
+                    "announced": True,
+                    "severity": "page",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    event_path.write_text(
+        json.dumps(
+            {
+                "rule_id": "A7",
+                "type": "firing",
+                "ts": episode_since,
+                "episode_since": episode_since,
+                "values": {"silent_sources": [{"source_id": "active"}]},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=True,
+    )
+
+    assert result["status"] == "BLOCKED_MISSING_EPISODE_IDENTITY"
+    assert result["source_ids"] == ["active"]
+    assert "wx_mp2rss" in str(result["reason"])
+
+
+@pytest.mark.parametrize("drift_target", ["state", "ledger"])
+def test_prepare_legacy_a7_episode_rejects_input_drift_after_dry_run(
+    tmp_path: Path,
+    drift_target: str,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    episode_since = "2026-09-04T08:00:00+08:00"
+    state_path.write_text(
+        json.dumps(
+            {
+                "A7": {
+                    "state": "firing",
+                    "since": episode_since,
+                    "last_notified": episode_since,
+                    "announced": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    event_path.write_text(
+        json.dumps(
+            {
+                "rule_id": "A7",
+                "type": "firing",
+                "ts": episode_since,
+                "episode_since": episode_since,
+                "values": {"silent_sources": [{"source_id": "wx_mp2rss"}]},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    preview = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=True,
+    )
+    assert preview["status"] == "SEEDABLE"
+
+    if drift_target == "state":
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["A7"]["detail"] = "changed"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+    else:
+        with event_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"rule_id": "A1", "type": "firing"}) + "\n")
+
+    result = prepare_alert_source_pause(
+        source_id="wx_mp2rss",
+        state_path=state_path,
+        event_path=event_path,
+        dry_run=False,
+        expected_input_digest=str(preview["input_digest"]),
+    )
+
+    assert result["status"] == "BLOCKED_MISSING_EPISODE_IDENTITY"
+    assert "no longer matches" in str(result["reason"])
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "source_ids" not in state["A7"]
+
+
 def test_a7_threshold_widens_for_low_cadence_sources(tmp_path: Path) -> None:
     """A source that normally publishes every few days must not page at 6h.
 
@@ -3770,11 +4180,11 @@ def test_a7_threshold_widens_for_low_cadence_sources(tmp_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
             """
-            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER, paused INTEGER DEFAULT 0);
             CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
-            INSERT INTO sources VALUES ('fast','Fast source',1);
-            INSERT INTO sources VALUES ('slow','Slow source',1);
-            INSERT INTO sources VALUES ('sparse','Sparse source',1);
+            INSERT INTO sources(id,name,enabled) VALUES ('fast','Fast source',1);
+            INSERT INTO sources(id,name,enabled) VALUES ('slow','Slow source',1);
+            INSERT INTO sources(id,name,enabled) VALUES ('sparse','Sparse source',1);
             """
         )
         # 120 items/30d -> ~6h typical gap -> threshold 12h. Silent 20h: fires.
@@ -3796,7 +4206,7 @@ def test_a7_threshold_widens_for_low_cadence_sources(tmp_path: Path) -> None:
         )
         conn.commit()
 
-    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(db_path, now)
+    silent, evaluated, unevaluable, faded, quiet_x, paused = _silent_source_signal(db_path, now)
     silent_ids = {row[0] for row in silent}
 
     assert "fast" in silent_ids, "a source 3x past its own cadence must fire"
@@ -3804,6 +4214,55 @@ def test_a7_threshold_widens_for_low_cadence_sources(tmp_path: Path) -> None:
     assert evaluated == 2
     assert unevaluable == 1, "sparse history is reported, not silently passed"
     assert quiet_x == []
+    assert paused == []
+
+
+def test_a7_does_not_evaluate_paused_sources_and_returns_pause_metadata(
+    tmp_path: Path,
+) -> None:
+    from airadar.admin.alerts import _silent_source_signal
+
+    db_path = tmp_path / "a7-paused.db"
+    now = datetime.fromisoformat("2026-09-04T09:00:00+00:00")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sources(
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                enabled INTEGER,
+                paused INTEGER,
+                kind TEXT,
+                meta_json TEXT
+            );
+            CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
+            INSERT INTO sources VALUES ('active','Active source',1,0,'feed','{}');
+            INSERT INTO sources VALUES ('paused','Paused source',1,1,'feed','{}');
+            INSERT INTO sources VALUES ('disabled','Disabled source',0,1,'feed','{}');
+            """
+        )
+        for source_id in ("active", "paused", "disabled"):
+            for index in range(120):
+                conn.execute(
+                    "INSERT INTO items VALUES (?,?,?)",
+                    (
+                        f"{source_id}-{index}",
+                        source_id,
+                        (now - timedelta(hours=20 + index * 6)).isoformat(),
+                    ),
+                )
+        conn.commit()
+
+    silent, evaluated, unevaluable, faded, quiet_x, paused = _silent_source_signal(
+        db_path, now
+    )
+
+    assert [source_id for source_id, *_ in silent] == ["active"]
+    assert evaluated == 1
+    assert unevaluable == 0
+    assert faded == []
+    assert quiet_x == []
+    assert paused == ["paused"]
 
 
 def test_a7_suppresses_only_fresh_terminal_x_receipts(tmp_path: Path) -> None:
@@ -3875,6 +4334,7 @@ def test_a7_suppresses_only_fresh_terminal_x_receipts(tmp_path: Path) -> None:
                 id TEXT PRIMARY KEY,
                 name TEXT,
                 enabled INTEGER,
+                paused INTEGER DEFAULT 0,
                 kind TEXT,
                 meta_json TEXT
             );
@@ -3883,7 +4343,7 @@ def test_a7_suppresses_only_fresh_terminal_x_receipts(tmp_path: Path) -> None:
         )
         for source_id, meta_json in sources.items():
             conn.execute(
-                "INSERT INTO sources VALUES (?,?,?,?,?)",
+                "INSERT INTO sources(id,name,enabled,kind,meta_json) VALUES (?,?,?,?,?)",
                 (source_id, source_id.title(), 1, "x", meta_json),
             )
             for n in range(120):
@@ -3897,7 +4357,7 @@ def test_a7_suppresses_only_fresh_terminal_x_receipts(tmp_path: Path) -> None:
                 )
         conn.commit()
 
-    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(
+    silent, evaluated, unevaluable, faded, quiet_x, paused = _silent_source_signal(
         db_path,
         now,
         x_receipt_fresh_minutes=120,
@@ -3913,6 +4373,7 @@ def test_a7_suppresses_only_fresh_terminal_x_receipts(tmp_path: Path) -> None:
         "pending",
         "invalid",
     }
+    assert paused == []
 
     signals = _normal_signals()
     signals.silent_sources = []
@@ -4053,9 +4514,9 @@ def test_a7_faded_source_closes_as_unevaluable_not_recovered(tmp_path: Path) -> 
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
             """
-            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER, paused INTEGER DEFAULT 0);
             CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
-            INSERT INTO sources VALUES ('dead','已停更的源',1);
+            INSERT INTO sources(id,name,enabled) VALUES ('dead','已停更的源',1);
             """
         )
         # 20 posts on a ~12h cadence, then nothing. Threshold ~72h.
@@ -4074,13 +4535,14 @@ def test_a7_faded_source_closes_as_unevaluable_not_recovered(tmp_path: Path) -> 
         return {"skipped": False}
 
     def round_at(moment: datetime) -> None:
-        silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(db_path, moment)
+        silent, evaluated, unevaluable, faded, quiet_x, paused = _silent_source_signal(db_path, moment)
         signals = _normal_signals()
         signals.silent_sources = silent
         signals.evaluated_sources = evaluated
         signals.unevaluable_sources = unevaluable
         signals.faded_sources = faded
         signals.quiet_x_sources = quiet_x
+        signals.paused_source_ids = paused
         a7 = next(r for r in evaluate_rules(signals) if r.rule_id == "A7")
         run_alert_results_state_machine(
             [a7],
@@ -4121,9 +4583,9 @@ def test_a7_low_cadence_source_is_not_faded_when_it_ages_out(tmp_path: Path) -> 
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
             """
-            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER, paused INTEGER DEFAULT 0);
             CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
-            INSERT INTO sources VALUES ('slow','每周一更的源',1);
+            INSERT INTO sources(id,name,enabled) VALUES ('slow','每周一更的源',1);
             """
         )
         # Exactly `min_history` items spread over the window; newest 7h old.
@@ -4138,13 +4600,14 @@ def test_a7_low_cadence_source_is_not_faded_when_it_ages_out(tmp_path: Path) -> 
     assert before[1] == 1 and before[0] == [], "precondition: healthy and evaluable"
 
     # Five hours later the oldest item has aged out: recent_count drops to 4.
-    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(
+    silent, evaluated, unevaluable, faded, quiet_x, paused = _silent_source_signal(
         db_path, now + timedelta(hours=5)
     )
 
     assert evaluated == 0 and unevaluable == 1, "precondition: it left the evaluated set"
     assert faded == [], "a 12h silence against a multi-day cadence is not a death"
     assert quiet_x == []
+    assert paused == []
 
 
 def test_a7_stale_backfilled_item_does_not_hide_a_faded_source(tmp_path: Path) -> None:
@@ -4165,9 +4628,9 @@ def test_a7_stale_backfilled_item_does_not_hide_a_faded_source(tmp_path: Path) -
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
             """
-            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER);
+            CREATE TABLE sources(id TEXT PRIMARY KEY, name TEXT, enabled INTEGER, paused INTEGER DEFAULT 0);
             CREATE TABLE items(id TEXT PRIMARY KEY, source_id TEXT, fetched_at TEXT);
-            INSERT INTO sources VALUES ('revived','复活后又停更的源',1);
+            INSERT INTO sources(id,name,enabled) VALUES ('revived','复活后又停更的源',1);
             """
         )
         # Daily cadence for five days, then silence — plus one row from 2021.
@@ -4182,10 +4645,11 @@ def test_a7_stale_backfilled_item_does_not_hide_a_faded_source(tmp_path: Path) -
         )
         conn.commit()
 
-    silent, evaluated, unevaluable, faded, quiet_x = _silent_source_signal(db_path, now)
+    silent, evaluated, unevaluable, faded, quiet_x, paused = _silent_source_signal(db_path, now)
 
     assert evaluated == 0 and unevaluable == 1, "precondition: it has left the evaluated set"
     assert [row[0] for row in faded] == ["revived"], (
         "27 days of silence against a daily cadence is a death, whatever 2021 says"
     )
     assert quiet_x == []
+    assert paused == []

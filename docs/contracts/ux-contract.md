@@ -176,6 +176,7 @@
 **列表行为**：
 - 展示进入"值得阅读列表"的文章，按发布时间从新到旧排列
 - **收录口径偏召回**：每篇文章带一个**推荐等级**徽标（必读 / 值得一看 / 可跳过，列表卡片与详情页均显示）；由于偏召回，列表中**可能出现个别推荐等级为"可跳过"的文章**（它们有次级可参考价值）——这是产品有意的取舍，不是错误。"进入列表"与"推荐等级"是两个独立信号
+- 暂停抓取不隐藏既存文章：暂停前已处于普通公开状态的文章，暂停后仍可在默认列表、搜索结果和 `/wechat/<slug>` 详情中阅读
 - 搜索框 placeholder 为 `搜索标题/公众号/摘要/标签…`；匹配原文标题、公众号名（作者）、摘要（abstract）和标签（tags），不匹配正文、结构化解读全文、聚合 feed 来源名"微信公众号（Mp2RSS 合集）"
 - 搜索一律使用 LIKE 匹配，不走 3 字及以上全文搜索分支；繁简互通，2 字专名可搜索
 - 搜索有 `q` 时，公众号名（作者）命中的条目在入选层面优先于仅标题 / 摘要 / 标签命中的条目，其余按发布时间倒序；无 `q` 时保留发布时间倒序
@@ -305,7 +306,9 @@
 - 点击"资讯"，仅展示资讯类源的内容；`kind="wechat"` 的微信公众号来源归入"资讯"而不是"推文"
 - 点击"推文"，仅展示 X/Twitter 来源的内容
 - 各筛选结果内的信源类型一致
-- 当前主站来源契约是 AIHOT 完整滚动观察的单调并集，共 161 个：109 个 X、34 个原始 Feed、18 个原始 Web/API 列表。About 页在 Mp2RSS 未配置时精确显示这 161 行；配置后另显示一行仅供「微信文章解读」的 WeChat 来源
+- 当前主站来源契约是 AIHOT 完整滚动观察的单调并集，共 161 个：109 个 X、34 个原始 Feed、18 个原始 Web/API 列表。两条 WeChat env 均缺失时，从 v2 contract 推导 expected IDs=`161 个主站 contract IDs ∪ {wx_mp2rss}`，并分别与 `/api/v2/sources` 和 About 表格的 actual ID set 做 exact compare；只配置 `WECHAT2RSS_FEED_URL` 后 expected IDs 再并入 `{wx_wechat2rss}`。162/163 只能是集合相等后的派生计数，`wx_mp2rss` 的公开成员身份不取决于 `MP2RSS_FEED_URL`
+- `/api/v1/sources` 继续保留全部非 archive legacy 行，包括 disabled 行；升级验收须在 reload 前冻结 v1 ID set，并在连续两次 reload 后做 exact compare，不得用 v2/About 的 162/163 计数替代
+- 公共“已启用”只表示来源已收录且历史内容可见，不表示此刻正在主动抓取；`optional_sources.runtime_configuration_status` 只表示具名运行时抓取入口是否可用，不得把 `unavailable_missing_required_environment` 解释成来源未收录。v1/v2 API 均不新增 `paused` 字段，About 不显示暂停 badge
 - X 来源摄取不依赖 Mp2RSS；身份解析与 timeline 分轮，每源每轮至多一个请求，timeline 最多 5 条。启用后的原创帖子由持久 checkpoint/cursor 增量推进，但接入前历史不属于已承诺召回
 - `kind="web"` 在 About 中作为网页来源展示；Feed、Web 和 X 才能进入精选、全部动态、搜索和策展，`kind="wechat"` 只进入 `/wechat`
 - 当前证据边界：AIHOT 成员观察已完成并通过收据验证；52 个 non-X 原始来源均已完成两轮 live 读取与一次同响应字节 immutable replay。受限 X live gate 已在 `x_openai` 上以一次身份请求和一次 timeline 请求获得 200，并为最近 20 分钟的空窗口提交合法 terminal checkpoint；这证明当前 App Bearer Token、身份解析、timeline 请求和增量状态持久化链路兼容，但空窗口没有提供实际帖子读取证据，也不代表 109 个 X 账号均已逐一 live 验证。上述证据不表示清理、筛选、标签、排序、评分、摘要或策展结果等价
@@ -414,7 +417,10 @@
 
 **AB-1：信源池展示**
 - 打开 `/about`，展示信源池表格
-- Mp2RSS 未配置时精确展示 161 个主站来源；配置本地/真实 Mp2RSS 时精确增加一个 WeChat 行，显示「仅用于微信文章解读，不属于主时间线」，且 DOM、公开 API 与浏览器请求不得泄漏付费 feed URL
+- 两条 WeChat env 均缺失时，从 v2 contract 推导 expected IDs=`161 个主站 contract IDs ∪ {wx_mp2rss}`，并分别与 `/api/v2/sources` 和 About 表格的 actual ID set 做 exact compare；只配置 `WECHAT2RSS_FEED_URL` 后 expected IDs 再并入 `{wx_wechat2rss}`。162/163 只能是集合相等后的派生计数
+- `/api/v1/sources` 继续保留全部非 archive legacy 行，包括 disabled 行；升级验收须冻结 reload 前的 v1 ID set，并在连续两次 reload 后做 exact compare，不得套用 v2/About 的成员计数
+- `wx_mp2rss` 在 v1、v2 与 About 三个 surface 各精确出现一次，About 显示「仅用于微信文章解读，不属于主时间线」；“已启用”准确解释为“已收录、历史内容仍可见”，不代表此刻正在主动抓取。`optional_sources.runtime_configuration_status` 只表示具名运行时抓取入口是否可用，不得把 `unavailable_missing_required_environment` 解释成来源未收录
+- v1/v2 API schema 均不新增 `paused` 字段，About 不显示暂停 badge；响应、DOM 与浏览器请求不得泄漏付费 feed URL 或未展开占位符
 - 生产升级后，被移除而转为 disabled 的旧来源不得出现在 About、精选、全部动态、搜索、条目详情或微信页面，但其历史 SQLite 行与关联仍可保留
 - 表格包含信源标识、名称、等级、状态、类型信息
 - 信源数量 ≥20 条（产品正常运行的基本保障）
@@ -449,6 +455,7 @@
 **WX-3：列表收录口径**
 - `/wechat` 列表展示进入"值得阅读列表"的文章；未进入该列表的文章不出现在列表中，直接访问其 `/wechat/<slug>` 显示 404 页（无法访问）
 - 收录偏召回：列表中可出现个别详情页推荐等级为"可跳过"的文章（有意取舍，非错误）；本条不对"是否真的值得读"做质量判断
+- 对同一篇暂停前已处于普通公开状态的既存文章，分别从无搜索条件的列表、搜索结果和其详情地址进入，三条路径都仍显示同一篇可读内容；暂停不能被呈现为删除、隐藏或归档
 
 **WX-4：搜索、分页与上下文保留**
 - 搜索框 placeholder 为 `搜索标题/公众号/摘要/标签…`
@@ -566,7 +573,7 @@
 
 ### 不在范围内
 - 管理后台或数据管道（不是用户可见的部分）
-- API 直接调用的验收（API 是前端的支撑，通过前端行为间接验证）
+- API 通常只作为前端支撑、通过前端行为间接验收；本次 TL-2 / AB-1 明确要求的 source inventory projection 直接观察仅覆盖 `/api/v1/sources`、`/api/v2/sources` 的 endpoint-specific ID set、v2 `optional_sources.runtime_configuration_status` projection，以及对应 schema / 泄漏负断言，不影响 HP-8、TL-4、HP-10、HT-1 各自已经规定的 API 观察面
 - SEO，或外部 benchmark 工具 / 第三方地域性能测试；首页与微信的用户可感知旅程延迟已纳入 same-host provisional 性能监控
 - 浏览器兼容性（仅需验证主流浏览器 Chrome/Safari）
 

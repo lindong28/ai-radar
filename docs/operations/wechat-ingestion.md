@@ -1,44 +1,51 @@
 # 微信公众号摄取运维
 
-> Mutable snapshot. 微信公众号实时生产链路是**托管 Mp2RSS 合集 feed 与自建 Wechat2RSS 双跑取并集**（`wx_mp2rss` + `wx_wechat2rss`，跨源去重见下文），另有维护者显式触发的 ai-assistant KB 内部归档补录；文章卡片显示真实公众号名与头像。仓库内的公众号后台发现候选与微信读书 canary 默认关闭且已停止推进。本文记录这些路径的配置、运维机制和迁移门槛。
+> Mutable snapshot. 本 checkout 的待发布配置把自建 Wechat2RSS（`wx_wechat2rss`）设为微信公众号主动抓取入口；托管 Mp2RSS（`wx_mp2rss`）为 `enabled=true, paused=true`，不进入 fetch/A7，但保留历史可见性与跨源去重身份。另有维护者显式触发的 ai-assistant KB 内部归档补录；文章卡片显示真实公众号名与头像。仓库内的公众号后台发现候选与微信读书 canary 默认关闭且已停止推进。暂停决策与尚未完成的生产收口边界见 [ADR-20260904-f427](../adr/20260904-f427-pause-source-fetch-without-hiding-history.md)；本 T1 单元未验证生产迁移、同步、发布或真实页面。
 >
 > 本目录（`docs/operations/`）是维护者产线 runbook，绑定具体实机拓扑；fork 部署路径见 [README](../../README.md)。
 
-## 接入方案：Mp2RSS（已替代 WeWe RSS）
+## 待发布接入：Wechat2RSS 主动，Mp2RSS paused
 
-微信公众号没有公开 RSS。早先 ai-radar 用自建 WeWe RSS（本地 Docker + 微信读书扫码登录）做发现层，但扫码频繁失效、稳定性差，反复影响线上摄取。现已迁移到托管付费 SaaS [Mp2RSS](https://mp2rss.com/)：上游维护登录态，本项目只消费一个合集 feed，无需自建容器或扫码。
+微信公众号没有公开 RSS。早先 ai-radar 用 WeWe RSS，随后改用托管 Mp2RSS，并在 ADR-059 阶段与自建 Wechat2RSS 双跑。本 checkout 的待发布路线定为 Wechat2RSS 主动抓取，Mp2RSS 只保留历史来源身份；这不是生产已切换或仍在双跑的读数。历史取舍见 [ADR-059](../adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md)，暂停决策见 [ADR-20260904-f427](../adr/20260904-f427-pause-source-fetch-without-hiding-history.md)。
 
-| 项 | Mp2RSS（当前） | WeWe RSS（已停用） |
+| 来源 | 当前角色 | 加载与主动工作 |
 |---|---|---|
-| 部署 | 无（hosted SaaS） | 本地 Docker `:4000` + launchd `wewe` 服务 |
-| 登录维护 | 上游负责 | 需本机微信读书扫码，频繁失效 |
-| ai-radar 侧 | 消费一个合集 feed URL | 每个公众号一个 per-feed URL |
+| `wx_wechat2rss` | 待发布的主动微信公众号抓取入口 | 配置 `WECHAT2RSS_FEED_URL` 后 `enabled=true, paused=false`，进入 fetch 与 A7 |
+| `wx_mp2rss` | 历史可见与跨源身份锚点 | `enabled=true, paused=true`；缺少抓取地址也保留这个来源，不进入 fetch/A7 |
+| WeWe RSS | 已停用的历史回滚材料 | 不在服务注册表或待发布来源清单中 |
 
 WeWe RSS 的退役状态（服务层移除时间、容器当前状态、回滚材料在哪）以 [services.md §服务](services.md#服务) 那条引述为权威，此处不复述。
 
-## 配置：`MP2RSS_FEED_URL`
+## 配置与状态集合
 
-合集源 `wx_mp2rss` 在 `data/sources.toml` 中 `fetch_url = "${MP2RSS_FEED_URL}"`（v2 schema 的字段名是 `fetch_url`，v1 才是 `url`，见 `src/airadar/sources/loader.py`）。真实 feed URL 含专属密钥，**不入 git**，存于 `.env`（项目根目录或 `~/.claude/.env`，均被 gitignore）：
-
-```bash
-MP2RSS_FEED_URL=https://mp2rss.com/feeds/<your-key>.xml
-```
-
-sources loader 用 `os.path.expandvars` 展开占位符（`src/airadar/sources/loader.py`）。`MP2RSS_FEED_URL` 未设置或设置为空时，loader 会记录 warning、跳过 `wx_mp2rss`，并继续加载其他信源；设置真实 feed URL 后该源自动生效。
-
-cron / launchd 不继承交互式 shell 的 `export`。需要启用微信公众号摄取时，自动调度前确认 `.env` 或 `~/.claude/.env` 已落该变量（与 LLM API Key 同处理，见 README §自动化调度）；暂不启用时可以保持为空。
-
-## 双跑：`WECHAT2RSS_FEED_URL` 与跨源去重
-
-自建的 Wechat2RSS（部署见 `deploy/wechat2rss/RUNBOOK.md`）作为第二个生产微信源 `wx_wechat2rss` 与 Mp2RSS **并行运行**，生产取两者并集。这是替换 Mp2RSS 之前的一步：只有真正同时跑过，才知道停掉 Mp2RSS 会丢什么。**Mp2RSS 不因此停用**，停用是另一个需要单独决定的动作。
+`wx_wechat2rss` 的 URL 是 loopback 加本部署 token，只在运行容器的机器上有效，放项目根 `.env`，不要放跨机器共享的 `~/.claude/.env`：
 
 ```bash
 WECHAT2RSS_FEED_URL=http://127.0.0.1:8080/feed/all.xml?k=<RSS_TOKEN>
 ```
 
-**当前状态（2026-09-04）**：Mp2RSS 订阅已于 2026-09-03 到期——feed 返回 404，最后一批真实文章入库于 2026-09-03 02:17Z，之后只入库了一条标题为「会员已到期，请续费以恢复更新」的占位文章（它仍在生产库与 `/wechat` 上）。`wx_mp2rss` 仍保持 enabled（停用与重启用的代价见下文「停用其中一个微信源时会发生什么」），每轮 fetch 报 404 直到续费或停用，两者都是待用户决定的动作。自建 Wechat2RSS 因宿主 OrbStack 未随 08-30 重启自启，2026-08-30 09:19Z 至 2026-09-04 01:36Z 停摆，此后是**唯一**在供稿的微信源；它只订阅了 14 个公众号，Mp2RSS 曾供 21 个，缺口与停机根因见 `plans/20260816-mp2rss-replacement/state.md` ISSUE-015 / ISSUE-016。
+`wx_mp2rss` 在 v2 contract 中仍保留 `fetch_url = "${MP2RSS_FEED_URL}"` 与公开 landing URL，但 `paused=true`。真实 feed URL 若存在仍是 secret，只能放 `.env` 或进程环境，不入 git；缺失或空值时 loader 不跳过这条 paused row，而是保留原占位符形成 inert `enabled=1, paused=1` 行。仅设置 `MP2RSS_FEED_URL` 不会解除暂停，也不会产生请求。
 
-该地址是 loopback 加本部署的 token，只在跑着那个容器的机器上有效，因此放**项目根 `.env`**，不要放跨机器共享的 `~/.claude/.env`。`/feed/all.xml` 是合集端点，全局上限 50 条（各账号自己的 feed 各 20 条）。缺 `k` 参数时它返回 `HTTP 200` 加 `{"err":"k param is empty..."}`，所以判断它是否可用要看返回体、不能只看状态码。
+四个集合的边界如下：
+
+| 状态/集合 | 判据 | 作用 |
+|---|---|---|
+| disabled | `enabled=false` | 普通来源退出 `/api/v2/sources`、About 与常规内容页；兼容用的 `/api/v1/sources` 仍可能返回它。内部归档来源 `wx_ai_assistant_kb_archive` 是显式例外，其文章仍可在 `/wechat` 使用并参与去重 |
+| paused | `enabled=true, paused=true` | 保留 inventory、历史可见、interpret、A5、dedup 和 discovery compare；排除 fetch/A7 |
+| fetchable / A7 evaluable | `enabled=true AND paused=false` | 允许主动读取，并纳入来源静默评估 |
+| visible | 各消费者既有 enabled 谓词 | 与 paused 无关，避免暂停时隐藏历史 |
+
+About 上的“已启用”只表示已收录、历史仍可见，不表示此刻主动抓取；runtime configuration status 只表示相应抓取入口是否可用。公共 API 不增加 `paused` 字段。
+
+cron / launchd 不继承交互式 shell 的 `export`。启用 Wechat2RSS 自动调度前确认项目 `.env` 已配置该变量（与 LLM API Key 同处理，见 README §自动化调度）；暂不启用时可以保持为空，普通未暂停 optional source 会被 loader 跳过。
+
+## Wechat2RSS 与跨源去重
+
+自建 Wechat2RSS 的部署见 `deploy/wechat2rss/RUNBOOK.md`。`/feed/all.xml` 是合集端点，全局上限 50 条（各账号自己的 feed 各 20 条）。缺 `k` 参数时它返回 `HTTP 200` 加 `{"err":"k param is empty..."}`，所以判断它是否可用要看返回体、不能只看状态码。
+
+program assembly 合入 T3 资产后，仓内将提供 Lima named-socket helper、无副作用四态 health receipt 与 boot witness，相关离线测试位于 T3 依赖中。当前 T1 checkout 尚无 `compose.sh`、`boot-witness.sh` 和支持 `--observe-only`/`--receipt` 的 healthcheck；旧脚本会忽略这些参数，组装前不要运行这些目标命令。先前取得的 live `HEALTHY` loopback probe 只证明当时服务可达，不能证明组装后实现、Lima、boot、cron、真实页面或生产切换已验收。维护者生产状态仍只有先前的 OrbStack 迁移 pre-state 快照，本 T1 单元未重新验收。目标生命周期、receipt 字段与未验证边界见 [Wechat2RSS runbook](../../deploy/wechat2rss/RUNBOOK.md)。
+
+生产收口前必须按 [monitoring-alerting 的暂停来源准备步骤](monitoring-alerting.md#暂停来源前准备-a7-episode-identity) 操作；该权威步骤要求对实际 state/event 文件显式传入绝对路径。legacy episode 需要时的完整交接为 `SEEDABLE → SEEDED → READY`；`READY` 或 `NO_ACTIVE_EPISODE` 才能继续，`BLOCKED_MISSING_EPISODE_IDENTITY` 表示缺少唯一匹配的 firing ledger，不能猜测归因。
 
 ### 去重键：账号 + 归一化标题 + 5 分钟发布窗
 
@@ -66,12 +73,12 @@ interpret 在总结一篇文章前，会拿它的 URL 问外部 summary-agent �
 
 排查同类问题时注意：**错误的摘要在库里和页面上都长得完全正常**——标题对、正文非空、标签齐全、`interpret processed=N errors=0`。可用的读数是 `wechat_interpretations.slug` 与 `items.title` 是否对应，以及同一 slug 基名下是否挂了一串 `-2`/`-3` 后缀却分属不同标题。
 
-### 停用其中一个微信源时会发生什么
+### paused 与 disabled 的恢复边界
 
-跨源去重只匹配 **enabled** 的来源。这是一个取舍，两面都实测过：
+跨源去重只匹配 **enabled** 的来源，paused row 因而仍能挡住 Wechat2RSS 重复写入；disabled row 不再匹配。这是 ADR-059 的身份语义，不因暂停而改变。
 
-- **停用后**，该源独有的文章立刻从 `/wechat` 消失——页面按同一个 `s.enabled=1` 过滤。落在另一个源当前 feed 窗口内的（Mp2RSS 一次给 100 条）会在随后几轮被它补回并重新可见；已经滚出窗口的补不回来。
-- **重新启用后**，被补回的那一篇会与原来那一行同时可见，即**同一篇文章出现两张卡**。
+- **paused**：历史仍在 `/wechat`、搜索与详情中，跨源 dedup 仍命中；恢复主动抓取需先验证上游、补齐 env、把 contract 的 `paused` 改为 false、重新生成并 reload。
+- **disabled**：历史立即从 enabled-only 消费面消失，去重锚点退出；以后重新启用可能把停用期间另一来源补回的同篇文章同时显示。
 
 选择匹配 enabled 而不是匹配全部行，是因为另一种写法下隐藏行会持续拦住每一次插入，那些文章**永久补不回来**。重复只在"停用后又重新启用"这一条路径上出现。
 
@@ -79,17 +86,19 @@ interpret 在总结一篇文章前，会拿它的 URL 问外部 summary-agent �
 
 ### 对告警与计数的影响
 
-A7「来源静默」逐源判定，阈值公式与「无法评估」的判据以 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则) 为权威。双跑对它的意味只有一条：`wx_wechat2rss` 入库的只是 Mp2RSS 漏掉的那部分，入库速率天然低于 Mp2RSS，样本不足期间它计入「无法评估」而不是「健康」。**两个源的入库量不能互相比较**——先到的那个源建条目、后到的被去重丢弃，所以计数反映的是抢到手的次数而不是覆盖率。覆盖率仍由 [`docs/plans/20260816-mp2rss-replacement/tools/shadow_compare.py`](../plans/20260816-mp2rss-replacement/tools/shadow_compare.py) 直接从两个 feed 测量，它不读生产库，因而不受去重影响（采样 cron 见 [services.md §服务](services.md#服务) 的 shadow-observe 行）。
+A7「来源静默」只评估 `enabled=true AND paused=false`；paused 来源不进入 silent、faded、quiet-X 或 unevaluable，不能把它写成健康。若已 announced 的 A7 episode 的全部 opening 来源后来都 paused，它直接 closed/ok，sender 调用数为 0，只在 `data/alert-events.jsonl` 写一条 `type=resolved, channel=INTERNAL, reason=source_paused`。若只暂停其中一部分，必须先有其余 opening 来源本轮仍被逐源评估的证据；缺证据时 episode 保持 firing 且不调用 sender，不能把“退出评估”误写成“已恢复”。完整分流见 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则)。
+
+A5 与 interpret 仍按 enabled 语义处理历史微信条目，不受 paused 影响。两个来源的历史入库量也不能当覆盖率比较：双跑时期先到的来源建条目、后到的被去重丢弃，计数只反映抢到手的次数。仓库外 `shadow-observe` 直接读两个 feed，应用 pause 不会阻止它请求 Mp2RSS；生产收口时只精确退役现场实际存在的目标行，若目标行原本不存在，则记录保留其余 cron 行的 no-op 证据。
 
 ### 日志与凭据脱敏
 
-`deploy/wechat2rss/logs.sh` 查看自建 Wechat2RSS 的部署日志时对 feed token 做脱敏。2026-08-20 起脱敏改为匹配到值末尾、在 `&` 处停下（此前只匹配 `[A-Za-z0-9_.~-]+`，`k=abc+def/ghi=` 这类合法 token 会漏出后缀），`&` 之后有诊断价值的 query 字段保留。注意脱敏要覆盖两条独立通道：服务自己打印的（启动横幅、配置回显），以及你构造的带 token URL 被对方记进访问日志的——只堵前一条时第二条原样漏出。
+program assembly 后，`deploy/wechat2rss/logs.sh` 才通过 Lima socket-aware `compose.sh` 查看部署日志，并对 feed token 做脱敏。2026-08-20 起脱敏改为匹配到值末尾、在 `&` 处停下（此前只匹配 `[A-Za-z0-9_.~-]+`，`k=abc+def/ghi=` 这类合法 token 会漏出后缀），`&` 之后有诊断价值的 query 字段保留。注意脱敏要覆盖两条独立通道：服务自己打印的（启动横幅、配置回显），以及你构造的带 token URL 被对方记进访问日志的——只堵前一条时第二条原样漏出。
 
 ## 公众号后台发现候选与微信读书 canary（默认关闭，已停止推进）
 
 仓库内还留着两条替代发现路线的实现：公众号后台 `searchbiz + appmsgpublish` 适配器与微信读书只读 canary。两者**默认关闭**（`data/wechat-discovery.toml` 的 `manual_backend_requests_enabled=false`），不被 `fetch_all` 或 pipeline 调用，也不写生产 `items`。
 
-后台路线已因平台级不可用**停止推进**（跨账号文章列举在 2026-07-30 前后被平台限制，见 [061-wechat-discovery](../adr/061-deprecate-wechat-admin-discovery-line.md)）；微信摄取改由 Mp2RSS + Wechat2RSS 双跑承担。
+后台路线已因平台级不可用**停止推进**（跨账号文章列举在 2026-07-30 前后被平台限制，见 [061-wechat-discovery](../adr/061-deprecate-wechat-admin-discovery-line.md)）；待发布配置改由 Wechat2RSS 承担微信主动摄取，paused Mp2RSS 只保留历史身份。
 
 只读地查看当前状态（不读私有 session、不发后台请求）：
 
@@ -170,7 +179,7 @@ AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 |---|---|
 | 第一次补录，或更换了 `--assistant-root`、`--user`、`--db-path` | 在命令中显式写出三个目标，再跑 `--dry-run` 核对候选数、已有条目和聚合后的跳过原因；CLI 不回显目标路径，dry-run 不写数据库 |
 | dry-run 显示 `eligible>0`，且聚合计数符合预期 | 去掉 `--dry-run` 实际导入；数量大时加 `--limit N` 分批执行。若关心某一篇，先按下文目录命令核对它的逐篇状态 |
-| 正常摄取之后发布的新文章 | 不用本命令；继续用 Mp2RSS / Wechat2RSS 与 pipeline |
+| 正常摄取之后发布的新文章 | 不用本命令；继续用 active Wechat2RSS 与 pipeline |
 | URL 已在 AI Radar，但没有 `wechat_interpretations` | 不用本命令；它只增加 `existing_without_interpretation` 计数，不修改该条目。启用源走正常 `./run.sh interpret`，其它情况按单独数据修复处理 |
 | 想导入非微信文章，或目录记录缺文章、摘要、有效向量等完整性条件 | 不用本命令绕过校验；修复 ai-assistant 侧记录后重跑，具体原因会列在 `Skipped reasons` |
 | 想撤销已提交批次 | 不要按 run id 直接删除；见下文「成功批次没有删除式回滚」 |
@@ -257,24 +266,25 @@ curl --fail-with-body -sSG --data-urlencode "q=$query" "$wechat_base_url/api/v1/
 - 删除与新 Mp2RSS 源重复的 9 条文章。
 - 补抓十字路口公众号头像写入 `wechat_account_avatars` 缓存。
 
-这是一次性的数据修复；新摄取的文章 author 由 Mp2RSS feed 正常带出，无需再处理。
+这是一次性的数据修复；该句只记录当时迁移结果，不是当前 Mp2RSS 运行状态。待发布配置中，新摄取的文章 author 由 Wechat2RSS feed 带出，无需再处理。
 
 ## 验证
 
 ```bash
-# 设置 MP2RSS_FEED_URL 后，占位符已展开（不应再看到字面 ${MP2RSS_FEED_URL}）
-./run.sh admin sources reload && sqlite3 data/radar.db \
-  "SELECT id, enabled, substr(url,1,40) FROM sources WHERE kind='wechat';"
-
-# Mp2RSS feed 联通性 + 新文章入库
-# 不要写成 `... | tail -5`：管道会把 fetch 的真实退出码换成 tail 的 0，抓取失败看不出来
-./run.sh fetch --sources data/sources.toml
+# reload 后检查状态；不要 SELECT url，避免把 feed token 回显到终端或日志
+./run.sh admin sources reload
 sqlite3 data/radar.db \
-  "SELECT author, title FROM items WHERE source_id='wx_mp2rss' ORDER BY fetched_at DESC LIMIT 10;"
+  "SELECT id, enabled, paused FROM sources WHERE kind='wechat' ORDER BY id;"
 
-# Wechat2RSS feed 联通性 + 新文章入库（同一轮 fetch；并集里被去重丢掉的不会出现在这里）
+# fetch 只验证 active 来源；保留完整退出码与日志，wx_mp2rss 不应出现 OK/FAIL 行
+./run.sh fetch
+
+# Wechat2RSS 新文章入库
 sqlite3 data/radar.db \
   "SELECT author, title FROM items WHERE source_id='wx_wechat2rss' ORDER BY fetched_at DESC LIMIT 10;"
+
+# Wechat2RSS 服务自身联通性走外部 healthcheck，不拿 paused Mp2RSS 作探针
+deploy/wechat2rss/healthcheck.sh
 
 # 头像缓存
 sqlite3 data/radar.db \

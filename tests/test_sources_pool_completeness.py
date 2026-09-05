@@ -23,6 +23,7 @@ def _project(source: object) -> dict[str, object]:
         "kind": source.kind,
         "tier": source.tier,
         "enabled": source.enabled,
+        "paused": source.paused,
         "fetch_url": source.url,
         "homepage_url": source.homepage_url,
         "icon_url": source.icon_url,
@@ -37,7 +38,7 @@ def _expected(row: dict[str, object], resolved: dict[str, str] | None = None) ->
     fetch_url = row["fetch_url"]
     if resolved:
         fetch_url = resolved.get(str(row["slug"]), fetch_url)
-    return {key: row[key] for key in ("slug", "name", "kind", "tier", "enabled", "homepage_url", "icon_url", "meta")} | {"fetch_url": fetch_url}
+    return {key: row[key] for key in ("slug", "name", "kind", "tier", "enabled", "paused", "homepage_url", "icon_url", "meta")} | {"fetch_url": fetch_url}
 
 
 def test_contract_has_exact_complete_identity_classes() -> None:
@@ -56,11 +57,15 @@ def test_contract_has_exact_complete_identity_classes() -> None:
         assert row["name"].casefold() not in {alias.casefold() for alias in row["aihot_aliases"]}
 
 
-def test_config_matches_contract_without_optional_mp2rss(monkeypatch) -> None:
+def test_config_matches_contract_without_optional_wechat_envs(monkeypatch) -> None:
     monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
     monkeypatch.delenv("WECHAT2RSS_FEED_URL", raising=False)
     actual = load_sources(CONFIG_PATH)
-    expected = [row for row in _contract() if row["ai_radar_main_timeline_member"]]
+    expected = [
+        row
+        for row in _contract()
+        if row["ai_radar_main_timeline_member"] or row["slug"] == "wx_mp2rss"
+    ]
     assert {_project(row)["slug"]: _project(row) for row in actual} == {str(row["slug"]): _expected(row) for row in expected}
 
 

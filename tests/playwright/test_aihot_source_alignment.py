@@ -12,9 +12,11 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 import pytest
@@ -98,7 +100,7 @@ MAIN_SOURCE_COUNT = 161
 
 
 def _expected_source_count(feed_urls: dict[str, str] | None) -> int:
-    return MAIN_SOURCE_COUNT + (len(WECHAT_FEED_ENVS) if feed_urls else 0)
+    return MAIN_SOURCE_COUNT + 1 + (1 if feed_urls else 0)
 
 
 class _Mp2RSSHandler(BaseHTTPRequestHandler):
@@ -157,16 +159,17 @@ def _insert_item(
     source_id: str,
     title: str,
     url: str,
+    published_at: str = "2026-08-13T08:00:00Z",
 ) -> None:
     conn.execute(
         """
         INSERT INTO items (
           id, source_id, url, title, author, published_at, fetched_at,
           content_text, content_html, content_hash, extra_json
-        ) VALUES (?, ?, ?, ?, 'fixture', '2026-08-13T08:00:00Z',
-                  '2026-08-13T08:01:00Z', ?, NULL, ?, '{}')
+        ) VALUES (?, ?, ?, ?, 'fixture', ?,
+                  ?, ?, NULL, ?, '{}')
         """,
-        (item_id, source_id, url, title, title, f"hash-{item_id}"),
+        (item_id, source_id, url, title, published_at, published_at, title, f"hash-{item_id}"),
     )
 
 
@@ -185,19 +188,21 @@ def _insert_source(
     optional: bool = False,
     required_env: str | None = None,
     wechat_only: bool = False,
+    paused: bool = False,
 ) -> None:
     conn.execute(
         """
         INSERT INTO sources (
-          id, name, url, tier, enabled, kind, homepage_url, icon_url,
+          id, name, url, tier, enabled, paused, kind, homepage_url, icon_url,
           meta_json, synced_at, public_url_override, optional, required_env, wechat_only
-        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, '2026-08-12T00:00:00Z', ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, '2026-08-12T00:00:00Z', ?, ?, ?, ?)
         """,
         (
             source_id,
             name,
             url,
             tier,
+            int(paused),
             kind,
             homepage_url,
             icon_url,
@@ -232,6 +237,7 @@ def _insert_config_source(conn: sqlite3.Connection, source: object) -> None:
         optional=source.optional,
         required_env=source.required_env,
         wechat_only=source.wechat_only,
+        paused=source.paused,
     )
 
 
@@ -643,7 +649,7 @@ def _assert_upgrade_fixtures_reach_public_consumers(
     expect(page.get_by_role("heading", name=LEGACY_WECHAT_MARKER, exact=True)).to_have_count(1)
 
 
-def _assert_preserved_upgrade_rows(db_path: Path, *, with_mp2rss: bool) -> None:
+def _assert_preserved_upgrade_rows(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         disabled = conn.execute(
@@ -670,26 +676,23 @@ def _assert_preserved_upgrade_rows(db_path: Path, *, with_mp2rss: bool) -> None:
         assert conn.execute(
             "SELECT COUNT(*) FROM wechat_interpretations WHERE item_id='alignment-legacy-wechat' AND slug='alignment-legacy-wechat'",
         ).fetchone()[0] == 1
-        wx_row = conn.execute("SELECT enabled FROM sources WHERE id='wx_mp2rss'").fetchone()
-        if with_mp2rss:
-            assert wx_row is not None
-            assert bool(wx_row["enabled"])
-        else:
-            assert wx_row is None
+        wx_row = conn.execute(
+            "SELECT enabled, paused FROM sources WHERE id='wx_mp2rss'"
+        ).fetchone()
+        assert wx_row is not None
+        assert (wx_row["enabled"], wx_row["paused"]) == (1, 1)
 
 
 def _assert_removed_content_is_publicly_absent(
     page: Page,
     base_url: str,
     evidence_dir: Path,
-    *,
-    with_mp2rss: bool,
 ) -> None:
     removed_item_ids = {f"removed-{slug}" for slug in REMOVED_SLUGS}
     sources_response, sources_data = _api_data(page, f"{base_url}/api/v2/sources")
     source_ids = {row["id"] for row in sources_data["sources"]}
     assert not (set(REMOVED_SLUGS) | {LEGACY_WECHAT_SLUG}) & source_ids
-    assert ("wx_mp2rss" in source_ids) is with_mp2rss
+    assert "wx_mp2rss" in source_ids
 
     default_response, default_data = _api_data(page, f"{base_url}/api/v1/curated?limit=100")
     explicit_response, explicit_data = _api_data(
@@ -798,7 +801,7 @@ def test_aihot_source_alignment_four_page_matrix(
                 pre_sync_context.close()
 
         _sync_current_sources(db_path, feed_urls=feed_urls)
-        _assert_preserved_upgrade_rows(db_path, with_mp2rss=with_mp2rss)
+        _assert_preserved_upgrade_rows(db_path)
         with _serve(db_path) as base_url:
             context = browser.new_context(viewport={"width": 1366, "height": 900})
             requested_urls: list[str] = []
@@ -809,7 +812,6 @@ def test_aihot_source_alignment_four_page_matrix(
                     page,
                     base_url,
                     evidence_dir,
-                    with_mp2rss=with_mp2rss,
                 )
                 _assert_main_page(page, base_url, "/")
                 page.screenshot(path=evidence_dir / "selected.png", full_page=True)
@@ -833,7 +835,9 @@ def test_aihot_source_alignment_four_page_matrix(
                 expected_rows = [
                     row
                     for row in contract_rows
-                    if row["ai_radar_main_timeline_member"] or with_mp2rss
+                    if row["ai_radar_main_timeline_member"]
+                    or row["slug"] == "wx_mp2rss"
+                    or (with_mp2rss and row["slug"] == "wx_wechat2rss")
                 ]
                 _assert_about_contract_rows(page, expected_rows)
                 assert {row["id"] for row in public_sources} == {row["slug"] for row in expected_rows}
@@ -853,12 +857,12 @@ def test_aihot_source_alignment_four_page_matrix(
                     )
                     assert actual["icon_url"] == expected["icon_url"]
 
-                if with_mp2rss:
-                    wx_row = page.locator("#sources-table tr").filter(has=page.get_by_text("wx_mp2rss", exact=True))
-                    expect(wx_row).to_contain_text("仅用于微信文章解读，不属于主时间线")
-                    expect(wx_row.locator("a")).to_have_attribute("href", "https://mp.weixin.qq.com/")
-                else:
-                    expect(page.get_by_text("wx_mp2rss", exact=True)).to_have_count(0)
+                wx_row = page.locator("#sources-table tr").filter(
+                    has=page.get_by_text("wx_mp2rss", exact=True)
+                )
+                expect(wx_row).to_contain_text("仅用于微信文章解读，不属于主时间线")
+                expect(wx_row.locator("a")).to_have_attribute("href", "https://mp.weixin.qq.com/")
+                expect(page.get_by_text("不代表此刻正在主动抓取", exact=False)).to_have_count(1)
                 x_row = page.locator("#sources-table tr").filter(has=page.get_by_text("x_openai", exact=True))
                 expect(x_row).to_contain_text("待首次验证")
 
@@ -964,3 +968,120 @@ def test_aihot_source_alignment_four_page_matrix(
                 temporary.replace(manifest_path)
             finally:
                 context.close()
+
+
+def test_paused_wechat_history_stays_in_list_search_and_detail_until_disabled(
+    browser: Browser,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "paused-wechat-visibility.db"
+    migrate(db_path)
+    markers = {
+        "paused-history-000": "PausedListMarker 000",
+        "paused-history-025": "PausedSearchMarker 025",
+        "paused-history-052": "PausedDetailMarker 052",
+    }
+    base_time = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
+    with sqlite3.connect(db_path) as conn:
+        _insert_source(
+            conn,
+            source_id="wx_mp2rss",
+            name="Paused Mp2RSS history",
+            url="${MP2RSS_FEED_URL}",
+            tier="T2",
+            kind="wechat",
+            homepage_url="https://mp.weixin.qq.com/",
+            public_url_override="https://mp.weixin.qq.com/",
+            optional=True,
+            required_env="MP2RSS_FEED_URL",
+            wechat_only=True,
+            paused=True,
+        )
+        for index in range(53):
+            item_id = f"paused-history-{index:03d}"
+            title = markers.get(item_id, f"PausedHistoryFiller {index:03d}")
+            published_at = (base_time - timedelta(minutes=index)).isoformat().replace("+00:00", "Z")
+            _insert_item(
+                conn,
+                item_id=item_id,
+                source_id="wx_mp2rss",
+                title=title,
+                url=f"https://mp.weixin.qq.com/s/{item_id}",
+                published_at=published_at,
+            )
+            conn.execute(
+                """
+                INSERT INTO wechat_interpretations (
+                  item_id, slug, recommendation, save_decision, save_reason,
+                  abstract, tags_json, summary_md, model, kb_synced, processed_at, error
+                ) VALUES (?, ?, 'read', 1, 'paused fixture', ?, '[]', ?, 'fixture', 0, ?, NULL)
+                """,
+                (
+                    item_id,
+                    item_id,
+                    f"abstract {title}",
+                    f"### {title}\n\npaused history remains visible",
+                    published_at,
+                ),
+            )
+        conn.commit()
+
+    with _serve(db_path) as base_url:
+        context = browser.new_context(viewport={"width": 1366, "height": 900})
+        page = context.new_page()
+        try:
+            _, first_page = _api_data(page, f"{base_url}/api/v1/wechat?page=1&limit=50")
+            _, second_page = _api_data(page, f"{base_url}/api/v1/wechat?page=2&limit=50")
+            expected_ids = [item["slug"] for item in first_page["items"] + second_page["items"]]
+            assert len(expected_ids) == 53
+            assert set(expected_ids) == {f"paused-history-{index:03d}" for index in range(53)}
+            assert set(markers).issubset(expected_ids)
+
+            page.goto(f"{base_url}/wechat", wait_until="domcontentloaded")
+            expect(page.locator(".wechat-card")).to_have_count(50)
+            assert page.locator(".wechat-card").evaluate_all(
+                "els => els.map(el => el.dataset.detailUrl)"
+            ) == [item["detail_url"] for item in first_page["items"]]
+            expect(page.get_by_text(markers["paused-history-000"], exact=True)).to_have_count(1)
+
+            page.goto(f"{base_url}/wechat?page=2", wait_until="domcontentloaded")
+            expect(page.locator(".wechat-card")).to_have_count(3)
+            assert page.locator(".wechat-card").evaluate_all(
+                "els => els.map(el => el.dataset.detailUrl)"
+            ) == [item["detail_url"] for item in second_page["items"]]
+
+            search_title = markers["paused-history-025"]
+            query = urlencode({"q": search_title})
+            _, search_data = _api_data(page, f"{base_url}/api/v1/wechat?{query}&page=1&limit=50")
+            assert [item["slug"] for item in search_data["items"]] == ["paused-history-025"]
+            page.goto(f"{base_url}/wechat?{query}", wait_until="domcontentloaded")
+            expect(page.get_by_text(search_title, exact=True)).to_have_count(1)
+
+            detail_response = page.goto(
+                f"{base_url}/wechat/paused-history-052",
+                wait_until="domcontentloaded",
+            )
+            assert detail_response is not None and detail_response.status == 200
+            expect(page.locator(".wechat-detail h1")).to_have_text(markers["paused-history-052"])
+
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("UPDATE sources SET enabled=0 WHERE id='wx_mp2rss'")
+                conn.commit()
+
+            _, disabled = _api_data(page, f"{base_url}/api/v1/wechat?page=1&limit=50")
+            assert disabled["items"] == []
+            assert disabled["total"] == 0
+            page.goto(f"{base_url}/wechat?_visibility=disabled", wait_until="domcontentloaded")
+            expect(page.locator(".wechat-card")).to_have_count(0)
+            page.goto(
+                f"{base_url}/wechat?{query}&_visibility=disabled",
+                wait_until="domcontentloaded",
+            )
+            expect(page.locator(".wechat-card")).to_have_count(0)
+            missing = page.goto(
+                f"{base_url}/wechat/paused-history-052?_visibility=disabled",
+                wait_until="domcontentloaded",
+            )
+            assert missing is not None and missing.status == 404
+        finally:
+            context.close()

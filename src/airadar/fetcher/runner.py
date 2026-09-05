@@ -15,7 +15,13 @@ import httpx
 from .. import db
 from ..runtime_env import read_value
 from ..sources.loader import SourceConfig, load_sources
-from ..sources.sync import load_enabled_sources_from_db, sync_to_db
+from ..sources.sync import (
+    load_enabled_sources_from_db as load_enabled_sources_from_db,
+)
+from ..sources.sync import (
+    load_fetchable_sources_from_db,
+    sync_to_db,
+)
 from ..sources.x_state import validate_x_runtime_meta, without_x_runtime_meta, x_runtime_meta
 from .dedup import FetchedItem, _normalized_url, upsert_item
 from .http_client import FeedResponse, fetch_feed
@@ -617,7 +623,7 @@ def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSum
     conn = db.get_conn(db_path)
     try:
         reload_sources(conn, path)
-        sources = load_enabled_sources_from_db(conn)
+        sources = load_fetchable_sources_from_db(conn)
         unavailable: list[SourceFetchSummary] = []
         if not read_value("X_BEARER_TOKEN").strip():
             unavailable = [

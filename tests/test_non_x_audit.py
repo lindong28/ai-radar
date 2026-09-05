@@ -99,6 +99,7 @@ name = "Only feed"
 fetch_url = "https://example.test/feed"
 tier = "T2"
 enabled = true
+paused = false
 kind = "feed"
 homepage_url = "https://example.test/"
 icon_url = "https://example.test/favicon.ico"

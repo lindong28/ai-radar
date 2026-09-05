@@ -4,7 +4,7 @@
 
 ## Overview
 
-AI Radar 是一个 AI 信息流聚合站点。信源不止 RSS：`data/sources.toml` 当前 163 条全部 enabled，按 `kind` 分为 `x` 109（X/推文，官方 API 或 RSS adapter）、`feed` 34（RSS/Atom）、`web` 18（原始 Web/API 抓取）、`wechat` 2（微信公众号合集 feed，Mp2RSS + Wechat2RSS 双跑）。抓取后经 LLM 多阶段处理（筛选、评分、翻译富化、精选），以时间线和日报形式通过 Web 展示。
+AI Radar 是一个 AI 信息流聚合站点。信源不止 RSS：仓内 `data/sources.toml` 当前 163 条全部 enabled，按 `kind` 分为 `x` 109（X/推文，官方 API 或 RSS adapter）、`feed` 34（RSS/Atom）、`web` 18（原始 Web/API 抓取）、`wechat` 2（Wechat2RSS 主动抓取，Mp2RSS paused 仅保留历史身份）。这是待发布的代码与配置快照，不表示生产迁移与发布已完成。抓取后经 LLM 多阶段处理（筛选、评分、翻译富化、精选），以时间线和日报形式通过 Web 展示。
 
 技术栈：Python 3.12+ / FastAPI / SQLite (WAL) / Jinja2 页面模板 / 多 LLM Provider。包管理使用 uv。prefilter/score/enrich 三阶段的默认 provider 都是 DeepSeek 系（`deepseek_v32` / `deepseek_v4_flash` / `deepseek_v4_pro`），同一封装按 key 走官方 DeepSeek 或火山 ARK（`DEEPSEEK_API_KEY` / `ARK_API_KEY`，ARK 侧另有 `provider/ark_breaker.py` 熔断）；GLM（prefilter）与 OpenAI 兼容的 `codex_gpt_mini`（score）是需显式设 `AI_RADAR_PREFILTER` / `AI_RADAR_SCORER` 才启用的备选。
 
@@ -30,7 +30,7 @@ src/airadar/
 │
 ├── sources/            # 信源管理
 │   ├── loader.py       #   解析 data/sources.toml -> SourceConfig
-│   ├── sync.py         #   同步信源配置到数据库
+│   ├── sync.py         #   同步信源配置到数据库，分别提供 enabled 与 fetchable 选择器
 │   ├── contract.py     #   机器契约（schema v2）校验：kind/tier/slug 形状与 union 收据
 │   └── x_state.py      #   X runtime metadata（cursor/checkpoint）的共享验证器
 │
@@ -291,7 +291,9 @@ ai-assistant KB ── versioned article catalog ──> admin/wechat_kb.py
 
 `kind="x"` 且 `meta.adapter="x_api"` 的源由 `fetcher/x_api.py` 走 X 官方 API；X RSS 源推荐显式使用 `meta.adapter="rss"`，无 adapter 的 v1 历史配置仍走 RSS。尚无 `x_user_id` 时只做 username identity lookup 并持久化首次时间边界，下一轮才读 user timeline；因此每源每轮仍至多一个远端请求。空页提交 `x_since_time`，拿到帖子后以 `x_since_id` 为 high-water mark；若响应有下一页，只把 cursor 与本批 high-water mark 写入 source runtime metadata，下一轮继续该 cursor，直到排空才推进 committed checkpoint。timeline 每次最多 5 条并排除 replies/retweets；runtime state 在写入、reload 与读取处共享同一验证器，配置文件不能伪造内部 cursor，runner 通过 identity + runtime snapshot + SQL CAS 拒绝陈旧覆盖。冷启动窗口不追接入前历史，因此不代表历史召回对齐。详细取舍见 ADR-046。
 
-`kind="wechat"` 生产源有两个并行运行、取并集：`wx_mp2rss`（托管 Mp2RSS 合集 feed，`MP2RSS_FEED_URL`）与 `wx_wechat2rss`（本机自建 Wechat2RSS，`WECHAT2RSS_FEED_URL`）。两者互有漏文、谁都不是对方的超集，所以并行而非切换（[ADR-059](adr/059-dual-run-wechat-feeds-with-a-cross-source-article-identity.md)）。既有去重按 URL / 正文哈希且作用域限于单个 `source_id`，识别不出跨源重复——两个源给同一篇文章的 URL 没有公共子串（短链 `/s/<token>` vs 长链 `?__biz=…&mid=…&idx=…&sn=…`），正文也来自不同渲染方。因此 `fetcher/dedup.py` 另加一层**跨源身份**，只对 `kind='wechat'` 且 enabled 的来源在 INSERT 前判定：账号（`items.author`）+ 归一化标题（`wechat_text.wechat_identity_title`）+ 发布时间差 ≤ `WECHAT_IDENTITY_WINDOW`（5 分钟），命中即丢弃后到的一条，谁先到留谁。
+仓内发布单元中，`kind="wechat"` 由 `wx_wechat2rss`（本机自建 Wechat2RSS，`WECHAT2RSS_FEED_URL`）主动抓取；`wx_mp2rss`（托管 Mp2RSS 合集 feed，`MP2RSS_FEED_URL`）保持 `enabled=true, paused=true`。source inventory 与历史消费者仍按 enabled 选择，fetch 与 A7 精确按 `enabled=true AND paused=false` 选择，所以 paused Mp2RSS 不发请求、不评估静默，但历史文章仍可见、可解读并参与去重/比较。显式 paused 的 v2 optional WeChat row 即使 env 缺失也作为 inert identity 加载；普通未暂停 optional source 缺 env 时仍跳过（[ADR-20260904-f427](adr/20260904-f427-pause-source-fetch-without-hiding-history.md)）。生产是否已切换须另看 migration、DB sync、behavior deploy 与真实 pipeline 读数，不从本文的仓内快照推定。
+
+ADR-059 建立的跨源身份继续适用：既有去重按 URL / 正文哈希且作用域限于单个 `source_id`，识别不出两个 renderer 的同篇文章。因此 `fetcher/dedup.py` 只对 `kind='wechat'` 且 enabled 的来源在 INSERT 前判定账号（`items.author`）+ 归一化标题（`wechat_text.wechat_identity_title`）+ 发布时间差 ≤ `WECHAT_IDENTITY_WINDOW`（5 分钟），命中即丢弃后到的一条。paused row 仍是 enabled，故继续作为历史锚点；ordinary disabled row 退出历史可见性与跨源去重。唯一例外是下一段的保留归档源 `wx_ai_assistant_kb_archive`，它由集中谓词显式纳入 `/wechat` 与跨源去重，不构成 generic disabled 语义。
 
 fetch 阶段通过 RSS 发现新文章链接，再只对尚未入库的 `mp.weixin.qq.com/s/...` 原文用 Playwright 抓全文；抓取失败时降级保留 RSS 裸条目，后续 Web 层仍只公开中文摘要与原文回链。`interpret` 阶段只读取启用的 wechat 源 item，调用 ai-assistant `summarize-article` 逻辑生成结构化总结；`save_decision=1` 的条目展示在 `/wechat` 并回写 ai-assistant KB，`save_decision=0` 只在本库留处理记录。X API 接入不读取或替换 `wx_mp2rss`。
 
@@ -366,7 +368,11 @@ performance remediation ──只读 lifecycles.page firing
 
 `admin/alerts.py` 以每个 `rule_id` 下的 `lifecycles` map 作为状态真源；`page` 与 `notice` 分别保存 `state`、`since`、`last_notified`、`detail` 和 `announced`。无 `lifecycles` 的旧 flat entry 在读取时被规范化到其记录的 severity（缺失则保守视为 page），之后统一写新形状。顶层 `state/since/last_notified/detail/severity/announced` 仅是供旧 reader 使用的兼容投影；当异常 state 同时含 firing page 和 notice 时，投影优先 page，避免隐藏高严重度。
 
-状态机只在 firing transport 成功后更新 announced / `last_notified`；未投递成功的 pending firing 或 resolved 都在下轮重试。notice→page 只发送新的 page firing，不发送中间 resolved，并在新 firing 送达后内部关闭旧 notice lifecycle；page 条件降到 notice 档时继续保持同一个 page incident，直到真正恢复。pending 且从未成功公告的旧 firing episode 静默关闭。每个 severity 保留自己的 debounce / cooldown 计时器。投递契约是 at-least-once：发送和状态持久化之间不能原子提交，重试使用发送前持久化的 notification nonce，并把 rule/severity/event/nonce/episode identity 传给 `im-notify` 的 signature ledger 抑制同一意图的重复可见消息；不宣称 exactly-once。成功 sender invocation 与内部合并抑制决策共同写入 `data/alert-events.jsonl`：投递事件含 `{ts,rule_id,severity,type,detail,values,channel}`，`channel=INTERNAL,type=suppressed` 的事件另含 carrier、reason 与 heartbeat freshness。ledger 不是状态真源，写入失败 fail-open，不阻断 delivery 或状态持久化；统计实际推送必须排除 `channel=INTERNAL`。
+状态机只在 firing transport 成功后更新 announced / `last_notified`；未投递成功的 pending firing 或 resolved 都在下轮重试。notice→page 只发送新的 page firing，不发送中间 resolved，并在新 firing 送达后内部关闭旧 notice lifecycle；page 条件降到 notice 档时继续保持同一个 page incident，直到真正恢复。pending 且从未成功公告的旧 firing episode 静默关闭。每个 severity 保留自己的 debounce / cooldown 计时器。投递契约是 at-least-once：发送和状态持久化之间不能原子提交，重试使用发送前持久化的 notification nonce，并把 rule/severity/event/nonce/episode identity 传给 `im-notify` 的 signature ledger 抑制同一意图的重复可见消息；不宣称 exactly-once。成功 sender invocation 与内部状态转换共同写入 `data/alert-events.jsonl`：投递事件含 `{ts,rule_id,severity,type,detail,values,channel}`；合并抑制写 `channel=INTERNAL,type=suppressed` 并附 carrier、reason 与 heartbeat freshness；A7 已 announced episode 因全部 opening snapshot 来源暂停而静默结案时写 `channel=INTERNAL,type=resolved,reason=source_paused`，不调用 sender。ledger 不是状态真源；普通 ledger 写入失败保持既有 fail-open 语义，唯独 `source_paused` 内部结案须先写成 ledger，失败时保留 firing 供下轮重试。统计实际推送必须排除 `channel=INTERNAL`。
+
+A7 的 `lifecycle.source_ids` 在 episode 首次 firing 时冻结 opening snapshot；迁移前缺少 source identity 的旧 announced-firing episode 只能从 `ts` 与 `episode_since` 都等于 lifecycle `since` 的 opening firing ledger 恢复，同一时刻有冲突身份就 fail closed。对“opening snapshot 中仅部分来源暂停”的 mixed episode，暂停本身不能证明其余来源已恢复：只有所有未暂停 opening source 都在本轮 `evaluated_source_ids` 中有当前评估证据时，才能走普通 resolved；证据不足则保持 firing 且 sender 为 0，全局仍 degraded 时保留 degraded 而不改写为绿色恢复。若已 announced 旧 episode 的全部 opening sources 都在同轮 paused，但 A7 又因新的 unrelated silent sources 继续 firing，只有在状态中恰好存在一个 firing lifecycle、且旧 episode 与 current result 的 source identity 都非空时才 rollover：先写 INTERNAL `source_paused` resolved ledger，成功后关闭旧 episode，再以 current source IDs 和当前时刻建立未 announced 的新 firing episode。ledger 写失败、存在多个 firing lifecycles，或任一侧 identity 为空时，sender 为 0 且原样保留旧状态。`evaluated_source_ids` 与普通通知中的 `paused_source_ids` 只是状态机证据，在 notification ledger 序列化边界过滤；唯独 INTERNAL `source_paused` 结案保留 episode-scoped `paused_source_ids`。
+
+未 announced 的 legacy firing 不进入 source identity prepare/blocking 或 INTERNAL `source_paused` ledger 分支，而是沿用 pending 且从未成功公告 episode 的静默关闭语义。
 
 confirmed `PERF:*` page incident 可由后续的 `performance-remediate` cron 读取。`performance/remediation.py` 对新 state 直接以 `lifecycles.page` firing 为权威 incident，不依赖可能 stale 的顶层投影；仅对无 `lifecycles` 的旧 entry 回退为 flat page。remediation 以 nonblocking lock 和 incident fingerprint 保证单 active、每个 firing episode 单次处置，在独立 git worktree 内用 fail-closed Codex workspace-write 生成 detached candidate commit。生产数据库被固定为 worktree 外的只读诊断输入，worker 无 push/deploy/launchctl 入口；候选必须经人工 review 与显式部署授权才会进入主分支或生产。
 
@@ -451,8 +457,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/api/v1/hot` | GET | 近 N 小时热点榜（`hours` 默认 48、范围 6–168；`limit` 默认 5、上限 10）。`heat = round(加权分×10 + 关联讨论数×5)`；响应级 `generated_at`，逐条含 `published_at`/`fetched_at`/`event_time`/`source_kind`/`author`/`related_discussions`。`event_time` 取可解析且不晚于 `generated_at` 的 `published_at`，否则回退 `fetched_at`（页面相对时间只用它）。候选集由后台缓存供给、无固定条数截断；缓存未就绪时返回 **503 + `Retry-After: 2`**，绝不用 200 + 空 items 冒充（见下） |
 | `/api/v1/items/{id}` | GET | 单条详情 + 评估历史 |
 | `/api/v1/wechat` | GET | 微信文章解读列表，仅返回 `save_decision=1`，字段含 slug/title/abstract/tags/author/avatar/published_at/url；`q` 按必需词混合检索，严格阶段零结果时才启用空白标准化兜底 |
-| `/api/v1/sources` | GET | 兼容信源投影，仅公开既有 `feed` / `x` / `wechat` kind；不会把新增 `web` kind 静默加入已发布 v1 集合 |
-| `/api/v2/sources` | GET | 完整的已启用公开信源 inventory，包含 `web` kind、配置状态、公开入口与作用域明确的读取验证状态；不公开付费 Mp2RSS URL 或 X cursor |
+| `/api/v1/sources` | GET | 兼容信源投影，保留全部非 archive legacy 行（含 ordinary disabled 行及其 `enabled=false`），仅公开既有 `feed` / `x` / `wechat` kind；不会把新增 `web` kind 静默加入已发布 v1 集合 |
+| `/api/v2/sources` | GET | 完整的已启用公开信源 inventory，包含 `web` kind、配置状态、公开入口与作用域明确的读取验证状态；enabled 表示已收录与历史可见，不承诺主动抓取；不公开 `paused`、付费 Mp2RSS URL 或 X cursor |
 | `/api/v1/healthz` | GET | 健康检查（条目数、运行数、ruleset 版本） |
 | `/api/v1/admin/metrics` | GET | 内部运维指标；与 `/admin` 同一访问门控 |
 | `/api/v1/admin/usage` | GET | 内部 LLM 已记录用量 rollup；`measurement_scope` 分开限定加总量与派生统计口径；与 `/admin` 同一访问门控 |
@@ -578,8 +584,8 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 | trafilatura | HTML 正文提取 |
 | beautifulsoup4 | 微信公众号 HTML 解析 |
 | Playwright + Chromium | 微信公众号原文抓取 + 默认 `performance-probe` 四旅程测量的浏览器运行时 |
-| Mp2RSS | 生产微信公众号发现层之一（托管付费服务），将已订阅公众号暴露为 RSS/Atom；`MP2RSS_FEED_URL` |
-| Wechat2RSS | 生产微信公众号发现层之二（自建，`deploy/wechat2rss/` 下 docker-compose 拉起 `ttttmr/wechat2rss` 容器）；`WECHAT2RSS_FEED_URL`，与 Mp2RSS 双跑取并集（ADR-059） |
+| Mp2RSS | 已暂停的微信公众号历史来源（托管付费服务）；`wx_mp2rss` 保持 enabled 供历史可见与跨源去重，不进入 fetch/A7；`MP2RSS_FEED_URL` 仅作为可选恢复前置，设置它不会解除暂停 |
+| Wechat2RSS | 仓内待发布的主动微信公众号发现层；目标 runtime 由 Lima ≥2.2 generated system LaunchDaemon 在 boot 启动 named instance，容器仍由 `deploy/wechat2rss/` 的 compose 管理。生产尚处 OrbStack migration pre-state，Lima 切换与真实 reboot 未验收；`WECHAT2RSS_FEED_URL` |
 | X 官方 API | `kind="x"` 且 `meta.adapter="x_api"` 源的主路径：`fetcher/x_api.py` 走 `https://api.x.com/2`，需 `X_BEARER_TOKEN` |
 | 图片出口代理（repo 外常驻） | `AI_RADAR_IMG_PROXY_URL` 指向的 HTTP 正向代理，`/img` 取 `pbs.twimg.com` 时**强制**走它（serve 主机到 twimg 的连接被上游阻断）；未配置即直接 404，绝不退化成直连（[ADR-057](adr/057-fetch-x-tweet-media-through-a-singapore-egress-proxy.md)）。产线实机拓扑（新加坡 tinyproxy + SSH 隧道）与诊断顺序见 [operations/services.md](operations/services.md) |
 | Domain-routing selector（repo 外常驻） | pipeline 与已登记外部 client 的唯一出网入口；AI Radar 消费严格 status-derived `agent_proxy`，system-config 持有域名 policy、GCP/Tencent/direct upstream 与 route audit。状态不健康时 pipeline fail closed；见 [ADR-20260826-68e2](adr/20260826-68e2-route-ai-radar-through-domain-selector.md) 与 [operations/services.md](operations/services.md#ai-radar-域名-selector-出网) |
@@ -594,7 +600,7 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 
 | 任务 | 关键文件 |
 |---|---|
-| 添加新信源 | 更新 `tests/fixtures/aihot_sources.json` 机器契约并生成 `data/sources.toml`；生产 wechat 源是 `wx_mp2rss` + `wx_wechat2rss` 两个合集 feed 并行（`MP2RSS_FEED_URL` / `WECHAT2RSS_FEED_URL`，ADR-059），改动要同时考虑跨源去重键；后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
+| 添加或暂停信源 | 更新 `tests/fixtures/aihot_sources.json` v2 机器契约并用 renderer 生成 `data/sources.toml`；每行显式 boolean `enabled`/`paused`，fetchable 为两者的 `enabled AND NOT paused`；当前 WeChat 主动入口是 `wx_wechat2rss`，paused `wx_mp2rss` 仍参与历史可见与跨源去重。后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
 | 维护 AIHOT 对齐信源 | `tests/fixtures/aihot_sources.json` + README「信源维护与验证」四个命令；稳定 identity/aliases、retirement ledger、解析器/规则、公开投影和收据必须同步，不能只改 TOML |
 | 采集或消费 AIHOT 私有基准 | `scripts/capture_aihot_dataset.py` + `src/airadar/eval/aihot_dataset.py` + `src/airadar/eval/schemas/aihot-item-v1.schema.json` + private submodule `benchmarks/aihot`；先核对 gitlink/tool/schema identity，再离线 validate/slice |
 | 添加原始 Web/API 信源 | `src/airadar/fetcher/web.py` 登记确定性 fetch/item 边界与 parser + 正反 fixture + 真实 `audit_non_x_retrieval.py` 收据 |

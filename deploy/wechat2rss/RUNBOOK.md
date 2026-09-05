@@ -1,98 +1,108 @@
 # Wechat2RSS Runbook
 
-Self-hosted discovery layer for `kind="wechat"` sources. AI Radar currently runs it alongside Mp2RSS and takes the cross-source union rather than treating either feed as a complete replacement.
+Self-hosted active ingestion layer for `kind="wechat"` sources. The pending-release AI Radar configuration fetches `wx_wechat2rss`; `wx_mp2rss` remains `enabled=true, paused=true` only as a historical-visibility and cross-source-deduplication identity, so it is inert for fetch and A7 even when its environment variable is present. The program target is a named Lima instance whose official generated system LaunchDaemon starts the VM at boot; no GUI login or global Docker context is part of that target lifecycle contract.
 
-Upstream is **WeRead**, not the mp backend. That distinction is the whole reason this route exists: cross-account article listing via `searchbiz + appmsg` was restricted platform-wide around 2026-07-30 and no longer works for third-party accounts; the retired discovery path and evidence boundary are summarized in [`061-wechat-discovery`](../../docs/adr/061-deprecate-wechat-admin-discovery-line.md).
+> **Current T1 checkout boundary:** this checkout contains `docker-compose.yml`, the legacy no-argument `healthcheck.sh`, and `logs.sh`, but it does not contain `compose.sh` or `boot-witness.sh`. Its legacy healthcheck does not support `--observe-only` or `--receipt`; passing those arguments would not suppress notifier, dedup, or state-file effects. Do not run the helper or flag-bearing commands below until program assembly has merged the T3 assets and revalidated this runbook. Until then, current-checkout status uses `docker compose ps` and `./healthcheck.sh` with no arguments. The remaining sections describe the program-assembly target, not a completed production cutover; current activation status is recorded in [`docs/operations/services.md`](../../docs/operations/services.md).
 
-## Bring-up
+## Program-assembly target: host prerequisites and instance creation
+
+Lima `>=2.2` and the Docker CLI are required. Confirm the installed CLI contract before creating the instance:
+
+```bash
+HOMEBREW_NO_AUTO_UPDATE=1 brew install lima
+limactl --version
+limactl autostart --help
+limactl list --help
+```
+
+Choose the absolute directory that contains this `docker-compose.yml` and `data/`. Mount that exact directory at the same absolute path in the guest; do not create a second writable copy of `data/` inside the VM. Only one daemon may own the production bind at a time.
+
+```bash
+LIVE_DEPLOY=/absolute/path/to/ai-radar/deploy/wechat2rss
+limactl start --name wechat2rss --vm-type=vz --mount-type=virtiofs --mount "$LIVE_DEPLOY:w" template:docker
+limactl autostart enable --condition=boot --user "$(id -un)" wechat2rss
+sudo launchctl print system/io.lima-vm.daemon.wechat2rss
+```
+
+The generated plist is the supervisor authority. Inspect it with `plutil` and `launchctl`; do not copy or hand-edit it into this repository. `compose.sh` dynamically resolves `unix://{{.Dir}}/sock/docker.sock` from `limactl list`, exports `DOCKER_HOST` only to its child command, and leaves the global Docker context unchanged.
+
+## Program-assembly target: first login and normal operation
+
+After program assembly has supplied the named-socket helpers, copy `.env.example` to `.env`, fill `LIC_EMAIL`, `LIC_CODE`, and `RSS_TOKEN`, then create the container through the socket-aware helper:
 
 ```bash
 cd deploy/wechat2rss
-cp .env.example .env      # fill LIC_EMAIL, LIC_CODE, RSS_TOKEN
-docker compose up -d
-docker compose ps
-curl -sf http://127.0.0.1:8080/ >/dev/null && echo admin_ui_ok
+cp .env.example .env
+limactl start wechat2rss
+./compose.sh up -d
+./compose.sh ps
+./healthcheck.sh --observe-only
 ./logs.sh --since 10m
 ```
 
-`admin_ui_ok` is the pre-login bring-up signal. It proves the loopback UI answered; account usability is checked separately with `./healthcheck.sh` after the first login.
+The service listens only on `127.0.0.1:8080`. Before scanning the login QR code, the WeChat account must have authorized WeRead's article feature once: open an Official Account article in WeChat, share it to “在微信读书中阅读”, and complete the prompt. After login, `./healthcheck.sh --observe-only` must exit 0 and print `HEALTHY: wechat2rss 有 N 个账号可用且均未风控`.
 
-Service listens on `127.0.0.1:8080` (loopback only — the admin UI accepts
-subscription changes and must not be world-reachable).
-
-## Host prerequisites (macOS / OrbStack)
-
-1. **OrbStack must auto-start at login**, or the container is down after every
-   reboot. OrbStack → Settings → General → "Start at login".
-2. **`network_proxy` must not point at a dead port.** It was found set to
-   `http://host.orbstack.internal:59527` while the agent-proxy tunnel was on
-   59520; OrbStack transparently redirects all container TCP through that value,
-   so every container had zero egress — including DNS-over-TCP. Set to `none`
-   on 2026-08-17:
-
-   ```bash
-   orbctl config show | grep network_proxy   # expect: none
-   orbctl config set network_proxy none
-   ```
-
-   Pinning it to the *current* port does not fix this: the agent-proxy tunnel
-   binds `127.0.0.1` only, so the VM cannot reach it on any port, and the port
-   itself is re-chosen on every reconnect. Containers reach WeRead, WeChat and
-   the vendor registry directly, so no proxy is needed.
-
-## First login (needs a phone, once)
-
-The service crawls through a logged-in WeChat account's WeRead session.
-
-**Before scanning**, the WeChat account must have authorized WeRead's article
-feature at least once: in WeChat, open any Official Account article → Share →
-"在微信读书中阅读" → complete the prompt. Skipping this produces a login that
-succeeds but crawls nothing, and the symptom looks like risk-control.
-
-Open `http://127.0.0.1:8080`, then in the admin UI choose 微信账号 → 添加账号 → scan. Prefer a **frequently used** WeChat account; the vendor notes those trip risk-control less often. After login, run `./healthcheck.sh`; success is a terminal line shaped as `healthy: N 个账号可用，均未风控` with exit code 0.
-
-## Connect and operate AI Radar
-
-Set the following in the AI Radar repository root `.env` on the same host; replace `<RSS_TOKEN>` with the value from this directory's `.env`:
+Set the following only in the AI Radar root `.env` on the same host; the token-bearing URL must not enter git or shared logs:
 
 ```bash
 WECHAT2RSS_FEED_URL=http://127.0.0.1:8080/feed/all.xml?k=<RSS_TOKEN>
 ```
 
-The feed URL is host-local and must not go in a cross-machine shared env file. Its response semantics, cross-source union, and deduplication contract are maintained in [the WeChat ingestion runbook](../../docs/operations/wechat-ingestion.md#双跑wechat2rss_feed_url-与跨源去重). Service health is not consumer verification: after setting the root `.env`, complete that runbook's [AI Radar-side fetch and database checks](../../docs/operations/wechat-ingestion.md#验证) before concluding that the feed is connected.
+Service health is not consumer verification. Complete the AI Radar-side fetch and database checks in [the WeChat ingestion runbook](../../docs/operations/wechat-ingestion.md#验证) before concluding that the source is connected. The repository-external `shadow-observe` cron may still read Mp2RSS independently of this source pause; retiring that cron (or proving it absent with a no-op readback) remains a future, separately authorized production-closure action whose current status is recorded in [the service inventory](../../docs/operations/services.md#服务).
 
-Use these lifecycle and verification entries from `deploy/wechat2rss/`:
+## Program-assembly target: lifecycle semantics
+
+This section applies only after program assembly has supplied and reviewed `compose.sh` plus the flag-aware healthcheck. At that point, run all Compose operations through `compose.sh`; use `logs.sh` for logs so both credential-redaction channels remain active.
 
 ```bash
-docker compose ps                 # read-only container status
-./healthcheck.sh                  # exit 0 plus healthy: ... means the logged-in accounts are usable
-./logs.sh --since 10m             # redacted logs; never use raw docker compose logs
-docker compose down               # stop and remove the container; persistent data remains in ./data
-docker compose pull
-docker compose up -d              # make image or .env/compose changes live
-./healthcheck.sh                  # post-change terminal check
+./compose.sh ps
+./healthcheck.sh
+./logs.sh --since 10m
+./compose.sh pull
+./compose.sh up -d
+./healthcheck.sh --observe-only
 ```
 
-## Risk control
+`./compose.sh ps` is read-only with respect to VM lifecycle and never starts Lima. Start or stop the VM explicitly with `limactl start wechat2rss` or `limactl stop wechat2rss`.
 
-Expected, not a failure. The service backs off 15m → 30m → 60m → … capped at 6h,
-and resets on recovery. Manual clear: in WeRead, 书架 → 文章收藏 → tap an account
-**name** (not an article title) → follow the prompts.
+`./compose.sh stop` is a manual disable and `./compose.sh down` is a teardown. Either action exits the boot-recoverable desired state and invalidates earlier boot receipts; `down` also removes the container. The single recovery sequence is:
 
-Repository-owned alerting deliberately does not use the service's `BOT_WEBHOOK_URL`: the external `healthcheck.sh` can still notify through `im-notify --alert` when the container itself is down. If you independently enable the vendor webhook, it posts the **企业微信** schema `{"msgtype":"text","text":{"content":"..."}}`, not Feishu's `{"msg_type":"text","content":{"text":...}}`; a translating endpoint is required between it and a Feishu webhook.
+```bash
+./compose.sh up -d
+./healthcheck.sh --observe-only
+```
 
-## Known coverage limits
+The normal no-argument health check retains alert delivery, dedup clearing, recovery-state updates, and exit codes for cron. `--observe-only` exercises the same liveness/account/risk-control branches and exit codes without notifier, dedup, or production-state I/O. Its stdout starts with one of four explicit states:
 
-- Only **群发** (broadcast) articles are collected. An account may publish
-  without broadcasting; those appear on its profile page but never in the feed.
-- Only the newest 20 articles are ever crawled. There is **no historical
-  backfill** — `RSS_KEEP_OLD_COUNT=-1` preserves everything from the moment the
-  subscription is added forward, but nothing before it.
-- Vendor QA states each account is checked 1–2×/day with 0–24h delay; the
-  "average 6h" figure on the pricing page is a different measurement (public
-  service under 400+ accounts). Treat neither as our number until the shadow
-  comparison reports one.
+| Status | Meaning | `healthy_account_count` |
+|---|---|---|
+| `HEALTHY` | The service responded and every observed account is usable and outside risk control. | Non-negative integer |
+| `DEGRADED` | At least one account remains usable, but another account has a terminal login or risk-control problem. | Positive integer |
+| `UNHEALTHY` | The service probe failed, its response was invalid, or no usable account remains. | `null` before account observation; otherwise a non-negative integer |
+| `UNMEASURED` | `.env` or `RSS_TOKEN` was absent before a service probe could run. | `null` |
 
-## Migration to another host
+A caller may add `--receipt /absolute/isolated/path.json`. Schema v1 has the exact fields `schema_version`, `observed_at`, `status`, `healthy_account_count`, `failure_category`, and `probe`; `probe` is `loopback_login_list`. The complete `failure_category` enum is `null` for `HEALTHY`, `missing_env`, `missing_rss_token`, `unreachable`, `invalid_response`, `api_error`, `no_account`, `login_invalid`, and `risk_control`. `healthy_account_count` is `null` for configuration, transport, invalid-response, and API-error branches because no account list was successfully observed; an observed empty list uses `0`. Receipts never contain account identity, URL, token, raw response, or raw error. Schema v1 freezes after the first accepted live receipt; any later incompatible field or semantic change requires a new schema version rather than silently reinterpreting v1. The notifier's existing dedup suffixes remain `unreachable`, `apierr`, `noaccount`, `login`, and `riskctl`; they are deliberately distinct from the receipt vocabulary.
 
-Copy the whole `deploy/wechat2rss` directory (including `data/`), run `docker compose up -d` there, and finish with `./healthcheck.sh`. Exit 0 plus the `healthy: ...` terminal line is the migration terminal check; no re-login is required when the copied data is valid.
+## Data, egress, and migration boundary
+
+Before moving an existing deployment, stop the old writer, take a cold snapshot, and verify that Lima mounts the same absolute host `data/` path. Preserve image ID/digest, account identity set, subscription/history identity, feed identity, and an AI Radar consumer read across the cutover; file existence or a readable cached feed is insufficient.
+
+Lima does not inherit an old runtime's proxy settings. Before production use, verify DNS and HTTPS separately from the guest and a diagnostic container for the registry, WeRead, and WeChat. Print only proxy-variable names/presence, never values. A configured but unreachable proxy is a failed preflight.
+
+After cutover the recovery policy is fix-forward on Lima. The previous OrbStack container, image, Compose files, and cold snapshot may remain as passive migration residue, but they are not a recovery target and must not be started against the shared writable data. OrbStack “Start at login” was a migration pre-state, not a supported dependency of this runtime.
+
+## Program-assembly target: reboot verification
+
+After program assembly has supplied `boot-witness.sh`, boot autostart is accepted only after one real reboot proves loopback readiness before any GUI or SSH login. Install a temporary, one-shot system LaunchDaemon that runs that helper as the owning non-root user with an absolute receipt path, a measured deadline, and the fixed `http://127.0.0.1:8080/` probe. During the observation window, do not log in and do not run any manual start or repair command.
+
+A valid receipt must bind to the current `kern.boottime`, report `PASS`, and show zero console and `who` sessions. After the readiness request succeeds, the witness resamples the host clock and both session probes; only that post-success timestamp may become `ready_epoch`, and it must remain strictly earlier than `boot_epoch + deadline_seconds`. A session that appears or a deadline reached during the request therefore produces terminal `FAIL`, not a stale `PASS`. Each session count remains JSON `null` until that specific probe has succeeded in the current witness run; a later terminal failure may retain the latest count that probe successfully observed. The receipt derives its deadline only from `boot_epoch` and `deadline_seconds`; it does not duplicate a `deadline_epoch` field. Missing, stale, or failed receipts cannot be repaired by later logged-in checks. After copying the accepted receipt to durable evidence, remove only the temporary witness job; keep Lima's generated LaunchDaemon enabled.
+
+Current repository evidence for the receipt writer is limited to deterministic isolated fixtures. A same-day live `HEALTHY` loopback probe recorded before the writer was finalized is historical observation only: it does not establish the current writer, Lima, cron, boot, consumer, schema, or production-cutover acceptance. Schema v1 therefore freezes only when a later live check explicitly accepts a receipt and binds it to the reviewed implementation.
+
+## Risk control and known limits
+
+Risk control is expected. The service backs off 15m → 30m → 60m → … capped at 6h and resets on recovery. Manual clear: in WeRead, open 书架 → 文章收藏, tap an account name, and follow the prompts.
+
+- Only broadcast articles are collected.
+- Only the newest 20 articles are crawled; `RSS_KEEP_OLD_COUNT=-1` preserves future history but does not backfill the past.
+- Vendor cadence claims are not this deployment's measured refresh interval. Use the accepted refresh observer and AI Radar consumer evidence for operational conclusions.

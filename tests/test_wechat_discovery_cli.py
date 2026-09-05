@@ -109,7 +109,11 @@ def _mp2rss_db(tmp_path: Path, *rows: tuple[str, str, datetime, datetime]) -> Pa
     with sqlite3.connect(path) as conn:
         conn.executescript(
             """
-            CREATE TABLE sources (id TEXT PRIMARY KEY, enabled INTEGER NOT NULL);
+            CREATE TABLE sources (
+              id TEXT PRIMARY KEY,
+              enabled INTEGER NOT NULL,
+              paused INTEGER NOT NULL
+            );
             CREATE TABLE items (
               source_id TEXT NOT NULL,
               author TEXT,
@@ -117,7 +121,7 @@ def _mp2rss_db(tmp_path: Path, *rows: tuple[str, str, datetime, datetime]) -> Pa
               published_at TEXT NOT NULL,
               fetched_at TEXT NOT NULL
             );
-            INSERT INTO sources VALUES ('wx_mp2rss', 1);
+            INSERT INTO sources VALUES ('wx_mp2rss', 1, 1);
             """
         )
         conn.executemany(

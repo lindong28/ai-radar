@@ -7,7 +7,7 @@ import pytest
 
 from airadar.db import migrate
 from airadar.sources.loader import SourceConfig, load_sources
-from airadar.sources.sync import load_enabled_sources_from_db, sync_to_db
+from airadar.sources.sync import load_enabled_sources_from_db, load_fetchable_sources_from_db, sync_to_db
 
 
 def test_load_sources_validates_toml(tmp_path: Path) -> None:
@@ -132,6 +132,39 @@ def test_sync_to_db_overwrites_source_rows(tmp_path: Path) -> None:
     row = conn.execute("SELECT name, url, tier, enabled, meta_json FROM sources WHERE id='simonw'").fetchone()
     assert row == ("Simon New", "https://example.com/new.xml", "T2", 0, "{}")
     assert load_enabled_sources_from_db(conn) == []
+
+
+def test_sync_persists_paused_and_keeps_enabled_and_fetchable_semantics_separate(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    paused = SourceConfig(
+        slug="wx_mp2rss",
+        name="Paused WeChat history",
+        url="${MP2RSS_FEED_URL}",
+        tier="T2",
+        enabled=True,
+        paused=True,
+        kind="wechat",
+    )
+    active = SourceConfig(
+        slug="active_feed",
+        name="Active feed",
+        url="https://example.com/feed.xml",
+        tier="T2",
+        enabled=True,
+    )
+
+    sync_to_db([paused, active], conn)
+
+    assert conn.execute(
+        "SELECT enabled, paused FROM sources WHERE id='wx_mp2rss'"
+    ).fetchone() == (1, 1)
+    assert {source.slug for source in load_enabled_sources_from_db(conn)} == {
+        "active_feed",
+        "wx_mp2rss",
+    }
+    assert [source.slug for source in load_fetchable_sources_from_db(conn)] == ["active_feed"]
 
 
 def test_sync_to_db_preserves_x_runtime_cursor_but_not_other_stale_meta(tmp_path: Path) -> None:
@@ -353,6 +386,7 @@ def test_load_sources_rejects_invalid_x_api_configuration(
                 'homepage_url = "https://x.com/OpenAI"',
                 'tier = "T1"',
                 'kind = "x"',
+                "paused = false",
                 "[source.meta]",
                 *meta_lines,
             ]
@@ -376,6 +410,7 @@ fetch_url = "https://api.x.com/2/users/by/username/AnthropicAI"
 homepage_url = "https://x.com/OpenAI"
 tier = "T1"
 kind = "x"
+paused = false
 [source.meta]
 adapter = "x_api"
 username = "OpenAI"

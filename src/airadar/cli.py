@@ -18,6 +18,7 @@ from .admin import edgeone
 from .admin.alerts import (
     DEFAULT_SERVE_LAUNCH_AGENT_PATH,
     collect_alert_signals,
+    prepare_alert_source_pause,
     run_alert_state_machine,
     run_pricing_notifications,
     send_alert_message,
@@ -1858,6 +1859,44 @@ def _admin(args: argparse.Namespace) -> int:
         if getattr(args, "admin_curate_command", None) == "rollback-quota":
             return _admin_curate_rollback_quota(args)
         return _curate(args)
+    if args.admin_command == "alert-prepare-source-pause":
+        state_path = str(Path(args.state_path).expanduser().resolve())
+        event_path = str(Path(args.event_path).expanduser().resolve())
+        preparation = prepare_alert_source_pause(
+            source_id=args.source_id,
+            state_path=state_path,
+            event_path=event_path,
+            dry_run=args.dry_run,
+            expected_input_digest=args.expected_input_digest,
+        )
+        status = str(preparation["status"])
+        print(f"Alert source-pause preparation: {status}")
+        print(f"Source: {args.source_id}")
+        print(f"State path: {state_path}")
+        print(f"Event path: {event_path}")
+        print("Runbook: docs/operations/monitoring-alerting.md")
+        raw_source_ids = preparation.get("source_ids", [])
+        source_ids = raw_source_ids if isinstance(raw_source_ids, list) else []
+        rendered_ids = ",".join(str(source_id) for source_id in source_ids)
+        print(f"Episode source ids: {rendered_ids or '(none)'}")
+        print(f"Input digest: {preparation.get('input_digest', '(none)')}")
+        print(f"Changed: {'yes' if preparation.get('changed') is True else 'no'}")
+        if preparation.get("reason"):
+            print(f"Reason: {preparation['reason']}")
+        if status == "SEEDABLE":
+            print(
+                "Next: obtain approval, then rerun without --dry-run and pass "
+                "--expected-input-digest with this exact digest"
+            )
+        elif status == "SEEDED":
+            print("Next: rerun this command to confirm READY before changing source configuration")
+        elif status == "READY":
+            print("Next: source-pause preparation is complete; source configuration is unchanged")
+        elif status == "NO_ACTIVE_EPISODE":
+            print("Next: no A7 episode identity needs preparation; source configuration is unchanged")
+        else:
+            print("Next: repair the exact A7 state/ledger identity before pausing the source")
+        return 2 if status == "BLOCKED_MISSING_EPISODE_IDENTITY" else 0
     if args.admin_command == "alert-check":
         now = datetime.fromisoformat(args.now) if args.now else None
         catalog = get_pricing(cache_path=args.pricing_cache_path) if args.pricing_cache_path else None
@@ -2312,6 +2351,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read-only preview: print counts, change no curated rows (SQLite may still create empty -wal/-shm sidecars)",
     )
     admin_subparsers.add_parser("rerun-eval")
+    alert_prepare_source_pause = admin_subparsers.add_parser(
+        "alert-prepare-source-pause"
+    )
+    alert_prepare_source_pause.add_argument("--source-id", required=True)
+    alert_prepare_source_pause.add_argument("--state-path", required=True)
+    alert_prepare_source_pause.add_argument("--event-path", required=True)
+    alert_prepare_source_pause.add_argument("--dry-run", action="store_true")
+    alert_prepare_source_pause.add_argument("--expected-input-digest")
     alert_check = admin_subparsers.add_parser("alert-check")
     alert_check.add_argument("--state-path", default=str(db.PROJECT_ROOT / "data" / "alert-state.json"))
     alert_check.add_argument("--event-path", default=str(db.PROJECT_ROOT / "data" / "alert-events.jsonl"))

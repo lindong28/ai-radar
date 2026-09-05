@@ -105,6 +105,110 @@ def test_fetch_all_runs_passive_checkpoint_after_fetch_round(monkeypatch, tmp_pa
     assert checkpointed_paths == [db_path]
 
 
+def test_fetch_all_skips_paused_sources_but_persists_them(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.db"
+    sources_path = tmp_path / "sources.toml"
+    sources_path.write_text(
+        """
+        schema_version = 2
+
+        [[source]]
+        slug = "active_feed"
+        name = "Active feed"
+        fetch_url = "http://127.0.0.1:8765/active.xml"
+        tier = "T2"
+        enabled = true
+        paused = false
+
+        [[source]]
+        slug = "paused_feed"
+        name = "Paused feed"
+        fetch_url = "http://127.0.0.1:8765/paused.xml"
+        tier = "T2"
+        enabled = true
+        paused = true
+        """,
+        encoding="utf-8",
+    )
+    fetched: list[str] = []
+
+    def fake_fetch_source_feed(source: SourceConfig) -> object:
+        fetched.append(source.slug)
+        return runner._SourceFeedResult(
+            source=source,
+            response=FeedResponse(status_code=200, body=b"<rss/>"),
+        )
+
+    monkeypatch.setattr(runner, "_fetch_source_feed", fake_fetch_source_feed)
+    monkeypatch.setattr(runner, "parse_feed", lambda source, body: [])  # noqa: ARG005
+    monkeypatch.setattr(runner.db, "checkpoint_db", lambda path: None)
+    monkeypatch.setattr(runner.db, "maintain_fts", lambda path: None)
+
+    summary = fetch_all(sources_path, db_path)
+
+    assert fetched == ["active_feed"]
+    assert [source.source_id for source in summary.sources] == ["active_feed"]
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute(
+            "SELECT id, enabled, paused FROM sources ORDER BY id"
+        ).fetchall() == [
+            ("active_feed", 1, 0),
+            ("paused_feed", 1, 1),
+        ]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("mp2rss_configured", [False, True])
+def test_generated_config_dispatches_active_wechat_but_never_paused_mp2rss(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mp2rss_configured: bool,
+) -> None:
+    db_path = tmp_path / "radar.db"
+    monkeypatch.setenv(
+        "WECHAT2RSS_FEED_URL",
+        "http://127.0.0.1:8765/self-hosted-feed.xml",
+    )
+    if mp2rss_configured:
+        monkeypatch.setenv(
+            "MP2RSS_FEED_URL",
+            "http://127.0.0.1:8765/legacy-feed.xml",
+        )
+    else:
+        monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
+    dispatched: list[str] = []
+
+    def fake_fetch_and_apply_sources(
+        conn: sqlite3.Connection,
+        sources: list[SourceConfig],
+    ) -> list[runner.SourceFetchSummary]:
+        del conn
+        dispatched.extend(source.slug for source in sources)
+        return []
+
+    monkeypatch.setattr(runner, "_fetch_and_apply_sources", fake_fetch_and_apply_sources)
+    monkeypatch.setattr(runner, "read_value", lambda name: "fixture-token")
+    monkeypatch.setattr(runner.db, "checkpoint_db", lambda path: None)
+    monkeypatch.setattr(runner.db, "maintain_fts", lambda path: None)
+
+    fetch_all(default_sources_path(), db_path)
+
+    assert dispatched.count("wx_wechat2rss") == 1
+    assert "wx_mp2rss" not in dispatched
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT enabled, paused FROM sources WHERE id='wx_mp2rss'"
+        ).fetchone() == (1, 1)
+        assert conn.execute(
+            "SELECT enabled, paused FROM sources WHERE id='wx_wechat2rss'"
+        ).fetchone() == (1, 0)
+
+
 def test_fetch_all_fetches_source_feeds_in_parallel_and_writes_on_main_thread(
     monkeypatch,
     tmp_path: Path,

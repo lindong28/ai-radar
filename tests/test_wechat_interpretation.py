@@ -187,6 +187,46 @@ def _seed_wechat_db(tmp_path: Path) -> Path:
     return db_path
 
 
+def test_interpret_candidate_selection_keeps_paused_enabled_history(
+    tmp_path: Path,
+) -> None:
+    from airadar.interpret.runner import _candidate_rows
+
+    db_path = tmp_path / "paused-candidate.db"
+    migrate(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO sources (
+              id, name, url, tier, enabled, paused, kind, meta_json, synced_at
+            ) VALUES (
+              'wx_mp2rss', 'Mp2RSS', 'https://example.com/feed', 'T2', 1, 1,
+              'wechat', '{}', '2026-09-04T00:00:00Z'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO items (
+              id, source_id, url, title, author, published_at, fetched_at,
+              content_text, content_html, content_hash, extra_json
+            ) VALUES (
+              'paused-item', 'wx_mp2rss', 'https://mp.weixin.qq.com/s/paused',
+              'Paused history', '测试号', '2026-09-04T01:00:00Z',
+              '2026-09-04T01:01:00Z', 'body', NULL, 'hash', '{}'
+            )
+            """
+        )
+        conn.commit()
+
+        assert [row["id"] for row in _candidate_rows(conn, limit=None)] == [
+            "paused-item"
+        ]
+        conn.execute("UPDATE sources SET enabled=0 WHERE id='wx_mp2rss'")
+        conn.commit()
+        assert _candidate_rows(conn, limit=None) == []
+
+
 def _seed_wechat_search_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "search-radar.db"
     migrate(db_path)

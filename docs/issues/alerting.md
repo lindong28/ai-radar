@@ -336,3 +336,11 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 - A4 的 resolve 消息（`_format_resolved` 通用分支）不提这次恢复的是哪个账户/状态码（本轮已加证据指针，原因标签随 lifecycle 记忆一并在上面「共享 lifecycle」条处理）。
 - 「另有 N 组同此」按组计数后，同一组的第二个状态码行（如 a 组既有 401 又有 402）不再单独显示也不计入 N；数据仍在 `values.failed_by_status`。
 - A4 resolved 的证据指针对账户层 / 出网两条路径并列给出、不按触发分支收窄（中性入口是有意选择，分支记忆见「共享 lifecycle」条）。
+
+## ISSUE-A21 · A7 full-pause close assumes at most one qualifying firing lifecycle
+
+**状态**：open · **优先级**：low · **原则**：P7 · **来源**：2026-09-05 T1 rollover decision review（基线独立 / 非边界）
+
+`run_alert_results_state_machine()` 的 non-firing full-pause 路径会收集所有满足 opening source IDs 全部 paused 的 announced firing lifecycles，但把它们合并成一条 INTERNAL `source_paused` ledger，并取列表第一项的 severity、`since` 作为 episode identity。正常状态转换预期不会同时留下多个这样的 lifecycle，但异常或迁移状态若出现多个，单条事件无法准确代表多个 episode。
+
+本次 T1 rollover 修复只在“总共恰有一个 firing lifecycle”时工作，明确不把多 lifecycle 状态吞并为一个事件。后续若要支持该异常形状，应先决定是逐 lifecycle 写独立 ledger 后分别结案，还是把状态判为需要人工修复；需补多 severity/episode 的判别测试，并保持 identity、notification nonce 与 ledger 写失败时的 fail-closed 语义。

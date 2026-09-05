@@ -31,6 +31,7 @@ def test_contract_has_no_convenience_copies() -> None:
         assert "derived_aihot_identity" in row
         assert "aihot" + "_identity" not in row
         assert row["ai_radar_main_timeline_member"] is (row["kind"] != "wechat")
+        assert isinstance(row["paused"], bool)
         assert "main_membership" not in row
         assert "public_url" not in row
         assert "registry_key" not in row
@@ -52,6 +53,9 @@ def test_contract_wechat_optional_boundary_is_explicit() -> None:
         assert wechat["fetch_url"] == f"${{{wechat['required_env']}}}"
         assert wechat["wechat_only"] is True
         assert wechat["public_url_override"] == "https://mp.weixin.qq.com/"
+    assert {row["slug"]: row["paused"] for row in payload["sources"]} == {
+        row["slug"]: row["slug"] == "wx_mp2rss" for row in payload["sources"]
+    }
 
 
 def test_fresh_aihot_delta_has_stable_contract_identities_and_observed_aliases() -> None:
@@ -91,6 +95,27 @@ def _break_wechat_env_placeholder_pairing(payload: dict) -> None:
     _wechat_rows(payload)[0]["required_env"] = "SOME_OTHER_FEED_URL"
 
 
+def _change_frozen_public_owner_to_feed(payload: dict) -> None:
+    owner = next(row for row in payload["sources"] if row["slug"] == "wx_mp2rss")
+    owner.update(
+        kind="feed",
+        derived_aihot_identity="feed:wx_mp2rss",
+        fetch_url="https://example.test/wx-mp2rss.xml",
+        ai_radar_main_timeline_member=True,
+        meta={},
+    )
+    for field in ("optional", "public_url_override", "required_env", "wechat_only"):
+        owner.pop(field)
+
+
+def test_contract_rejects_non_wechat_frozen_public_owner() -> None:
+    payload = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    _change_frozen_public_owner_to_feed(payload)
+
+    with pytest.raises(ValueError, match="wx_mp2rss.*optional WeChat owner"):
+        validate_source_contract(payload)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -98,6 +123,8 @@ def _break_wechat_env_placeholder_pairing(payload: dict) -> None:
         (lambda payload: payload["sources"][0].update(public_url="https://duplicate.test"), "unknown fields"),
         (lambda payload: payload["sources"][0]["aihot_aliases"].append(payload["sources"][0]["name"]), "public name"),
         (lambda payload: payload["sources"][0].update(optional=True), "optional fields"),
+        (lambda payload: payload["sources"][0].pop("paused"), "required fields"),
+        (lambda payload: payload["sources"][0].update(paused="false"), "paused.*boolean"),
         (lambda payload: payload["sources"][0].update(derived_aihot_identity="feed:wrong"), "identity"),
         # Two WeChat feeds pointed at one env var would silently fetch the same
         # feed twice, which reads as "the replacement agrees with the incumbent".

@@ -125,6 +125,19 @@ def test_sources_api_supplies_about_table_fields(tmp_path: Path) -> None:
     assert "homepage_url" not in source
     assert "synced_at" not in source
     assert "meta" not in source
+    assert "paused" not in source
+
+
+def test_about_explains_enabled_inventory_without_promising_active_fetch(
+    tmp_path: Path,
+) -> None:
+    response = TestClient(create_app(_seed_db(tmp_path))).get("/about")
+
+    assert response.status_code == 200
+    assert "已收录、历史内容仍可见" in response.text
+    assert "不代表此刻正在主动抓取" in response.text
+    assert "对应运行时入口是否可用" in response.text
+    assert "配置状态表示是否纳入抓取" not in response.text
 
 
 def test_sources_v1_preserves_legacy_collection_and_fields(tmp_path: Path) -> None:
@@ -382,6 +395,112 @@ def test_sources_v2_lists_unconfigured_optional_wechat_without_secret(tmp_path: 
     assert "MP2RSS_FEED_URL}" not in response.text
 
 
+def test_sources_v2_optional_wechat_projection_is_bound_to_mp2rss_slug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract_path = Path(__file__).resolve().parent / "fixtures/aihot_sources.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    wechat_rows = [row for row in contract["sources"] if row["kind"] == "wechat"]
+    other_rows = [row for row in contract["sources"] if row["kind"] != "wechat"]
+    contract["sources"] = [
+        next(row for row in wechat_rows if row["slug"] == "wx_wechat2rss"),
+        next(row for row in wechat_rows if row["slug"] == "wx_mp2rss"),
+        *other_rows,
+    ]
+    monkeypatch.setattr(
+        "airadar.web.routes.sources.load_source_contract",
+        lambda _: contract,
+    )
+    monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
+
+    payload = TestClient(create_app(_seed_db(tmp_path))).get("/api/v2/sources").json()["data"]
+
+    assert payload["optional_sources"] == [
+        {
+            "id": "wx_mp2rss",
+            "name": "微信公众号（Mp2RSS 合集）",
+            "scope": "wechat_only",
+            "required_environment_variable": "MP2RSS_FEED_URL",
+            "declared_in_contract": True,
+            "runtime_configuration_status": "unavailable_missing_required_environment",
+        }
+    ]
+
+
+def test_sources_v2_optional_wechat_status_uses_selected_owner_required_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract_path = Path(__file__).resolve().parent / "fixtures/aihot_sources.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    mp2rss = next(row for row in contract["sources"] if row["slug"] == "wx_mp2rss")
+    mp2rss["required_env"] = "DECLARED_MP2RSS_FEED_URL"
+    monkeypatch.setattr(
+        "airadar.web.routes.sources.load_source_contract",
+        lambda _: contract,
+    )
+    monkeypatch.setenv("MP2RSS_FEED_URL", "https://old-literal.example.test/feed")
+    monkeypatch.delenv("DECLARED_MP2RSS_FEED_URL", raising=False)
+    db_path = _seed_db(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO sources (
+              id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "wx_mp2rss",
+                "微信公众号（Mp2RSS 合集）",
+                "https://fixture.example.test/feed",
+                "T2",
+                1,
+                "wechat",
+                "https://mp.weixin.qq.com/",
+                None,
+                "{}",
+                "2026-09-04T00:00:00Z",
+            ),
+        )
+    client = TestClient(create_app(db_path))
+
+    missing = client.get("/api/v2/sources").json()["data"]["optional_sources"][0]
+
+    assert missing["required_environment_variable"] == "DECLARED_MP2RSS_FEED_URL"
+    assert missing["runtime_configuration_status"] == "unavailable_missing_required_environment"
+
+    monkeypatch.setenv(
+        "DECLARED_MP2RSS_FEED_URL",
+        "https://declared-owner.example.test/feed",
+    )
+    configured = client.get("/api/v2/sources").json()["data"]["optional_sources"][0]
+
+    assert configured["required_environment_variable"] == "DECLARED_MP2RSS_FEED_URL"
+    assert configured["runtime_configuration_status"] == "configured"
+
+
+@pytest.mark.parametrize("match_count", [0, 2])
+def test_sources_v2_optional_wechat_projection_requires_one_mp2rss_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    match_count: int,
+) -> None:
+    contract_path = Path(__file__).resolve().parent / "fixtures/aihot_sources.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    mp2rss = next(row for row in contract["sources"] if row["slug"] == "wx_mp2rss")
+    contract["sources"] = [
+        row for row in contract["sources"] if row["slug"] != "wx_mp2rss"
+    ] + [dict(mp2rss) for _ in range(match_count)]
+    monkeypatch.setattr(
+        "airadar.web.routes.sources.load_source_contract",
+        lambda _: contract,
+    )
+
+    with pytest.raises(ValueError, match="exactly one wx_mp2rss"):
+        TestClient(create_app(_seed_db(tmp_path))).get("/api/v2/sources")
+
+
 def test_sources_v2_does_not_treat_legacy_wechat_as_loaded_optional_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -417,6 +536,7 @@ def test_sources_v2_does_not_treat_legacy_wechat_as_loaded_optional_source(
 def test_wechat_public_override_projects_contract_through_config_db_and_v2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     paid_url = "https://paid.example.test/private-feed-token"
     monkeypatch.setenv("MP2RSS_FEED_URL", paid_url)
+    monkeypatch.delenv("WECHAT2RSS_FEED_URL", raising=False)
     db_path = tmp_path / "radar.db"
     migrate(db_path)
     with sqlite3.connect(db_path) as conn:
@@ -585,6 +705,7 @@ def test_production_upgrade_disables_removed_sources_across_public_consumers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("MP2RSS_FEED_URL", raising=False)
+    monkeypatch.delenv("WECHAT2RSS_FEED_URL", raising=False)
     db_path = tmp_path / "upgrade.db"
     migrate(db_path)
     with sqlite3.connect(db_path) as conn:
@@ -665,13 +786,14 @@ def test_production_upgrade_disables_removed_sources_across_public_consumers(
     assert before.get("/wechat/removed-wechat-slug").status_code == 200
 
     sources = load_sources(Path(__file__).resolve().parents[1] / "data" / "sources.toml")
-    assert len(sources) == 161
+    assert len(sources) == 162
     with sqlite3.connect(db_path) as conn:
         sync_to_db(sources, conn)
 
     after = TestClient(create_app(db_path))
     public_source_ids = {row["id"] for row in after.get("/api/v2/sources").json()["data"]["sources"]}
-    assert len(public_source_ids) == 161
+    assert len(public_source_ids) == 162
+    assert "wx_mp2rss" in public_source_ids
     assert public_source_ids.isdisjoint({"lilianweng", "importai", "wx_legacy"})
     assert after.get("/api/v1/timeline", params={"q": "RemovedComputedMarker"}).json()["data"]["total"] == 0
     assert after.get("/api/v1/items/removed-computed").status_code == 404

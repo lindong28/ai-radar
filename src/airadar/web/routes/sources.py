@@ -153,9 +153,16 @@ def sources_v2(request: Request) -> dict[str, object]:
             }
         )
     contract = load_source_contract(Path(__file__).resolve().parents[4] / "tests/fixtures/aihot_sources.json")
-    wx_contract = next(row for row in contract["sources"] if row["kind"] == "wechat")
+    wx_contract_rows = [row for row in contract["sources"] if row["slug"] == "wx_mp2rss"]
+    if len(wx_contract_rows) != 1:
+        raise ValueError(
+            "source contract must declare exactly one wx_mp2rss optional source; "
+            f"found {len(wx_contract_rows)}"
+        )
+    wx_contract = wx_contract_rows[0]
+    wx_required_env = wx_contract["required_env"]
     wx_enabled_and_loaded = any(row["id"] == wx_contract["slug"] for row in rows)
-    wx_environment_configured = bool(os.environ.get("MP2RSS_FEED_URL", "").strip())
+    wx_environment_configured = bool(os.environ.get(wx_required_env, "").strip())
     if not wx_environment_configured:
         wx_runtime_status = "unavailable_missing_required_environment"
     elif not wx_enabled_and_loaded:
@@ -167,7 +174,7 @@ def sources_v2(request: Request) -> dict[str, object]:
             "id": wx_contract["slug"],
             "name": wx_contract["name"],
             "scope": "wechat_only" if wx_contract["wechat_only"] else "main",
-            "required_environment_variable": wx_contract["required_env"],
+            "required_environment_variable": wx_required_env,
             "declared_in_contract": True,
             "runtime_configuration_status": wx_runtime_status,
         }

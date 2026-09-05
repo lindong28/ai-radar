@@ -24,6 +24,7 @@ COMMON_FIELDS = frozenset(
         "ai_radar_main_timeline_member",
         "meta",
         "name",
+        "paused",
         "slug",
         "tier",
     }
@@ -117,6 +118,8 @@ def validate_source_contract(payload: object) -> dict[str, Any]:
 
         if row.get("tier") not in TIERS:
             raise ValueError(f"invalid source contract tier for {slug}")
+        if not isinstance(row.get("paused"), bool):
+            raise ValueError(f"source contract {slug} paused must be boolean")
         if not isinstance(row.get("enabled"), bool) or not isinstance(row.get("ai_radar_main_timeline_member"), bool):
             raise ValueError(f"source contract {slug} enabled/ai_radar_main_timeline_member must be booleans")
         _http_url(row.get("homepage_url"), field="homepage_url", slug=slug)
@@ -166,6 +169,12 @@ def validate_source_contract(payload: object) -> dict[str, Any]:
         raise ValueError("web source slugs must exactly match the code-owned registry")
     if not wechat_envs:
         raise ValueError("source contract must contain at least one optional WeChat source")
+    frozen_public_owners = [row for row in sources if row["slug"] == "wx_mp2rss"]
+    if len(frozen_public_owners) != 1:
+        raise ValueError("source contract must contain exactly one wx_mp2rss public owner")
+    frozen_public_owner = frozen_public_owners[0]
+    if frozen_public_owner["kind"] != "wechat" or frozen_public_owner.get("optional") is not True:
+        raise ValueError("source contract wx_mp2rss must be an optional WeChat owner")
     return payload
 
 

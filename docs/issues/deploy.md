@@ -85,7 +85,11 @@
 
 - Type: service lifecycle · Priority: medium · Discovered: 20260810 LLM cost plan 的 full docs-sync P5 review
 
-repo-owned 的 DB sync、performance-remediate 与 Wechat2RSS healthcheck cron，以及维护者本机的 shadow-observe 临时 cron，都列在 services 清单但不受 `./install.sh`、`./uninstall.sh`、`./status.sh` 管理：前两者只给完整 wrapper / 裸 producer，或让操作者手工编辑 crontab；healthcheck 同样只有裸脚本；shadow-observe 的入口则明确未入 git。前三条应按各自现有启用约束增加规范 lifecycle，并让 status 展示调度和最近 terminal state；shadow-observe 要先由 owner 在“纳入 git 并提供 lifecycle”与“评估结束后移除”之间裁决，不能把未入 git 的临时任务直接当作 repo-owned 服务加固。`status.sh` 当前还会抑制 `crontab -l` 的错误，并把“无法读取”折叠成 `not installed`，因此这类输出不能单独证明排期不存在。pulled code 如何进入运行态的跨服务 make-live 文档缺口已登记在 `docs/issues/docs-quality.md`，本条不重复展开。
+repo-owned 的 DB sync、performance-remediate 与 Wechat2RSS healthcheck cron，以及维护者本机的 shadow-observe 临时 cron，都列在 services 清单但不受 `./install.sh`、`./uninstall.sh`、`./status.sh` 管理：前两者只给完整 wrapper / 裸 producer，或让操作者手工编辑 crontab；healthcheck 同样只有裸脚本；shadow-observe 的入口则明确未入 git。
+
+四者的分支现在分开跟踪：DB sync、performance-remediate 与 Wechat2RSS healthcheck 这三条 repo-owned cron 的规范 lifecycle/status 缺口保持 open；shadow-observe 不再候选纳入 git，路线已由 [ADR-f427](../adr/20260904-f427-pause-source-fetch-without-hiding-history.md) 定为移除。这项 repo 外 crontab 变更仍须经过独立生产授权 gate：先以 preflight 精确识别目标行，再只移除该行，并用 readback 证明其它行 unchanged；若 preflight 已证明目标行不存在，则以同样保护其它行的 no-op 证据关闭该分支。在该独立生产授权 gate 尚未执行且验收证据未落地前，本条整体仍 open，不能把代码配置的 pause 冒充 repo 外直接 feed consumer 已停止。
+
+`status.sh` 当前还会抑制 `crontab -l` 的错误，并把“无法读取”折叠成 `not installed`，因此这类输出不能单独证明排期不存在。pulled code 如何进入运行态的跨服务 make-live 文档缺口已登记在 `docs/issues/docs-quality.md`，本条不重复展开。
 
 ## [open] 2026-09-01：pipeline 的 launchd 备选形态没有规范 lifecycle 入口
 

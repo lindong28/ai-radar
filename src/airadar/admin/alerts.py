@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -150,6 +151,9 @@ class AlertSignals:
     # looks identical to a healthy one in the rule's output otherwise.
     unevaluable_sources: int = 0
     evaluated_sources: int = 0
+    # Exact IDs with current per-source evidence. This is transient state-machine
+    # input, not notification-ledger data.
+    evaluated_source_ids: list[str] = field(default_factory=list)
     # The half of `unevaluable_sources` whose silence has outrun the cadence of
     # its own newest few items — as opposed to sources that simply never
     # published enough to be characterised. Kept separate because leaving the
@@ -161,6 +165,10 @@ class AlertSignals:
     # They remain visible in A7's evidence while staying out of the actionable
     # page set.
     quiet_x_sources: list[tuple[str, str, float, float]] = field(default_factory=list)
+    # Enabled sources intentionally removed from active ingestion. These are
+    # metadata, not unevaluable observations: A7 uses them only to close an
+    # already-announced episode without claiming recovery.
+    paused_source_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -768,7 +776,8 @@ def evaluate_rules(
                         "先按 error 分组读 logs/pipeline-*.log 最新一轮的 FAIL 行。"
                         "整批 ConnectError 多为出网链路：先看 === egress preflight FAIL/OK ===；"
                         "FAIL 时按 runbook 检查 selector，OK 但请求仍失败时按 hostname 查 route audit。"
-                        "X 源走官方 api.x.com（另查 bearer token 与配额），微信源走 Mp2RSS。"
+                        "X 源走官方 api.x.com（另查 bearer token 与配额），微信活跃抓取入口走 Wechat2RSS；"
+                        "暂停的 Mp2RSS 不应出现在 OK/FAIL 行。"
                         "详见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
                     )
                 )
@@ -911,6 +920,9 @@ def evaluate_rules(
                 ],
                 "silent_count": len(a7_named),
                 "evaluated_sources": signals.evaluated_sources,
+                "evaluated_source_ids": _normalize_source_ids(
+                    signals.evaluated_source_ids
+                ),
                 "unevaluable_sources": signals.unevaluable_sources,
                 "faded_sources": [
                     {"source_id": sid, "name": name, "hours": hours}
@@ -925,6 +937,7 @@ def evaluate_rules(
                     }
                     for sid, name, hours, receipt_age_minutes in a7_quiet_x
                 ],
+                "paused_source_ids": signals.paused_source_ids,
             },
             severity=PAGE_SEVERITY,
             impact=(
@@ -1067,6 +1080,78 @@ def _normalize_firing_basis(value: object) -> FiringBasis | None:
     return None
 
 
+def _normalize_source_ids(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted(
+        {
+            source_id.strip()
+            for source_id in value
+            if isinstance(source_id, str) and source_id.strip()
+        }
+    )
+
+
+def _a7_result_source_ids(result: AlertRuleResult) -> list[str]:
+    raw_sources = result.values.get("silent_sources")
+    if not isinstance(raw_sources, list):
+        return []
+    return sorted(
+        {
+            str(source["source_id"]).strip()
+            for source in raw_sources
+            if isinstance(source, dict)
+            and isinstance(source.get("source_id"), str)
+            and str(source["source_id"]).strip()
+        }
+    )
+
+
+def _qualify_a7_partial_pause_resolution(
+    result: AlertRuleResult,
+    *,
+    lifecycle: Mapping[str, object],
+    paused_source_ids: set[str],
+) -> AlertRuleResult:
+    if result.rule_id != "A7":
+        return result
+    episode_source_ids = set(_normalize_source_ids(lifecycle.get("source_ids")))
+    paused_episode_source_ids = sorted(episode_source_ids & paused_source_ids)
+    recovered_episode_source_ids = sorted(episode_source_ids - paused_source_ids)
+    if not paused_episode_source_ids or not recovered_episode_source_ids:
+        return result
+    if result.evaluation_state == "degraded":
+        return result
+    return replace(
+        result,
+        detail=(
+            f"{result.detail}；本次告警中已恢复来源："
+            f"{','.join(recovered_episode_source_ids)}；因暂停不再评估的来源："
+            f"{','.join(paused_episode_source_ids)}"
+        ),
+        evaluation_state="scope_limited",
+    )
+
+
+def _a7_mixed_pause_resolution_has_current_evidence(
+    result: AlertRuleResult,
+    *,
+    lifecycle: Mapping[str, object],
+    paused_source_ids: set[str],
+) -> bool:
+    if result.rule_id != "A7":
+        return True
+    episode_source_ids = set(_normalize_source_ids(lifecycle.get("source_ids")))
+    paused_episode_source_ids = episode_source_ids & paused_source_ids
+    non_paused_episode_source_ids = episode_source_ids - paused_source_ids
+    if not paused_episode_source_ids or not non_paused_episode_source_ids:
+        return True
+    evaluated_source_ids = set(
+        _normalize_source_ids(result.values.get("evaluated_source_ids"))
+    )
+    return non_paused_episode_source_ids.issubset(evaluated_source_ids)
+
+
 def _severity_channel(severity: AlertSeverity) -> str:
     return NOTIFICATION_CHANNEL if severity == NOTICE_SEVERITY else ALERT_CHANNEL
 
@@ -1128,6 +1213,8 @@ def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
     }
     if (firing_basis := _normalize_firing_basis(entry.get("firing_basis"))) is not None:
         normalized["firing_basis"] = firing_basis
+    if state == "firing" and (source_ids := _normalize_source_ids(entry.get("source_ids"))):
+        normalized["source_ids"] = source_ids
     return normalized
 
 
@@ -1196,6 +1283,10 @@ def _project_lifecycles(
         firing_basis := _normalize_firing_basis(projected.get("firing_basis"))
     ) is not None:
         projection["firing_basis"] = firing_basis
+    if active_severity is not None and (
+        source_ids := _normalize_source_ids(projected.get("source_ids"))
+    ):
+        projection["source_ids"] = source_ids
     return projection
 
 
@@ -1376,15 +1467,41 @@ def _write_ledger_rows(event_path: Path, rows: list[dict[str, object]]) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def _source_paused_episode_identity(
+    row: dict[str, object],
+) -> tuple[datetime, tuple[str, ...]] | None:
+    if (
+        row.get("rule_id") != "A7"
+        or row.get("type") != "resolved"
+        or row.get("channel") != INTERNAL_CHANNEL
+        or row.get("reason") != "source_paused"
+    ):
+        return None
+    episode_since = _parse_dt(row.get("episode_since"))
+    values = row.get("values")
+    if episode_since is None or not isinstance(values, dict):
+        return None
+    episode_source_ids = tuple(_normalize_source_ids(values.get("episode_source_ids")))
+    paused_source_ids = set(_normalize_source_ids(values.get("paused_source_ids")))
+    if (
+        not episode_source_ids
+        or not paused_source_ids
+        or paused_source_ids != set(episode_source_ids)
+    ):
+        return None
+    return episode_since, episode_source_ids
+
+
 def _record_event_rows(
     event_path: str | Path,
     *,
     current: datetime,
     new_rows: list[dict[str, object]],
-) -> None:
+    dedupe_source_paused: bool = False,
+) -> bool:
     try:
         if not new_rows:
-            return
+            return True
         path = Path(event_path)
         _check_ledger_size(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1410,16 +1527,33 @@ def _record_event_rows(
             try:
                 _check_ledger_size(path)
                 rows = _read_ledger_rows(path)
-                rows.extend(new_rows)
                 cutoff = current - timedelta(days=RETENTION_DAYS)
                 retained = [
                     row
                     for row in rows
                     if (timestamp := _parse_dt(row.get("ts"))) is None or timestamp >= cutoff
                 ]
-                _write_ledger_rows(path, retained)
+                rows_to_append = new_rows
+                if dedupe_source_paused:
+                    identities = {
+                        identity
+                        for row in retained
+                        if (identity := _source_paused_episode_identity(row)) is not None
+                    }
+                    rows_to_append = []
+                    for row in new_rows:
+                        identity = _source_paused_episode_identity(row)
+                        if identity is not None and identity in identities:
+                            continue
+                        rows_to_append.append(row)
+                        if identity is not None:
+                            identities.add(identity)
+                retained.extend(rows_to_append)
+                if retained != rows:
+                    _write_ledger_rows(path, retained)
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return True
     except BaseException as exc:  # The ledger must never block alert state persistence.
         try:
             LOGGER.error(
@@ -1430,6 +1564,7 @@ def _record_event_rows(
             )
         except BaseException:
             pass
+        return False
 
 
 def _record_notification_events(
@@ -1438,6 +1573,15 @@ def _record_notification_events(
     current: datetime,
     delivered: list[tuple[dict[str, object], AlertRuleResult]],
 ) -> None:
+    def persisted_values(result: AlertRuleResult) -> dict[str, object]:
+        if result.rule_id != "A7":
+            return result.values
+        return {
+            key: value
+            for key, value in result.values.items()
+            if key not in {"paused_source_ids", "evaluated_source_ids"}
+        }
+
     _record_event_rows(
         event_path,
         current=current,
@@ -1448,7 +1592,7 @@ def _record_notification_events(
                 "severity": receipt["effective_severity"],
                 "type": receipt["type"],
                 "detail": result.detail,
-                "values": result.values,
+                "values": persisted_values(result),
                 "channel": receipt["channel"],
                 "episode_since": receipt.get("episode_since"),
                 "notification_nonce": receipt.get("notification_nonce"),
@@ -1520,6 +1664,229 @@ def reserve_alert_evaluation_sequence(*, state_path: str | Path) -> int:
         sequence = _claim_evaluation_sequence(state)
         _write_state(path, state)
     return sequence
+
+
+def _source_pause_prepare_digest(
+    *,
+    state: dict[str, dict[str, object]],
+    ledger_rows: list[dict[str, object]],
+    source_id: str,
+) -> str:
+    payload = json.dumps(
+        {"source_id": source_id, "state": state, "ledger_rows": ledger_rows},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _classify_source_pause_prepare(
+    *,
+    state: dict[str, dict[str, object]],
+    ledger_rows: list[dict[str, object]],
+    source_id: str,
+) -> dict[str, object]:
+    entry = state.get("A7")
+    if not isinstance(entry, dict):
+        return {"status": "NO_ACTIVE_EPISODE", "source_ids": []}
+    lifecycles = _normalize_lifecycles(entry)
+    active = [
+        (severity, lifecycle)
+        for severity, lifecycle in lifecycles.items()
+        if lifecycle.get("state") == "firing" and _entry_announced(lifecycle)
+    ]
+    if not active:
+        return {"status": "NO_ACTIVE_EPISODE", "source_ids": []}
+    if len(active) != 1:
+        return {
+            "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+            "source_ids": [],
+            "reason": "active A7 lifecycle identity is not unique",
+        }
+    severity, lifecycle = active[0]
+    existing_source_ids = _normalize_source_ids(lifecycle.get("source_ids"))
+    if existing_source_ids:
+        if source_id not in existing_source_ids:
+            return {
+                "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+                "source_ids": existing_source_ids,
+                "reason": f"requested source {source_id!r} is not present in the active episode",
+            }
+        return {
+            "status": "READY",
+            "source_ids": existing_source_ids,
+            "severity": severity,
+        }
+
+    episode_since = str(lifecycle.get("since") or "")
+    parsed_episode_since = _parse_dt(episode_since)
+    matches = [
+        row
+        for row in ledger_rows
+        if row.get("rule_id") == "A7"
+        and row.get("type") == "firing"
+        and parsed_episode_since is not None
+        and _parse_dt(row.get("episode_since")) == parsed_episode_since
+        and _parse_dt(row.get("ts")) == parsed_episode_since
+    ]
+    if not matches:
+        return {
+            "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+            "source_ids": [],
+            "reason": (
+                "expected an opening firing ledger row whose ts, episode_since, "
+                "and lifecycle since identify the same instant; found 0"
+            ),
+        }
+
+    opening_identities: list[list[str]] = []
+    for match in matches:
+        opening_values = match.get("values")
+        opening_sources = (
+            opening_values.get("silent_sources")
+            if isinstance(opening_values, dict)
+            else None
+        )
+        if not isinstance(opening_sources, list) or not opening_sources:
+            return {
+                "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+                "source_ids": [],
+                "reason": "opening firing ledger row contains missing or empty source identity",
+            }
+        recovered_source_ids: list[str] = []
+        for source in opening_sources:
+            if (
+                not isinstance(source, dict)
+                or not isinstance(source.get("source_id"), str)
+                or not str(source["source_id"]).strip()
+            ):
+                return {
+                    "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+                    "source_ids": [],
+                    "reason": "opening firing ledger row contains malformed source identity",
+                }
+            recovered_source_ids.append(str(source["source_id"]).strip())
+        opening_identities.append(sorted(set(recovered_source_ids)))
+
+    recovered_source_ids = opening_identities[0]
+    if any(identity != recovered_source_ids for identity in opening_identities[1:]):
+        return {
+            "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+            "source_ids": [],
+            "reason": "conflicting opening firing ledger source identities",
+        }
+    if source_id not in recovered_source_ids:
+        return {
+            "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+            "source_ids": recovered_source_ids,
+            "reason": f"requested source {source_id!r} is not present in the active episode",
+        }
+    return {
+        "status": "SEEDABLE",
+        "source_ids": recovered_source_ids,
+        "severity": severity,
+        "episode_since": episode_since,
+        "requested_source_present": source_id in recovered_source_ids,
+    }
+
+
+@contextmanager
+def _alert_ledger_lock(event_path: Path) -> Iterator[None]:
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _ledger_lock_path(event_path)
+    _require_regular_file_if_present(lock_path, label="lock path")
+    flags = os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o666)
+    try:
+        with os.fdopen(descriptor, mode="r+") as lock_file:
+            descriptor = -1
+            _acquire_ledger_lock(lock_file, event_path=event_path)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def prepare_alert_source_pause(
+    *,
+    source_id: str,
+    state_path: str | Path,
+    event_path: str | Path,
+    dry_run: bool,
+    expected_input_digest: str | None = None,
+) -> dict[str, object]:
+    source_id = source_id.strip()
+    if not source_id:
+        raise ValueError("source_id must not be empty")
+    path = Path(state_path)
+    ledger_path = Path(event_path)
+    _validate_alert_paths(state_path=path, event_path=ledger_path)
+
+    with _alert_state_lock(path):
+        if dry_run:
+            state = _load_state(path)
+            ledger_rows = _read_ledger_rows(ledger_path)
+            result = _classify_source_pause_prepare(
+                state=state,
+                ledger_rows=ledger_rows,
+                source_id=source_id,
+            )
+        else:
+            with _alert_ledger_lock(ledger_path):
+                state = _load_state(path)
+                ledger_rows = _read_ledger_rows(ledger_path)
+                result = _classify_source_pause_prepare(
+                    state=state,
+                    ledger_rows=ledger_rows,
+                    source_id=source_id,
+                )
+
+                digest = _source_pause_prepare_digest(
+                    state=state,
+                    ledger_rows=ledger_rows,
+                    source_id=source_id,
+                )
+                result["input_digest"] = digest
+                if result["status"] != "SEEDABLE":
+                    return result
+                if expected_input_digest != digest:
+                    return {
+                        **result,
+                        "status": "BLOCKED_MISSING_EPISODE_IDENTITY",
+                        "reason": "dry-run input digest is missing or no longer matches state/ledger",
+                    }
+
+                entry = state["A7"]
+                lifecycles = _normalize_lifecycles(entry)
+                severity = _normalize_severity(result["severity"])
+                lifecycles[severity] = {
+                    **lifecycles[severity],
+                    "source_ids": result["source_ids"],
+                }
+                projected = _project_lifecycles(
+                    lifecycles,
+                    preferred_severity=_normalize_severity(entry.get("severity")),
+                )
+                for key in ("last_evaluated_at", "last_evaluation_sequence"):
+                    if key in entry:
+                        projected[key] = entry[key]
+                state["A7"] = projected
+                _write_state(path, state)
+                return {**result, "status": "SEEDED", "changed": True}
+
+        result["input_digest"] = _source_pause_prepare_digest(
+            state=state,
+            ledger_rows=ledger_rows,
+            source_id=source_id,
+        )
+        result["changed"] = False
+        return result
 
 
 def _write_state(path: Path, state: dict[str, dict[str, object]]) -> None:
@@ -1788,6 +2155,52 @@ def _apply_alert_results(
             _write_state(state_path, state)
             return prepared, nonce
 
+        def close_paused_a7_lifecycles(
+            paused_lifecycles: list[tuple[AlertSeverity, dict[str, object]]],
+        ) -> bool:
+            episode_source_ids = sorted(
+                {
+                    source_id
+                    for _, lifecycle in paused_lifecycles
+                    for source_id in _normalize_source_ids(lifecycle.get("source_ids"))
+                }
+            )
+            episode_since = paused_lifecycles[0][1].get("since")
+            pause_event = {
+                "ts": current.isoformat(),
+                "rule_id": result.rule_id,
+                "severity": paused_lifecycles[0][0],
+                "type": "resolved",
+                "detail": (
+                    "A7 opening sources are paused; episode closed without notification"
+                    if result.firing
+                    else result.detail
+                ),
+                "values": {
+                    "episode_source_ids": episode_source_ids,
+                    "paused_source_ids": sorted(
+                        set(episode_source_ids) & paused_source_ids
+                    ),
+                },
+                "channel": INTERNAL_CHANNEL,
+                "reason": "source_paused",
+                "episode_since": episode_since,
+            }
+            if not _record_event_rows(
+                event_path,
+                current=current,
+                new_rows=[pause_event],
+                dedupe_source_paused=True,
+            ):
+                return False
+            for severity, lifecycle in paused_lifecycles:
+                lifecycles[severity] = _ok_lifecycle(
+                    lifecycle,
+                    str(pause_event["detail"]),
+                    result.evaluation_state,
+                )
+            return True
+
         if not result.firing and result.evaluation_state == "in_progress":
             if not lifecycles:
                 projected_severity = _normalize_severity(result.severity)
@@ -1802,6 +2215,44 @@ def _apply_alert_results(
                 }
             state[result.rule_id] = project(projected_severity)
             continue
+
+        paused_source_ids = set(
+            _normalize_source_ids(result.values.get("paused_source_ids"))
+        )
+        active_a7_lifecycles = [
+            (severity, lifecycle)
+            for severity, lifecycle in lifecycles.items()
+            if result.rule_id == "A7" and lifecycle.get("state") == "firing"
+        ]
+        unidentified_paused_a7 = bool(paused_source_ids) and any(
+            _entry_announced(lifecycle)
+            and not _normalize_source_ids(lifecycle.get("source_ids"))
+            for _, lifecycle in active_a7_lifecycles
+        )
+        if unidentified_paused_a7:
+            if not result.firing:
+                state[result.rule_id] = project(projected_severity)
+            continue
+        paused_a7_lifecycles = [
+            (severity, lifecycle)
+            for severity, lifecycle in active_a7_lifecycles
+            if _entry_announced(lifecycle)
+            and (lifecycle_source_ids := set(
+                _normalize_source_ids(lifecycle.get("source_ids"))
+            ))
+            and lifecycle_source_ids.issubset(paused_source_ids)
+        ]
+        if result.firing and paused_a7_lifecycles:
+            current_source_ids = _a7_result_source_ids(result)
+            rollover_is_unambiguous = (
+                len(active_a7_lifecycles) == 1
+                and len(paused_a7_lifecycles) == 1
+                and bool(current_source_ids)
+            )
+            if not rollover_is_unambiguous:
+                continue
+            if not close_paused_a7_lifecycles(paused_a7_lifecycles):
+                continue
 
         if result.firing:
             effective_severity = _normalize_severity(result.severity)
@@ -1891,6 +2342,8 @@ def _apply_alert_results(
                 lifecycle["firing_basis"] = firing_basis
             else:
                 lifecycle.pop("firing_basis", None)
+            if result.rule_id == "A7" and not lifecycle_was_firing:
+                lifecycle["source_ids"] = _a7_result_source_ids(result)
             lifecycles[effective_severity] = lifecycle
             state[result.rule_id] = project(effective_severity)
             delivery_succeeded = False
@@ -1939,11 +2392,27 @@ def _apply_alert_results(
             if should_notify:
                 _write_state(state_path, state)
         else:
+            if paused_a7_lifecycles:
+                close_paused_a7_lifecycles(paused_a7_lifecycles)
+                state[result.rule_id] = project(projected_severity)
+                continue
             for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
                 lifecycle = lifecycles.get(severity)
                 if lifecycle is None or lifecycle.get("state") != "firing":
                     continue
                 if _entry_announced(lifecycle):
+                    if not _a7_mixed_pause_resolution_has_current_evidence(
+                        result,
+                        lifecycle=lifecycle,
+                        paused_source_ids=paused_source_ids,
+                    ):
+                        state[result.rule_id] = project(projected_severity)
+                        continue
+                    resolved_result = _qualify_a7_partial_pause_resolution(
+                        result,
+                        lifecycle=lifecycle,
+                        paused_source_ids=paused_source_ids,
+                    )
                     lifecycle, notification_nonce = prepare_notification(
                         lifecycle,
                         severity=severity,
@@ -1952,9 +2421,12 @@ def _apply_alert_results(
                         preferred_severity=projected_severity,
                     )
                     receipt = _invoke_sender(
-                        result=result,
+                        result=resolved_result,
                         event_type="resolved",
-                        text=_format_resolved(result, str(lifecycle.get("since") or "")),
+                        text=_format_resolved(
+                            resolved_result,
+                            str(lifecycle.get("since") or ""),
+                        ),
                         severity=severity,
                         sender=sender,
                         episode_since=lifecycle.get("since"),
@@ -1962,10 +2434,12 @@ def _apply_alert_results(
                         transport_dedup=transport_dedup,
                     )
                     sent.append(receipt)
-                    delivered.append((receipt, result))
+                    delivered.append((receipt, resolved_result))
                     if receipt["delivered"] is True:
                         lifecycles[severity] = _ok_lifecycle(
-                            lifecycle, result.detail, result.evaluation_state
+                            lifecycle,
+                            resolved_result.detail,
+                            resolved_result.evaluation_state,
                         )
                     state[result.rule_id] = project(projected_severity)
                     _write_state(state_path, state)
@@ -1987,7 +2461,11 @@ def _apply_alert_results(
             state[result.rule_id] = project(projected_severity)
     try:
         _record_notification_events(event_path, current=current, delivered=delivered)
-        _record_event_rows(event_path, current=current, new_rows=suppressed_events)
+        _record_event_rows(
+            event_path,
+            current=current,
+            new_rows=suppressed_events,
+        )
     except BaseException:
         pass
     return sent
@@ -2407,14 +2885,16 @@ def _silent_source_signal(
     lookback_days: int = 30,
     min_history: int = 5,
     x_receipt_fresh_minutes: int = 120,
+    evaluated_source_ids: list[str] | None = None,
 ) -> tuple[
     list[tuple[str, str, float, float]],
     int,
     int,
     list[tuple[str, str, float]],
     list[tuple[str, str, float, float]],
+    list[str],
 ]:
-    """Find enabled sources that have stopped producing items.
+    """Find enabled, unpaused sources that have stopped producing items.
 
     Exists because the aggregate ingestion signal cannot see a single source
     die: when WeChat produced nothing for 73 hours the other ~160 sources kept
@@ -2449,10 +2929,11 @@ def _silent_source_signal(
     — a revived source, a backfilled item from years back — widening the
     threshold past any silence that could ever trip it.
 
-    Returns (silent, evaluated_count, unevaluable_count, faded, quiet_x) where each
-    silent row is (source_id, name, hours_silent, threshold_hours) and each
-    faded row is (source_id, name, hours_silent). Each quiet_x row adds the
-    terminal receipt age in minutes after hours_silent.
+    Returns (silent, evaluated_count, unevaluable_count, faded, quiet_x,
+    paused_source_ids). When provided, `evaluated_source_ids` is replaced with
+    the exact sorted IDs counted by `evaluated_count`. Paused IDs are
+    non-evaluation metadata used only to close an existing A7 episode without
+    sending a recovery notification.
     """
     window_hours = lookback_days * 24.0
     cutoff = (current - timedelta(days=lookback_days)).isoformat().replace("+00:00", "Z")
@@ -2460,12 +2941,20 @@ def _silent_source_signal(
     faded: list[tuple[str, str, float]] = []
     quiet_x: list[tuple[str, str, float, float]] = []
     evaluated = 0
+    current_evaluated_source_ids: list[str] = []
     unevaluable = 0
+    paused_source_ids: list[str] = []
     with db.get_conn(db_path) as conn:
         # Pin the item history and runtime receipt to one SQLite snapshot. The
         # fetcher commits them atomically; splitting these reads across commits
         # would throw away that guarantee on the evaluator side.
         conn.execute("BEGIN")
+        paused_source_ids = [
+            str(row["id"])
+            for row in conn.execute(
+                "SELECT id FROM sources WHERE enabled = 1 AND paused = 1 ORDER BY id"
+            ).fetchall()
+        ]
         rows = conn.execute(
             """
             SELECT s.*,
@@ -2474,7 +2963,7 @@ def _silent_source_signal(
                    SUM(CASE WHEN i.fetched_at >= ? THEN 1 ELSE 0 END) AS recent_count
             FROM sources s
             LEFT JOIN items i ON i.source_id = s.id
-            WHERE s.enabled = 1
+            WHERE s.enabled = 1 AND s.paused = 0
             GROUP BY s.id, s.name
             """,
             (cutoff,),
@@ -2543,6 +3032,7 @@ def _silent_source_signal(
                     faded.append((str(row["id"]), str(row["name"]), hours_silent))
             continue
         evaluated += 1
+        current_evaluated_source_ids.append(str(row["id"]))
         # Coarse cadence: the average gap over the window. Doubling it keeps a
         # source that merely skipped one publishing slot out of the alert.
         typical_gap_hours = window_hours / recent
@@ -2575,7 +3065,9 @@ def _silent_source_signal(
                 quiet_x.append((source_id, source_name, hours_silent, receipt_age_minutes))
             else:
                 silent.append((source_id, source_name, hours_silent, threshold))
-    return silent, evaluated, unevaluable, faded, quiet_x
+    if evaluated_source_ids is not None:
+        evaluated_source_ids[:] = sorted(current_evaluated_source_ids)
+    return silent, evaluated, unevaluable, faded, quiet_x, paused_source_ids
 
 
 def _wechat_interpretation_signal(
@@ -2764,17 +3256,20 @@ def collect_alert_signals(
                 }
             )
     a7 = _threshold_section(ALERT_THRESHOLDS, "a7")
+    evaluated_source_ids: list[str] = []
     (
         silent_sources,
         evaluated_sources,
         unevaluable_sources,
         faded_sources,
         quiet_x_sources,
+        paused_source_ids,
     ) = _silent_source_signal(
         db_path,
         current,
         floor_hours=_float_threshold(a7, "silence_floor_hours", 6.0),
         x_receipt_fresh_minutes=_int_threshold(a2, "no_success_minutes", 120),
+        evaluated_source_ids=evaluated_source_ids,
     )
     a5 = _threshold_section(ALERT_THRESHOLDS, "a5")
     no_success_hours = _float_threshold(a5, "no_success_hours", 4.0)
@@ -2862,9 +3357,11 @@ def collect_alert_signals(
         a6_pricing_freshness=str(a6_signal["pricing_freshness"]),
         silent_sources=silent_sources,
         evaluated_sources=evaluated_sources,
+        evaluated_source_ids=evaluated_source_ids,
         unevaluable_sources=unevaluable_sources,
         faded_sources=faded_sources,
         quiet_x_sources=quiet_x_sources,
+        paused_source_ids=paused_source_ids,
         a6_metering_complete=bool(a6_signal["metering_complete"]),
         a6_metering_failure_count=int(a6_signal["metering_failure_count"]),
     )

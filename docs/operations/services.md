@@ -15,9 +15,9 @@
 | performance probe (5min) | launchd, `StartInterval=300`, `RunAtLoad=true` | 当前未安装；旧 hourly cron 自 2026-07-24 起保持 PAUSED，等待 performance plan 收口 | `./install.sh performance-probe` / `./uninstall.sh performance-probe` / `./status.sh performance-probe` | [ai-radar-performance-probe.plist.example](../../deploy/launchd/ai-radar-performance-probe.plist.example) · [monitoring-alerting.md §用户旅程性能监控](monitoring-alerting.md#用户旅程性能监控) |
 | LLM cost report | cron (`17 9 * * 1`) | 已在 user crontab；周一 09:17 经 `run-or-alert --key ai-radar-cost-report` 发送上一上海自然周 | `./install.sh cost-report` / `./uninstall.sh cost-report` / `./status.sh cost-report` | [deploy/cron/ai-radar-cost-report](../../deploy/cron/ai-radar-cost-report) |
 | performance remediation (hourly) | cron（建议 `25 * * * *`，在 probe 后） | **当前禁用**；启用 gate 与安装步骤的唯一全文在 [monitoring-alerting.md §安装 remediation cron](monitoring-alerting.md#安装-remediation-cron启用-gate-全文) | `./run.sh performance-remediate` | [monitoring-alerting.md §安装 remediation cron](monitoring-alerting.md#安装-remediation-cron启用-gate-全文) |
-| wechat2rss | docker compose（`restart: unless-stopped`），随 OrbStack 开机自启 | 运行中；`wx_wechat2rss` 源消费 `127.0.0.1:8080` | `cd deploy/wechat2rss && docker compose up -d / down`；`deploy/wechat2rss/healthcheck.sh`、`logs.sh` | [deploy/wechat2rss/RUNBOOK.md](../../deploy/wechat2rss/RUNBOOK.md) |
-| wechat2rss healthcheck (20min) | cron (`11,31,51 * * * *`) | 在 user crontab | 手动跑：`deploy/wechat2rss/healthcheck.sh`（exit 0=健康；exit 1=发现异常并尝试通知，是否送达以同次输出为准） | 外部探活：崩掉的服务发不出自己的告警。五类终态各有 dedup-key `wechat2rss-{unreachable,apierr,noaccount,login,riskctl}`，经 `im-notify --alert` 直发，**不写 `data/alert-events.jsonl`**。健康时清除全部五个 key，并在「上一次探测报过告警 → 本轮健康」的转换上发一条恢复通知（探测结果记在 `deploy/wechat2rss/data/healthcheck.state`；清键或恢复通知发送失败时不写 healthy、下一轮重试；粒度是一次探测，两次 cron 之间的「恢复又复发」观察不到、按同一事故延续处理）；2026-09-04 前没有这一步，08-17 演练失败分支留下的签名把 08-30→09-04 停机的 335 次告警全部压成 `skipped(unchanged)`（`plans/20260816-mp2rss-replacement/state.md` ISSUE-016）（见 [monitoring-alerting.md §已送达通知历史](monitoring-alerting.md#已送达通知历史)） |
-| shadow-observe (每 30 分钟) | cron (`7,37 * * * *`) | 在 user crontab | 维护者主工作树于 2026-09-01 实测 live 入口为 `/Users/lindong/research/ai-radar/plans/20260816-mp2rss-replacement/tools/shadow-observe.sh`（**未入 git，不随其它 checkout 分发**）；它调用的 [`shadow_compare.py` 归档副本](../plans/20260816-mp2rss-replacement/tools/shadow_compare.py)只用于保留计划期 provenance，不是 live 入口 | Mp2RSS ↔ Wechat2RSS 双跑覆盖率采样，直接读两个 feed、不读生产库。评估期临时项，路线定案后应移除该 cron |
+| wechat2rss | 目标：Lima ≥2.2 generated system LaunchDaemon 在 boot 启动 named instance，容器由 `restart: unless-stopped` 恢复 | T3 helper 与 boot witness 尚未组装进当前 T1 checkout；维护者生产仍是授权前的 OrbStack 迁移 pre-state，尚未取得 Lima 安装、切换或 reboot 验收读数。待发布配置把 `wx_wechat2rss` 设为主动微信抓取入口，不表示生产已切换 | 当前 checkout 无 `compose.sh`；program assembly 后才可使用 `compose.sh`、`boot-witness.sh` 与目标 Lima lifecycle | [deploy/wechat2rss/RUNBOOK.md](../../deploy/wechat2rss/RUNBOOK.md) |
+| wechat2rss healthcheck (20min) | cron (`11,31,51 * * * *`) | 现场快照记录为在 user crontab；当前 T1 checkout 仍是旧无参数实现 | 当前只运行 `deploy/wechat2rss/healthcheck.sh`，不要传 `--observe-only`/`--receipt`；program assembly 后才有四态无副作用观察与 receipt | 外部探活：崩掉的服务发不出自己的告警。当前无参数模式经 `im-notify --alert` 发送告警，健康时清除既有告警签名并在需要时发恢复通知；T3 的无副作用模式、四态输出与 receipt 字段契约只在 program assembly 后适用（目标语义见 [RUNBOOK](../../deploy/wechat2rss/RUNBOOK.md#lifecycle-semantics)） |
+| shadow-observe (每 30 分钟) | cron (`7,37 * * * *`) | 生产收口待 P6-G6 独立授权退役 | 维护者主工作树于 2026-09-01 实测 live 入口为 `/Users/lindong/research/ai-radar/plans/20260816-mp2rss-replacement/tools/shadow-observe.sh`（**未入 git，不随其它 checkout 分发**）；它调用的 [`shadow_compare.py` 归档副本](../plans/20260816-mp2rss-replacement/tools/shadow_compare.py)只用于保留计划期 provenance，不是 live 入口 | 该 cron 直接读 Mp2RSS，不受应用 pause 保护；P6-G6 只精确移除目标行并 exact readback 其余 crontab，现场无目标行则以 no-op 关闭 |
 | DB sync → 腾讯服务器 (5h) | cron (`41 1,6,11,16,21 * * *`)，`run-or-alert --key ai-radar-db-sync` 包裹，失败经 im-notify 告警、成功自复位 | 已启用；这是公网副本持续新鲜的 Mac producer | 手动跑：`deploy/sync/sync-db-cron.sh`（完整 cron wrapper）或 `deploy/sync/sync-db-to-server.sh`（裸 producer） | [deploy/cron/ai-radar-db-sync](../../deploy/cron/ai-radar-db-sync) · [ADR-013](../adr/013-db-sync-cron-agent-socket-auth.md) · [ADR-014](../adr/014-ship-base-only-db-and-rebuild-fts.md) |
 
 probe 的专属 plist 经 `./run.sh performance-probe` 启动。crontab 条目的识别方式两种并存：**cost-report 用精确 marker**（行尾 `# ai-radar-cost-report`），**pipeline 没有 marker**——`install.sh` / `uninstall.sh` / `status.sh` 都按路径子串 `ai-radar/pipeline.sh` 匹配（三处 `grep`），所以同一台机器上有第二个 ai-radar checkout 时，卸载会连同名的另一行一起删掉。
@@ -91,7 +91,7 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 
 `alert` 服务负责 A1–A7（`src/airadar/admin/alerts.py` 的 `RULESET` 七条），D3 定价提醒复用同一轮调度但不进入 page lifecycle。阈值、合并、degraded/in-progress 语义、severity 转换、投递与 ledger 的单一运行权威是 [monitoring-alerting.md §告警规则](monitoring-alerting.md#告警规则)；本服务清单只维护拓扑与生命周期入口，避免复制状态机细节后漂移。
 
-> 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）；其容器又于 **2026-08-20 手动停止**，当前为 `exited` 状态、**保留未删除**（其数据卷含已停用的微信读书登录态）。如需彻底清理，连同数据一起删除由用户执行，本仓不代劳。微信摄取现走 **Mp2RSS + Wechat2RSS 双跑取并集**（见 [wechat-ingestion.md](wechat-ingestion.md)）。如需回滚到 WeWe RSS：`deploy/wewe-rss/`（docker-compose + RUNBOOK）仍在，launchd plist 与脚本 wiring 从 git 历史恢复（移除 commit 见 git log）。
+> 已退役的 `wewe`（WeWe RSS docker bridge）已于 2026-06-06 从服务层移除（不再在脚本/注册表中）；其容器又于 **2026-08-20 手动停止**，当前为 `exited` 状态、**保留未删除**（其数据卷含已停用的微信读书登录态）。如需彻底清理，连同数据一起删除由用户执行，本仓不代劳。待发布配置由 Wechat2RSS 主动抓取、Mp2RSS 保留为 paused 历史来源；生产迁移与仓库外 `shadow-observe` 退役待 P6 授权（见 [wechat-ingestion.md](wechat-ingestion.md)）。当前 checkout 已无 `deploy/wewe-rss/` 回滚包；如需参考历史 recipe，先从 `29ca189^` 恢复 `.env.example`、`.gitignore`、`RUNBOOK.md` 与 `docker-compose.sqlite.yml` 四个文件的完整目录，再按 [wechat-sources.md](../references/wechat-sources.md) 处理；恢复前不得把当前文档当作可执行回滚流程。
 
 调度方式选择：pipeline 在 cron 和 launchd 之间二选一，**不要同时启用**——详见 [experiences/deployment.md 2026-05-15 条目](../experiences/deployment.md)。当前生产用 cron。
 
@@ -106,7 +106,7 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 | alert 发送器 | `~/.local/bin/im-notify` + page 的 `FEISHU_GENERAL_ALERT_WEBHOOK` + notice 的 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`；两个 webhook 任缺一个都拒绝 alert 安装 | `test -x "$HOME/.local/bin/im-notify"` 后运行下文无发送 preflight；已安装时检查 plist 同时有两个 key |
 | Playwright Chromium | 微信原文抓取与默认 `performance-probe` | 部署前显式运行 `uv run playwright install chromium`；`install.sh` 不自动下载或校验 |
 | Cloudflare tunnel | `deploy/cloudflared/config.yml` | 存在还不够，要判它不是 example 占位：`rg -c '^tunnel: [0-9a-f]{8}-' deploy/cloudflared/config.yml`（真实 tunnel UUID）与 `rg '^\s+- hostname: ' deploy/cloudflared/config.yml`（应列出实际托管的 hostname，不含 `example.com`） |
-| OrbStack（Docker daemon） | 必须设为**开机自启**（OrbStack → Settings → General → "Start at login"） | `orbctl status`。未自启时 `wechat2rss` 容器在重启后静默缺席——`restart: unless-stopped` 只管容器进程崩溃，管不了 daemon 不在 |
+| Lima（Wechat2RSS 目标 Docker daemon） | program assembly 后使用 Lima ≥2.2 官方 generated system LaunchDaemon；目标 instance 为 `wechat2rss`，无需 GUI login item | 当前 T1 checkout 尚无 `deploy/wechat2rss/compose.sh`；组装 T3 资产后该入口才动态解析 named socket。安装、generated plist、真实 reboot 与生产切换仍须按授权阶段取得读数；OrbStack “Start at login” 仅属迁移 pre-state |
 | 图片出口代理（新加坡） | serve 主机 `.env` 的 `AI_RADAR_IMG_PROXY_URL`（现指 `127.0.0.1:39148`）+ 上海主机 systemd 服务 `ai-radar-img-tunnel`（SSH 隧道到 SG tinyproxy，见下节） | 走下节「诊断顺序」，**不要**只看公网 `/img` 的状态码——它对每种失败都回 404，读数区分不了故障层 |
 | Cloudflare Cache Rule | zone `aiplanet.live` 上的 `AI Radar short public pagination TTL`（见下节） | 当前生产旁路不适用；将来重新经 Cloudflare 代理后，同一 public 分页 URL 第二次请求应为 `CF-Cache-Status: HIT` |
 
@@ -318,7 +318,7 @@ curl -sf https://news.aiplanet.live/api/v1/healthz && echo public_ok      # 公�
 ./status.sh alert
 uv run pytest tests/test_admin_alerts.py -q -k 'send_alert_message_calls_im_notify_alert_without_dedup or send_alert_message_routes_notice_without_alert_flag'
 ./run.sh performance-probe --origin-url http://127.0.0.1:8010 --public-url https://news.aiplanet.live
-./run.sh fetch                                      # pipeline + Mp2RSS feed 联通性；保留真实退出码
+./run.sh fetch                                      # 验证 active sources；paused Mp2RSS 不应出现 OK/FAIL 行
 ```
 
 alert 的双通道配置、无发送 preflight，以及「`./run.sh admin alert-check` 会发真实消息、不是无害 smoke」这条告诫，都以 [monitoring-alerting.md §im-notify 飞书双通道](monitoring-alerting.md#im-notify-飞书双通道) 为准；上述 pytest 只验证 mock 投递路由，不发送真实消息。
@@ -349,5 +349,5 @@ pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再
 - [README.md §服务](../../README.md#服务) — 用户视角的脚本入口表
 - [docs/operations/monitoring-alerting.md](monitoring-alerting.md) — `/admin` dashboard、A1–A7 与 D3 告警、周报、飞书 webhook 与旅程延迟
 - [docs/experiences/deployment.md](../experiences/deployment.md) — 历史踩坑（env 不继承、cron/launchd 共存、tunnel region、docker compose 守护）
-- [docs/operations/wechat-ingestion.md](wechat-ingestion.md) — 微信公众号摄取（Mp2RSS + Wechat2RSS 双跑与跨源去重、两个 feed URL 的配置、头像 backfill、迁移留尾记录）
+- [docs/operations/wechat-ingestion.md](wechat-ingestion.md) — 微信公众号摄取（Wechat2RSS 主动入口、Mp2RSS paused 历史身份、跨源去重、头像 backfill 与迁移门槛）
 - [docs/references/wechat-sources.md](../references/wechat-sources.md) — 旧 WeWe RSS 微信源添加流程（已停用，仅回滚参考）

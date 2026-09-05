@@ -66,13 +66,14 @@ def sync_to_db(sources: list[SourceConfig], conn: sqlite3.Connection) -> None:
             meta = planned_meta[source.slug]
             conn.execute(
             """
-            INSERT INTO sources (id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, synced_at, public_url_override, optional, required_env, wechat_only)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sources (id, name, url, tier, enabled, paused, kind, homepage_url, icon_url, meta_json, synced_at, public_url_override, optional, required_env, wechat_only)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name=excluded.name,
               url=excluded.url,
               tier=excluded.tier,
               enabled=excluded.enabled,
+              paused=excluded.paused,
               kind=excluded.kind,
               homepage_url=excluded.homepage_url,
               icon_url=excluded.icon_url,
@@ -89,6 +90,7 @@ def sync_to_db(sources: list[SourceConfig], conn: sqlite3.Connection) -> None:
                 source.url,
                 source.tier,
                 1 if source.enabled else 0,
+                1 if source.paused else 0,
                 source.kind,
                 source.homepage_url,
                 source.icon_url,
@@ -110,14 +112,14 @@ def sync_to_db(sources: list[SourceConfig], conn: sqlite3.Connection) -> None:
         raise
 
 
-def load_enabled_sources_from_db(conn: sqlite3.Connection) -> list[SourceConfig]:
+def _load_sources_from_db(conn: sqlite3.Connection, *, where_sql: str) -> list[SourceConfig]:
     rows = conn.execute(
-        "SELECT id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, public_url_override, optional, required_env, wechat_only "
-        "FROM sources WHERE enabled=1 ORDER BY id"
+        "SELECT id, name, url, tier, enabled, paused, kind, homepage_url, icon_url, meta_json, public_url_override, optional, required_env, wechat_only "
+        f"FROM sources WHERE {where_sql} ORDER BY id"
     ).fetchall()
     sources: list[SourceConfig] = []
     for row in rows:
-        meta_raw = row[8] or "{}"
+        meta_raw = row[9] or "{}"
         try:
             meta = json.loads(meta_raw)
         except json.JSONDecodeError:
@@ -129,14 +131,23 @@ def load_enabled_sources_from_db(conn: sqlite3.Connection) -> list[SourceConfig]
                 url=row[2],
                 tier=row[3],
                 enabled=bool(row[4]),
-                kind=row[5] or "feed",
-                homepage_url=row[6],
-                icon_url=row[7],
+                paused=bool(row[5]),
+                kind=row[6] or "feed",
+                homepage_url=row[7],
+                icon_url=row[8],
                 meta=meta,
-                public_url_override=row[9],
-                optional=bool(row[10]),
-                required_env=row[11],
-                wechat_only=bool(row[12]),
+                public_url_override=row[10],
+                optional=bool(row[11]),
+                required_env=row[12],
+                wechat_only=bool(row[13]),
             )
         )
     return sources
+
+
+def load_enabled_sources_from_db(conn: sqlite3.Connection) -> list[SourceConfig]:
+    return _load_sources_from_db(conn, where_sql="enabled=1")
+
+
+def load_fetchable_sources_from_db(conn: sqlite3.Connection) -> list[SourceConfig]:
+    return _load_sources_from_db(conn, where_sql="enabled=1 AND paused=0")
