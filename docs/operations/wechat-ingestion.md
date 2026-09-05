@@ -43,7 +43,9 @@ cron / launchd 不继承交互式 shell 的 `export`。启用 Wechat2RSS 自动�
 
 自建 Wechat2RSS 的部署见 `deploy/wechat2rss/RUNBOOK.md`。`/feed/all.xml` 是合集端点，全局上限 50 条（各账号自己的 feed 各 20 条）。缺 `k` 参数时它返回 `HTTP 200` 加 `{"err":"k param is empty..."}`，所以判断它是否可用要看返回体、不能只看状态码。
 
-program assembly 合入 T3 资产后，仓内将提供 Lima named-socket helper、无副作用四态 health receipt 与 boot witness，相关离线测试位于 T3 依赖中。当前 T1 checkout 尚无 `compose.sh`、`boot-witness.sh` 和支持 `--observe-only`/`--receipt` 的 healthcheck；旧脚本会忽略这些参数，组装前不要运行这些目标命令。先前取得的 live `HEALTHY` loopback probe 只证明当时服务可达，不能证明组装后实现、Lima、boot、cron、真实页面或生产切换已验收。维护者生产状态仍只有先前的 OrbStack 迁移 pre-state 快照，本 T1 单元未重新验收。目标生命周期、receipt 字段与未验证边界见 [Wechat2RSS runbook](../../deploy/wechat2rss/RUNBOOK.md)。
+**重启后自启（2026-09-05 起）**：`./install.sh orbstack` 装一个登录时跑 `orbctl start` 的 LaunchAgent，Wechat2RSS 容器靠既有的 `restart=unless-stopped` 随之自回。它修的是一个实际发生过的故障——Aug 31 21:49 那次重启后 OrbStack 一直没起来，`/wechat` 停更五天。OrbStack 自带的 `app.start_at_login` 不能用：`orbctl config set` 退出 0 但值不变，只能从图形界面改。用 `./status.sh orbstack` 查状态。
+
+原计划把运行时迁到 Lima 以取得「开机前（无人登录也能起）」这一档，已放弃：两次尝试都卡在 guest 出网（默认 provisioning 拉不到 docker 包；SOCKS 隧道下安装器内部 curl 报 TLS error），而现有 ai-radar 服务全部是 LaunchAgent + 用户 crontab、无任何 LaunchDaemon——无人登录时 serve / tunnel / alert 本来就都不起，所以那一档不会带来实际可用性提升。
 
 生产收口前必须按 [monitoring-alerting 的暂停来源准备步骤](monitoring-alerting.md#暂停来源前准备-a7-episode-identity) 操作；该权威步骤要求对实际 state/event 文件显式传入绝对路径。legacy episode 需要时的完整交接为 `SEEDABLE → SEEDED → READY`；`READY` 或 `NO_ACTIVE_EPISODE` 才能继续，`BLOCKED_MISSING_EPISODE_IDENTITY` 表示缺少唯一匹配的 firing ledger，不能猜测归因。
 

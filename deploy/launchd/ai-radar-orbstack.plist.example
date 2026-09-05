@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- ai-radar:managed-launch-agent:v1 -->
+  <!-- Starts the OrbStack daemon at login so the wechat2rss container comes
+       back after a reboot. The container itself carries restart=unless-stopped,
+       so Docker restores it as soon as the daemon is up; nothing here needs to
+       know about the container. OrbStack's own app.start_at_login is readable
+       through orbctl but not writable by it (`config set` exits 0 and the value
+       stays false), and flipping it needs the GUI -- which is exactly what this
+       deployment must not depend on. Measured 2026-09-05: the Aug 31 21:49
+       reboot left OrbStack down and /wechat stopped updating for five days. -->
+  <key>Label</key><string>live.aiplanet.ai-radar.orbstack</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/orbctl</string>
+    <string>start</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/tmp/ai-radar-orbstack.log</string>
+  <key>StandardErrorPath</key><string>/tmp/ai-radar-orbstack.err</string>
+</dict>
+</plist>

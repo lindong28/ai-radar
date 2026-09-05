@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-05（重启后微信抓取能自己回来了）
+
+- 新增 `./install.sh orbstack`：登录时启动 OrbStack，Wechat2RSS 容器靠既有的 `restart=unless-stopped` 随之自回。此前 OrbStack 没有任何开机自启，Aug 31 21:49 那次重启后它一直没起来，`/wechat` 因此停更五天而无人察觉。
+- OrbStack 自带的 `app.start_at_login` 走不通：`orbctl config set` 退出 0 但值不变，只能从图形界面改——而这套部署不能依赖图形界面。
+- `./status.sh orbstack` 与 `./uninstall.sh orbstack` 同步可用。
+
 ## 2026-09-05（定时任务恢复：cron 缺 /usr/sbin 曾让整条 pipeline 每轮空跑）
 
 - 2026-09-05 11:15–12:00 连续四轮定时 pipeline 在 egress 预检就停下（`status=unavailable`），抓取、精选、解读一个阶段都没跑，而手动跑同一条命令始终正常。原因是 cron 的 `PATH` 不含 `/usr/sbin`，域名选择器的健康探测在那里找不到 `lsof`，于是把整条链路判为不健康、按设计拒绝发起任何外呼。`pipeline.sh` 现在显式把 `/usr/sbin` 加进 `PATH`，12:15 那轮起恢复正常。

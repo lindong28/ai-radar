@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install ai-radar services. Idempotent.
 # Usage: ./install.sh              # all services
-#        ./install.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | cost-report
+#        ./install.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | orbstack | cost-report
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -263,7 +263,7 @@ for slug in "${SELECTED_SERVICES[@]}"; do
   fi
 
   case "$slug" in
-    serve|tunnel|alert|performance-probe) install_launchd_service "$slug" ;;
+    serve|tunnel|alert|performance-probe|orbstack) install_launchd_service "$slug" ;;
     pipeline)          install_pipeline ;;
     cost-report)       install_cost_report ;;
   esac

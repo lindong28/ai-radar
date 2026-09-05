@@ -4,7 +4,7 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-ALL_SERVICES=(serve tunnel pipeline alert performance-probe cost-report)
+ALL_SERVICES=(serve tunnel pipeline alert performance-probe orbstack cost-report)
 LLM_PROVIDER_ENV_KEYS=(DEEPSEEK_API_KEY ARK_API_KEY OPENAI_API_KEY GLM_API_KEY)
 LLM_PROVIDER_ENV_KEYS_TEXT="DEEPSEEK_API_KEY, ARK_API_KEY, OPENAI_API_KEY, GLM_API_KEY"
 SERVICE_DEPENDENCY_SKIP_REASON=""
@@ -19,6 +19,7 @@ service_label() {
     tunnel)   echo "live.aiplanet.ai-radar.tunnel" ;;
     alert)    echo "live.aiplanet.ai-radar.alert" ;;
     performance-probe) echo "live.aiplanet.ai-radar.performance-probe" ;;
+    orbstack) echo "live.aiplanet.ai-radar.orbstack" ;;
     pipeline|cost-report) echo "" ;;
     *) return 1 ;;
   esac
@@ -30,6 +31,7 @@ service_plist_name() {
     tunnel) echo "ai-radar-tunnel.plist" ;;
     alert)  echo "ai-radar-alert.plist" ;;
     performance-probe) echo "ai-radar-performance-probe.plist" ;;
+    orbstack) echo "ai-radar-orbstack.plist" ;;
     pipeline|cost-report) echo "" ;;
     *) return 1 ;;
   esac
@@ -330,6 +332,7 @@ service_desc() {
     tunnel)   echo "Cloudflare tunnel to your public domain" ;;
     alert)    echo "Monitoring alert check (launchd, 5 min)" ;;
     performance-probe) echo "Idle-gated performance probe (launchd, 5 min)" ;;
+    orbstack) echo "Start OrbStack at login so wechat2rss returns after reboot" ;;
     pipeline) echo "Incremental fetch/score/enrich/curate (cron, 15 min)" ;;
     cost-report) echo "Weekly LLM cost report (cron, Monday 09:17)" ;;
     *) return 1 ;;
@@ -430,6 +433,13 @@ service_dependency_missing_reason() {
       ;;
     performance-probe)
       return 1
+      ;;
+    orbstack)
+      if [[ -x /opt/homebrew/bin/orbctl ]]; then
+        return 1
+      fi
+      echo "orbctl not found at /opt/homebrew/bin/orbctl"
+      return 0
       ;;
     pipeline)
       if llm_provider_key_present; then

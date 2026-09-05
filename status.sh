@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read-only service status panel. Never modifies state.
 # Usage: ./status.sh              # all services
-#        ./status.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | cost-report
+#        ./status.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | orbstack | cost-report
 
 set -uo pipefail  # no -e: status must report failures, not abort on them
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,6 +71,7 @@ status_launchd_service() {
     tunnel) printf " | log /tmp/ai-radar-tunnel.err" ;;
     alert)  printf " | log logs/alert-check.log" ;;
     performance-probe) printf " | log logs/performance-probe-launchd.log" ;;
+    orbstack) printf " | log /tmp/ai-radar-orbstack.log" ;;
   esac
   echo
 }
@@ -109,7 +110,7 @@ status_cost_report() {
 
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
-    serve|tunnel|alert|performance-probe) status_launchd_service "$slug" ;;
+    serve|tunnel|alert|performance-probe|orbstack) status_launchd_service "$slug" ;;
     pipeline)          status_pipeline ;;
     cost-report)       status_cost_report ;;
   esac

@@ -2,7 +2,7 @@
 # Uninstall ai-radar services. Idempotent and tolerant — silent if not installed.
 # Keeps source, plist files, logs, and data. Only unregisters from supervisors.
 # Usage: ./uninstall.sh              # all services
-#        ./uninstall.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | cost-report
+#        ./uninstall.sh <service>    # serve | tunnel | pipeline | alert | performance-probe | orbstack | cost-report
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,7 +89,7 @@ uninstall_cost_report() {
 
 for slug in "${SELECTED_SERVICES[@]}"; do
   case "$slug" in
-    serve|tunnel|alert|performance-probe) uninstall_launchd_service "$slug" ;;
+    serve|tunnel|alert|performance-probe|orbstack) uninstall_launchd_service "$slug" ;;
     pipeline)          uninstall_pipeline ;;
     cost-report)       uninstall_cost_report ;;
   esac
