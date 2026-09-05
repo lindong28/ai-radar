@@ -14,4 +14,10 @@
 - **判据**: pipeline 日志出现 `skip interpret: selector compatibility is unproven (...)`。逐字段定位用 `airadar.interpret.runner.expected_selector_compatibility_receipt` 与 `./run.sh egress-preflight` 的当前 `policy_sha256` 比对 `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json`。注意另有一个不同形态：`require_selector_policy()` 的 status 命令返回非 0 时抛 `EgressPreflightError`，那是 `interpret FAIL (exit 1)`、不是跳过。
 - **闸为什么存在**: 解读会 shell 出去调 `$AI_ASSISTANT_ROOT/agents/summary-agent/{summarize.sh,run.sh}`，文章正文离开本进程、由本仓管不着的代码发到外网。ai-radar 唯一的抓手是覆写六个代理变量成受管选择器，而这只对守规矩读 env 的子进程有效（`trust_env=False`、自定义 transport、原生 socket、不受管后代全在保证之外，契约文档明写）。收据是操作者签的证明，补的正是这个洞。详见 `docs/references/ai-assistant-contract.md`「Selector compatibility receipt」。
 - **已知失败形态（竞态，不是漂移）**: 策略文件在**另一个仓** `system-config:config/agent-proxy/policies/domain-routing-v2.tsv`，改它就换 `policy_sha256`。`02fce04` 那次 attestation 基于 `a5f3433`（09-02 16:38）跑完，20:36 写盘时生产已被 `236d165`（09-02 20:32）换掉 → **收据落地即失效**。
-- **Applies when**: 补跑 attestation 时，**写盘前必须再校验一次生产 `policy_sha256` 未变**，变了就重跑，否则重演同一竞态；跨仓改 domain-routing 策略时，记得 ai-radar 的 interpret 收据是它的下游消费方。
+- **Applies when**: 跨仓改 domain-routing 策略时，记得 ai-radar 的 interpret 收据是它的下游消费方。这条竞态本身已由下一条经验固化的 `airadar.interpret.receipt_writer` 关闭——收据一律经它写，不要再手工编辑收据文件。
+
+## 2026-09-05 selector compatibility attestation 与收据写盘必须是同一个身份校验入口
+
+- Problem: 一轮 attestation 可以正确测试某个 `policy_sha256`，但操作者随后手工编辑收据前，生产 domain-routing 策略已经切换。这样生成的收据即使字段格式完全正确，落盘时也已经不代表本轮实际测试的策略；consumer fail-closed 只能拒绝它，不能修复 producer 的时间竞态。直接把收据 SHA 改成当前值可恢复生产，却把“证明跑过”退化成形式。
+- Solution: attestation 结束时同时固定 tested policy SHA 与实现闭包 SHA，只允许 `airadar.interpret.receipt_writer` 写收据。Writer 先拒绝闭包变化，再在任何备份或写盘前清空 selector cache，通过 interpret 共用的 `require_selector_policy()` 重新读取生产 status；live policy 不等于 tested policy 就保持原收据与备份集合不变、非零退出并要求整轮重跑。匹配时才创建时间戳备份并同目录原子替换。负例必须模拟“测试结束后换策略”，并同时观察退出码、收据字节与备份数；只证明检查命令报错不够，因为它没有覆盖实际 writer。
+- Applies when: 任何跨仓兼容收据或 attestation artifact 的有效性依赖会独立更新的生产身份时。收据内容应来自本轮实测身份，最后一次权威身份读取与写盘应收敛在同一受测入口；不要把面向人的 status stdout 反向解析成新的机器契约。

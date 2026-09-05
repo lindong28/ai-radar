@@ -4,6 +4,14 @@
 
 ---
 
+**迁出记录 2026-09-05**：用户点名的「interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态」在本分支基线中尚无条目；本轮已补录完整事实并直接按终态生命周期写入 [`archive/closed.md`](archive/closed.md)，未把已闭合事项留在 open 清单。
+
+## [open] AI Assistant contract 对 archive import receipt 使用了无限定的 `receipt`
+
+- Type: documentation / terminology · Priority: low · Discovered: 2026-09-05 selector receipt contract review（基线独立、非本任务边界）
+- Description: `docs/references/ai-assistant-contract.md` 前段用 `receipt` 指 selector compatibility receipt，archive import consumer contract 后段又以无 qualifier 的 `receipt` 指 import receipt。两个对象同处一份跨仓接口契约，读者可能把 `postcheck` 错接到 selector receipt。
+- Fix direction: 下一次修改 archive import contract 时，将该处限定为 `archive import receipt` 或权威 schema 类型名；本轮不修改无关基线文本。
+
 ## [open] ISSUE-GENERAL-20260901-b6ad · WeChat KB import receipt does not identify its target namespace
 
 - Type: operability / observability · Priority: medium · Discovered: 2026-09-01 documentation sync final review

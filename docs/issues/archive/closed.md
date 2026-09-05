@@ -2,6 +2,13 @@
 
 > Append-only archive for resolved or wontfix issues. Entries moved from a domain file retain their historical evidence; issues discovered and resolved within one plan are recorded here directly with terminal evidence.
 
+## [resolved] interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态（closed 2026-09-05）
+
+- Type: reliability / egress attestation · Priority: high · Discovered: 2026-09-05 production interpret recovery
+- Description: 2026-09-02 的完整 attestation 测试了 `policy_sha256=6fdcfb9f…`，但生产 domain-routing 策略在收据写盘前切换为 `58a97e64…`；随后写出的收据落地即过期。Interpret 的严格 preflight 自 2026-09-01 15:00 起连续 138 轮 fail-closed，215 篇微信文章没有解读，而 stage 干净退出 0 令 pipeline 仍打印 `interpret OK`。2026-09-05 的生产恢复先由 supervisor 手工把收据 SHA 改成当前值，该临时动作没有重跑 attestation，因此只恢复了产出，没有恢复证明真实性。
+- Resolution: 对生产策略 `58a97e64769d070f5799a107b7c7bc77f6f8f3f16077ee8738cade74f0568b42` 与 AI Assistant 闭包 `9d7d950a579a47d702d1ac5058c6d10898f3a5c0b9583ef3578a422ddd639f4f` 在隔离镜像重跑完整 path-level attestation：父六代理变量不可用、summarize LLM / known-tag save embedding / unknown-tag save embedding + classification 只经受管 selector，`--check-url` 本地完成且 selector 请求为 0；旧 v1、闭包篡改、证明字段篡改均拒绝，有效 v2 返回 `ok`。生产收据已新增时间戳备份后由受测 writer 重写，真实 `_preflight()` 返回 `(True, 'ok')`。
+- Closure: `airadar.interpret.receipt_writer` 把 tested policy/implementation identity 作为显式输入；在任何备份或写盘前重算闭包、清 selector cache 并重新读取生产 status，identity 变化或 preflight 失败即非零退出且保持收据与备份集合不变。区分性负例模拟 attestation 后 live policy 变更，得到 rc=1、收据字节 SHA 不变、备份数 `0→0`；正常对照 rc=0、备份数 `0→1`。操作者步骤与边界见 [AI Assistant contract](../../references/ai-assistant-contract.md#selector-compatibility-receipt) 和 [ADR-20260905-b00f](../../adr/20260905-b00f-write-egress-receipt-after-live-policy-recheck.md)。
+
 ## [resolved] ISSUE-019 · P3 ballot repeat-set 的 N=4 分布带窄于实测运行内噪声
 
 **状态**：resolved · **优先级**：high
