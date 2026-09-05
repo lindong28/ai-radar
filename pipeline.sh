@@ -7,7 +7,13 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+# /usr/sbin is not on cron's PATH, and the domain-selector status helper
+# (system-config bin/agent-proxy-wait-launchd-listener) shells out to bare
+# `lsof`, which lives there. Without it that helper dies with FileNotFoundError,
+# check-proxy-status reports degraded and exits 1, and egress-preflight then
+# fails closed -- every managed external stage is skipped for the whole round.
+# Symptom is a healthy manual run and a failing cron run (2026-09-05, 4+ rounds).
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:/usr/sbin:$PATH"
 
 # cron runs this in a non-interactive shell, so nothing from the interactive
 # rc is present. Local deployment settings live in a gitignored .env.

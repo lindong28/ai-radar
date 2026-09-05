@@ -327,3 +327,33 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 - **现状**：`cli.py` 的 `_validate_source_quota_shadow` / `_validate_source_quota_block` 拒绝缺键、错类型、`quota_only_count` 与逐行 `baseline_selected=false` 不一致的 run；不核：① `baseline_only[].item_id` 是否存在于 `items` 且与当前精选集互斥；② 逐行 `kind` 是否等于 `sources.kind`、同 run 各行 `kind_cap`/`source_cap` 是否一致、实际逐 kind/逐源计数是否 ≤ cap；③ `shadow_json` 未知顶层键与回退后 `rollback:{at, removed_item_ids}` 块的形状；④ `reason_json.raw_weighted_score` 与 `weighted_score` 同时存在且不等时取前者、不拒绝。
 - **为什么值得跟踪**：这些漂移在当前唯一写入端（`curate()` 同一事务写入）下不会自然发生，只在人工改库或未来第二写入端出现时才会；届时回退会把不一致输入带进成功路径（重算 rank/展示分）。
 - **处置候选**：把校验器扩成接收 `conn`/`run_id` 的语义校验（join `items`/`sources`、整 run cap 一致性、rollback 块封闭键集），复用于 curate 落库与 rollback 两处；配套否定用例。`source_cap:null` 分支尚无真实实例（默认 policy 总配单源上限），若上线后需要该分支，先在副本用 `per_source=None` 产一份实例接地。
+
+### interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态，收据落地即失效
+
+- **现象**：`interpret` 自 2026-09-01 15:00 起每轮跳过（`skip interpret: selector compatibility is unproven (receipt does not match egress implementation)`），累计 138 轮；215 篇微信文章无解读（`wx_mp2rss` 130 / `wx_wechat2rss` 85），`/wechat` 因 `JOIN wechat_interpretations WHERE save_decision=1` 而停更。fetch 与告警全绿，无任何告警触发。
+- **逐字段定位**：收据 `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` 只有 `policy_sha256` 不匹配（收据 `6fdcfb9f…` vs 生产 `58a97e64…`）；`egress_implementation_sha256` 完全一致（`9d7d950a…`），`./run.sh egress-preflight` 当时即 `status=healthy`。
+- **根因（竞态，四分钟）**：策略文件 `system-config:config/agent-proxy/policies/domain-routing-v2.tsv` 的两次相邻提交——`a5f3433` 09-02 16:38（SG Standard）产出 sha `6fdcfb9f…`，`236d165` 09-02 20:32（`googleapis.com` 由 5 条 exact 收敛为 1 条 suffix）产出 sha `58a97e64…`。ai-radar 的 `02fce04 fix(interpret): re-attest the selector receipt under domain-routing v2` 于 09-02 20:40 提交、收据文件 mtime 20:36，其 attestation 基于 `a5f3433` 那版策略跑完，写盘时生产已被 `236d165` 换掉 → **收据从落地那一刻起就与生产策略不一致**。
+- **为什么没人发现**：闸 fail-closed 且**干净退出 0**（契约文档明写"no external script is started"），pipeline 阶段报 `interpret OK`；现有 A1–A7 无「interpret 连续 N 轮 skipped」维度。
+- **本次处置（2026-09-05，用户裁决先恢复）**：收据 `policy_sha256` 直接改为 `58a97e64…`（原文件备份 `.bak-20260905-095616`），`_preflight()` 返回 ok。**残余**：收据现 attest 一个未经 attestation 的策略，该闸暂时退化为形式；是否补跑完整 attestation 待定。
+- **闭合方向**：(1) attestation 流程收尾时校验生产 `policy_sha256` 未变，变了即重跑，消除竞态；(2) 给 `interpret skipped=true` 连续 N 轮加一条告警（属「产出还在但质量变差」类静默降级，与 Playwright 那条同族）；(3) 策略仓与收据消费方之间缺跨仓变更通知，考虑让 `egress-preflight` 在 sha 漂移时显式提示收据需重签。
+
+### interpret 把 `check-proxy-status` 的整体健康当前置，任一无关远端抖动即让整轮 FAIL
+
+- **现象**：收据 `policy_sha256` 修好、闸已放行之后，interpret 仍间歇整轮失败——`2026-09-05 11:11:03 === interpret FAIL (exit 1) ===`，异常为 `airadar.egress.EgressPreflightError: status command returned 1`（`egress.py:135`，经 `interpret/runner.py:192` 的 `require_selector_policy()`）。同形态在 09-04 18:00 / 20:45 / 22:15 三轮已各发生一次，当时被收据不匹配的跳过掩盖。
+- **机理**：`require_selector_policy()` 只需要「模式是 domain-routing、policy_id/sha 已知」这两项事实，却把 `check-proxy-status --format=kv` 的**退出码**（= 整体健康）当作前置。该命令的非 0 分支包含与 interpret 无关的远端探测结果：`AGENT_PROXY_ADDR` 与 `DOMAIN_ROUTER_PROXY` 不一致（`effective_mode=custom`）、`gcp-data-unreachable`、`gcp-tunnel-unavailable`、`dgx-mode-stale`、`dgx-resources-unavailable`。因此 GCP 隧道或 DGX 侧任一抖动，都会让本轮**一篇文章都不处理**。
+- **归因订正（2026-09-05 03:46Z，据新证据）**：初判「无关远端瞬时抖动」**不成立**。后续读数表明 11:11–11:45 是一次**真实的 egress 不可用窗口**：11:15 / 11:30 / 11:45 三轮 pipeline 连 `egress preflight` 阶段都 `FAIL (exit 1)`（`status=unavailable reason=status command returned 1`），整轮外部阶段一个没跑；11:46 手动跑即恢复 `status=healthy exit 0`，`overall_status=healthy`、`router_status=running`、端口与 `DOMAIN_ROUTER_PROXY` 一致。故 11:11 那次 interpret FAIL 是**正确的 fail-closed**，不是误杀。
+- **排除项**：与并行的 attestation 任务无关——该任务 wrapper 11:00:48 启动，其 `.output` 里 103 条命令全为只读 `rg`/`git show`，`enable_proxy|disable_proxy|agent-proxy |switch` 命中数为 0。也不是 pipeline 自身环境所致：按 `.env` 复现 pipeline 环境（`set -a; . ./.env`）跑同一条 status 命令得 `effective_mode=domain-routing overall_status=healthy exit 0`。
+- **因此本条的可议面收窄**：`egress preflight` 阶段按整体健康 fail-closed 是**合理的**（所有外部阶段都不该在选择器不健康时发流量）；真正重复的只是 `interpret` 又独立判了一次同样的整体健康——它需要的只是策略身份字段。收窄那一层可减少一次冗余失败面，但**不会**让上述 34 分钟窗口里的 interpret 跑起来（那段时间外呼本就不该发）。
+- **另一个未覆盖面（新）**：那 34 分钟 egress 中断**零告警**。pipeline 每轮 `PIPELINE DONE (failed=1)` 但无人看；A1–A7 无「egress preflight 连续 N 轮 FAIL」维度。这与本文件里 Playwright 那条、以及 interpret 静默跳过那条同族——都是「阶段失败但整体报 OK / 无人看」。
+- **影响**：解读积压的排空被间歇打断——09:30 轮 `interpret processed=30 errors=0`，10:45 轮 FAIL 处理 0 条。不阻断（下一轮重试），但拖长恢复且每次都以 `PIPELINE DONE (failed=1)` 计入失败。
+- **闭合方向**：把 interpret 的前置收窄到它真正依赖的字段——解析 `--format=kv` 的 `stored_mode` / `effective_mode` / `policy_id` / `policy_sha256` / `policy_projection`，仅当这几项不满足时才拒绝；`check-proxy-status` 的整体退出码留给它自己的消费者。注意 `parse_proxy_status()` 已在解析 stdout，问题只在**先按退出码 fail-closed** 这一步。
+
+### cron 的 PATH 缺 `/usr/sbin`，`lsof` 找不到 → egress preflight fail-closed → 整条 pipeline 的外部阶段全部不跑
+
+- **现象**：2026-09-05 11:15 / 11:30 / 11:45 / 12:00 连续四轮 `=== egress preflight FAIL (exit 1) ===`（`status=unavailable reason=status command returned 1`），整轮**连 fetch 都没跑**；同期手动跑 `./run.sh egress-preflight` 恒为 `status=healthy exit 0`。11:11 那次 `interpret FAIL (exit 1)` 与 09-04 18:00 / 20:45 / 22:15 三次同源。
+- **根因（阴阳性对照已做）**：`check-proxy-status` 的健康探测调用 `system-config:bin/agent-proxy-wait-launchd-listener`，后者以**裸 `lsof`** shell 出去，而 `lsof` 只在 `/usr/sbin/lsof`。crontab 的 `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` 不含 `/usr/sbin`，`pipeline.sh` 原本的 `export PATH` 也没补，于是该 helper 抛 `FileNotFoundError: [Errno 2] No such file or directory: 'lsof'` → `check-proxy-status` 判 `overall_status=degraded` 并 return 1 → `require_selector_policy()` / egress preflight 按设计 fail-closed。
+  - 阴性对照：`env -i HOME PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin ./run.sh egress-preflight` → `status=unavailable`。
+  - 阳性对照：同环境 PATH 末尾加 `:/usr/sbin` → `status=healthy policy_sha256=58a97e64…`。
+- **为什么表现为「间歇」**：该 helper 只在走到 `listener_owned()` 那一步才调 `lsof`；deadline 已过或 pid 解析为 None 时提前返回、不触发。故同一缺陷时而命中时而不命中，掩盖了它是确定性的 PATH 缺失。这正是 user-scope CLAUDE.md「非交互 Shell 里执行命令」点名的形态：报错指向别处（这里是 `status command returned 1`），而真因是环境缺失；判据是**手动跑成功、cron 跑失败**。
+- **本次处置（2026-09-05）**：`pipeline.sh` 的 `export PATH` 插入 `/usr/sbin`（备份 `scratchpad/pipeline.sh.bak`），并在该行上方写明理由。cron 环境下复验 `status=healthy`。
+- **闭合方向（根上）**：`system-config:bin/agent-proxy-wait-launchd-listener` 应以绝对路径调 `lsof`（或在其 PATH 上补 `/usr/sbin`）——否则每个非交互调用方都要各自记得补，这已是第二次由 PATH 缺失伪装成别的故障（前一次见 `plans/20260816-mp2rss-replacement/state.md` ISSUE-008 的代理变量缺失）。另：连续四轮 egress preflight FAIL **零告警**，与本文件 Playwright、interpret 静默跳过两条同族。
