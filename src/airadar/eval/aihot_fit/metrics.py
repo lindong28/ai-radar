@@ -540,14 +540,24 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
         # baseline's point estimate ignores the baseline's own uncertainty; measured
         # on two runs drawn from the same distribution it fired 9% of the time for a
         # nominal 2.5% test, i.e. roughly 1 in 11 no-op changes read as "improved".
-        lower = metric["ci95"][0] if metric.get("ci95") else None
-        other_upper = other["ci95"][1] if other.get("ci95") else None
+        current_ci = metric.get("ci95")
+        other_ci = other.get("ci95")
+        # None, not False: without both intervals there is no verdict, and False would read
+        # the same for a +0.38 gain, a -0.37 regression and a genuine no-change. A zero-width
+        # interval is not evidence either -- 20/20 bootstraps to [1.0, 1.0] while its Wilson
+        # interval is [0.84, 1.0], so treating it as a bound manufactures "improved".
+        usable = (
+            current_ci is not None
+            and other_ci is not None
+            and current_ci[0] < current_ci[1]
+            and other_ci[0] < other_ci[1]
+        )
         deltas[name] = {
             "delta": round(metric["value"] - other["value"], 4),
-            "improved": (lower is not None and other_upper is not None and lower > other_upper),
-            "improved_rule": "current ci95 lower > baseline ci95 upper",
+            "improved": (current_ci[0] > other_ci[1]) if usable else None,
+            "improved_rule": "current ci95 lower > baseline ci95 upper; None when either interval is missing or zero-width",
             "baseline_value": other["value"],
-            "baseline_ci95": other.get("ci95"),
+            "baseline_ci95": other_ci,
             "baseline_n": other.get("n"),
             "n": metric.get("n"),
         }

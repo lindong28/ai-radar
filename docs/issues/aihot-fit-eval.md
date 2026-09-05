@@ -1,6 +1,6 @@
 # Issues — aihot-fit 评测体系
 
-来源：2026-09-05 `src/airadar/eval/aihot_fit/` 首轮交付前的 review gate（中档，独立只读 reviewer，2 HIGH / 17 MEDIUM / 11 LOW）。**两条 HIGH 与 6 条 MEDIUM 已在该轮修复**（见 [ADR-20260905-499e](../adr/20260905-499e-aihot-reference-fit-eval-system.md)），本文件收录**同批发现、未在该轮闭合**的项。
+来源：2026-09-05 `src/airadar/eval/aihot_fit/` 首轮交付前的 review gate（中档，独立只读 reviewer，2 HIGH / 17 MEDIUM / 11 LOW）。**两条 HIGH 与 6 条 MEDIUM 在该轮修复，修复复核轮又修了 3 条自伤项与 1 条升档项**（见 [ADR-20260905-499e](../adr/20260905-499e-aihot-reference-fit-eval-system.md)），本文件收录**同批发现、未在该轮闭合**的项。
 
 按用户 2026-09-05 常设指令（最低充分方案，按实际问题加码），这些项按「已发现但未观察到实际损害」处理：**记账不修**，等它们真的产出误导性读数或阻塞使用时再修。每条都写明**失败场景**，以便日后判断是否已发生。
 
@@ -48,7 +48,11 @@ evalset 里 2667 条 AIHOT 参考摘要，用我站自己的 `EnrichOutputV2.sum
 
 ### ISSUE-FIT-05 · identity 记的是"请求的模型"，不是"实际服务的模型"
 
-**状态**：open · **优先级**：medium
+**状态**：**resolved 2026-09-05**（修复复核轮升档为结构性后修复：`run.json` 的 `identity.stages` 增 `served_models`，取自各响应的 `raw.model`；实测 `deepseek-v4-flash` → `deepseek-v4-flash-ga-260731`、`deepseek-v4-pro` → `deepseek-v4-pro-ga-260813`）· **原优先级**：medium
+
+升档理由（reviewer 语）：H2 的修复把 `stage_identity_diff` 变成了读者判断"两次 run 之间流水线没变"的**唯一凭据**，而它读的 `model_id` 是类常量——修复把一个已知记错的字段提拔成了可比性判据，比原来更重。
+
+原描述：
 
 实测同一次 run：`run.json` 宣称 `deepseek-v4-flash` / `deepseek-v4-pro`，而 `outputs.jsonl` 每行 `raw.model` 是 `deepseek-v4-flash-ga-260731` / `deepseek-v4-pro-ga-260813`（20/20）。`-ga-<日期>` 后缀正是会轮换的那部分。
 
@@ -107,6 +111,29 @@ evalset 里 2667 条 AIHOT 参考摘要，用我站自己的 `EnrichOutputV2.sum
 | `metrics.py` `render_report` | `item_ids` 为空时回落到整份题集，却仍标为"本次 run 覆盖题数" | 覆盖面被高报 |
 | `run.py` 候选面 | 评测包含生产 curator 明确排除的 `kind='wechat'` 与 `enabled=0` 源，这些题的 `weighted_score` 生产里不会被算出 | 未披露（`stage_gating` 字段只披露了 prefilter 门控那一层） |
 | `common.py` `readonly_db_uri` | 不做 URI 转义，路径含 `?` / `#` / 空格时 URI 被截断 | 当前路径无此问题 |
+
+## 分组四：修复复核轮的残留项
+
+2026-09-05 的修复复核轮确认 H1 / H2 修复成立（新增的 51 条不匹配经逐条核实**全部是原本的错匹配**，反向 0 条；「两侧 query 参数集合不同」这一担心在当前数据里为 0 条），并报回 4 条由修复本身引入的新问题。**其中 3 条已修**（`improved` 三态化、零宽 CI 不得作判决依据、judgments 合并不得用 `None` 覆盖已付费读数），各自跑了双向验证。下列是仍未闭合的。
+
+### ISSUE-FIT-11 · `subset_sha256` 锚的是抽样集合，不是成功测到的集合
+
+**状态**：open · **优先级**：low
+
+`item_ids` 记的是抽中的题，stage 级 error 的题仍留在里面，故 `n_joined` 与 `subset_sha256` 可能不一致。`stopped_early` 闸挡住了最大的一类。另：两份**都缺** `subset_sha256` 的旧 payload 互比时 `None == None`，该闸失效（还需 `questions_sha256` 相同，触发面很窄）。
+
+### ISSUE-FIT-12 · 只读探针对准的是 `readonly_db_uri`，不是 build 实际用的那条连接
+
+**状态**：open · **优先级**：low
+
+实测：把 `build_evalset` 内部换成读写连接后，测试里那条断言**仍然通过**。它证明的是 `readonly_db_uri` 会生成只读 URI，不是 `build_evalset` 用了它。要真正钉住得把探针挂在 build 打开的那条连接上（monkeypatch `sqlite3.connect` 记录实际 URI）。这比原来的空断言强（原来两种情况读数完全相同），但仍打偏一格。
+
+### ISSUE-FIT-13 · 两处小的一致性债
+
+**状态**：open · **优先级**：low
+
+- `metrics.json` 新增的 `stages`（identity dict）与同目录 `run.json` 的 `stages`（stage 名 list）**同名异型**——这是本轮 H2 修复引入的命名冲突，用户裁定本轮收口故未改，改法是把 metrics 侧改名为 `stage_identity`。
+- 测试里 `with sqlite3.connect(...)` 的上下文管理器是**事务**管理器不是关闭器（出块后连接仍可 `SELECT 1`）。测试里无害，但这正是本项目 [healthz 500/CANTOPEN 连接泄漏](general.md) 那次的同一写法，不该被复制到生产路径。
 
 ## 未被 review 覆盖的面
 

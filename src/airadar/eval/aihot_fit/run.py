@@ -70,13 +70,30 @@ def provider_item(question: dict[str, Any]) -> ProviderItem:
     )
 
 
-def stage_identity(providers: dict[str, Any]) -> dict[str, Any]:
+def served_models(rows: list[dict[str, Any]], stage: str) -> list[str]:
+    """Model ids the API actually answered with, from each response's ``raw.model``."""
+    names = set()
+    for row in rows:
+        payload = row.get(stage)
+        raw = payload.get("output", {}).get("raw") if isinstance(payload, dict) else None
+        served = raw.get("model") if isinstance(raw, dict) else None
+        if served:
+            names.add(str(served))
+    return sorted(names)
+
+
+def stage_identity(providers: dict[str, Any], rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     root = db.PROJECT_ROOT
     rulesets = {"prefilter": current_version(), "score": current_version(), "enrich": current_version_v2()}
     return {
         stage: {
             "ruleset_version": rulesets[stage],
+            # What we asked for. It is a class constant, so it stays byte-identical when ARK
+            # rotates the model underneath -- `deepseek-v4-flash` was served by
+            # `deepseek-v4-flash-ga-260731`, and the `-ga-<date>` suffix is the rotating part.
             "model_id": getattr(providers[stage], "model_id", None),
+            # What answered. This is what a comparability gate has to read.
+            "served_models": served_models(rows or [], stage),
             "provider_class": type(providers[stage]).__name__,
             "prompt_file": _PROMPT_FILES[stage],
             "prompt_sha256": sha256_file(root / _PROMPT_FILES[stage]),
@@ -227,7 +244,7 @@ def run_stages(
         "stop_reasons": stop_reasons,
         "stage_summary": stage_summary,
         "identity": {
-            "stages": stage_identity(providers),
+            "stages": stage_identity(providers, rows),
             "git": git_identity(),
             "model_selection_env": model_selection_env(),
             "credentials": credentials,

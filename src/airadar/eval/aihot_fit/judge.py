@@ -281,9 +281,19 @@ def run_judge(
     if judgments_path.exists():
         for previous in read_jsonl(judgments_path):
             merged[(str(previous["question_id"]), str(previous["dimension"]))] = previous
-    replaced = sum(1 for row in judgments if (str(row["question_id"]), str(row["dimension"])) in merged)
+    # A task whose stop event fires mid-flight returns closeness=None, so an unconditional
+    # merge lets a quota-interrupted rerun blank the very readings the merge was added to
+    # protect. Keep the scored row unless the new one is scored too.
+    replaced = 0
+    discarded_blank = 0
     for row in judgments:
-        merged[(str(row["question_id"]), str(row["dimension"]))] = row
+        key = (str(row["question_id"]), str(row["dimension"]))
+        previous = merged.get(key)
+        if previous is not None and previous.get("closeness") is not None and row.get("closeness") is None:
+            discarded_blank += 1
+            continue
+        replaced += previous is not None
+        merged[key] = row
     write_jsonl(judgments_path, [merged[key] for key in sorted(merged)])
 
     judge_json = {
@@ -302,6 +312,7 @@ def run_judge(
         "errors": sum(1 for row in judgments if row.get("error")),
         "judgments_total_on_disk": len(merged),
         "judgments_replaced_this_call": replaced,
+        "judgments_blank_discarded_this_call": discarded_blank,
         "skipped": skipped,
         "stopped_early": judge.stop.is_set(),
         "stop_reasons": judge.stop_reasons,

@@ -77,6 +77,19 @@ AI Radar 的内容链有三个 LLM 驱动对象（prefilter、score、enrich v2 
 - **M12 · 重跑 `judge` 会覆盖 `judgments.jsonl`**，早停或 `--limit` 会静默销毁已付费的读数。改为按 `(question_id, dimension)` 合并，并记 `judgments_total_on_disk` / `judgments_replaced_this_call`。
 - 报告的 n 列现在显示正例数（`20（正例 1）`）——AUC / P@k 依赖的是正例数而非 n，而 n 列读起来像它有 20 个支撑。
 
+### 修复复核轮（同一 reviewer，只答「修复是否成立 / 有无新问题 / 有无应升档者」三问）
+
+H1 / H2 修复经独立复核成立：新增的 51 条不匹配**逐条核实全部是原本的错匹配**（反向 0 条），且「两侧 query 参数集合不同导致新漏配」这一风险在当前数据里为 0 条。复核另揭示一条范围事实：AIHOT 的 52 篇微信记录里只有 1 篇在我站 `items` 中（我站库内微信文章 257 篇），即**本评测对微信内容线的真实覆盖是 1 题**——修复没有制造这个缺口，只是把它从"52 篇假匹配"还原成"1 篇真覆盖"。
+
+复核报回 4 条由修复本身引入的新问题，全部已修（三条共同结构：**我的修复把原本只影响展示的缺陷提拔成了判决依据**）：
+
+- `improved` 在任一侧 CI 缺失时落到 `False`，使 +0.38 的改善、-0.37 的回归与真正无变化取同一个值——而 M1 的 fail-closed 恰好让 CI 缺失从罕见变成常态（RUN1 十个指标里 4 个有值无 CI）。改为三态。
+- 零宽 CI 成了判决输入：`ai_recall` 20/20 bootstrap 出 `[1.0, 1.0]`，与基线 18/20 的 `[0.75, 0.98]` 判为不重叠、报 `improved: True`，而正确的 Wilson 区间 `[0.84, 1.0]` 是重叠的。改为零宽区间不作证据。这条把原 M2 从展示层瑕疵升档为结构性问题。
+- judgments 合并是**无条件覆盖**，而判官任务在 stop 飞行中置位时返回 `closeness=None`——一次配额中断的重跑会把三条真实读数全部抹成 None，且 `judgments_total_on_disk` 仍显示 3、读起来毫发无伤。M12 要防的那件事换了条路又发生。改为只在新行有分数时才覆盖，并记 `judgments_blank_discarded_this_call`。
+- `stage_identity_diff` 成了"流水线没变"的唯一凭据，而它读的 `model_id` 是类常量（原 M4，升档）。改为同时记 `served_models`，取自各响应的 `raw.model`。
+
+四条修复各自跑了双向验证；`improved` 那条另跑阴性对照确认真实不重叠仍报 `True`，闸没有被焊死。此后按「修复轮预算」收口（该轮 4 条新 finding 中 3 条可追到本方上一轮修复，过半即停），残留项记入 issues。
+
 未修的 17 条按用户常设指令（最低充分方案、按实际问题加码）记账不修，逐条带失败场景落在 [docs/issues/aihot-fit-eval.md](../issues/aihot-fit-eval.md)。其中对定达标线影响最大的一条是 ISSUE-FIT-01：**77.4% 的 AIHOT 参考摘要是 1–2 句，而我站 schema 强制 3–5 句**，判官又把编辑风格算作三分之一权重，故 `summary_closeness_mean` 含一个 prompt 层动不了的固定折扣。
 
 ## Scope and Unverified Items
