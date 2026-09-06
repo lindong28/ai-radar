@@ -52,3 +52,20 @@ def test_a_core_dimension_is_required_even_at_zero_weight() -> None:
         weighted_score({"relevance": 4.0, "density": 8.0}, weights, "T1.5")
     full = {"relevance": 4.0, "density": 8.0, "recency": 0.0, "authority": 0.0, "engineering": 0.0}
     assert weighted_score(full, weights, "T1.5") == pytest.approx(6.0)
+
+
+def test_a_row_carrying_none_of_the_weighted_signals_raises_rather_than_scoring_zero() -> None:
+    """Reachable, and the wrong answer here is silent rather than loud.
+
+    A vector whose only positive weight sits on a later dimension meets every core requirement
+    above -- those five are present, they just carry no weight -- and then has nothing left to
+    rescale over. Returning 0.0 would rank the row last on a ranking it was never scored on,
+    which reads exactly like a genuinely bad item.
+    """
+    only_later = Weights(relevance=0.0, density=0.0, recency=0.0, authority=0.0, engineering=0.0, significance=1.0)
+    core_only = {"relevance": 6.0, "density": 6.0, "recency": 6.0, "authority": 6.0, "engineering": 6.0}
+
+    with pytest.raises(ValueError, match="no weighted dimension"):
+        weighted_score(core_only, only_later, "T1.5")
+
+    assert weighted_score({**core_only, "significance": 6.0}, only_later, "T1.5") == pytest.approx(6.0)
