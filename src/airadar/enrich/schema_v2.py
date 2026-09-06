@@ -26,12 +26,16 @@ class EnrichOutputV2(BaseModel):
 
     @field_validator("summary_zh")
     @classmethod
-    def summary_must_have_three_to_five_sentences(cls, value: str) -> str:
+    def summary_must_be_one_to_five_sentences(cls, value: str) -> str:
+        # AIHOT writes 1-2 sentences for 74% of items, median 131 characters; the old floor of
+        # three forced padding on exactly the thin sources where there is nothing to add, and
+        # the padding was usually an explanation of why the source is thin. Widening the window
+        # is read-safe: every stored 3-5 sentence summary still validates.
         terminal_sentences = _SENTENCE_RE.findall(value)
         trailing = _SENTENCE_RE.sub("", value).strip()
         sentence_count = len(terminal_sentences)
-        if trailing or not 3 <= sentence_count <= 5:
-            raise ValueError("summary_zh must contain 3 to 5 sentences")
+        if trailing or not 1 <= sentence_count <= 5:
+            raise ValueError("summary_zh must contain 1 to 5 sentences")
         return value
 
     @field_validator("why_recommend")
