@@ -29,6 +29,28 @@ DEFAULT_WORKERS = 8
 DEFAULT_EVALSET_DIR = db.PROJECT_ROOT / "data" / "eval-fit" / "evalset-staging" / "aihot-fit-v1"
 DEFAULT_RUNS_DIR = db.PROJECT_ROOT / "data" / "eval-fit" / "runs"
 
+EVAL_USAGE_DB = DEFAULT_RUNS_DIR.parent / "llm-usage-eval.db"
+EVAL_BREAKER_STATE = DEFAULT_RUNS_DIR.parent / "ark-breaker-eval.json"
+
+
+def isolate_side_effects() -> dict[str, str]:
+    """Point the production usage ledger and ARK breaker at eval-local files.
+
+    An eval run drives the production entrypoints, so it writes `llm_usage` rows under the
+    production stage names -- 970 of them for three small runs, 23.9% of that day's table and
+    indistinguishable from real traffic in cost reports. The same path lets a 429 from a large
+    eval run trip `data/ark-breaker.json`, which pushes *production* onto the pay-per-token
+    DeepSeek endpoint for two hours. Both modules resolve their file from an environment
+    variable, so redirecting those is enough and no production code changes.
+
+    Returns the paths in effect, for the run identity record.
+    """
+    os.environ["AI_RADAR_LLM_USAGE_DB"] = str(EVAL_USAGE_DB)
+    os.environ["AI_RADAR_ARK_BREAKER_STATE"] = str(EVAL_BREAKER_STATE)
+    EVAL_USAGE_DB.parent.mkdir(parents=True, exist_ok=True)
+    return {"llm_usage_db": str(EVAL_USAGE_DB), "ark_breaker_state": str(EVAL_BREAKER_STATE)}
+
+
 # Single owner of the AIHOT category slug -> PrimaryCategory mapping used by the
 # evalset. Values match ``airadar.enrich.classification.PrimaryCategory``.
 CATEGORY_SLUG_TO_PRIMARY: dict[str, str] = {

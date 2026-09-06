@@ -25,6 +25,7 @@ from .common import (
     git_identity,
     has_reference,
     is_stop_signal,
+    isolate_side_effects,
     load_questions,
     model_selection_env,
     redact,
@@ -145,6 +146,7 @@ def run_stages(
     if require_reference is not None and require_reference not in REFERENCE_FIELD:
         raise ValueError(f"unknown reference dimension: {require_reference}")
     credentials = require_ark_only()
+    side_effects = isolate_side_effects()
     questions_sha256 = sha256_file(questions_path)
     pool = load_questions(questions_path)
     pool_total = len(pool)
@@ -248,6 +250,7 @@ def run_stages(
             "git": git_identity(),
             "model_selection_env": model_selection_env(),
             "credentials": credentials,
+            "side_effects": side_effects,
             "weights": DEFAULT_WEIGHTS.as_dict(),
         },
     }

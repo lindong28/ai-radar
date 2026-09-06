@@ -17,6 +17,7 @@ from .common import (
     JUDGE_SCHEMA_VERSION,
     REFERENCE_FIELD,
     is_stop_signal,
+    isolate_side_effects,
     load_questions,
     read_json,
     read_jsonl,
@@ -223,6 +224,7 @@ def run_judge(
     workers: int = DEFAULT_WORKERS,
 ) -> dict[str, Any]:
     credentials = require_ark_only()
+    side_effects = isolate_side_effects()
     # Pin the ARK model for this process so a global AI_RADAR_ARK_DEEPSEEK_MODEL cannot swap the judge.
     os.environ[_JUDGE_ARK_MODEL_ENV] = model
     questions = {str(question["question_id"]): question for question in load_questions(questions_path)}
@@ -305,6 +307,7 @@ def run_judge(
         "limit": limit,
         "workers": workers,
         "credentials": credentials,
+        "side_effects": side_effects,
         "judged": {
             dimension: sum(1 for row in judgments if row["dimension"] == dimension and row.get("closeness") is not None)
             for dimension in DIMENSIONS
