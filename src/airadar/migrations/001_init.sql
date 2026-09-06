@@ -1,6 +1,9 @@
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
-PRAGMA busy_timeout=5000;
+-- busy_timeout is deliberately not set here. It is a per-connection runtime setting, this
+-- script re-runs on every CLI invocation, and the value it used to hardcode silently
+-- overrode whatever get_conn had chosen -- which made a long batch job's raised timeout
+-- take effect for exactly one statement and then vanish.
 
 CREATE TABLE IF NOT EXISTS sources (
   id TEXT PRIMARY KEY,

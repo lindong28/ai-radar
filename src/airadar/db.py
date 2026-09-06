@@ -394,4 +394,9 @@ def rebuild_fts(path: str | Path) -> None:
 def migrate(path: str | Path | None = None) -> None:
     with get_conn(path) as conn:
         _apply_pending_migrations(conn)
+        # Re-asserted because a migration script can change it and one did: 001_init carried
+        # `PRAGMA busy_timeout=5000` for a long time, so every caller's setting survived only
+        # until the first migration statement ran. The symptom was a raised timeout that had no
+        # effect, with nothing logged and the pragma reading correctly right up until it did not.
+        conn.execute(f"PRAGMA busy_timeout={_busy_timeout_ms()}")
         conn.commit()

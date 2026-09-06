@@ -29,3 +29,30 @@ def test_the_pragma_actually_carries_the_value(monkeypatch: pytest.MonkeyPatch, 
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 45000
     finally:
         conn.close()
+
+
+def test_the_timeout_survives_running_the_migrations(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Migrations must not quietly reset it.
+
+    001_init.sql set `PRAGMA busy_timeout=5000` and re-runs on every CLI invocation, so a batch
+    job that raised the timeout got it for one statement and then lost it. The pragma read back
+    correctly before the migrations and wrongly after, which is why nothing caught it: every
+    check anyone would think to write happens on a fresh connection.
+    """
+    monkeypatch.setenv("AI_RADAR_SQLITE_BUSY_TIMEOUT_MS", "90000")
+    db_path = tmp_path / "radar.db"
+    db.migrate(db_path)
+    conn = db.get_conn(db_path)
+    try:
+        # Run the migrations and read the pragma back WITHOUT re-asserting it. Re-asserting here
+        # first -- which the first draft of this test did -- makes it pass whether or not a
+        # migration reset anything, because the assertion then only checks the line above it.
+        db._apply_pending_migrations(conn)
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 90000
+    finally:
+        conn.close()
+
+    # And migrate() leaves a caller's connection with the value it asked for.
+    with db.get_conn(db_path) as after:
+        db.migrate(db_path)
+        assert after.execute("PRAGMA busy_timeout").fetchone()[0] == 90000
