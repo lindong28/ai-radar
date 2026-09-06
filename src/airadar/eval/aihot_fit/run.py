@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 import statistics
 import threading
@@ -83,6 +84,39 @@ def served_models(rows: list[dict[str, Any]], stage: str) -> list[str]:
     return sorted(names)
 
 
+# Modules whose contents change stage behaviour without changing the prompt module's own bytes.
+# prompt_sha256 hashes only the prompt module, so a change here is otherwise invisible: editing
+# the tag vocabulary altered what the model was asked and left every identity field identical.
+_STAGE_BEHAVIOUR_FILES: dict[str, tuple[str, ...]] = {
+    "enrich": (
+        "src/airadar/enrich/normalizers/production_enrich_provider_output_v2.py",
+        "src/airadar/enrich/classification.py",
+    ),
+}
+
+
+def _rendered_inputs_sha256(stage: str) -> str | None:
+    """Digest of what the prompt renders from outside its own module, plus those modules.
+
+    enrich's prompt renders two constants that live elsewhere -- the tag vocabulary from the
+    normalizer and the category list from classification.py -- and the normalizer also decides
+    what survives validation. Hashing the rendered values catches vocabulary edits; hashing the
+    files catches behaviour edits that leave the rendered values alone.
+    """
+    files = _STAGE_BEHAVIOUR_FILES.get(stage)
+    if not files:
+        return None
+    from ...enrich.classification import PRIMARY_CATEGORIES
+    from ...enrich.normalizers.production_enrich_provider_output_v2 import CONTROLLED_VOCABULARY_V2
+
+    digest = hashlib.sha256()
+    digest.update("\u0000".join(CONTROLLED_VOCABULARY_V2).encode("utf-8"))
+    digest.update("\u0000".join(PRIMARY_CATEGORIES).encode("utf-8"))
+    for relative in files:
+        digest.update(sha256_file(db.PROJECT_ROOT / relative).encode("utf-8"))
+    return digest.hexdigest()
+
+
 def stage_identity(providers: dict[str, Any], rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     root = db.PROJECT_ROOT
     rulesets = {"prefilter": current_version(), "score": current_version(), "enrich": current_version_v2()}
@@ -93,6 +127,11 @@ def stage_identity(providers: dict[str, Any], rows: list[dict[str, Any]] | None 
             # rotates the model underneath -- `deepseek-v4-flash` was served by
             # `deepseek-v4-flash-ga-260731`, and the `-ga-<date>` suffix is the rotating part.
             "model_id": getattr(providers[stage], "model_id", None),
+            # prompt_sha256 covers the prompt module, and enrich's prompt renders a vocabulary
+            # that lives in the normalizer -- so editing the vocabulary changed what the model
+            # was actually asked while leaving every identity field byte-identical, and a
+            # comparison across that edit reported no pipeline difference at all.
+            "rendered_inputs_sha256": _rendered_inputs_sha256(stage),
             # What answered. This is what a comparability gate has to read.
             "served_models": served_models(rows or [], stage),
             "provider_class": type(providers[stage]).__name__,

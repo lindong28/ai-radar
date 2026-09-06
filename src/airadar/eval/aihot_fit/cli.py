@@ -156,6 +156,9 @@ def run_eval_fit(args: argparse.Namespace) -> int:
             regressed = [n for n, d in comparison["metrics"].items() if d.get("regressed") is True]
             improved = [n for n, d in comparison["metrics"].items() if d.get("improved") is True]
             print(f"vs baseline: improved={','.join(improved) or 'none'} regressed={','.join(regressed) or 'none'}")
+            drifted = comparison.get("stage_identity_diff") or {}
+            if drifted:
+                print(f"WARNING: pipeline identity differs from the baseline on {','.join(sorted(drifted))}")
         elif comparison:
             print(f"vs baseline: NOT COMPARABLE ({comparison.get('reason')})")
         verdicts = payload.get("threshold_verdicts") or {}

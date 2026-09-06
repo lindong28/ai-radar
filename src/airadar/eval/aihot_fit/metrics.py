@@ -516,11 +516,23 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
             "current": current.get("stopped_early"),
             "baseline": baseline.get("stopped_early"),
         }
-    stage_diff = {
-        stage: {"current": current_identity, "baseline": (baseline.get("stages") or {}).get(stage)}
-        for stage, current_identity in (current.get("stages") or {}).items()
-        if (baseline.get("stages") or {}).get(stage) != current_identity
-    }
+    # Report only fields both sides carry. A baseline written before a field existed differs from
+    # every current run on that field alone, which marked all three stages as changed and left the
+    # one that really changed indistinguishable from the two that did not.
+    stage_diff: dict[str, Any] = {}
+    for stage, current_identity in (current.get("stages") or {}).items():
+        baseline_identity = (baseline.get("stages") or {}).get(stage) or {}
+        if not isinstance(current_identity, dict):
+            continue
+        shared = [
+            key
+            for key in current_identity
+            if key in baseline_identity and current_identity[key] != baseline_identity[key]
+        ]
+        if shared:
+            stage_diff[stage] = {
+                key: {"current": current_identity[key], "baseline": baseline_identity[key]} for key in shared
+            }
     current_judge = _judge_identity_of(current.get("judge"))
     baseline_judge = _judge_identity_of(baseline.get("judge"))
     if current_judge and baseline_judge and current_judge != baseline_judge:
@@ -833,6 +845,15 @@ def render_report(
         else:
             lines += [
                 f"- 基线 run: `{comparison.get('baseline_run_id')}`",
+                (
+                    "- **流水线身份与基线不同**: "
+                    + "; ".join(
+                        f"{stage} {', '.join(fields)}" for stage, fields in comparison["stage_identity_diff"].items()
+                    )
+                    + "（差异可能来自流水线本身，而不是被评测对象的表现）"
+                )
+                if comparison.get("stage_identity_diff")
+                else "- 流水线身份与基线一致",
                 "",
                 "| 指标 | delta | 改善 | 回归 |",
                 "|---|---|---|---|",

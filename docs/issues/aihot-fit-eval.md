@@ -194,6 +194,18 @@ evalset 里 2667 条 AIHOT 参考摘要，用我站自己的 `EnrichOutputV2.sum
 
 **闭合方向**：`as_completed` 循环里增量追加到 `outputs.jsonl`（每题一行，本就是 JSONL），run.json 在最后写；重跑时读已有 outputs 跳过已完成的 question_id。与 ISSUE-FIT-12 的 judgments 合并逻辑同构（那一半已在 `c8306ea` 做了）。
 
+### ISSUE-FIT-15 · prompt 身份锚只哈希 prompt 模块，渲染进去的常量改了它也不变
+
+**状态**：**resolved 2026-09-06**（发现当轮即修）
+
+**怎么发现的**：2026-09-06 改 `CONTROLLED_VOCABULARY_V2`（词表被 `prompts_v2.py` 渲染进 prompt）后跑对比，`stage_identity_diff` 报 `{}`——**一次真实的 prompt 内容改变，对身份块完全不可见**。`prompt_sha256` 哈希的是 `src/airadar/enrich/prompts_v2.py` 这个文件，而词表常量住在 normalizer 模块里。
+
+**为什么重要**：它与 ISSUE-FIT-05（`model_id` 记的是请求的而非实际服务的）是同一形态——**身份锚指向代理物而非真正决定行为的东西**，后果是两次流水线不同的 run 被判"完全相同"，差异被归因到别处。且它比 FIT-05 更隐蔽：那一条至少在 `outputs.jsonl` 的 `raw.model` 里留着真值，这一条在整个 run 目录里没有任何痕迹。
+
+**修复**：`stage_identity` 增 `rendered_inputs_sha256`，enrich 段取受控词表的摘要。验证：改动前后哈希分别为 `6da95d66…` / `33f2dbcf…`，新锚报得出这次改动。
+
+**未覆盖**：只处理了 enrich 的词表这一个已知实例。其它 stage 的 prompt 若也渲染外部常量，同样的洞仍在——目前 `_rendered_inputs_sha256` 对 prefilter / score 返回 `None`，没有核查过它们的 prompt 是否也有渲染项。
+
 ## 未被 review 覆盖的面
 
 reviewer 按指令未发任何 LLM 请求，故 ISSUE-FIT-01 / FIT-02 是从 prompt 文本与数据分布推出的**结构性**结论，不是实测的判官偏移量；`run_judge` / `run_stages` 的端到端行为未由 reviewer 实测（由作者在 spec §7 跑通）。enrich 的解码噪声量级（`AI_RADAR_ENRICH_TEMPERATURE=0.2`）未测，因此不知它相对 bootstrap CI 宽度有多大。
