@@ -62,6 +62,12 @@ class Metric:
     direction: str = HIGHER
     baseline: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    # Per-question values for metrics that are a mean over items. Two runs share a subset by
+    # construction, so a comparison can pair them and cancel the largest variance source --
+    # how hard each question is. Without it the report compares two independent intervals and
+    # calls a real move noise: reason closeness rose 0.372 to 0.460 and read as not improved,
+    # while the paired test on the same rows gave p=0.0005.
+    per_question: dict[str, float] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +76,7 @@ class Metric:
             "ci95": list(self.ci95) if self.ci95 else None,
             "direction": self.direction,
             "baseline": self.baseline,
+            **({"per_question": self.per_question} if self.per_question else {}),
             **self.extra,
         }
 
@@ -145,16 +152,33 @@ def _mean(values: Sequence[float]) -> float | None:
     return round(statistics.fmean(values), 4) if values else None
 
 
-def _mean_metric(name: str, values: Sequence[float], **extra: Any) -> Metric:
-    return Metric(name=name, n=len(values), value=_mean(values), ci95=bootstrap_ci(values, _mean), extra=extra)
+def _mean_metric(
+    name: str,
+    values: Sequence[float],
+    *,
+    keys: Sequence[str] | None = None,
+    **extra: Any,
+) -> Metric:
+    return Metric(
+        name=name,
+        n=len(values),
+        value=_mean(values),
+        ci95=bootstrap_ci(values, _mean),
+        extra=extra,
+        per_question=dict(zip(keys, values, strict=True)) if keys is not None else None,
+    )
 
 
 # --- prefilter ---------------------------------------------------------------
 
 
 def ai_recall(rows: Sequence[Joined]) -> Metric:
-    values = [1.0 if row.prefilter.get("is_ai_related") else 0.0 for row in rows if row.prefilter is not None]
-    metric = _mean_metric("ai_recall", values)
+    scored = [
+        (row.question_id, 1.0 if row.prefilter.get("is_ai_related") else 0.0)
+        for row in rows
+        if row.prefilter is not None
+    ]
+    metric = _mean_metric("ai_recall", [v for _, v in scored], keys=[k for k, _ in scored])
     metric.baseline = {
         "kind": "none",
         "note": "all questions come from AIHOT and are treated as positives; no negatives",
@@ -177,8 +201,13 @@ def category_pairs(rows: Sequence[Joined]) -> list[tuple[str, str]]:
 
 def category_agreement(rows: Sequence[Joined]) -> Metric:
     pairs = category_pairs(rows)
+    keyed = [
+        (row.question_id, row.reference.get("primary_category"), (row.enrich or {}).get("primary_category"))
+        for row in rows
+    ]
+    keyed = [(k, e, p) for k, e, p in keyed if e in PRIMARY_CATEGORIES and p in PRIMARY_CATEGORIES]
     values = [1.0 if expected == predicted else 0.0 for expected, predicted in pairs]
-    metric = _mean_metric("category_agreement", values)
+    metric = _mean_metric("category_agreement", values, keys=[k for k, _, _ in keyed])
     majority = Counter(expected for expected, _ in pairs).most_common(1)
     metric.baseline = {
         "kind": "majority_class",
@@ -410,8 +439,9 @@ def selected_p_at_k(rows: Sequence[Joined]) -> Metric:
 
 
 def closeness_mean(rows: Sequence[Joined], dimension: str) -> Metric:
-    values = [row.judgments[dimension] / 100.0 for row in rows if dimension in row.judgments]
-    metric = _mean_metric(f"{dimension}_closeness_mean", values)
+    scored = [(row, row.judgments[dimension] / 100.0) for row in rows if dimension in row.judgments]
+    values = [value for _, value in scored]
+    metric = _mean_metric(f"{dimension}_closeness_mean", values, keys=[row.question_id for row, _ in scored])
     metric.baseline = {
         "kind": "judge_calibration",
         "note": "see judge-calibration.json positive / negative control means",
@@ -491,6 +521,27 @@ def _judge_identity_of(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     return {"model": payload.get("model"), "prompt_sha256": payload.get("prompt_sha256")}
 
 
+def _paired_verdict(current: Any, baseline: Any) -> dict[str, Any] | None:
+    """Bootstrap the per-question difference over the questions both runs answered."""
+    if not isinstance(current, dict) or not isinstance(baseline, dict):
+        return None
+    shared = sorted(set(current) & set(baseline))
+    if len(shared) < 20:
+        return None
+    diffs = [float(current[key]) - float(baseline[key]) for key in shared]
+    ci = bootstrap_ci(diffs, lambda xs: statistics.fmean(xs) if xs else None)
+    if ci is None:
+        return None
+    return {
+        "paired_n": len(shared),
+        "paired_delta": round(statistics.fmean(diffs), 4),
+        "paired_ci95": list(ci),
+        "improved": ci[0] > 0,
+        "regressed": ci[1] < 0,
+        "verdict_rule": "paired per-question bootstrap; improved when the 95% CI of the difference clears zero",
+    }
+
+
 def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
     if current.get("questions_sha256") != baseline.get("questions_sha256"):
         return {
@@ -552,6 +603,22 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
         # baseline's point estimate ignores the baseline's own uncertainty; measured
         # on two runs drawn from the same distribution it fired 9% of the time for a
         # nominal 2.5% test, i.e. roughly 1 in 11 no-op changes read as "improved".
+        # Paired first when both runs carry per-question values. They measured the same questions,
+        # so pairing removes question difficulty from the variance and answers what is actually
+        # being asked -- did this change help on the items it saw -- rather than whether two
+        # independent intervals clear each other. Reason closeness moved 0.372 to 0.460 and the
+        # unpaired rule called it no change, while the paired test on the same rows gave p=0.0005.
+        paired = _paired_verdict(metric.get("per_question"), other.get("per_question"))
+        if paired is not None:
+            deltas[name] = {
+                "delta": round(metric["value"] - other["value"], 4),
+                **paired,
+                "baseline_value": other["value"],
+                "baseline_n": other.get("n"),
+                "n": metric.get("n"),
+            }
+            continue
+
         current_ci = metric.get("ci95")
         other_ci = other.get("ci95")
         # None, not False: without both intervals there is no verdict, and False would read
