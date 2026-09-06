@@ -160,7 +160,11 @@ def run_eval_fit(args: argparse.Namespace) -> int:
             print(f"vs baseline: NOT COMPARABLE ({comparison.get('reason')})")
         verdicts = payload.get("threshold_verdicts") or {}
         blocked = [name for name, v in verdicts.items() if v.get("confident") is False]
-        unknown = [name for name, v in verdicts.items() if v.get("confident") is None]
+        unknown = [
+            name
+            for name, v in verdicts.items()
+            if v.get("confident") is None and "subset" not in (v.get("reason") or "")
+        ]
         if verdicts:
             print(f"thresholds: below={','.join(blocked) or 'none'} undetermined={','.join(unknown) or 'none'}")
         if payload.get("stopped_early"):

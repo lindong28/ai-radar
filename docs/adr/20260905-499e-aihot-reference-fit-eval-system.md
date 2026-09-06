@@ -133,6 +133,75 @@ H1 / H2 修复经独立复核成立：新增的 51 条不匹配**逐条核实全
 
 未修的 17 条按用户常设指令（最低充分方案、按实际问题加码）记账不修，逐条带失败场景落在 [docs/issues/aihot-fit-eval.md](../issues/aihot-fit-eval.md)。其中对定达标线影响最大的一条是 ISSUE-FIT-01：**77.4% 的 AIHOT 参考摘要是 1–2 句，而我站 schema 强制 3–5 句**，判官又把编辑风格算作三分之一权重，故 `summary_closeness_mean` 含一个 prompt 层动不了的固定折扣。
 
+## 全量基线与达标线（2026-09-06，题集 `dbe074ed…`）
+
+`FULL-20260906`：2741 题、53 分钟、无早停。prefilter / score 各 2741 全部成功；**enrich 204 条结构性拒绝（7.4%）**，其中 117 条是标签越出受控词表、越界的几乎全是品牌名（NVIDIA 53、腾讯 10、小米 7、Amazon 7…）——本仓 [ADR-001](./001-deterministic-source-brand-tags.md) 的决策是品牌标签由确定性层加，模型在抢那一层的活并因此整条产出被拒，落 [issues/general.md](../issues/general.md)。判官两维度校准 `scale_ok=True`。
+
+| 指标 | 全量点估计 | 95% CI | n |
+|---|---|---|---|
+| ai_recall | 0.9179 | [0.9070, 0.9274] | 2741 |
+| category_agreement | 0.5104 | [0.4907, 0.5302] | 2537 |
+| tag_jaccard_mean | 0.4641 | [0.4426, 0.4861] | 548 |
+| score_spearman | 0.4281 | [0.3918, 0.4576] | 2741 |
+| **selected_auc** | **0.7731** | [0.7178, 0.8193] | 78 正例 |
+| selected_p_at_k | 0.2821 | [0.2308, 0.3467] | 11 日桶 |
+| summary_closeness_mean | 0.5446 | [0.5356, 0.5534] | 2476 |
+| reason_closeness_mean | 0.3719 | [0.3267, 0.4205] | 73 |
+
+`selected_auc = 0.773` 是本轮唯一被小样本严重误导过的指标：n=20 的两次分别给出 0.947 与 0.58，各自只有 1 个正例，两个都不可用。`selected_p_at_k = 0.282` 与旧 T5 的历史读数（33.3% / 14.3% / 43.8% / 合并 27.0%）同量级。
+
+**达标线已写入** `evalsets/aihot-fit-v1/thresholds.json`，8 条设闸、2 条明确不设：
+
+| 指标 | 适用配置 | 下限 | 可检出的最小回归 |
+|---|---|---|---|
+| ai_recall | ITER-300-seed7 | 0.8645 | 0.053 |
+| category_agreement | ITER-300-seed7 | 0.3907 | 0.120 |
+| tag_jaccard_mean | ITER-300-seed7 | 0.3295 | 0.135 |
+| score_spearman | ITER-300-seed7 | 0.2181 | 0.210 |
+| summary_closeness_mean | ITER-300-seed7 | 0.4922 | 0.052 |
+| summary_bigram_jaccard | ITER-300-seed7 | 0.1893 | 0.032 |
+| reason_closeness_mean | ITER-REASON-78 | 0.2781 | 0.094 |
+| reason_bigram_jaccard | ITER-REASON-78 | 0.0376 | 0.019 |
+
+**`selected_auc` 与 `selected_p_at_k` 不设闸**：`selected` 只占 2.8%，300 题子集里约 9 个正例，按同一规则推出的下限分别是 0.4224（**低于 0.5 的随机排序基线——随机评分器都能过**）与负数（低于该指标取值下界）。**下限低于随机基线或取值下界的闸永远不会开火，摆在那里只会让读者以为这一维被覆盖了。** 这两条只在全量 run 上判。
+
+每条下限绑定它所适用的 `subset_sha256`，`report` 只对匹配的 run 施加——不绑的话，300 题的 run 会被理由维度的下限误判、78 题的 run 会被摘要维度的下限误判，两者实跑都发生过。
+
+双向验证：三个配置（ITER-300 / ITER-REASON-78 / FULL）对真实基线均 `below=none undetermined=none` 且 exit 0；把 ITER-300 的 75 条分类劣化后，`category_agreement` 掉到 0.2606 [0.2113, 0.3134]，闸点名该指标并 exit 1。
+
+## 达标线怎么定：必须与它将被施加的样本量成对
+
+**一个会让达标线一上线就报废的陷阱**：闸判的是「区间下界是否 ≥ 下限」，而区间宽度随 √n 收缩。若下限取自全量 n=2741 的 CI 下界，再拿去要求一次 n=300 的迭代 run 去确认，那次 run 即使**毫无回归**也会被判低于下限。取 `category_agreement` 的点估计 0.486 算一遍（正态近似，下同）：
+
+| n | 95% 半宽 | CI 下界 |
+|---|---|---|
+| 144 | 0.0816 | 0.4044 |
+| 300 | 0.0566 | 0.4294 |
+| 1000 | 0.0310 | 0.4550 |
+| 2741 | 0.0187 | **0.4673** |
+
+下限取 0.4673 时，一次真值仍为 0.486 的 n=300 迭代其下界是 0.4294，低于下限 → 闸开火。这不是闸坏了，是**把在一个样本量上确认的下界，拿去要求另一个样本量确认**。
+
+**因此本 ADR 的达标线规则**：下限取**迭代规模**（n=300，`--seed 7`）基线的 CI 下界，而非全量的；全量读数作为权威点估计另行记录。这样一次无回归的迭代按构造约 95% 放行，而真实回归会把整个区间压到下限之下。`thresholds.json` 每条的 `basis` 字段写明它取自哪个 run 与哪个样本量——**推导规则写进文件，不手抄数字**（本轮已因手抄基线出过一次转录错误）。
+
+迭代规模的读数不必另跑：全量 run 覆盖全部 2741 题，`--limit 300 --seed 7` 的子集是它的真子集，逐题产物与判分都能从中取出重算，零额外调用。
+
+## 怎么用它迭代（可比性闸带来的使用约束）
+
+可比性闸要求两次 run 的 `subset_sha256` 相同，所以**不能随便换抽样再去比**。抽样是确定性的——`sample_questions` 先按 `question_id` 排序再用 `random.Random(seed).sample`，实测同 `--limit/--seed` 两次给出同一子集、换 seed 给出不同子集——因此固定这两个参数就能既便宜又可比。
+
+改完 prompt 想知道有没有改善，跑这三条（与本 ADR 记录的基线同参数即可直接 `--baseline` 比较）：
+
+| 用途 | 命令 | 规模 |
+|---|---|---|
+| 分类 / 标签 / 评分 / 摘要 | `eval-fit run --limit 300 --seed 7` | 900 次 stage 调用，约 6 分钟 |
+| 推荐理由 | `eval-fit run --limit 78 --seed 7 --require-reference reason` | 参考理由的**完整总体**，234 次调用 |
+| 精选排序 | 只有全量 run 才有足够正例 | `selected` 占 2.8%，`--limit 300 --seed 7` 只含 9 个正例 |
+
+判官对每个 run 另跑 `judge --run <dir> --calibrate 20`；`report` 在 `threshold_verdicts` 里给逐指标判定，某指标区间确认低于下限时 `report` 以 exit 1 结束。
+
+**读 `tag_jaccard_mean` 要按可达上限归一**：我方 `normalize()` 追加 `deterministic_tags` 后截到 4，标签数均值 3.215 对参考侧 2.546，故即使预测完美，逐题 `min/max` 的期望上限也只有 **0.7475**（独立验算，见 [issues](../issues/aihot-fit-eval.md) ISSUE-FIT-03）。0.449 的实际达成度是 60% 而非 45%。
+
 ## Scope and Unverified Items
 
 - **两次 n=20 不支撑任何达标线**，也不支撑跨维度的强弱比较：多数指标 CI 宽度超过 0.4。`thresholds` 留 `null` 是本决策的一部分，不是待办遗漏。

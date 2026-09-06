@@ -578,7 +578,11 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
     }
 
 
-def evaluate_thresholds(metrics: dict[str, Any], thresholds: dict[str, Any] | None) -> dict[str, Any] | None:
+def evaluate_thresholds(
+    metrics: dict[str, Any],
+    thresholds: dict[str, Any] | None,
+    subset_sha256: str | None = None,
+) -> dict[str, Any] | None:
     """Score each metric against its configured floor.
 
     Two verdicts per metric because they answer different questions. ``value_meets`` asks
@@ -593,6 +597,21 @@ def evaluate_thresholds(metrics: dict[str, Any], thresholds: dict[str, Any] | No
         return None
     verdicts: dict[str, Any] = {}
     for name, floor in thresholds.items():
+        if name.startswith("_"):
+            continue
+        # A floor is only meaningful for the run configuration it was derived at, because the
+        # gate reads a CI lower bound and that bound moves with sqrt(n). Scoring a 300-question
+        # run against a floor derived from the 78-question reason population -- or the reverse --
+        # fires on runs that have not regressed at all. subset_sha256 pins the pairing exactly.
+        applies_to = floor.get("subset_sha256") if isinstance(floor, dict) else None
+        if applies_to is not None and applies_to != subset_sha256:
+            verdicts[name] = {
+                "min": floor.get("min"),
+                "value_meets": None,
+                "confident": None,
+                "reason": f"floor is for subset {applies_to[:12]}; this run is {(subset_sha256 or '')[:12]}",
+            }
+            continue
         minimum = floor.get("min") if isinstance(floor, dict) else floor
         metric = metrics.get(name)
         if metric is None or minimum is None or metric.get("value") is None:
@@ -671,7 +690,9 @@ def compute_metrics(
         "stopped_early": bool(run_meta.get("stopped_early")) or bool(judge_meta and judge_meta.get("stopped_early")),
         "thresholds": thresholds,
         "threshold_verdicts": evaluate_thresholds(
-            {name: metric.as_dict() for name, metric in metrics.items()}, thresholds
+            {name: metric.as_dict() for name, metric in metrics.items()},
+            thresholds,
+            sha256_text("\n".join(sorted(str(i) for i in (run_meta.get("item_ids") or [])))),
         ),
         "comparison": None,
     }

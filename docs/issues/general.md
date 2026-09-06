@@ -388,3 +388,12 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 - **为什么表现为「间歇」**：该 helper 只在走到 `listener_owned()` 那一步才调 `lsof`；deadline 已过或 pid 解析为 None 时提前返回、不触发。故同一缺陷时而命中时而不命中，掩盖了它是确定性的 PATH 缺失。这正是 user-scope CLAUDE.md「非交互 Shell 里执行命令」点名的形态：报错指向别处（这里是 `status command returned 1`），而真因是环境缺失；判据是**手动跑成功、cron 跑失败**。
 - **本次处置（2026-09-05）**：`pipeline.sh` 的 `export PATH` 插入 `/usr/sbin`（备份 `scratchpad/pipeline.sh.bak`），并在该行上方写明理由。cron 环境下复验 `status=healthy`。
 - **闭合方向（根上）**：`system-config:bin/agent-proxy-wait-launchd-listener` 应以绝对路径调 `lsof`（或在其 PATH 上补 `/usr/sbin`）——否则每个非交互调用方都要各自记得补，这已是第二次由 PATH 缺失伪装成别的故障（前一次见 `plans/20260816-mp2rss-replacement/state.md` ISSUE-008 的代理变量缺失）。另：连续四轮 egress preflight FAIL **零告警**，与本文件 Playwright、interpret 静默跳过两条同族。
+
+### enrich v2 把品牌名当标签输出、被受控词表拒收，7.4% 的条目因此完全没有 enrich 产物
+
+- **读数来源**：2026-09-06 首次全量 aihot-fit 评测跑（2741 题，`data/eval-fit/runs/FULL-20260906`），这是生产 enrich v2 在全量真实数据上的第一份失败率读数。此前小样本（n=20）每轮只见到 1–2 条，看不出结构。
+- **现象**：`enrich` 2537/2741 成功，**204 条（7.4%）结构性拒绝**。分布：`tags 越出受控词表` **117**、`tags must contain 2-4 provider-…` 55、`why_recommend` 超 90 字符 19、其它字段超长 9、其它 schema 校验失败 4。
+- **越界的几乎全是公司/品牌名**：NVIDIA 37 + Nvidia 16 = 53、腾讯 8 + 腾讯混元 2、小米 7、Amazon 7、Apple 5、AMD 4、阿里云 4、Perplexity 2；只有零星几个是真的主题词（自动驾驶 2、芯片 2）。
+- **为什么这是缺陷而不只是"标签差一点"**：[ADR-001](../adr/001-deterministic-source-brand-tags.md) 的决策就是**品牌标签由确定性层加**、不归模型。现在模型在抢那一层的活，产出被受控词表整条拒收——后果是这 117 条（占全量 **4.3%**）**根本没有 enrich 输出**：没有摘要、没有推荐理由、没有分类，不是标签质量差一点。
+- **重试开销**：`llm-usage-eval.db` 里 enrich 3054 次调用对 2537 次成功，即失败项各消耗两次调用，约 +11% 的 enrich 成本花在注定被拒的输出上。
+- **闭合方向（未验证，按发现顺序排）**：① 最便宜的一条是在 prompt 里明确"不要输出公司或产品品牌名作为标签，品牌由系统另行补充"——这正对着 117 条里的绝大多数；② 或让 normalizer 在校验前先剥掉词表外的品牌名而不是整条拒收（与 ADR-001 的确定性品牌层合流）；③ `why_recommend` 超长那 19 条与 `tags 数量不足` 那 55 条是另两个独立面。**任一改动的效果都可以用本评测体系直接量**：跑 `eval-fit run --limit 300 --seed 7` 后与基线比 `failures.enrich.errors` 与各 closeness 指标。
