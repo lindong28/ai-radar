@@ -562,9 +562,10 @@ Pipeline 各阶段使用的统一数据传输对象。从 `items` + `sources` �
 
 ### Weighted Score
 
-精选评分公式：`sum(dimension_score * weight) * tier_multiplier`。
+精选评分公式：`sum(dimension_score * weight)`，其中缺失的维度被剔除、其余权重按比例放大回原总和。
+tier 乘数已于 2026-09-06 取消（[ADR-20260906-7c31](adr/20260906-7c31-rank-on-weights-fitted-to-the-reference.md)），现由 `Weights.uses_tier_multiplier` 控制、默认关闭。
 
-默认权重：relevance=0.10, density=0.40, recency=0.30, authority=0.10, engineering=0.10。
+默认权重（拟合 AIHOT 的 0-100 分数得出）：density=0.50 → 实际为 relevance=0.0, density=0.40, recency=0.0, authority=0.10, engineering=0.0, significance=0.50。三个零权重维度各有其他环节承担：AI 相关性归 prefilter，新鲜度归精选的 48 小时窗口，engineering 在历次拟合中始终冗余。
 
 精选阈值默认 6.5，展示分数经过排名线性校准（62-92 分映射）。
 

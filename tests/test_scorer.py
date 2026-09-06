@@ -238,3 +238,31 @@ def test_run_scoring_records_out_of_range_errors(monkeypatch, tmp_path: Path) ->
     assert summary.errors == 1
     error = conn.execute("SELECT error FROM item_evaluations WHERE stage='scoring'").fetchone()[0]
     assert "schema validation failed" in error
+
+
+def test_a_second_run_skips_what_it_already_scored(tmp_path: Path) -> None:
+    conn = _db(tmp_path)
+
+    first = run_scoring(conn, provider=FakeScorer(), since="24h", ruleset_version="score.r1")
+    second = run_scoring(conn, provider=FakeScorer(), since="24h", ruleset_version="score.r1")
+
+    assert (first.processed, second.processed) == (1, 0)
+
+
+def test_force_rescores_what_the_version_alone_would_skip(tmp_path: Path) -> None:
+    """A prompt edit changes scoring without moving ruleset_version, and the skip clause matches
+    on that version -- so every already-scored item becomes unreachable and the archive can never
+    pick up the change. `--force` is the way back in; the case above is what it has to overcome.
+    """
+    conn = _db(tmp_path)
+    run_scoring(conn, provider=FakeScorer(), since="24h", ruleset_version="score.r1")
+
+    forced = run_scoring(conn, provider=FakeScorer(), since="24h", ruleset_version="score.r1", force=True)
+
+    assert forced.processed == 1
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM item_evaluations WHERE stage='scoring' AND ruleset_version='score.r1'"
+    ).fetchone()[0]
+    # A new evaluation row, not an overwrite: selection reads MAX(id) per item, so the newer one
+    # wins while the older one stays readable for comparison.
+    assert rows == 2

@@ -30,6 +30,10 @@ class ScoringResult:
     recency: float
     authority: float
     engineering: float
+    # Optional, not defaulted to 0.0: the heuristic provider has no notion of it, and a provider
+    # that never produced the signal must stay distinguishable from one that scored it zero --
+    # a weight fitted over a column silently filled with zeros is fitted on a fiction.
+    significance: float | None = None
     reasoning: str = ""
     topics: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict)

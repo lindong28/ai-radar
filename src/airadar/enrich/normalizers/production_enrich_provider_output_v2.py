@@ -178,19 +178,18 @@ def normalize(value: Mapping[str, object], *, item: ProviderItem) -> dict[str, A
             content_text=item.content_text,
         )
     ]
-    # The floor below counts the deterministic layer too, and that layer does not depend on the
-    # model at all -- keyword hits on title and body supply OpenAI/Anthropic, the URL host the
-    # rest. Measured over 5000 enriched items, 1.6% get two controlled tags from it alone, so a
-    # response whose every tag was out of vocabulary would still be accepted and its summary and
-    # reason kept. Require one surviving model tag: dropping a single offender was the point,
-    # not accepting a response that understood none of the vocabulary.
+    # Require one surviving MODEL tag specifically. The deterministic layer below does not depend
+    # on the model at all -- keyword hits on title and body supply OpenAI/Anthropic, the URL host
+    # the rest -- so without this check a response that understood none of the vocabulary would
+    # still be accepted on the strength of its source. Dropping a single offending tag was the
+    # point; accepting a response that got every tag wrong was not.
     if not mapped_tags:
         raise ValueError(f"no provider tag survived the controlled vocabulary: dropped {dropped}")
 
     merged = _unique([*mapped_tags, *(tag for tag in derived if tag in _VOCABULARY_SET)])
-    if len(merged) < 2:
+    if not merged:
         raise ValueError(
-            "tags must normalize to at least 2 unique controlled values"
+            "tags must normalize to at least 1 unique controlled value"
             + (f" (dropped outside vocabulary: {dropped})" if dropped else "")
         )
     normalized["tags"] = merged[:4]

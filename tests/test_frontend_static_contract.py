@@ -195,7 +195,9 @@ def test_app_js_declares_frontend_ux_behaviors() -> None:
     assert "function dateBucket" in js
     assert "Asia/Shanghai" in js
     assert "<time datetime=" in js
-    assert "LLM 5 维评分加权后得分" in js
+    # Six since 2026-09-06, when `significance` was added (ADR-20260906-7c31). The SSR copy
+    # in _prepaint_list.html carries the same string and has to move with it.
+    assert "LLM 六维评分加权后得分" in js
     assert "initNavigation" in js
     assert "#refresh" not in js
 

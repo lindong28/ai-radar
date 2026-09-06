@@ -23,9 +23,19 @@ SOURCE_QUOTA_POLICY = "source-quota-v1"
 # What the per-item ``baseline_selected`` flag and the run-level ``baseline_only`` list
 # are measured against: the same run, same candidates and ordering, quotas disabled.
 SOURCE_QUOTA_BASELINE = "same_run_without_source_quota"
-# Which score ``baseline_only[].raw_weighted_score`` carries: after the tier multiplier,
-# before rank-linear display calibration.
-SOURCE_QUOTA_SCORE_SEMANTICS = "tier_adjusted_before_rank_calibration"
+# Which score ``baseline_only[].raw_weighted_score`` carries. It has to move when the score
+# behind it moves -- the tier multiplier was retired on 2026-09-06 (ADR-20260906-7c31), and
+# leaving the old value would have made runs from either side of that change read alike in the
+# audit trail, which is the thing this record exists to prevent.
+SOURCE_QUOTA_SCORE_SEMANTICS = "unadjusted_before_rank_calibration"
+# What validation accepts. ADR-20260903-bc36 freezes the run *shape*, not a single value of this
+# field: a run recorded before the multiplier was retired legitimately carries the old string,
+# and rollback has to keep working on it. Comparing every stored run against the current constant
+# broke rollback for the entire archive the moment the constant moved. New values are appended
+# here, never substituted.
+KNOWN_SOURCE_QUOTA_SCORE_SEMANTICS = frozenset(
+    {"tier_adjusted_before_rank_calibration", SOURCE_QUOTA_SCORE_SEMANTICS}
+)
 
 
 @dataclass(frozen=True)
@@ -197,7 +207,10 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
         reason = {
             "scores": numeric,
             "tier": row[5],
-            "tier_multiplier": tier_multiplier(row[5]),
+            # What was actually applied, not what the tier would map to. Recording the mapping
+            # while the score no longer carries it puts a 1.25 next to a number that was never
+            # multiplied, and every consumer of reason_json reads them as a pair.
+            "tier_multiplier": tier_multiplier(row[5]) if weights.uses_tier_multiplier else 1.0,
             "weighted_score": score,
         }
         candidates.append(
@@ -315,7 +328,7 @@ def curate(
         (
             run.id,
             run.ruleset_version,
-            _json(run.weights.as_dict()),
+            _json(run.weights.as_record()),
             run.threshold,
             _json(run.input_eval_ids),
             _json(run.output_curated_ids),

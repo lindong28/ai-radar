@@ -43,6 +43,7 @@ class DeepSeekV4FlashScorer:
             recency=float(payload.get("recency", 0.0)),
             authority=float(payload.get("authority", 0.0)),
             engineering=float(payload.get("engineering", 0.0)),
+            significance=(None if payload.get("significance") is None else float(payload["significance"])),
             reasoning=str(payload.get("reasoning", "")),
             topics=tuple(str(tag) for tag in payload.get("topics", [])),
             raw={"provider": result.provider, "model": result.model, "json": payload},

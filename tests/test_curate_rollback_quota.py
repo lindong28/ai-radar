@@ -563,3 +563,37 @@ def test_rollback_quota_rejects_each_malformed_value_without_writing(
 def test_resolve_source_quota_rejects_unsupported_argument_types() -> None:
     with pytest.raises(TypeError, match="unsupported value"):
         cli._resolve_source_quota("x=0.2")
+
+
+@pytest.mark.parametrize(
+    "semantics",
+    ["tier_adjusted_before_rank_calibration", "unadjusted_before_rank_calibration"],
+)
+def test_rollback_accepts_every_semantics_a_run_could_legitimately_carry(semantics: str) -> None:
+    """Both, because runs on either side of the tier multiplier's retirement are both valid.
+
+    ADR-20260903-bc36 freezes the run *shape*; the field's value moves when the score behind it
+    moves (ADR-20260906-7c31 retired the multiplier). Validating every stored run against the
+    single current constant broke rollback for the entire archive the moment that constant was
+    updated -- 24 cases in this file went red at once, and the only thing wrong was the check.
+    """
+    shadow = {
+        "baseline": "same_run_without_source_quota",
+        "baseline_only": [{"item_id": "a", "raw_weighted_score": 1.0}],
+        "policy": "source-quota-v1",
+        "quota_only_count": 1,
+        "score_semantics": semantics,
+    }
+    cli._validate_source_quota_shadow(shadow)
+
+
+def test_rollback_still_rejects_a_semantics_string_nobody_ever_wrote() -> None:
+    shadow = {
+        "baseline": "same_run_without_source_quota",
+        "baseline_only": [{"item_id": "a", "raw_weighted_score": 1.0}],
+        "policy": "source-quota-v1",
+        "quota_only_count": 1,
+        "score_semantics": "something_else",
+    }
+    with pytest.raises(ValueError, match="score_semantics"):
+        cli._validate_source_quota_shadow(shadow)

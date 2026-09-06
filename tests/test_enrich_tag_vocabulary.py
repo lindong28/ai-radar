@@ -117,13 +117,20 @@ def test_vocabulary_drops_the_tags_aihot_never_uses(tag: str) -> None:
     assert tag not in CONTROLLED_VOCABULARY_V2
 
 
-def test_a_single_surviving_tag_is_not_enough_on_its_own() -> None:
-    # The floor below the survivor check has its own job: one model tag survives, so the check
-    # above passes, but nothing else joins it -- this item hits no deterministic keyword -- and a
-    # one-tag enrichment is not a usable output. Adding the survivor check above silently took
-    # over every input that used to reach this floor, so it needs its own case.
-    with pytest.raises(ValueError, match="at least 2 unique controlled values"):
-        normalize({**_BASE, "tags": ["推理", "小米"]}, item=_item())
+def test_a_single_surviving_tag_is_enough() -> None:
+    # Relaxed from two on 2026-09-06. Two was our own convention, and the item below -- one
+    # controlled tag, no deterministic keyword to join it -- used to lose its summary, reason and
+    # category over it. AIHOT leaves most items untagged entirely, so two was never fidelity.
+    out = normalize({**_BASE, "tags": ["推理", "小米"]}, item=_item())
+    assert out["tags"] == ["推理"]
+    assert out["summary_zh"] and out["why_recommend"]
+
+
+def test_a_response_that_understood_none_of_the_vocabulary_is_still_rejected() -> None:
+    # The floor moved to one; it did not disappear. A response whose every tag is out of
+    # vocabulary must not ride in on the deterministic layer's source-derived tags.
+    with pytest.raises(ValueError, match="no provider tag survived"):
+        normalize({**_BASE, "tags": ["小米", "小鹏"]}, item=_item())
 
 
 def test_too_many_tags_are_truncated_rather_than_rejected() -> None:
@@ -176,3 +183,45 @@ def test_a_compliant_tag_behind_four_rejects_is_not_trimmed_away() -> None:
 def test_repeats_do_not_consume_the_four_slots() -> None:
     out = normalize({**_BASE, "tags": ["智能体", "智能体", "推理", "推理", "编码"]}, item=_item())
     assert out["tags"] == ["智能体", "推理", "编码"]
+
+
+def test_a_single_tag_survives_the_schema_too() -> None:
+    """The normalizer is only the first of two gates; the model rejects too, and on both paths.
+
+    `EnrichOutputV2` validates fresh provider output on write and every stored row on read
+    (presentation.summary.parse_enrichment), so a min_length of 2 there would still discard the
+    81 items this change set out to keep -- and would do it after the normalizer had accepted
+    them. Mutating the normalizer alone was caught by the case above; mutating the schema alone
+    was caught by nothing, which is why this exists separately.
+    """
+    from airadar.enrich.schema_v2 import EnrichOutputV2
+
+    parsed = EnrichOutputV2.model_validate(
+        {
+            "title_zh": "标题",
+            "summary_zh": "模型在推理任务上给出了新的基准结果，说明了它的适用范围。",
+            "why_recommend": "原文给出了可核验的基准数字与测试条件，读者可以据此判断它适不适合自己的场景，不必再去翻二手转述。",
+            "tags": ["推理"],
+            "primary_category": "model",
+            "is_opinion": False,
+        }
+    )
+    assert parsed.tags == ["推理"]
+
+
+def test_the_schema_still_rejects_an_empty_tag_list() -> None:
+    from pydantic import ValidationError
+
+    from airadar.enrich.schema_v2 import EnrichOutputV2
+
+    with pytest.raises(ValidationError):
+        EnrichOutputV2.model_validate(
+            {
+                "title_zh": "标题",
+                "summary_zh": "模型在推理任务上给出了新的基准结果，说明了它的适用范围。",
+                "why_recommend": "原文给出了可核验的基准数字与测试条件，读者可以据此判断它适不适合自己的场景，不必再去翻二手转述。",
+                "tags": [],
+                "primary_category": "model",
+                "is_opinion": False,
+            }
+        )

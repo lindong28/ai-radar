@@ -100,6 +100,7 @@ def _evaluate_item(
             "recency": result.recency,
             "authority": result.authority,
             "engineering": result.engineering,
+            "significance": result.significance,
             "reasoning": result.reasoning[:200],
             "topics": list(result.topics)[:4],
             "raw": result.raw,
@@ -145,10 +146,16 @@ def run_scoring(
     since: str = "24h",
     limit: int | None = None,
     ruleset_version: str | None = None,
+    force: bool = False,
 ) -> ScoringRunSummary:
     selected_provider = provider or _provider_from_env()
     selected_ruleset = ruleset_version or current_version()
-    force = bool(os.environ.get("AI_RADAR_FAKE_OUT_OF_RANGE"))
+    # The env var stays honoured so existing callers keep working, but it is a test switch for
+    # forcing an out-of-range payload and re-scoring was never what it meant to say. An explicit
+    # parameter is what a backfill needs: a scoring change that leaves ruleset_version alone --
+    # a prompt edit does exactly that -- is otherwise unreachable, because the skip clause below
+    # matches on that version and every stored row already has it.
+    force = force or bool(os.environ.get("AI_RADAR_FAKE_OUT_OF_RANGE"))
     rows = _candidate_rows(conn, since, selected_ruleset, limit, force)
     processed = 0
     errors = 0

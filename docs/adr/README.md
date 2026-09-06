@@ -85,3 +85,4 @@
 | [20260905-b00f](./20260905-b00f-write-egress-receipt-after-live-policy-recheck.md) | 出网收据只在写盘前复核生产策略后生成 | accepted; extends ADR-20260829-c0e8 receipt generation | 2026-09-05 |
 | [20260904-d708](./20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline，W1 复用共享告警状态机 | accepted; relates ADR-20260826-68e2 and ADR-059; supersedes ADR-009/021 boundedness only | 2026-09-04 |
 | [20260905-499e](./20260905-499e-aihot-reference-fit-eval-system.md) | 以 AIHOT 历史输出为参考输出建立内容链拟合评测体系（eval-fit 四槽位），达标线延后 | accepted；达标线未定，首轮为 n=20 小样本 | 2026-09-05 |
+| [20260906-7c31](./20260906-7c31-rank-on-weights-fitted-to-the-reference.md) | 网站排序改用拟合 AIHOT 分数的权重（density/authority/significance），取消来源分层乘数 | accepted; extends ADR-20260905-499e（该 ADR 曾把生产排序留在原地） | 2026-09-06 |

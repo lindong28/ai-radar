@@ -20,7 +20,13 @@ class EnrichOutputV2(BaseModel):
     title_zh: str = Field(min_length=2, max_length=120)
     summary_zh: str = Field(min_length=20, max_length=400)
     why_recommend: str = Field(min_length=35, max_length=90)
-    tags: list[str] = Field(min_length=2, max_length=4)
+    # One, not two. The floor was our own convention, and it was costing whole enrichments:
+    # 81 of 2741 items on the 2026-09-06 full run were rejected outright -- summary, reason and
+    # category discarded -- because only a single controlled tag survived, and 52 of those had
+    # been given exactly one tag by the model in the first place. AIHOT, the thing this output is
+    # being fitted to, leaves 2157 of the same 2741 items with no tags at all, so requiring two
+    # was never fidelity to it. Widening also keeps every stored row readable.
+    tags: list[str] = Field(min_length=1, max_length=4)
     primary_category: PrimaryCategory
     is_opinion: bool = Field(strict=True)
 

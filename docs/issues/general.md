@@ -457,3 +457,13 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 | **E. 不改** | 7.4% 的条目继续对每一个拟合指标缺席 | — | — |
 
 **方案之间不互斥**；A 与 B 的关系是"事后修补"对"教会规则"，A 确定但只治标签路径，B 触及根因但要一次实测。
+
+### main 上有一条测试因源配置增长而失效（2026-09-06 发现，未修）
+
+`tests/playwright/test_fixture_isolation.py::test_playwright_session_db_is_deterministic_and_serve_uses_it` 断言 `source_counts["wechat"] == 1`，实际为 2。
+
+**成因不是回归，是断言过期。** fixture 从 `data/sources.toml` 读源、剔除 `wx_mp2rss` 再塞回一个替身，因此启用的 wechat 源数量等于配置里的数量。而配置里现在有两个：`wx_mp2rss` 与 `wx_wechat2rss`（后者是 Mp2RSS 到期后接手抓取时加的）。加源的那次改动没有同步这条断言。
+
+**取证**：在 `e3f521b` 的干净 `git archive` 导出树上跑同一条，失败逐字相同——与任何未提交改动无关。
+
+**未修的理由**：它落在微信来源那条链路上，而本工作树此刻有另一个 session 正在改 `src/airadar/wechat_discovery/`（工作树登记与未跟踪文件都指向它）。断言该改成 `>= 1` 还是跟着源数量走，取决于那边的收敛结果，此时改它有冲突风险。

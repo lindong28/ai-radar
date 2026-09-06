@@ -85,8 +85,10 @@
         <section class="about-section">
           <h2>评分说明</h2>
           <p>
-            精选阈值为 6.5 分。LLM 按 relevance、density、recency、authority、engineering 五维评分；
-            默认权重为 relevance 0.30、density 0.20、recency 0.15、authority 0.15、engineering 0.20。
+            精选阈值为 6.5 分。LLM 按 relevance、density、recency、authority、engineering、significance
+            六维评分；排序权重取自与参照站点评分的拟合，为 density 0.40、significance 0.50、
+            authority 0.10，其余三维为 0——它们各由别的环节把关：AI 相关性归前置筛选，
+            新鲜度归精选的 48 小时窗口。来源分层系数已取消。
           </p>
         </section>
         <section class="about-section">
@@ -120,7 +122,7 @@
     </main>
 {% include "_mobile_tabbar.html" %}
     <script type="module">
-      import { initAbout } from "/app.js?v=20260817-aihot-def79110";
+      import { initAbout } from "/app.js?v=20260817-aihot-8384e5c7";
       initAbout();
     </script>
   </body>

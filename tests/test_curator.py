@@ -11,24 +11,36 @@ from airadar import cli
 from airadar.curator.dedup import deduplicate_candidates
 from airadar.curator.score import ScoredCandidate, weighted_score
 from airadar.curator.select import DEFAULT_SOURCE_QUOTA, SourceQuota, curate, parse_source_quota
-from airadar.curator.weights import DEFAULT_WEIGHTS, Weights, load_weights
+from airadar.curator.weights import DEFAULT_WEIGHTS, Weights, load_weights, weights_from_mapping
 from airadar.db import migrate
 
 
-def test_weighted_score_applies_weights_and_tier_multiplier() -> None:
-    numeric = {
-        "relevance": 10.0,
-        "density": 8.0,
-        "recency": 6.0,
-        "authority": 4.0,
-        "engineering": 2.0,
-    }
+def test_ranking_no_longer_multiplies_by_source_tier() -> None:
+    """Retired 2026-09-06, deliberately: the multiplier ordered the tiers backwards.
 
-    base = weighted_score(numeric, DEFAULT_WEIGHTS, "T1.5")
-    with_tier = weighted_score(numeric, DEFAULT_WEIGHTS, "T1")
+    It was T1 1.25 / T1.5 1.0 / T2 0.75, and AIHOT -- the reference this ranking is now fitted
+    to -- scores those tiers 44.68 / 39.82 / 51.68. Carrying it on the fitted vector costs 0.093
+    Spearman. A vector that wants it back sets uses_tier_multiplier, which is what the case below
+    checks still works.
+    """
+    numeric = {"relevance": 10.0, "density": 8.0, "recency": 6.0, "authority": 4.0, "engineering": 2.0}
+    numeric_with_new_signal = {**numeric, "significance": 5.0}
 
-    assert base == pytest.approx(6.6)
-    assert with_tier == pytest.approx(8.25)
+    assert weighted_score(numeric_with_new_signal, DEFAULT_WEIGHTS, "T1") == pytest.approx(
+        weighted_score(numeric_with_new_signal, DEFAULT_WEIGHTS, "T2")
+    )
+    assert weighted_score(numeric_with_new_signal, DEFAULT_WEIGHTS, "T1") == pytest.approx(6.1)
+
+
+def test_a_vector_can_still_ask_for_the_tier_multiplier() -> None:
+    weights = Weights(relevance=0.2, density=0.4, recency=0.2, authority=0.1, engineering=0.1)
+    keeps_tier = Weights(
+        relevance=0.2, density=0.4, recency=0.2, authority=0.1, engineering=0.1, uses_tier_multiplier=True
+    )
+    numeric = {"relevance": 10.0, "density": 8.0, "recency": 6.0, "authority": 4.0, "engineering": 2.0}
+
+    assert weighted_score(numeric, weights, "T1") == pytest.approx(7.0)
+    assert weighted_score(numeric, keeps_tier, "T1") == pytest.approx(8.75)
 
 
 def test_load_weights_rejects_zero_or_negative_totals(tmp_path: Path) -> None:
@@ -341,7 +353,10 @@ def test_curate_records_baseline_membership_and_exact_shadow_difference(tmp_path
         "baseline_only": [{"item_id": "x-2", "raw_weighted_score": 9.8}],
         "policy": "source-quota-v1",
         "quota_only_count": 1,
-        "score_semantics": "tier_adjusted_before_rank_calibration",
+        # Changed with the tier multiplier's retirement (ADR-20260906-7c31). The string is
+        # part of the frozen shape ADR-20260903-bc36 validates, so it has to move when the
+        # score behind it moves -- otherwise runs from either side read alike in the audit.
+        "score_semantics": "unadjusted_before_rank_calibration",
     }
 
 
@@ -546,3 +561,36 @@ def test_curate_with_high_threshold_returns_empty_run(tmp_path: Path) -> None:
 
     assert run.output_curated_ids == []
     assert conn.execute("SELECT COUNT(*) FROM curated_items WHERE run_id=?", (run.id,)).fetchone()[0] == 0
+
+
+def test_a_weights_file_can_carry_the_new_dimension_and_the_tier_switch() -> None:
+    """Both were silently droppable: a file could name them and the loader would ignore it.
+
+    `significance` reaching zero and `uses_tier_multiplier` reaching False are the same value the
+    defaults produce, so a loader that discarded both looked identical to one that read them.
+    """
+    loaded = weights_from_mapping(
+        {
+            "relevance": 0.0,
+            "density": 0.4,
+            "recency": 0.0,
+            "authority": 0.1,
+            "engineering": 0.0,
+            "significance": 0.5,
+            "uses_tier_multiplier": True,
+        }
+    )
+    assert loaded.significance == pytest.approx(0.5)
+    assert loaded.uses_tier_multiplier is True
+    # All five core dimensions present: they are required whatever their weight.
+    numeric = {"relevance": 0.0, "density": 6.0, "recency": 0.0, "authority": 6.0,
+               "engineering": 0.0, "significance": 6.0}
+    assert weighted_score(numeric, loaded, "T1") == pytest.approx(7.5)
+
+
+def test_a_weights_file_without_them_still_loads() -> None:
+    loaded = weights_from_mapping(
+        {"relevance": 0.2, "density": 0.4, "recency": 0.2, "authority": 0.1, "engineering": 0.1}
+    )
+    assert loaded.significance == pytest.approx(0.0)
+    assert loaded.uses_tier_multiplier is False

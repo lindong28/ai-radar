@@ -49,9 +49,9 @@ from .curator.precompute import (
 from .curator.score import ScoredCandidate
 from .curator.select import (
     DEFAULT_SOURCE_QUOTA,
+    KNOWN_SOURCE_QUOTA_SCORE_SEMANTICS,
     SOURCE_QUOTA_BASELINE,
     SOURCE_QUOTA_POLICY,
-    SOURCE_QUOTA_SCORE_SEMANTICS,
     SourceQuota,
     _calibrate_selected_scores,
     curate,
@@ -740,7 +740,10 @@ def _prefilter(args: argparse.Namespace) -> int:
 def _score(args: argparse.Namespace) -> int:
     db.migrate()
     with db.get_conn() as conn:
-        summary = run_scoring(conn, since=args.since, limit=args.limit, ruleset_version=args.ruleset)
+        summary = run_scoring(
+            conn, since=args.since, limit=args.limit, ruleset_version=args.ruleset,
+            force=getattr(args, "force", False),
+        )
     print(f"score processed={summary.processed} errors={summary.errors}")
     return 0
 
@@ -849,7 +852,7 @@ def _validate_source_quota_shadow(shadow: dict[str, object]) -> None:
     """Reject anything that is not the complete, frozen source-quota-v1 run shape."""
     if shadow.get("baseline") != SOURCE_QUOTA_BASELINE:
         raise ValueError(f"shadow_json.baseline is {shadow.get('baseline')!r}")
-    if shadow.get("score_semantics") != SOURCE_QUOTA_SCORE_SEMANTICS:
+    if shadow.get("score_semantics") not in KNOWN_SOURCE_QUOTA_SCORE_SEMANTICS:
         raise ValueError(f"shadow_json.score_semantics is {shadow.get('score_semantics')!r}")
     baseline_only = shadow.get("baseline_only")
     if not isinstance(baseline_only, list):
@@ -2536,6 +2539,12 @@ def build_parser() -> argparse.ArgumentParser:
     score_parser.add_argument("--since", default="24h")
     score_parser.add_argument("--limit", type=int)
     score_parser.add_argument("--ruleset")
+    score_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-score items that already have an evaluation for this ruleset version. "
+        "Needed after a scoring change that does not move the version, such as a prompt edit.",
+    )
 
     enrich_parser = subparsers.add_parser("enrich")
     enrich_parser.add_argument("--since", default="24h")

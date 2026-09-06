@@ -371,12 +371,14 @@ function normalizedTagLabel(tag) {
 
 function scorePill(item) {
   if (item.weighted_score == null) return "";
-  const title = "LLM 5 维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明";
+  const title = "LLM 六维评分加权后得分（满分 10，阈值 6.5 进精选）。详见关于 → 评分说明";
   const score = Math.round(Number(item.weighted_score) * 10);
   const tier = scoreTierClass(score);
   // 标签而非裸数字：tooltip 在移动端不可达，裸「89」读不出这个数字是什么。
-  // 不写「/100」：T1 信源有 1.25 倍 tier 乘数（curator/score.py），weighted_score 可超过 10,
-  // 生产实况里已有 10.75 的条目，写死分母会渲染出 108/100 这种假值。SSR 侧同形在 _prepaint_list.html。
+  // 不写「/100」：ADR-056 当初的理由是 T1 的 1.25 倍 tier 乘数能把 weighted_score 顶过 10（实况见过
+  // 10.75）。乘数已于 2026-09-06 取消，权重和为 1.0 且缺维重新归一保持总和，结构上不再超过 10——
+  // 所以那条理由已经不成立。仍不写分母，是因为改分母是独立的展示决定，不是这次改动的一部分。
+  // SSR 侧同形在 _prepaint_list.html。
   return `<span class="timeline-score ${tier}" title="${esc(title)}"><span class="timeline-score-label">AI<span class="timeline-score-label-rest"> 评分</span></span> ${score}</span>`;
 }
 
