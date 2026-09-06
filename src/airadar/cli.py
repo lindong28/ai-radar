@@ -741,8 +741,13 @@ def _score(args: argparse.Namespace) -> int:
     db.migrate()
     with db.get_conn() as conn:
         summary = run_scoring(
-            conn, since=args.since, limit=args.limit, ruleset_version=args.ruleset,
+            conn,
+            since=args.since,
+            limit=args.limit,
+            ruleset_version=args.ruleset,
             force=getattr(args, "force", False),
+            workers=getattr(args, "workers", 1),
+            commit_every=getattr(args, "commit_every", 200),
         )
     print(f"score processed={summary.processed} errors={summary.errors}")
     return 0
@@ -2539,6 +2544,19 @@ def build_parser() -> argparse.ArgumentParser:
     score_parser.add_argument("--since", default="24h")
     score_parser.add_argument("--limit", type=int)
     score_parser.add_argument("--ruleset")
+    score_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Evaluate this many items at once. Default 1: the scheduled pipeline stays serial, "
+        "and concurrency is opted into for a backfill.",
+    )
+    score_parser.add_argument(
+        "--commit-every",
+        type=int,
+        default=200,
+        help="Commit after this many items, so an interrupted backfill keeps what it paid for.",
+    )
     score_parser.add_argument(
         "--force",
         action="store_true",

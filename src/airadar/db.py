@@ -27,6 +27,28 @@ def resolve_db_path(path: str | Path | None = None) -> Path:
     return db_path
 
 
+DEFAULT_BUSY_TIMEOUT_MS = 5000
+
+
+def _busy_timeout_ms() -> int:
+    """How long a writer waits for the lock, overridable for long batch jobs.
+
+    Five seconds suits the scheduled pipeline, where every writer is short. A backfill runs for
+    hours alongside that pipeline and meets its curate transaction repeatedly; at five seconds it
+    dies partway through with "database is locked" and leaves the archive half re-scored. The
+    value is not raised for everyone, because a long default would turn a genuine deadlock into a
+    hang nobody notices.
+    """
+    raw = os.environ.get("AI_RADAR_SQLITE_BUSY_TIMEOUT_MS")
+    if not raw:
+        return DEFAULT_BUSY_TIMEOUT_MS
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_BUSY_TIMEOUT_MS
+    return parsed if parsed > 0 else DEFAULT_BUSY_TIMEOUT_MS
+
+
 def get_conn(path: str | Path | None = None) -> sqlite3.Connection:
     db_path = resolve_db_path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +56,7 @@ def get_conn(path: str | Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(f"PRAGMA busy_timeout={_busy_timeout_ms()}")
     return conn
 
 

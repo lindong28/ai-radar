@@ -17,7 +17,7 @@ from ...curator.weights import AIHOT_FIT_WEIGHTS, DEFAULT_WEIGHTS
 from ...enrich import runner_v2 as enrich_runner
 from ...prefilter import runner as prefilter_runner
 from ...provider.base import ProviderItem
-from ...ruleset import current_version, current_version_v2
+from ...ruleset import current_score_version, current_version, current_version_v2
 from ...scorer import runner as scorer_runner
 from .common import (
     DEFAULT_WORKERS,
@@ -124,7 +124,11 @@ def _rendered_inputs_sha256(stage: str) -> str | None:
 
 def stage_identity(providers: dict[str, Any], rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     root = db.PROJECT_ROOT
-    rulesets = {"prefilter": current_version(), "score": current_version(), "enrich": current_version_v2()}
+    rulesets = {
+        "prefilter": current_version(),
+        "score": current_score_version(),
+        "enrich": current_version_v2(),
+    }
     return {
         stage: {
             "ruleset_version": rulesets[stage],

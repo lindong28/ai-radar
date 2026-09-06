@@ -49,3 +49,19 @@
 - Problem: DeepSeek/ARK 账户余额不足时，API 不返回明确的欠费/余额错误，而是返回误导性的 `404 InvalidEndpointOrModel.NotFound: The model or endpoint <name> does not exist or you do not have access to it`。ai-radar 现象：prefilter（`deepseek-v4-flash`）和 score/enrich（`deepseek-v4-pro`）同时全挂、都报这个 404 时，第一直觉容易误判成"模型被下线/改名"，去翻 provider 代码找 model_id；真实原因是上游欠费。本次约 24h 处理层空转。
 - Solution: 看到多模型同时报 model-not-found 404 时，第一嫌疑放在**上游余额**而非代码改动。判别要点：(a) model_id 写死在 `src/airadar/provider/deepseek_v4_flash.py` / `deepseek_v4_pro.py`，`git blame` 这些行若久未动 → 排除代码改动、指向服务端；(b) 充值后自动恢复无需改代码——正在跑的 enrich 进程错误计数冻结、接连返回 OK 即恢复指纹（本次约 14:59 PDT 充值生效后自愈）；(c) 真实错因落点——prefilter 异常进 `logs/pipeline-*.log` traceback，score/enrich 的 per-item 异常落 DB `item_evaluations.error` 列。
 - Applies when: pipeline 处理层（prefilter/score/enrich）批量报 model-not-found / 无访问权限的 404 时——先查 DeepSeek/ARK 控制台余额，再怀疑模型变更。多模型同时全挂尤其指向账户级问题（余额、key 失效）而非单模型下线。实际发生于 2026-06-01。
+
+## 存量重打分：三个把「3 小时」变成「跑不完」的东西（2026-09-06）
+
+给打分器加了一个维度之后要回填四万条存量，实测撞到三件事，每件都不在估算里。
+
+**一、生产打分器是串行的。** `run_scoring` 是 `for row in rows:`，没有 ThreadPoolExecutor——而评测侧的 `eval/aihot_fit/run.py` 用的是 workers 8。照评测侧的速率估算存量回填会**低估 8 倍**：实测串行 20 条用 45 秒 = 2.25 秒/条，40,810 条是 **25.5 小时**，不是 3.2 小时。已加 `--workers`（默认仍是 1，定时任务不受影响）。
+
+**二、整个循环只在末尾 commit 一次。** 一次被 120 秒超时打断的运行**落库 0 行**——已经付过的模型调用全部作废。已改为每 `--commit-every`（默认 200）条提交一次。
+
+写这条测试时踩到一个更值得记的坑：**用写入的同一个连接读回行数，测不出提交与否**——sqlite 让一个连接看见它自己未提交的写入，于是"提交了"和"没提交"取值相同。第一版测试正是这么写的，把 commit 移出循环后它照样绿。必须用**第二个连接**读。
+
+**三、`migrate()` 的锁不受 `busy_timeout` 约束。** 每次 `./run.sh score` 都先跑 `db.migrate()`，它先 SELECT 判断迁移是否已应用（开一个读快照），再执行 DDL 升级为写。若期间别的连接提交过，SQLite 返回 `SQLITE_BUSY_SNAPSHOT` 并**立即失败**——等待再久也没用。表现是设了 120 秒超时却在 6 秒报 `database is locked`。
+
+所以长时间批处理**不能只靠调大超时**，得分块 + 重试：单块失败后隔一会儿重跑，锁是启动期的瞬时冲突，下一次多半就过了。另新增 `AI_RADAR_SQLITE_BUSY_TIMEOUT_MS`（默认仍 5000）用于打分循环内部的写入——那部分确实是普通等待可解的。
+
+**回填不要带 `--force`。** 升版之后不需要它，而带上它会让"已打过分就跳过"失效，于是分块循环的终止条件（某一块 processed=0）永远不成立。

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,7 +13,7 @@ from ..provider.base import ProviderItem, ScoringProvider, ScoringResult
 from ..provider.codex_gpt_mini import CodexGptMiniScorer
 from ..provider.deepseek_v4_flash import DeepSeekV4FlashScorer
 from ..provider.deepseek_v4_pro import DeepSeekV4ProScorer
-from ..ruleset import current_version
+from ..ruleset import current_score_version
 from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
 from ..stage_common import provider_item_from_row as _to_provider_item
@@ -139,6 +140,18 @@ def _insert_evaluation(
     )
 
 
+DEFAULT_COMMIT_EVERY = 200
+
+
+def _evaluate_batch(
+    provider: ScoringProvider, items: list[ProviderItem], workers: int
+) -> list[tuple[ScoringNumeric | None, dict[str, Any], str | None, int]]:
+    if workers <= 1 or len(items) <= 1:
+        return [_evaluate_item(provider, item) for item in items]
+    with ThreadPoolExecutor(max_workers=min(workers, len(items))) as executor:
+        return list(executor.map(lambda item: _evaluate_item(provider, item), items))
+
+
 def run_scoring(
     conn: sqlite3.Connection,
     *,
@@ -147,9 +160,11 @@ def run_scoring(
     limit: int | None = None,
     ruleset_version: str | None = None,
     force: bool = False,
+    workers: int = 1,
+    commit_every: int = DEFAULT_COMMIT_EVERY,
 ) -> ScoringRunSummary:
     selected_provider = provider or _provider_from_env()
-    selected_ruleset = ruleset_version or current_version()
+    selected_ruleset = ruleset_version or current_score_version()
     # The env var stays honoured so existing callers keep working, but it is a test switch for
     # forcing an out-of-range payload and re-scoring was never what it meant to say. An explicit
     # parameter is what a backfill needs: a scoring change that leaves ruleset_version alone --
@@ -159,11 +174,20 @@ def run_scoring(
     rows = _candidate_rows(conn, since, selected_ruleset, limit, force)
     processed = 0
     errors = 0
-    for row in rows:
-        item = _to_provider_item(row)
-        numeric, output, error, latency_ms = _evaluate_item(selected_provider, item)
-        errors += 1 if error else 0
-        _insert_evaluation(conn, item, selected_provider, selected_ruleset, numeric, output, error, latency_ms)
-        processed += 1
-    conn.commit()
+    batch_size = max(1, commit_every)
+    for start in range(0, len(rows), batch_size):
+        items = [_to_provider_item(row) for row in rows[start : start + batch_size]]
+        # Evaluated concurrently, written serially. The provider calls are network-bound and the
+        # eval path already runs these same providers at eight at a time; the sqlite connection
+        # is not shared across threads, so every insert happens back here in order.
+        results = _evaluate_batch(selected_provider, items, workers)
+        for item, (numeric, output, error, latency_ms) in zip(items, results, strict=True):
+            errors += 1 if error else 0
+            _insert_evaluation(conn, item, selected_provider, selected_ruleset, numeric, output, error, latency_ms)
+            processed += 1
+        # Committed per batch, not once at the end. A backfill runs for hours next to a live
+        # pipeline; a single trailing commit means any interruption -- a timeout, a lock, a
+        # laptop lid -- discards every call already paid for. Measured once: a run killed at 120
+        # seconds left zero rows behind.
+        conn.commit()
     return ScoringRunSummary(processed=processed, errors=errors)

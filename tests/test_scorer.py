@@ -123,6 +123,21 @@ def _db(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _db_with_items(tmp_path: Path, *, count: int) -> sqlite3.Connection:
+    conn = _db_with_sources(tmp_path)
+    for index in range(count):
+        item_id = _seed_item_with_dates(
+            conn,
+            f"LLM benchmark {index}",
+            f"A practical LLM benchmark with API details, number {index}.",
+            published_at=_recent_iso(30),
+            fetched_at=_recent_iso(29),
+        )
+        _insert_prefilter_eval(conn, item_id)
+    conn.commit()
+    return conn
+
+
 def _db_with_sources(tmp_path: Path) -> sqlite3.Connection:
     db_path = tmp_path / "radar.db"
     migrate(db_path)
@@ -266,3 +281,77 @@ def test_force_rescores_what_the_version_alone_would_skip(tmp_path: Path) -> Non
     # A new evaluation row, not an overwrite: selection reads MAX(id) per item, so the newer one
     # wins while the older one stays readable for comparison.
     assert rows == 2
+
+
+def test_scoring_carries_its_own_ruleset_stamp(tmp_path: Path) -> None:
+    """Distinct from the shared one, and that distinctness is the whole mechanism.
+
+    The runner skips items that already have a row at the current version. While scoring shared a
+    stamp with prefilter and enrich v1, a scoring-only change could not move it without moving
+    theirs -- so nobody moved it, and the change could never reach an already-scored item. It also
+    left rows from either side of the change claiming the same version.
+    """
+    from airadar.ruleset import current_score_version, current_version
+
+    assert current_score_version() != current_version()
+
+    conn = _db(tmp_path)
+    run_scoring(conn, provider=FakeScorer(), since="24h")
+    stored = conn.execute("SELECT ruleset_version FROM item_evaluations WHERE stage='scoring'").fetchone()[0]
+    assert stored == current_score_version()
+
+
+def test_an_interrupted_run_keeps_the_batches_it_finished(tmp_path: Path) -> None:
+    """The whole point of committing per batch, and the reason a 120-second run left zero rows.
+
+    A backfill runs for hours beside a live pipeline. With one trailing commit, any interruption
+    discards every call already paid for -- so the failure is measured here by cutting the run
+    off mid-way and asking what survived.
+    """
+    conn = _db_with_items(tmp_path, count=7)
+
+    class _DiesOnTheFifth:
+        model_id = "fake-scorer"
+
+        def __init__(self) -> None:
+            self.seen = 0
+
+        def smoke_test(self) -> str:
+            return "ok"
+
+        def score_5d(self, item: ProviderItem) -> ScoringResult:
+            self.seen += 1
+            if self.seen == 5:
+                raise KeyboardInterrupt
+            return ScoringResult(
+                relevance=5.0, density=5.0, recency=5.0, authority=5.0, engineering=5.0, reasoning="ok"
+            )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_scoring(conn, provider=_DiesOnTheFifth(), since="24h", ruleset_version="score.r1", commit_every=2)
+
+    # Read through a SECOND connection. The writing connection sees its own uncommitted rows, so
+    # counting through `conn` gives 4 whether or not anything was committed -- the first version
+    # of this test did exactly that and stayed green when the per-batch commit was removed.
+    observer = sqlite3.connect(tmp_path / "radar.db")
+    try:
+        kept = observer.execute("SELECT COUNT(*) FROM item_evaluations WHERE stage='scoring'").fetchone()[0]
+    finally:
+        observer.close()
+    # Two full batches of two landed before the fifth call; with one trailing commit this is 0.
+    assert kept == 4
+
+
+def test_workers_does_not_change_what_gets_written(tmp_path: Path) -> None:
+    """Correctness under concurrency, not proof that it ran concurrently.
+
+    A serial fallback satisfies every assertion here, so this case cannot tell workers=4 from
+    workers=1 -- it is not trying to. What it pins is that turning concurrency on does not drop,
+    duplicate or reorder rows, which is the way this change could actually be wrong.
+    """
+    conn = _db_with_items(tmp_path, count=5)
+
+    summary = run_scoring(conn, provider=FakeScorer(), since="24h", ruleset_version="score.r1", workers=4)
+
+    assert summary.processed == 5
+    assert conn.execute("SELECT COUNT(DISTINCT item_id) FROM item_evaluations WHERE stage='scoring'").fetchone()[0] == 5
