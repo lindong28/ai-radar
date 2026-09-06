@@ -138,16 +138,19 @@ def _evaluate_item(
     start = time.monotonic()
     attempts = 0
     last_output: dict[str, Any] = {}
+    last_raw: Any = None
     last_error: str | None = None
     while attempts < 2:
         attempts += 1
         try:
             result = provider.enrich(item)
+            # Captured before normalisation, which raises on a tag list it will not accept. Without
+            # this the rejected rows carry no model output at all, and the one question worth
+            # asking about them -- what did the model actually emit -- has no answer on disk.
+            last_raw = result.raw
             output = _output_from_result(result, item)
             last_output = output
-            enriched = EnrichOutputV2.model_validate(
-                {key: value for key, value in output.items() if key != "raw"}
-            )
+            enriched = EnrichOutputV2.model_validate({key: value for key, value in output.items() if key != "raw"})
             latency_ms = int((time.monotonic() - start) * 1000)
             return enriched, output, None, latency_ms
         except ValidationError as exc:
@@ -158,7 +161,10 @@ def _evaluate_item(
         except Exception as exc:
             last_error = f"enrich failed after retry: {exc}" if attempts == 2 else str(exc)
     latency_ms = int((time.monotonic() - start) * 1000)
-    return None, {**last_output, "attempts": attempts}, last_error, latency_ms
+    failed = {**last_output, "attempts": attempts}
+    if "raw" not in failed and last_raw is not None:
+        failed["raw"] = last_raw
+    return None, failed, last_error, latency_ms
 
 
 def _insert_evaluation(

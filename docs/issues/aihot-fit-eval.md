@@ -227,3 +227,37 @@ evalset 里 2667 条 AIHOT 参考摘要，用我站自己的 `EnrichOutputV2.sum
 ## 未被 review 覆盖的面
 
 reviewer 按指令未发任何 LLM 请求，故 ISSUE-FIT-01 / FIT-02 是从 prompt 文本与数据分布推出的**结构性**结论，不是实测的判官偏移量；`run_judge` / `run_stages` 的端到端行为未由 reviewer 实测（由作者在 spec §7 跑通）。enrich 的解码噪声量级（`AI_RADAR_ENRICH_TEMPERATURE=0.2`）未测，因此不知它相对 bootstrap CI 宽度有多大。
+
+### ISSUE-FIT-17 · 标签数截断的第一版把失败从一个桶推进了另一个（2026-09-06）
+
+**背景**：ISSUE-FIT-16 已指出正确落点是 normalizer 而非继续加 prompt 压力。第一版按此改成"多于 4 个就截到 4 个"，随即在 300 题子集上实测。
+
+**读数**（`SCORE-300-seed7` → `TRUNC-300-seed7`，同一子集同一批 prompt）：
+
+| 失败桶 | 基线 | 截断后 |
+|---|---|---|
+| `tags must contain 2-4` | 4 | **0** |
+| `tags must normalize to at least 2 unique` | 2 | **10** |
+| `why_recommend` 长度不足 | 6 | 7 |
+| 合计 | 12 | **17** |
+
+**根因**：截断发生在按词表过滤**之前**，于是按位置切。排在第五位的合规标签被切掉，而排在前面的越界标签活到过滤那一步才被丢——净效果是幸存标签更少，直接撞下面那道"有效标签不足 2 个"的底线。重复标签同理会占掉 4 个名额中的若干个。改为过滤 → 去重 → 截断后两种输入都能救回，两条测试各自经突变验证。
+
+**顺带取得的读数**（reviewer 实测，n=572 / 555 两个 run）：模型标签的位置**确实携带信息**——与 AIHOT 参考标签的一致率按位置为 0.79 / 0.55 / 0.48 / 0.38，而把每条的标签列表随机置换 200 次后四个位置一律塌到 ~0.62。所以"保留最靠前的幸存者"这个选择成立。两个限制随结论保留：样本只含 normalize 成功的行（有选择偏差），且最大观测位置是 4，"第五个最弱"是外推。
+
+**记账不修**：
+
+- **`run_stages` 全无测试。** `git grep run_stages -- tests` 零命中：外层 handler、stop 传播、`skipped` 计数、rows 落盘都没有覆盖。本次修的 `served_models` 已单独钉住，但"一个 item 失败不终结整个 run"这条性质仍无测试。reviewer 明确标注这条追溯不到来源（用户未要求、任务开始前无生效契约），故只记账。
+- **已失败的存量行不会自愈。** `"output rejected"` 属 `DETERMINISTIC_ENRICH_ERROR_PREFIXES`，`ENRICH_FAILED_RETRY_BACKOFF_HOURS = 24`，而 `_candidate_rows` 默认 `since` 同为 24h（按 `fetched_at`）。`fetched_at` 早于 24h 的行常规跑不会再被挑到，要靠 `--item-ids` 定向回填。上一个已 commit 的词表修复同样如此——两条 CHANGELOG 里"现在……照常保留"都只对此后新处理的文章成立。
+- **2-4 不合规的失败计数通道关闭了。** 此前不合规是 `item_evaluations.error` 里一条可 grep 的行（75 这个数正是这么数出来的），现在它不再产生错误行，而生产只存归一化后的输出、不存模型原始标签。eval run 的 `outputs.jsonl` 仍保留 `raw.json.tags`（本轮另修了 normalizer 拒收时 raw 不落盘的洞），所以拟合工作要的那个读数还在；生产侧没有了。第一版曾用一个纯函数 `raw_tag_count_was_out_of_range()` 声称保住了这个通道，实际没有任何生产调用方，已删除。
+- **75 篇里"多"与"少"各占多少无从得知**：旧代码两个方向共用一条错误消息，且被拒时原始标签没落盘。CHANGELOG 已按此改写，不再声称是"写到五个"。
+
+### ISSUE-FIT-18 · 限流会摧毁 run 的身份记录，而不只是截断它（2026-09-06，已修）
+
+**现象**：300 题的 run 写完 `outputs.jsonl`（300 行完整）后崩在 `AttributeError: 'NoneType' object has no attribute 'get'`，`run.json` 没有落盘——于是那次 run 有全套输出、没有任何身份块，按 `evaluation-integrity` 的要求整份不可用。
+
+**根因**：`run.py` 的 `served_models()` 写的是 `payload.get("output", {}).get("raw")`。`dict.get(key, default)` 的 default **只在键缺失时生效**，而早停分支与外层异常 handler 都把键写成显式的 `None`。一次 ARK 429 会让**其余每一行**都变成那个形状，所以第一个限流不是让 run 少跑几题，是让它整份作废。
+
+**误诊记录**（值得留着）：第一版归因为"prefilter/score 的 `_evaluate_item` 会把 provider 异常抛出去，而 enrich 会接住"，并在 `_evaluate` 外加了一层捕获。reviewer 指出该调用点**本来就有**一个逐字等价的 `except Exception`（`git log -S` 显示自该文件第一个 commit 起就在），所以异常根本逃不出去；那层捕获唯一的行为差是把 `output` 由 `None` 变成 `{}`，恰好把真正的缺陷遮住了——**而且遮不住早停那条路径**，也就是 FULL2 撞 429 的那条。归因已按阳性对照重做：用早停分支写出的行形状直接调 `served_models`，复现出逐字相同的 `AttributeError`。冗余的捕获已撤回。
+
+**未覆盖**：`data/eval-fit/runs/FULL2-20260906` 的判官读数仍不可用（`stopped_early=True`、summary 1388/2606、reason 0），需在修复后重跑。

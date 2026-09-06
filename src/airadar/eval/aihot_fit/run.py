@@ -77,7 +77,12 @@ def served_models(rows: list[dict[str, Any]], stage: str) -> list[str]:
     names = set()
     for row in rows:
         payload = row.get(stage)
-        raw = payload.get("output", {}).get("raw") if isinstance(payload, dict) else None
+        # `get("output", {})` returns the default only when the key is ABSENT. A stopped or
+        # failed stage writes the key with a None value, so the default never applied and this
+        # line raised AttributeError -- after outputs.jsonl was written and before run.json was,
+        # which is why a killed run left a full output file and no summary. An ARK 429 sets every
+        # remaining row to that shape, so the first rate limit destroyed the run's identity record.
+        raw = (payload.get("output") or {}).get("raw") if isinstance(payload, dict) else None
         served = raw.get("model") if isinstance(raw, dict) else None
         if served:
             names.add(str(served))

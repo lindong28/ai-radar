@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ...provider.base import ProviderItem
@@ -121,11 +121,32 @@ def adapt_raw(value: Mapping[str, object]) -> dict[str, Any]:
     }
 
 
+def _unique(tags: Iterable[str]) -> list[str]:
+    seen: list[str] = []
+    for tag in tags:
+        if tag not in seen:
+            seen.append(tag)
+    return seen
+
+
 def normalize(value: Mapping[str, object], *, item: ProviderItem) -> dict[str, Any]:
     normalized = adapt_raw(value)
+    # An over-long tag list is truncated, not rejected. merged[:4] below already establishes that
+    # truncation is an acceptable outcome, so refusing five tags up front threw away the summary,
+    # reason and category for a field the code was about to trim anyway -- 75 of 2741 items on the
+    # 2026-09-06 full run, the single largest failure bucket. Too few is left to the floor further
+    # down, which can still be met by the deterministic layer.
+    #
+    # This does close a measurement channel: non-compliance with the 2-4 instruction used to be a
+    # countable `item_evaluations.error` row and now is not. It is still readable in an eval run,
+    # whose outputs.jsonl keeps the model's own `raw.json.tags` for accepted and rejected rows
+    # alike; it is not readable in production, which stores only the normalized output.
+    #
+    # The trim happens AFTER the vocabulary filter below, not here. Truncating first cuts by
+    # position, so a compliant tag sitting fifth is lost while an out-of-vocabulary one sitting
+    # first survives to be dropped anyway -- which is how the first cut of this change moved four
+    # items out of the tag-count bucket and eight into the vocabulary floor, a net loss.
     raw_tags = normalized["tags"]
-    if not 2 <= len(raw_tags) <= 4:
-        raise ValueError("tags must contain 2-4 provider-selected values")
 
     # Drop tags outside the vocabulary instead of rejecting the whole output. AIHOT tags a brand
     # only when it is one of the labs on its own short list -- our vocabulary already carries that
@@ -136,7 +157,13 @@ def normalize(value: Mapping[str, object], *, item: ProviderItem) -> dict[str, A
     # baseline, 110 of them over a single offending tag.
     mapped_tags = [AIHOT_TO_RADAR_TAG_MAP.get(tag, tag) for tag in raw_tags]
     dropped = [tag for tag in mapped_tags if tag not in _VOCABULARY_SET]
-    mapped_tags = [tag for tag in mapped_tags if tag in _VOCABULARY_SET]
+    # Filter, then de-duplicate, then trim -- in that order. Trimming first cuts by position, so
+    # a compliant tag sitting fifth is lost while an out-of-vocabulary or repeated one sitting
+    # first survives only to be discarded a line later. Model tag order does carry information
+    # (agreement with the AIHOT reference runs 0.79 / 0.55 / 0.48 / 0.38 across the first four
+    # positions, against 0.62 flat when the lists are shuffled), so keeping the earliest survivors
+    # is right -- it is trimming before the survivors are known that is wrong.
+    mapped_tags = _unique([tag for tag in mapped_tags if tag in _VOCABULARY_SET])[:4]
 
     # deterministic_tags guards against v1's vocabulary, which still holds GitHub and arXiv, so
     # removals have to be applied here as well or the source-derived layer reintroduces them.
@@ -160,10 +187,7 @@ def normalize(value: Mapping[str, object], *, item: ProviderItem) -> dict[str, A
     if not mapped_tags:
         raise ValueError(f"no provider tag survived the controlled vocabulary: dropped {dropped}")
 
-    merged: list[str] = []
-    for tag in [*mapped_tags, *(tag for tag in derived if tag in _VOCABULARY_SET)]:
-        if tag not in merged:
-            merged.append(tag)
+    merged = _unique([*mapped_tags, *(tag for tag in derived if tag in _VOCABULARY_SET)])
     if len(merged) < 2:
         raise ValueError(
             "tags must normalize to at least 2 unique controlled values"

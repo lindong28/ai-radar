@@ -116,6 +116,7 @@ def test_vocabulary_carries_the_tags_aihot_uses(tag: str) -> None:
 def test_vocabulary_drops_the_tags_aihot_never_uses(tag: str) -> None:
     assert tag not in CONTROLLED_VOCABULARY_V2
 
+
 def test_a_single_surviving_tag_is_not_enough_on_its_own() -> None:
     # The floor below the survivor check has its own job: one model tag survives, so the check
     # above passes, but nothing else joins it -- this item hits no deterministic keyword -- and a
@@ -123,3 +124,55 @@ def test_a_single_surviving_tag_is_not_enough_on_its_own() -> None:
     # over every input that used to reach this floor, so it needs its own case.
     with pytest.raises(ValueError, match="at least 2 unique controlled values"):
         normalize({**_BASE, "tags": ["推理", "小米"]}, item=_item())
+
+
+def test_too_many_tags_are_truncated_rather_than_rejected() -> None:
+    # merged[:4] already trims, so refusing five up front discarded the summary, reason and
+    # category over a field the code was about to trim anyway -- the single largest failure
+    # bucket on the full run, 75 of 2741.
+    out = normalize({**_BASE, "tags": ["智能体", "推理", "编码", "多模态", "端侧"]}, item=_item())
+    assert out["tags"] == ["智能体", "推理", "编码", "多模态"]
+    assert out["summary_zh"] and out["why_recommend"]
+
+
+def test_a_single_tag_is_topped_up_by_the_deterministic_layer() -> None:
+    item = ProviderItem(
+        id="i",
+        title="OpenAI 发布新模型",
+        url="https://example.com/a",
+        source_id="s",
+        tier="T1",
+        author=None,
+        published_at="2026-08-19T00:00:00Z",
+        content_text="内容",
+    )
+    out = normalize({**_BASE, "tags": ["智能体"]}, item=item)
+    assert out["tags"] == ["智能体", "OpenAI"]
+
+
+def _named_item() -> ProviderItem:
+    # The deterministic layer keys off the title, so this item contributes "OpenAI" and the
+    # vocabulary floor can be met by a single surviving model tag.
+    return ProviderItem(
+        id="i",
+        title="OpenAI 发布新模型",
+        url="https://example.com/a",
+        source_id="s",
+        tier="T1",
+        author=None,
+        published_at="2026-08-19T00:00:00Z",
+        content_text="内容",
+    )
+
+
+def test_a_compliant_tag_behind_four_rejects_is_not_trimmed_away() -> None:
+    # Trimming to four before the vocabulary filter cut 推理 and left nothing, so the summary,
+    # reason and category went with it -- exactly the loss this change set out to stop, moved
+    # from one failure bucket into another.
+    out = normalize({**_BASE, "tags": ["小米", "小鹏", "蔚来", "理想", "推理"]}, item=_named_item())
+    assert out["tags"] == ["推理", "OpenAI"]
+
+
+def test_repeats_do_not_consume_the_four_slots() -> None:
+    out = normalize({**_BASE, "tags": ["智能体", "智能体", "推理", "推理", "编码"]}, item=_item())
+    assert out["tags"] == ["智能体", "推理", "编码"]
