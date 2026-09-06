@@ -49,6 +49,7 @@ class Joined:
     prefilter: dict[str, Any] | None = None
     score: dict[str, Any] | None = None
     weighted_score: float | None = None
+    fit_score: float | None = None
     enrich: dict[str, Any] | None = None
     judgments: dict[str, int] = field(default_factory=dict)
 
@@ -111,6 +112,7 @@ def join_rows(
                 prefilter=_stage_output(row, "prefilter"),
                 score=_stage_output(row, "score"),
                 weighted_score=score_record.get("weighted_score") if score_record else None,
+                fit_score=score_record.get("fit_score") if score_record else None,
                 enrich=_stage_output(row, "enrich"),
                 judgments=dict(scores.get(str(row["question_id"]), {})),
             )
@@ -312,9 +314,10 @@ def spearman(pairs: Sequence[tuple[float, float]]) -> float | None:
 
 def score_pairs(rows: Sequence[Joined]) -> list[tuple[float, float]]:
     return [
-        (float(row.weighted_score), float(row.reference["score_0_100"]))
+        (float(row.fit_score if row.fit_score is not None else row.weighted_score), float(row.reference["score_0_100"]))
         for row in rows
-        if row.weighted_score is not None and row.reference.get("score_0_100") is not None
+        if (row.fit_score is not None or row.weighted_score is not None)
+        and row.reference.get("score_0_100") is not None
     ]
 
 

@@ -13,7 +13,7 @@ from typing import Any
 
 from ... import db
 from ...curator.score import weighted_score
-from ...curator.weights import DEFAULT_WEIGHTS
+from ...curator.weights import AIHOT_FIT_USES_TIER_MULTIPLIER, AIHOT_FIT_WEIGHTS, DEFAULT_WEIGHTS
 from ...enrich import runner_v2 as enrich_runner
 from ...prefilter import runner as prefilter_runner
 from ...provider.base import ProviderItem
@@ -160,7 +160,15 @@ def _evaluate(stage: str, provider: Any, item: ProviderItem, tier: str) -> dict[
         scored, output, error, latency_ms = scorer_runner._evaluate_item(provider, item)
         record = {"output": output, "error": error, "latency_ms": latency_ms}
         if scored is not None:
-            record["weighted_score"] = weighted_score(scored.model_dump(), DEFAULT_WEIGHTS, tier)
+            numeric = scored.model_dump()
+            # Two scores because AIHOT scores and selects with two different functions.
+            # weighted_score is what production ranks on; fit_score is the vector fitted
+            # against AIHOT's own 0-100 number, and it drops the tier multiplier -- source
+            # tier is our concept, and carrying it costs 0.09 Spearman against that number.
+            record["weighted_score"] = weighted_score(numeric, DEFAULT_WEIGHTS, tier)
+            record["fit_score"] = weighted_score(
+                numeric, AIHOT_FIT_WEIGHTS, tier if AIHOT_FIT_USES_TIER_MULTIPLIER else "unknown"
+            )
     else:
         _, output, error, latency_ms = enrich_runner._evaluate_item(provider, item)
         record = {"output": output, "error": error, "latency_ms": latency_ms}
@@ -291,6 +299,8 @@ def run_stages(
             "credentials": credentials,
             "side_effects": side_effects,
             "weights": DEFAULT_WEIGHTS.as_dict(),
+            "fit_weights": AIHOT_FIT_WEIGHTS.as_dict(),
+            "fit_uses_tier_multiplier": AIHOT_FIT_USES_TIER_MULTIPLIER,
         },
     }
     write_json(out_dir / "run.json", run_json)
