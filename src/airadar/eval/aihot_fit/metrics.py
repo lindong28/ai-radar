@@ -569,8 +569,48 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
     }
 
 
-def compute_metrics(*, run_dir: Path, questions_path: Path, baseline_path: Path | None = None) -> dict[str, Any]:
+def evaluate_thresholds(metrics: dict[str, Any], thresholds: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Score each metric against its configured floor.
+
+    Two verdicts per metric because they answer different questions. ``value_meets`` asks
+    whether this run landed above the floor; ``confident`` asks whether the interval says so,
+    which is what a gate should block on -- a point estimate above the floor with an interval
+    straddling it is noise, and blocking on the point estimate alone turns a threshold into a
+    coin flip at these sample sizes. A metric with no usable interval gets ``confident: None``,
+    not False: "cannot tell" and "below the floor" are different states and a reader acting on
+    them does different things.
+    """
+    if not thresholds:
+        return None
+    verdicts: dict[str, Any] = {}
+    for name, floor in thresholds.items():
+        minimum = floor.get("min") if isinstance(floor, dict) else floor
+        metric = metrics.get(name)
+        if metric is None or minimum is None or metric.get("value") is None:
+            verdicts[name] = {"min": minimum, "value_meets": None, "confident": None, "reason": "no value"}
+            continue
+        ci = metric.get("ci95")
+        usable = ci is not None and ci[0] < ci[1]
+        verdicts[name] = {
+            "min": minimum,
+            "value_meets": metric["value"] >= minimum,
+            "confident": (ci[0] >= minimum) if usable else None,
+            "n": metric.get("n"),
+            "basis": floor.get("basis") if isinstance(floor, dict) else None,
+        }
+    return verdicts
+
+
+def compute_metrics(
+    *,
+    run_dir: Path,
+    questions_path: Path,
+    baseline_path: Path | None = None,
+    thresholds_path: Path | None = None,
+) -> dict[str, Any]:
     run_meta = read_json(run_dir / "run.json")
+    resolved_thresholds = thresholds_path or (questions_path.parent / "thresholds.json")
+    thresholds = read_json(resolved_thresholds) if resolved_thresholds.exists() else None
     questions = load_questions(questions_path)
     outputs = list(read_jsonl(run_dir / "outputs.jsonl"))
     judgments_path = run_dir / "judgments.jsonl"
@@ -620,7 +660,10 @@ def compute_metrics(*, run_dir: Path, questions_path: Path, baseline_path: Path 
         "metrics": {name: metric.as_dict() for name, metric in metrics.items()},
         "failures": failures,
         "stopped_early": bool(run_meta.get("stopped_early")) or bool(judge_meta and judge_meta.get("stopped_early")),
-        "thresholds": None,
+        "thresholds": thresholds,
+        "threshold_verdicts": evaluate_thresholds(
+            {name: metric.as_dict() for name, metric in metrics.items()}, thresholds
+        ),
         "comparison": None,
     }
     if baseline_path is not None:
@@ -725,7 +768,33 @@ def render_report(
     lines += ["", "## 失败计数", ""]
     for stage, counts in payload["failures"].items():
         lines.append(f"- {stage}: " + ", ".join(f"{key}={value}" for key, value in counts.items()))
-    lines += ["", "## 达标线", "", "- thresholds: null（首轮基线跑出后由 caller 另填）"]
+    verdicts = payload.get("threshold_verdicts")
+    if not verdicts:
+        lines += ["", "## 达标线", "", "- 未配置（题集目录下无 `thresholds.json`）"]
+    else:
+        lines += [
+            "",
+            "## 达标线",
+            "",
+            "| 指标 | 下限 | 本次值 | 点估计达标 | 区间确认 | 依据 |",
+            "|---|---|---|---|---|---|",
+        ]
+        for name, verdict in verdicts.items():
+            metric = payload["metrics"].get(name, {})
+            confident = verdict.get("confident")
+            lines.append(
+                f"| {name} | {_fmt(verdict.get('min'))} | {_fmt(metric.get('value'))} | "
+                f"{'是' if verdict.get('value_meets') else '否' if verdict.get('value_meets') is not None else 'n/a'} | "
+                f"{'是' if confident else '不确定' if confident is None else '否'} | "
+                f"{verdict.get('basis') or ''} |"
+            )
+        blocked = [n for n, v in verdicts.items() if v.get("confident") is False]
+        unknown = [n for n, v in verdicts.items() if v.get("confident") is None]
+        lines += [
+            "",
+            f"- **区间确认低于下限**（应阻断）: {', '.join(blocked) if blocked else '无'}",
+            f"- **无法判定**（区间缺失或零宽，不等于达标）: {', '.join(unknown) if unknown else '无'}",
+        ]
     comparison = payload.get("comparison")
     if comparison is not None:
         lines += ["", "## 与基线比较", ""]

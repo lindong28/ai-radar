@@ -53,6 +53,10 @@ def add_eval_fit_parser(subparsers: argparse._SubParsersAction) -> None:  # type
     report.add_argument("--run", required=True)
     report.add_argument("--questions", default=str(DEFAULT_EVALSET_DIR / "questions.jsonl"))
     report.add_argument("--baseline", help="metrics.json of another run to compare against")
+    report.add_argument(
+        "--thresholds",
+        help="Pass marks to score against; defaults to thresholds.json beside the evalset",
+    )
 
 
 def _parse_sources(values: list[str] | None) -> tuple[tuple[str, Path], ...] | None:
@@ -143,9 +147,20 @@ def run_eval_fit(args: argparse.Namespace) -> int:
             run_dir=Path(args.run),
             questions_path=Path(args.questions),
             baseline_path=Path(args.baseline) if args.baseline else None,
+            thresholds_path=Path(args.thresholds) if args.thresholds else None,
         )
         for name, metric in payload["metrics"].items():
             print(f"{name}: n={metric['n']} value={metric['value']} ci95={metric['ci95']}")
+        verdicts = payload.get("threshold_verdicts") or {}
+        blocked = [name for name, v in verdicts.items() if v.get("confident") is False]
+        unknown = [name for name, v in verdicts.items() if v.get("confident") is None]
+        if verdicts:
+            print(f"thresholds: below={','.join(blocked) or 'none'} undetermined={','.join(unknown) or 'none'}")
+        if payload.get("stopped_early"):
+            print("WARNING: this run stopped early; the readings above cover only part of the subset")
+        calibration = payload.get("judge_calibration") or {}
+        if calibration and calibration.get("scale_ok") is not True:
+            print(f"WARNING: judge calibration scale_ok={calibration.get('scale_ok')}")
         print(f"metrics={Path(args.run) / 'metrics.json'} report={Path(args.run) / 'report.md'}")
-        return 0
+        return 1 if blocked else 0
     raise SystemExit(f"unknown eval-fit command: {args.eval_fit_command}")
