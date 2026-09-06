@@ -151,6 +151,13 @@ def run_eval_fit(args: argparse.Namespace) -> int:
         )
         for name, metric in payload["metrics"].items():
             print(f"{name}: n={metric['n']} value={metric['value']} ci95={metric['ci95']}")
+        comparison = payload.get("comparison") or {}
+        if comparison.get("comparable"):
+            regressed = [n for n, d in comparison["metrics"].items() if d.get("regressed") is True]
+            improved = [n for n, d in comparison["metrics"].items() if d.get("improved") is True]
+            print(f"vs baseline: improved={','.join(improved) or 'none'} regressed={','.join(regressed) or 'none'}")
+        elif comparison:
+            print(f"vs baseline: NOT COMPARABLE ({comparison.get('reason')})")
         verdicts = payload.get("threshold_verdicts") or {}
         blocked = [name for name, v in verdicts.items() if v.get("confident") is False]
         unknown = [name for name, v in verdicts.items() if v.get("confident") is None]

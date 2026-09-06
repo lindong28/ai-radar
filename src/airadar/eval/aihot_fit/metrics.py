@@ -552,10 +552,19 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
             and current_ci[0] < current_ci[1]
             and other_ci[0] < other_ci[1]
         )
+        # improved and regressed are separate three-state answers, not one boolean's two
+        # sides. improved=False alone reads identically for "no change" and for a drop of
+        # 0.27 with fully disjoint intervals -- measured on a mutated run against its own
+        # baseline -- and a reader acts differently on those.
         deltas[name] = {
             "delta": round(metric["value"] - other["value"], 4),
             "improved": (current_ci[0] > other_ci[1]) if usable else None,
-            "improved_rule": "current ci95 lower > baseline ci95 upper; None when either interval is missing or zero-width",
+            "regressed": (other_ci[0] > current_ci[1]) if usable else None,
+            "verdict_rule": (
+                "improved: current ci95 lower > baseline ci95 upper; "
+                "regressed: baseline ci95 lower > current ci95 upper; "
+                "both None when either interval is missing or zero-width"
+            ),
             "baseline_value": other["value"],
             "baseline_ci95": other_ci,
             "baseline_n": other.get("n"),
@@ -804,9 +813,18 @@ def render_report(
             lines += [
                 f"- 基线 run: `{comparison.get('baseline_run_id')}`",
                 "",
-                "| 指标 | delta | improved |",
-                "|---|---|---|",
+                "| 指标 | delta | 改善 | 回归 |",
+                "|---|---|---|---|",
             ]
+
+            def _verdict(value: Any) -> str:
+                return "是" if value is True else "否" if value is False else "判不出"
+
             for name, delta in comparison["metrics"].items():
-                lines.append(f"| {name} | {_fmt(delta.get('delta'))} | {delta.get('improved')} |")
+                lines.append(
+                    f"| {name} | {_fmt(delta.get('delta'))} | {_verdict(delta.get('improved'))} "
+                    f"| {_verdict(delta.get('regressed'))} |"
+                )
+            regressed = [n for n, d in comparison["metrics"].items() if d.get("regressed") is True]
+            lines += ["", f"- **判定为回归的指标**: {', '.join(regressed) if regressed else '无'}"]
     return "\n".join(lines) + "\n"
