@@ -181,6 +181,7 @@
 | [dev-environment.md](experiences/dev-environment.md) | 开发环境配置和工具使用 |
 | [deployment.md](experiences/deployment.md) | 部署和调度相关的坑点和 pattern |
 | [llm-pipeline.md](experiences/llm-pipeline.md) | LLM 调用、模型选型、prompt 调优、eval 管线 |
+| [measurement.md](experiences/measurement.md) | 测量与读数可信度：仪器失明（读数在结论真/假时同形）的六个实例、共享结构与三种挡法 |
 | [integration.md](experiences/integration.md) | 跨系统 / 外部工具接口约定（ai-assistant、summarize.sh、KB 写入器） |
 
 ### docs/plans/ [Developer]
