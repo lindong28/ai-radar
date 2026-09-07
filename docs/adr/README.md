@@ -86,4 +86,4 @@
 | [20260904-d708](./20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline，W1 复用共享告警状态机 | accepted; relates ADR-20260826-68e2 and ADR-059; supersedes ADR-009/021 boundedness only | 2026-09-04 |
 | [20260905-499e](./20260905-499e-aihot-reference-fit-eval-system.md) | 以 AIHOT 历史输出为参考输出建立内容链拟合评测体系（eval-fit 四槽位），达标线延后 | accepted；达标线未定，首轮为 n=20 小样本 | 2026-09-05 |
 | [20260906-7c31](./20260906-7c31-rank-on-weights-fitted-to-the-reference.md) | 网站排序改用拟合 AIHOT 分数的权重（density/authority/significance），取消来源分层乘数 | accepted; extends ADR-20260905-499e（该 ADR 曾把生产排序留在原地） | 2026-09-06 |
-| [20260907-a1c4](./20260907-a1c4-align-architecture-not-just-fields.md) | 与 AIHOT 对齐**架构**而非只对齐字段：M1 理由只给精选写、M2 打分加类别项（held-out ρ +0.029）、M3 精选不是分数的函数（建议不做）、M4 分类改有序判定（tutorial→industry 205 条是最大误判格） | **proposed**，待 decision-review；四条可分别裁决 | 2026-09-07 |
+| [20260907-a1c4](./20260907-a1c4-align-architecture-not-just-fields.md) | 与 AIHOT 对齐**架构**而非只对齐字段：M1 理由只给精选写、M2 打分加类别项（held-out ρ +0.029）、M3 精选不是分数的函数（建议不做）、**M5 已同日撤回**、M4 分类改有序判定（tutorial→industry 205 条是最大误判格） | **proposed**，待 decision-review；四条可分别裁决 | 2026-09-07 |
