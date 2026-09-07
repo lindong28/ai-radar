@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import random
 import statistics
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -122,6 +123,18 @@ def _rendered_inputs_sha256(stage: str) -> str | None:
     return digest.hexdigest()
 
 
+def _provider_module_sha256(provider: Any) -> str | None:
+    """Digest of the file the provider class is defined in, or None if it cannot be located."""
+    module = sys.modules.get(type(provider).__module__)
+    path = getattr(module, "__file__", None)
+    if not path:
+        return None
+    try:
+        return sha256_file(Path(path))
+    except OSError:
+        return None
+
+
 def stage_identity(providers: dict[str, Any], rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     root = db.PROJECT_ROOT
     rulesets = {
@@ -144,6 +157,14 @@ def stage_identity(providers: dict[str, Any], rows: list[dict[str, Any]] | None 
             # What answered. This is what a comparability gate has to read.
             "served_models": served_models(rows or [], stage),
             "provider_class": type(providers[stage]).__name__,
+            # The module the provider itself is defined in, hashed. _PROMPT_FILES below is a
+            # fixed map, so a variant provider that carries its own prompt records the stock
+            # file's digest -- prompt_sha256 then names a file that did not run. Measured: four
+            # A/B arms with very different classifier prompts wrote byte-identical
+            # prompt_sha256 AND rendered_inputs_sha256, and the first reading of that was "the
+            # arms are identical, this comparison is void". See ISSUE-FIT-34.
+            "provider_module_sha256": _provider_module_sha256(providers[stage]),
+            # Covers the stock prompt module only; read it together with the two fields above.
             "prompt_file": _PROMPT_FILES[stage],
             "prompt_sha256": sha256_file(root / _PROMPT_FILES[stage]),
         }
