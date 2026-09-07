@@ -203,6 +203,10 @@ overall agreement 71.0%
 
 **③ 更像真的那条杠杆不是「拆两次」，是「把写作指令从分类器上下文里拿掉」**（B2 vs B3，+0.033 分得开），并且是它救回了 paper 召回。干净测它要一个「**单次调用 + 剥短分类上下文**」的 arm，**没跑**——这是线索，不是结论。
 
+> **测它之前必须先钉死「剥短」指什么**（T2 评审者交回的 caveat）：B2 的 stage-1 prompt 把**写作指令、标签词表、类别枚举**一并去掉了；而单次调用的 arm 仍然要在同一次 completion 里吐 tags，**词表与枚举去不掉**。所以「剥短」在那个 arm 上不可能是同一个意思，**B2↔B3 的 +0.033 不是它的预测值**。不先定清楚剥哪些，新 arm 会原样继承 B3 当初被加进来要消除的那个混淆。
+>
+> 复用现成的：`deepseek_v4_pro_twostage_split_full` 已在；新 arm 约等于「B2 的 stage-1 文本 + 一次调用吐完整 enrich JSON」，形状同 B1 的 provider。`scripts/t2/compare_arms.py` 接任意两个 run 目录，且已拒绝题集不匹配。（均在 worktree `t2-cat-twostage-20260907`，HEAD `b1df230`，未 push。）
+
 ### 两条读数纪律（本次实测确证）
 
 - **只看定向口径会发出完全相反的建议**：tutorial 召回与 industry 精确率在**每个** B arm 上都显著改善。拦住它的是整体 agreement **加逐类矩阵**。
