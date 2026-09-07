@@ -467,3 +467,18 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 **取证**：在 `e3f521b` 的干净 `git archive` 导出树上跑同一条，失败逐字相同——与任何未提交改动无关。
 
 **未修的理由**：它落在微信来源那条链路上，而本工作树此刻有另一个 session 正在改 `src/airadar/wechat_discovery/`（工作树登记与未跟踪文件都指向它）。断言该改成 `>= 1` 还是跟着源数量走，取决于那边的收敛结果，此时改它有冲突风险。
+
+### main 上的既有测试失败清单（2026-09-07 复核，未修）
+
+跑全量会看到 7 条红。**没有一条由当前工作引入**——每条都在 `git archive HEAD` 的干净导出树上同样失败。列在这里是为了下一个人不必重新推一遍哪些是既有的：那个推导每次要跑一轮对照，而"7 条红"与"我刚弄坏了什么"在读数上同形。
+
+| 测试 | 断言 | 性质 |
+|---|---|---|
+| `test_admin_cli.py::test_source_pause_runbook_documents_internal_resolution_ledger_query` | runbook 里找不到 `channel=INTERNAL,type=resolved,reason=source_paused` | 文档与测试漂移 |
+| `test_egress_callsite_registry.py::test_checked_in_network_callsites_match_classified_registry_exactly` | 一处 callsite 由 `subprocess.Popen` 变成 `...launch`，注册表未同步（其余 55 项一致） | 注册表未更新 |
+| `test_pipeline_scheduler.py::test_real_run_sh_chain_preserves_pipeline_lock_fd_and_generation` | 测试内跑的 pipeline 报 `egress preflight FAIL (exit 1)` | 环境相关 |
+| `tests/playwright/test_fixture_isolation.py::test_playwright_session_db_is_deterministic_and_serve_uses_it` | `source_counts["wechat"] == 1` 实际为 2 | 见上一节，加源时漏同步断言 |
+| `test_aihot_dataset.py::test_capture_writer_refuses_non_repo_root_and_existing_capture` | — | 既有 |
+| `test_repository_hygiene.py::test_execution_plan_workspace_is_ignored_and_untracked` | `/.label-serve/` 未被忽略 | 既有 |
+
+**另有一条不在此列，是负载抖动**：`test_egress_routing.py::test_playwright_external_and_loopback_reach_the_selected_listener` 在全量并跑（尤其有后台任务打网络）时会红，单独重跑即过。`tests/playwright/test_fixture_isolation.py` 之外的 playwright 用例同理。判据是**单独重跑**，不是重跑全量。
