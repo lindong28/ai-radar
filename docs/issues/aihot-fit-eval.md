@@ -585,3 +585,17 @@ reviewer 复算了 diff 与文档里的全部读数（0.4502 / 0.6286 / 0.5925 /
 - `tests/test_enrich_prompt_matches_schema.py`：断言硬门槛句陈述的窗口等于 `EnrichOutputV2` 的实际约束，且薄源子句不豁免下限。两条都跑过阳性对照（在 `git archive HEAD` 导出树上分别复现 `2-4` 漂移与「薄源也用最短」，各自命中对应用例）。
 - **未验证**：这次改动**没有跑模型**（本轮不跑全量）。它是否真把薄源理由推进 35-90，要等下一次 enrich 的生产读数或一次小样本复测。已丢的 92 条需要一次显式补跑才回得来，本轮未做。
 
+
+### ISSUE-FIT-34 · eval 身份记录分不开 enricher 变体（2026-09-07，由 T2 评审者报出并复核）
+
+`src/airadar/eval/aihot_fit/run.py:41` 的 `_PROMPT_FILES` 把 enrich 的 prompt 路径**硬编码**为 `src/airadar/enrich/prompts_v2.py`；`prompt_sha256`（:148）与 `rendered_inputs_sha256`（:143）都从这一条路径派生。
+
+**后果**：把变体实现成另一个模块的 enricher（本次 T2 的 `AI_RADAR_ENRICHER=deepseek_v4_pro_twostage_*`）时，四个跑着**明显不同分类 prompt** 的 run 记下**逐字节相同**的 `prompt_sha256` 与 `rendered_inputs_sha256`。**只有 `provider_class` 与 `model_selection_env` 区分得开。**
+
+**它为什么要紧**：身份记录的全部作用就是证明"测的是哪个对象"。任何按 prompt hash 判可比性的下游——人或脚本——会把两个不同对象判成同一个，而这个误判与"确实是同一个对象"读数完全相同。这是 `docs/experiences/measurement.md` 那一族的第七个实例，也是唯一一个落在**身份记录本身**上的。
+
+**本轮的绕行**：评审者用 usage 账本的 `input_char_count` 逐条补证（300/300 相符，阴性对照 0/300）。**但那是字符数不是字节，等长改写会通过**——是个更弱的代理判据，不是修复。
+
+**未修，理由**：要动共享的 `run.py`，且会改掉 arm A 已落盘的 identity 语义。**归属**：独立单元，动它之前先决定既有 run 的 identity 怎么迁移。
+
+**我自己一度踩中它**：读到四个 run 的 `prompt_sha256` 相同时，第一反应是"两个 arm 没差别、这次 A/B 作废"；核 `model_selection_env` 才排除。**判反了的那一侧更危险**——若变体恰好没设 env 区分，就会把"同一个对象跑两遍"读成"对照有效"。
