@@ -27,9 +27,24 @@ cd "$WORKTREE" || { echo "FATAL: worktree missing"; exit 3; }
 # days and let the tool reject it if that is not the canonical pair.
 END="$(date -u +%Y-%m-%dT00:00:00Z)"
 START="$(date -u -v-2d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '2 days ago' +%Y-%m-%dT00:00:00Z)"
+# The capture refuses a dirty TOOL checkout -- it records the checkout's exact HEAD, an
+# eval-identity guarantee. Its data happens to live inside that checkout, so without this line
+# the job's own output counts as code dirt and the first success blocks every run after it.
+# That is how 2026-09-08 09:37 failed: rc=2 on the 09-07 capture's untracked files.
+#
+# Scoping the dirt check out of the submodule fixes the whole class at once -- untracked new
+# captures, the tracked deletions retention makes, and a `.staging` tree left by a capture
+# killed mid-flight (16 minutes a day of exposure) all stop mattering. Verified on this
+# worktree: with 771 tracked files deleted, the tool's own predicate still reads dirty=False.
+# It hides genuine gitlink changes too, which costs nothing here -- nothing else moves it.
+git config --local submodule.benchmarks/aihot.ignore dirty
+
 echo "requesting $START .. $END"
 
-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture --start "$START" --end "$END"
+# Seam so the git-handling below can be exercised without spending a real AIHOT window.
+# tests/test_capture_aihot_daily.sh substitutes a stub; nothing else sets it.
+AIHOT_CAPTURE_CMD="${AIHOT_CAPTURE_CMD:-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture}"
+eval "$AIHOT_CAPTURE_CMD --start \"$START\" --end \"$END\""
 rc=$?
 
 # An already-captured window is the expected steady state on a re-run, not a failure.
@@ -51,6 +66,12 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture EXIT rc=$rc ==="
 # Windows are never pruned -- they are the data. Captures are the evidence a window validates
 # against, and a window's manifest names its capture by path and sha256, so pruning a capture
 # leaves that window usable but no longer verifiable.
+# Runs whether or not today's capture succeeded. It was briefly guarded on rc=0 after the
+# 2026-09-08 incident, on a misreading: the capture it deleted that day (aihot-20260821T142635Z)
+# was 18 days old against a 14-day window, so a SUCCESSFUL run would have deleted exactly the
+# same directory. rc=2 was concurrent, not causal. And gating disk policy on network success is
+# backwards -- an outage is when pruning matters most, and a full disk is itself a reason
+# capture fails, which the guard would have made self-perpetuating.
 RETAIN="${AIHOT_CAPTURE_RETAIN_DAYS:-14}"
 if [ "$RETAIN" -gt 0 ] 2>/dev/null; then
   # Age comes from the directory name (aihot-YYYYMMDDTHHMMSSZ), not from mtime. A fresh clone
@@ -69,5 +90,52 @@ if [ "$RETAIN" -gt 0 ] 2>/dev/null; then
   done
   after=$(du -sm benchmarks/aihot/captures 2>/dev/null | cut -f1)
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === retention: keep ${RETAIN}d, captures ${before:-?}MB -> ${after:-?}MB ==="
+fi
+
+# Persist, AFTER retention so the commit records the pruned state rather than a tree retention
+# is about to change. This is durability, not deadlock relief -- `ignore=dirty` above owns that,
+# and this block existing does not make tomorrow's run depend on it.
+#
+# Named paths, and note what that does NOT buy: `captures` and `windows` are directories, so a
+# stray file under either still gets committed. It only excludes strays elsewhere in the tree.
+#
+# KNOWN EXPOSURE, larger than a re-clone: these commits live in this linked worktree's private
+# gitdir (.git/worktrees/<name>/modules/...). `git worktree remove` deletes that gitdir, and the
+# objects are then gone machine-wide while the superproject keeps a pin pointing at nothing.
+# This is a dated program worktree -- exactly the kind that gets cleaned up. Pushing the
+# submodule is what makes the data durable; until then there is one copy, in a disposable place.
+if [ $rc -eq 0 ]; then
+  if git -C benchmarks/aihot add captures windows 2>&1 &&
+     ! git -C benchmarks/aihot diff --cached --quiet; then
+    if git -C benchmarks/aihot commit -q -m "data(aihot): $(basename "$(ls -dt benchmarks/aihot/captures/aihot-* 2>/dev/null | head -1)")"; then
+      echo "  submodule commit: $(git -C benchmarks/aihot rev-parse --short HEAD)"
+      git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot \
+        && echo "  pointer commit: $(git rev-parse --short HEAD)" \
+        || echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
+    else
+      echo "  WARNING: submodule commit failed; today's capture is uncommitted"
+    fi
+  else
+    echo "  submodule: nothing staged (either nothing new, or git add failed above)"
+  fi
+fi
+
+# Last word, after everything that can dirty the tree. The 2026-09-08 failure was invisible for
+# a day because the only record was a log nobody reads, so this exits non-zero.
+#
+# Two checks, because `ignore=dirty` above means the parent's status no longer SEES the
+# submodule -- which is the point, and also the reason a single parent-side check would have
+# been blind to the likeliest place for junk to accumulate.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === WARNING: worktree dirty at exit, tomorrow will fail ==="
+  git status --short | sed 's/^/    /'
+  [ $rc -eq 0 ] && rc=1
+fi
+# Submodule leftovers no longer block tomorrow, so this reports without failing the run -- but
+# it does report, because unbounded junk under a data directory is worth someone seeing.
+sub_dirt="$(git -C benchmarks/aihot status --porcelain)"
+if [ -n "$sub_dirt" ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === NOTE: uncommitted content in the dataset submodule ==="
+  printf '%s\n' "$sub_dirt" | sed 's/^/    /'
 fi
 exit $rc
