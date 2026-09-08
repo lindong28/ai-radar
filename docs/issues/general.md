@@ -482,3 +482,24 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 | `test_repository_hygiene.py::test_execution_plan_workspace_is_ignored_and_untracked` | `/.label-serve/` 未被忽略 | 既有 |
 
 **另有一条不在此列，是负载抖动**：`test_egress_routing.py::test_playwright_external_and_loopback_reach_the_selected_listener` 在全量并跑（尤其有后台任务打网络）时会红，单独重跑即过。`tests/playwright/test_fixture_isolation.py` 之外的 playwright 用例同理。判据是**单独重跑**，不是重跑全量。
+
+### enrich 的存量回填还没有安全的跑法（2026-09-08，一次尝试已撤回）
+
+**现状**：`enrich` 的 ruleset 戳自 2026-09-08 起由 prompt 派生，所以每次改 prompt 都会把整窗放回队列（`--since 24h` 实测 3863 条），而定时任务每轮只做 40 条。手工 `./run.sh enrich` 是唯一的补法，但它**不取 `pipeline.sh` 的 flock**——实测一次并发把某轮的 `db.migrate()` 撞成 `database is locked`，整个 fetch 阶段下线。
+
+**试过并撤回的做法**：把 `scripts/backfill_rescore.sh` 按 stage 参数化（它已有分块、饥饿让路、块超时、错误率中止，`starve_threshold` 表里甚至早有 `enrich) echo 900`）。中档 review 判死。下面这份就是「**要做对得改什么**」的清单，三条最重的我独立核实过：
+
+- **它不解决它自称要解决的问题。** 脚本发的也是 `./run.sh enrich`（第 100 行），同样不取 flock。更糟的是它只给**自己的子进程**设 `AI_RADAR_SQLITE_BUSY_TIMEOUT_MS=120000`（第 65 行），而 pipeline 的 `db.migrate()` 走默认 5000——**竞争时系统性输的那一方正是 pipeline**，恰好是那次事故的形态。
+- **退出条件 #4（错误率）的前提是反的。** score 的候选查询只看 `ruleset_version`（`scorer/runner.py:56`），失败行确实永久排除；**enrich 的带 `AND enriched.error IS NULL`**（`enrich/runner_v2.py:106`），失败行不排除任何东西、下轮原样重取。所以那句「errored items are now skipped forever, they need targeted repair」对 enrich 是假的，还会把人指向一次不必要的修复。
+- **配套测试犯了它自称要防的那个 bug。** 它断言 `processed=500 errors=3`，而本仓真实打印的是 `score processed=N errors=0`（**带前导词**，日志里实测 172 次）——那条字符串仓里从不出现。有人把正则收紧成只认 `^processed=` 时，5 条断言全绿而每个真实 score chunk 都会掉进失败路径。
+
+review 另外指出（未逐条复核，但机制清楚）：
+
+- **终止条件 #1（`processed=0` 即完成）对 enrich 两个方向都坏**：① enrich 独有的 24h 失败退避会把确定性失败项暂时排除出候选，chunk 报 0、脚本打印「complete」，而那批其实没做；② 戳由 prompt 派生且**每个 chunk 的子进程各算一次**——跑到一半有人改 prompt，候选集跳回全量（400d 窗口 42216 条），此前写的行对新戳不可见。score 结构上做不出这件事，它的戳是字面常量。
+- **饥饿闸在最需要的 stage 上最不敏感**：enrich 阈值 900s 恰等于一个 cron 周期（score 的 300s 只有周期的三分之一），检测延迟还有一个 chunk。等它响时下一轮 cron 已因 "already running" 丢掉——那正是这道闸存在的理由。
+- **窗口默认值是 score 时代的 400d**：对 enrich 是 42216 条（≈219MB 写入、约 6.9 小时），而触发场景只需 24h 的 3863 条，差 10.9 倍；调用行不打印本次 STAGE/SINCE，无 dry-run、不先报候选数。
+- **v2 语义全靠 `.env` 里一行**：调用行没有 `--v2`，而本次依赖的每一个性质（prompt 派生戳、逐条 commit、`error IS NULL` 跳过、never-enriched-first 排序）**都只属于 v2**。换台机器就会静默跑 v1。
+- **未知 stage 落到贵的那一支**：`if score … else <enrich>`，`else` 无条件。
+- **测试不隔离**：直接跑生产脚本、不设 `AI_RADAR_DB`、不设 timeout——**闸一旦回归（断言本该变红的那一刻），测试自己会对生产库发起一次 500 项 enrich**。
+
+**结论**：enrich 支持不是「加个参数」，要重做按 stage 分的退出语义、窗口默认、`--v2`、真正的 flock、以及对称的 busy_timeout。在那之前，**手工回填只能自己排 `.pipeline.flock`**（本 session 用 `fcntl.flock` 排过一次，可行但要等——pipeline 每 15 分钟一轮、单轮 20–40 分钟，间隙很窄）。
