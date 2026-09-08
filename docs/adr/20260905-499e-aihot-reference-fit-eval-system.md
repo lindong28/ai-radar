@@ -210,3 +210,9 @@ H1 / H2 修复经独立复核成立：新增的 51 条不匹配**逐条核实全
 - 未验证 AIHOT 参考自身的一致性（同一条目重复采集是否给出相同摘要/理由），因此判官读数的天花板未知。
 - 题集匹配依赖我站 `items` 表当前内容：`content_text` 随重新抓取可能变化，`questions.jsonl` 是当时的快照。未匹配条目共 158 条（t2 29 / t5 129），未逐条核查未匹配原因。
 - 未跑全量 2741 题的基线（成本约 8223 次 stage 调用），因此本 ADR 不含全题集读数。
+
+### 题集 `aihot-fit-new2d` 的参考侧覆盖（2026-09-07 抓取，AIHOT 侧事实）
+
+- **AIHOT 自己不给全字段。** 该题集 364 题里带参考 tags 的 186 题（51.1%），`primary_category` 为空的 172 题（47.3%）；读数取自 `data/eval-fit/evalset-staging/aihot-fit-new2d/manifest.json` 的 `with_tags` / `by_primary_category`。这是参考输出本身的覆盖，**不是我方产出的缺陷，也不是待补的工程缺口**——不要再想办法提高它。它的后果只有一条：`tag_jaccard_mean` 与 `category_agreement` 的 n 恒小于题数，两者的 CI 因而比同 run 的其它指标宽，跨 run 比较必须先看 n。
+- **tags 维度在这两个题集之间不可做配对比较。** `aihot-fit-v1` 与 `aihot-fit-new2d` 共享 59 个 `item_id`，其中在 v1 侧带参考 tags 的是 **0 题**（new2d 侧 56 题）。所以 FULL3 的 `tag_jaccard_mean` 0.5296 与 REG-NEW2D 的 0.4417 之间没有任何共同样本，这个差值**测不出**是 prompt 变化还是题集人群变化，不得作为回归读数使用。同一交集上 `primary_category` 参考值两侧完全一致（59/59 相同），故 category 维度可配对：老 prompt 40/59、新 prompt 38/59，McNemar 不一致对 b=3 / c=1，精确双侧 p=0.625——**无可检出的回归**，未配对时看到的 0.71 → 0.597 是人群效应。
+
