@@ -92,3 +92,18 @@
 ### 手工回填不走 pipeline 的锁
 
 `pipeline.sh` 用 flock 互斥，而 `./run.sh enrich` **不取那把锁**。手工回填与 cron 轮次并发时，后者的 `db.migrate` 会撞上 `sqlite3.OperationalError: database is locked` 并让 fetch 阶段整段失败（实测 2026-09-08T20:15 轮 `fetch FAIL (exit 1)`，`attempted` 汇总行都没写出来）。回填要么等 pipeline 让出锁，要么自己按同一把锁排队。
+
+### 「每轮重列整个存档」的源会污染任何按 fetched_at 排序的批处理
+
+`openai_blog` 有 1204 条条目、最早到 2015-12-11，而它的 feed 每轮把整个存档重新列一遍——2026-09-08 实测近 24 小时内它有 **1173 条**被重新 fetch，`fetched_at` 因此整批刷新。
+
+后果有两层：
+
+- **`fetched_at` 对这类源不是新鲜度的代理。** 任何按它排序、取窗口或判"新不新"的逻辑，在这类源上都读到的是"上次抓取时刻"而不是"这条内容有多新"。
+- **它会占满任何按 `fetched_at` 排序的批处理队列。** enrich 重算就是这样：1527 条重算样本里 991 条（67%）来自这一个源，而它在候选池里真实只占 5.3%。据这个样本测出的池子构成整个作废。
+
+判据是**该源被重新列出的条数与它的总条数同量级**。诊断一条：
+
+    select source_id, count(*) from items where fetched_at > datetime('now','-24 hours') group by 1 order by 2 desc
+
+把它和该源的 `count(*)` 比一眼就看得出来。要按源做无偏抽样时，别用 `fetched_at`，用 `published_at` 或直接按源分层。
