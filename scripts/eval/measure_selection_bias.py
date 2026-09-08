@@ -75,7 +75,9 @@ def main() -> None:
     print(f"{'口径':<34}{'对 AIHOT 精选构成的 TV':>22}")
     print(f"{'我方按当前权重取 top-N':<30}{_tv(our_share, aihot_share):>22.3f}")
     print(f"{'整个题集，完全不做选择':<30}{_tv(pool_share, aihot_share):>22.3f}")
-    print("   ↑ 前者大于后者，就说明排序把构成推得比不选还远\n")
+    print("   ↑ 前者大于后者，就说明排序把构成推得比不选还远")
+    print("   ⚠ 第二行**不是我方的地板**：题集是 AIHOT 自己发布过的条目，所以它量的是")
+    print("     「AIHOT 的流 vs AIHOT 的精选」，即 AIHOT 有多不挑，与我方池子无关。\n")
 
     print(f"{'类别':<10}{'池占比':>9}{'AIHOT精选率':>13}{'我方入选率':>12}{'相对':>8}")
     for c in CATS:
