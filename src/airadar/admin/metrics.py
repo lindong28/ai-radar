@@ -43,6 +43,18 @@ PIPELINE_DONE_RE = re.compile(
 # that fails to parse as a skip is not inert — it is counted as a real run with
 # zero sources, and `latest_run` then reports attempted=0, which reads as a 0%
 # fetch failure rate no matter what the actual pipeline did.
+# The pipeline prints this line once per round, before the `=== egress preflight
+# OK|FAIL ===` marker, in BOTH the healthy and the unavailable case. It is the only
+# machine-readable statement of *why* a round produced no fetch. The optional
+# timestamp prefix matches every other regex in this module: today `pipeline.sh`
+# appends the preflight output raw while every marker around it goes through
+# `log()`, so tolerating the prefix keeps a future cleanup from silently
+# disabling attribution. The marker line
+# itself carries a space in the stage name, so STAGE_EVENT_RE (which allows only
+# [a-z_]) never matched it and a preflight-blocked round parsed to zero stages.
+EGRESS_PREFLIGHT_RE = re.compile(
+    r"^(?:\[[^\]]+\]\s+)?egress-preflight\s+status=(?P<status>\S+)(?:.*?\breason=(?P<reason>.+))?"
+)
 SKIP_RE = re.compile(
     r"^(?:\[[^\]]+\]\s+)?===\s+pipeline SKIP: already running(?: pid=(?P<pid>\d+))?\s+==="
 )
@@ -127,6 +139,7 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
         "status": "unknown",
         "failed": None,
         "skip": False,
+        "egress_preflight": None,
         "stages": {},
         "fetch": {
             "attempted": 0,
@@ -147,6 +160,12 @@ def _parse_pipeline_log(path: Path) -> dict[str, object]:
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw_line.strip()
         if not line:
+            continue
+        if egress_match := EGRESS_PREFLIGHT_RE.match(line):
+            run["egress_preflight"] = {
+                "status": egress_match.group("status"),
+                "reason": (egress_match.group("reason") or "").strip(),
+            }
             continue
         if skip_match := SKIP_RE.match(line):
             run["status"] = "skip"

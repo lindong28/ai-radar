@@ -103,6 +103,11 @@ class AlertSignals:
     items_today: int
     last_successful_pipeline_at: datetime | None = None
     minutes_elapsed_today: int = MINUTES_PER_DAY
+    # Newest round that actually reached the egress preflight, healthy or not.
+    # SKIP rounds never reach it, so they leave these two untouched rather than
+    # clearing them — a skip is not evidence that egress recovered.
+    egress_preflight_status: str = ""
+    egress_preflight_reason: str = ""
     # A4 fetch dimension. `fetch_evaluated` is False when the log directory has
     # no complete fetch round (summary line followed by a `=== fetch OK|FAIL ===`
     # terminal line) or the newest complete round is older than
@@ -398,12 +403,44 @@ def evaluate_rules(
     # liveness, not a fault. So skip count is never a standalone trigger; it only
     # rides along as context when the heartbeat itself has genuinely gone stale.
     no_success_minutes = _int_threshold(a2, "no_success_minutes", 120)
+    heartbeat_action = ""
     if signals.minutes_since_successful_pipeline > no_success_minutes:
-        skip_note = (
-            f"（期间连续 SKIP {signals.consecutive_skip_logs} 次，疑似卡死/僵尸锁）"
-            if signals.consecutive_skip_logs
-            else ""
-        )
+        # Attribution, not silence, is what failed twice here (2026-09-04 and
+        # 2026-09-08): both outages were `egress preflight FAIL` written plainly in
+        # every round's log, and both times A2 said "疑似卡死/僵尸锁" and sent the
+        # reader to look at locks. The skip count cannot carry that story — it
+        # counts skips since the last success, so during the 2026-09-08 outage it
+        # read 2 while the actual number of SKIP rounds was 0. When the newest
+        # round that reached the preflight says it was not healthy, that IS the
+        # cause; the skip count is dropped rather than shown beside it.
+        if signals.egress_preflight_status and signals.egress_preflight_status != "healthy":
+            # The reason is copied verbatim from a line the pipeline wrote, which in
+            # turn embeds `check-proxy-status` output of unbounded length; it goes on
+            # to become an argv element for im-notify, so it is capped here.
+            #
+            # 400, not a round 200: the longest reason across 770 real rounds is
+            # exactly 201 (`missing status fields:` with 11 field names, 14 rounds
+            # carry it), and a 200 cap silently ate the final letter of
+            # `tencent_status_scope`. That is the worst possible failure for this
+            # message — the field list is the whole reason this attribution exists,
+            # and a truncated one reads as a complete one naming a field that does
+            # not exist. The cap must sit above what production actually emits, and
+            # when it does bite it has to be visible.
+            raw = signals.egress_preflight_reason
+            reason = raw if len(raw) <= 400 else raw[:400] + "…（已截断）"
+            reason_text = f"，reason={reason}" if reason else ""
+            skip_note = f"（最近一轮出网 preflight status={signals.egress_preflight_status}{reason_text}）"
+            heartbeat_action = (
+                "出网 preflight 未通过：运行 check-proxy-status --format=kv 核 selector，"
+                "见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
+            )
+        else:
+            skip_note = (
+                f"（期间连续 SKIP {signals.consecutive_skip_logs} 次，疑似卡死/僵尸锁）"
+                if signals.consecutive_skip_logs
+                else ""
+            )
+            heartbeat_action = ""
         elapsed_text = (
             "尚无成功 pipeline 记录"
             if signals.minutes_since_successful_pipeline >= 10_000
@@ -709,13 +746,19 @@ def evaluate_rules(
             title="阶段错误率/耗时异常",
             firing=bool(stage_reasons),
             detail="；".join(stage_reasons) if stage_reasons else "各阶段错误率、耗时与 pipeline 心跳在阈值内",
-            action="查看 pipeline 最新日志，定位异常 stage；若无成功轮次或连续 SKIP，检查 pipeline 锁和长任务。",
+            # Only the heartbeat branch may retarget the action: A2 also fires on stage
+            # error rate and P95, and those still need the "go read the stage logs"
+            # instruction even while egress happens to be unhealthy.
+            action=heartbeat_action
+            or "查看 pipeline 最新日志，定位异常 stage；若无成功轮次或连续 SKIP，检查 pipeline 锁和长任务。",
             values={
                 "stage_error_rate": signals.stage_error_rate,
                 "stage_sample_count": signals.stage_sample_count,
                 "stage_p95_latency_ms": signals.stage_p95_latency_ms,
                 "minutes_since_successful_pipeline": signals.minutes_since_successful_pipeline,
                 "consecutive_skip_logs": signals.consecutive_skip_logs,
+                "egress_preflight_status": signals.egress_preflight_status,
+                "egress_preflight_reason": signals.egress_preflight_reason,
             },
         ),
         AlertRuleResult(
@@ -3354,6 +3397,24 @@ def collect_alert_signals(
                 break
             runs_after_last_success.append(run)
     minutes_since_success = int((current - last_success).total_seconds() / 60) if last_success else 10_000
+    # Only the newest non-SKIP round may speak. Scanning further back would let a
+    # reading survive an arbitrary number of skips: a round that hangs after taking
+    # the lock but before printing its preflight line leaves every later round
+    # skipping, and the newest *parseable* reading would then come from before the
+    # hang — attributing a genuine zombie lock to egress and deleting the skip count
+    # that is the only evidence of it. A hung round produces no reading, so the
+    # heartbeat correctly falls back to the lock wording.
+    egress_preflight_status = ""
+    egress_preflight_reason = ""
+    if isinstance(recent_runs, list):
+        for run in reversed(recent_runs):
+            if not isinstance(run, dict) or run.get("skip"):
+                continue
+            preflight = run.get("egress_preflight")
+            if isinstance(preflight, dict) and preflight.get("status"):
+                egress_preflight_status = str(preflight["status"])
+                egress_preflight_reason = str(preflight.get("reason") or "")
+            break
     browser_preflight_only_failed_runs = 0
     if last_success is not None and runs_after_last_success:
         data_stages = {"fetch", "prefilter", "scoring", "enrich", "curate", "interpret"}
@@ -3482,6 +3543,8 @@ def collect_alert_signals(
         minutes_since_successful_pipeline=minutes_since_success,
         last_successful_pipeline_at=last_success,
         consecutive_skip_logs=consecutive_skip_logs,
+        egress_preflight_status=egress_preflight_status,
+        egress_preflight_reason=egress_preflight_reason,
         server_error_rate=_server_error_rate(users),
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
         items_today=int(ingestion.get("items_today") or 0),

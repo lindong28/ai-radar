@@ -13,7 +13,7 @@ import time
 from collections import Counter
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import FrozenInstanceError, asdict
+from dataclasses import FrozenInstanceError, asdict, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -5024,3 +5024,273 @@ def test_a7_stale_backfilled_item_does_not_hide_a_faded_source(tmp_path: Path) -
     )
     assert quiet_x == []
     assert paused == []
+
+
+def _a2(signals: AlertSignals) -> object:
+    return next(r for r in evaluate_rules(signals) if r.rule_id == "A2")
+
+
+def _write_round(log_dir: Path, stamp: str, body: str) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / f"pipeline-{stamp}.log").write_text(body, encoding="utf-8")
+
+
+_HEALTHY_ROUND = (
+    "[{ts}] === pipeline RUN generation=g ===\n"
+    "egress-preflight status=healthy policy_id=domain-routing-v2 policy_sha256=deadbeef\n"
+    "[{ts}] === egress preflight OK ===\n"
+    "=== attempted=1 inserted=1 failed=0\n"
+    "[{ts}] === fetch OK ===\n"
+    "[{ts}] === PIPELINE DONE (failed=0; alert_recovery=OK) ===\n"
+)
+_BLOCKED_ROUND = (
+    "[{ts}] === pipeline RUN generation=g ===\n"
+    "egress-preflight status=unavailable reason=missing status fields: direct_status,router_status\n"
+    "[{ts}] === egress preflight FAIL (exit 1) ===\n"
+)
+_SKIPPED_ROUND = "[{ts}] === pipeline SKIP: already running ===\n"
+
+
+# --- message and remediation, driven from hand-built signals -----------------
+
+
+def test_a2_attributes_a_stale_heartbeat_to_the_egress_preflight() -> None:
+    """Replays 2026-09-08 11:00-14:30: 15 rounds of `egress preflight FAIL`, 0 SKIP.
+
+    The pre-fix message said "疑似卡死/僵尸锁" and sent the reader to check locks.
+    """
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        consecutive_skip_logs=2,  # stale count from before the outage window
+        egress_preflight_status="unavailable",
+        egress_preflight_reason="missing status fields: direct_status,router_status",
+    )
+    result = _a2(signals)
+    assert result.firing
+    assert "出网 preflight status=unavailable" in result.detail
+    assert "missing status fields" in result.detail
+    assert "僵尸锁" not in result.detail
+    assert "SKIP" not in result.detail
+    assert result.values["egress_preflight_status"] == "unavailable"
+
+
+def test_a2_remediation_names_a_command_that_exists() -> None:
+    """The whole point of this change is not sending the reader somewhere useless.
+
+    `check-proxy-status` is what `airadar.egress.STATUS_COMMAND` actually runs and
+    what the runbook section named here documents; `./run.sh admin egress` is not a
+    real subcommand and an earlier draft of this fix shipped it.
+    """
+    from airadar.egress import STATUS_COMMAND
+
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        egress_preflight_status="unavailable",
+    )
+    action = _a2(signals).action
+    # STATUS_COMMAND is a zsh -fc invocation; the operator-facing part is the
+    # command inside it, which is what the message must name.
+    assert "check-proxy-status --format=kv" in " ".join(STATUS_COMMAND)
+    assert "check-proxy-status --format=kv" in action
+    assert "run.sh admin egress" not in action
+    assert "出网 selector 的 preflight 与实际 route" in action
+    runbook = Path(__file__).resolve().parents[1] / "docs/operations/monitoring-alerting.md"
+    assert "出网 selector 的 preflight 与实际 route" in runbook.read_text(encoding="utf-8")
+
+
+def test_a2_leaves_the_stage_remediation_alone_when_the_heartbeat_is_fresh() -> None:
+    """A2 also fires on stage error rate and P95; those still need the stage logs.
+
+    An unhealthy preflight must not retarget an action the heartbeat did not raise.
+    """
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=10,
+        stage_error_rate={"prefilter": 0.0, "scoring": 0.8, "enrich": 0.0},
+        egress_preflight_status="unavailable",
+        egress_preflight_reason="status command returned 1",
+    )
+    result = _a2(signals)
+    assert result.firing
+    assert "scoring 错误率" in result.detail
+    assert "出网 preflight" not in result.detail
+    assert "pipeline 锁" in result.action
+    assert "check-proxy-status" not in result.action
+
+
+def test_a2_caps_the_reason_copied_out_of_the_pipeline_log() -> None:
+    """The reason embeds `check-proxy-status` output and becomes an im-notify argv."""
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        egress_preflight_status="unavailable",
+        egress_preflight_reason="x" * 5000,
+    )
+    assert len(_a2(signals).detail) < 500
+
+
+def test_a2_keeps_the_lock_wording_when_the_preflight_was_healthy() -> None:
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        consecutive_skip_logs=3,
+        egress_preflight_status="healthy",
+    )
+    result = _a2(signals)
+    assert "连续 SKIP 3 次，疑似卡死/僵尸锁" in result.detail
+    assert "出网 preflight" not in result.detail
+    assert "pipeline 锁" in result.action
+
+
+def test_a2_keeps_the_lock_wording_when_no_round_reached_the_preflight() -> None:
+    """Empty status (only SKIP rounds on disk) must not silently read as healthy."""
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        consecutive_skip_logs=4,
+        egress_preflight_status="",
+    )
+    result = _a2(signals)
+    assert "连续 SKIP 4 次，疑似卡死/僵尸锁" in result.detail
+    assert "pipeline 锁" in result.action
+
+
+def test_a2_does_not_fire_on_an_unhealthy_preflight_alone() -> None:
+    """Attribution changes the wording of a firing A2; it is not a new trigger."""
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=10,
+        egress_preflight_status="unavailable",
+        egress_preflight_reason="status command returned 1",
+    )
+    assert not _a2(signals).firing
+
+
+# --- the log-dir -> signals step, which none of the above crosses ------------
+
+
+def _collect(log_dir: Path, tmp_path: Path, now: str) -> AlertSignals:
+    db_path = tmp_path / "radar.db"
+    if not db_path.exists():
+        migrate(db_path)
+    return collect_alert_signals(
+        db_path=db_path,
+        pipeline_log_dir=log_dir,
+        access_log_paths=[],
+        now=datetime.fromisoformat(now),
+    )
+
+
+def test_collect_signals_takes_the_preflight_from_the_newest_round(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    _write_round(log_dir, "20260908-104500", _HEALTHY_ROUND.format(ts="2026-09-08T10:45:00"))
+    _write_round(log_dir, "20260908-110000", _BLOCKED_ROUND.format(ts="2026-09-08T11:00:00"))
+    signals = _collect(log_dir, tmp_path, "2026-09-08T14:00:00+08:00")
+    assert signals.egress_preflight_status == "unavailable"
+    assert "direct_status" in signals.egress_preflight_reason
+
+
+def test_collect_signals_does_not_reach_past_a_round_that_never_reported(tmp_path: Path) -> None:
+    """A round that hangs after taking the lock leaves later rounds skipping.
+
+    Reaching back past it would attribute a genuine zombie lock to egress and drop
+    the skip count, which is the only evidence of the lock.
+    """
+    log_dir = tmp_path / "logs"
+    _write_round(log_dir, "20260908-100000", _BLOCKED_ROUND.format(ts="2026-09-08T10:00:00"))
+    _write_round(  # took the lock, then hung before printing the preflight line
+        log_dir, "20260908-101500", "[2026-09-08T10:15:00] === pipeline RUN generation=g ===\n"
+    )
+    for stamp, ts in (("20260908-103000", "10:30"), ("20260908-104500", "10:45")):
+        _write_round(log_dir, stamp, _SKIPPED_ROUND.format(ts=f"2026-09-08T{ts}:00"))
+    signals = _collect(log_dir, tmp_path, "2026-09-08T14:00:00+08:00")
+    assert signals.egress_preflight_status == ""
+
+
+def test_collect_signals_ignores_skip_rounds_when_looking_backwards(tmp_path: Path) -> None:
+    """Skips carry no preflight of their own and must not clear the newest reading."""
+    log_dir = tmp_path / "logs"
+    _write_round(log_dir, "20260908-110000", _BLOCKED_ROUND.format(ts="2026-09-08T11:00:00"))
+    _write_round(log_dir, "20260908-111500", _SKIPPED_ROUND.format(ts="2026-09-08T11:15:00"))
+    signals = _collect(log_dir, tmp_path, "2026-09-08T14:00:00+08:00")
+    assert signals.egress_preflight_status == "unavailable"
+
+
+def test_collect_signals_reports_no_preflight_when_every_round_skipped(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    for stamp, ts in (("20260908-110000", "11:00"), ("20260908-111500", "11:15")):
+        _write_round(log_dir, stamp, _SKIPPED_ROUND.format(ts=f"2026-09-08T{ts}:00"))
+    signals = _collect(log_dir, tmp_path, "2026-09-08T14:00:00+08:00")
+    assert signals.egress_preflight_status == ""
+
+
+def test_pipeline_log_parser_records_both_preflight_outcomes(tmp_path: Path) -> None:
+    """Healthy rounds carry trailing policy_id=/policy_sha256=; unavailable ones a reason."""
+    from airadar.admin.metrics import _parse_pipeline_log
+
+    _write_round(tmp_path, "20260908-181500", _HEALTHY_ROUND.format(ts="2026-09-08T18:15:00"))
+    _write_round(tmp_path, "20260908-113000", _BLOCKED_ROUND.format(ts="2026-09-08T11:30:00"))
+    _write_round(tmp_path, "20260908-174500", _SKIPPED_ROUND.format(ts="2026-09-08T17:45:02"))
+
+    healthy = _parse_pipeline_log(tmp_path / "pipeline-20260908-181500.log")
+    assert healthy["egress_preflight"] == {"status": "healthy", "reason": ""}
+    blocked = _parse_pipeline_log(tmp_path / "pipeline-20260908-113000.log")
+    assert blocked["egress_preflight"] == {
+        "status": "unavailable",
+        "reason": "missing status fields: direct_status,router_status",
+    }
+    skipped = _parse_pipeline_log(tmp_path / "pipeline-20260908-174500.log")
+    assert skipped["egress_preflight"] is None
+
+
+def test_pipeline_log_parser_tolerates_a_timestamp_prefix(tmp_path: Path) -> None:
+    """Every other regex in the module accepts one; pipeline.sh appends this line raw
+    today, but routing it through log() must not silently disable attribution."""
+    from airadar.admin.metrics import _parse_pipeline_log
+
+    _write_round(
+        tmp_path,
+        "20260908-120000",
+        "[2026-09-08T12:00:00] egress-preflight status=unavailable reason=status command returned 1\n",
+    )
+    run = _parse_pipeline_log(tmp_path / "pipeline-20260908-120000.log")
+    assert run["egress_preflight"] == {"status": "unavailable", "reason": "status command returned 1"}
+
+
+def test_a2_does_not_truncate_the_longest_reason_production_actually_emits() -> None:
+    """201 chars, 14 rounds on 2026-09-08 carried it; a 200 cap ate the last letter.
+
+    The field list is the whole point of the attribution: a silently truncated one
+    reads as a complete one naming a field (`tencent_status_scop`) that does not exist.
+    """
+    real = (
+        "missing status fields: direct_status,gcp_sg_standard_status,overall_status,"
+        "policy_id,policy_projection,policy_sha256,route_attribution,router_status,"
+        "status_schema_id,tencent_status,tencent_status_scope"
+    )
+    assert len(real) == 201
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        egress_preflight_status="unavailable",
+        egress_preflight_reason=real,
+    )
+    detail = _a2(signals).detail
+    assert real in detail
+    assert "已截断" not in detail
+
+
+def test_a2_marks_the_cut_when_a_reason_does_exceed_the_cap() -> None:
+    """`duplicate status field: {key}` embeds a whole stdout line, so the cap can
+    still bite; when it does, the reader must be able to tell."""
+    signals = replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        egress_preflight_status="unavailable",
+        egress_preflight_reason="y" * 5000,
+    )
+    detail = _a2(signals).detail
+    assert "已截断" in detail
+    assert len(detail) < 600
