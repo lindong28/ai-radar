@@ -106,7 +106,24 @@ def _candidate_rows(
             AND enriched.error IS NULL
         )
         {backoff_filter}
-      ORDER BY i.fetched_at DESC, i.published_at DESC
+      ORDER BY
+        -- Never-enriched items first, always. A ruleset bump makes every already
+        -- enriched item a candidate again, and `fetched_at` cannot separate them
+        -- from new arrivals: it is assigned per source batch and refreshed every
+        -- time a feed re-lists an old entry, so the top of this ordering carries
+        -- only two or three distinct values and is really "which source was
+        -- fetched first". Measured 2026-09-08, minutes after the enrich stamp
+        -- moved: 2757 candidates in the window, the next round's 40 slots all
+        -- taken by recomputes, and the 18 brand-new items ranked 303rd to 2440th
+        -- — roughly two days out at the observed round rate, by which time they
+        -- would have left the 24h window unenriched and permanently. An
+        -- unenriched item shows its raw foreign-language title with no summary
+        -- and is invisible to every category filter.
+        EXISTS (
+          SELECT 1 FROM item_evaluations seen
+          WHERE seen.item_id=i.id AND seen.stage='enrich' AND seen.error IS NULL
+        ) ASC,
+        i.fetched_at DESC, i.published_at DESC
     """
     if limit is not None:
         sql += " LIMIT ?"

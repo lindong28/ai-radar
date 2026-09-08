@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import os
 from datetime import UTC, datetime
 
 RULESET_REV: str = "r1"
@@ -12,6 +14,26 @@ PINNED_RULESET_DATE: str = "2026-05-13"
 # skips items that already have a row at the current version, so a change that leaves the
 # version alone can never reach the archive at all.
 PINNED_SCORE_RULESET_DATE: str = "2026-09-06"
+# Enrich v2 needs the same treatment for the same reason, and did not get it on
+# 2026-09-06: it kept sharing PINNED_RULESET_DATE with prefilter, which is pinned to
+# May. Its prompt then changed four times between 2026-09-02 and 2026-09-07 while the
+# stamp never moved, so `runner_v2`'s NOT EXISTS(... ruleset_version=?) skipped every
+# already-enriched item and the change never reached the archive. Measured on
+# 2026-09-08: only 1.8% of the pool's enrich rows came from the prompt then in
+# production, 83.2% from a May one. Bumping this alone would also invalidate every
+# prefilter row, which is why enrich gets its own constant rather than a shared bump.
+#
+# It is a date only for readability. A date cannot carry the bump on its own: this
+# project changes the enrich prompt more than once a day (three generations landed on
+# 2026-09-08 alone), and a same-day second edit leaves the date identical — the
+# original bug, silently restored. So the stamp also carries a digest of everything
+# that decides what the model is asked, and the date is just a human-readable prefix.
+PINNED_ENRICH_RULESET_DATE: str = "2026-09-08"
+# Rolling this back is not symmetric: rows already written at the new stamp stay, and
+# every consumer reads the latest enrich row by MAX(id), so the new prompt's output
+# keeps serving. Meanwhile `runner_v2` would consider those items done under the old
+# stamp and never touch them again — a mixed archive the runner cannot heal. Reverting
+# means re-running enrich over the affected window, not just reverting this file.
 
 
 def git_short_hash() -> str:
@@ -23,16 +45,83 @@ def current_version() -> str:
     return f"{date}.{RULESET_REV}"
 
 
+class _DigestProbeItem:
+    """Fixed stand-in so the digest can render the prompt without touching the database.
+
+    Dunders must raise: jinja probes `__html__` when autoescape is on, and returning a
+    string for it makes the render raise `TypeError: 'str' object is not callable`
+    *inside* `current_version_v2()` — which `run_enrich` calls first, so the whole
+    enrich stage would die pointing at jinja rather than at this class.
+    """
+
+    def __getattr__(self, name: str) -> str:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return f"<{name}>"
+
+
+_DIGEST_PROBE_ITEM = _DigestProbeItem()
+
+
+# Runtime switches that change what gets stored without touching a line of code. The
+# rendered prompt cannot see them, and `.env` already carries one of this family.
+_ENRICH_RUNTIME_ENV = (
+    "AI_RADAR_ENRICHER",
+    "AI_RADAR_ARK_ENRICH_MODEL",
+    "AI_RADAR_DEEPSEEK_ENRICH_MODEL",
+    "AI_RADAR_ENRICH_TEMPERATURE",
+)
+
+
+def enrich_inputs_digest() -> str:
+    """Short digest of what the enrich stage would store, given the current inputs.
+
+    Deliberately wider than the system prompt: the user template carries the length
+    windows, the tag vocabulary lives in the normalizer, and the category list lives in
+    classification.py. Hashing only the system prompt was measured on 2026-09-08 to miss
+    all three — a full replacement of the user template left the digest byte-identical.
+
+    It hashes the **rendered** prompt rather than the module's bytes, for two reasons
+    both measured the same day. Bytes made the digest move on a comment or a whitespace
+    edit, and a spurious move is not free: it re-enriches the whole window (~3,900 calls,
+    ~18 hours of the scheduled job's budget) and re-labels roughly a third of the site.
+    Bytes were also read at call time while the prompt constants are bound at import
+    time, so an edit landing mid-process produced a stamp describing a prompt that
+    process was not using — the exact misattribution this digest exists to prevent.
+    Rendering covers `render_enrich_prompt` itself, so prompt-assembly logic is still in.
+
+    The three runtime switches go in separately: they decide who answers and how, which
+    the rendered text cannot show.
+    """
+    from .enrich.prompts_v2 import render_enrich_prompt
+
+    rendered = render_enrich_prompt(_DIGEST_PROBE_ITEM)  # type: ignore[arg-type]
+    digest = hashlib.sha256()
+    digest.update(rendered["system"].encode("utf-8"))
+    digest.update(rendered["user"].encode("utf-8"))
+    for name in _ENRICH_RUNTIME_ENV:
+        digest.update(f"{name}={os.environ.get(name, '')}\u0000".encode())
+    return digest.hexdigest()[:8]
+
+
 def current_version_v2() -> str:
     """r2 ruleset stamp for the content-v2 enrich pipeline (runner_v2).
 
-    Mirrors current_version()'s constant-concatenation mechanism with a
-    distinct revision suffix so v2 item_evaluations rows (ruleset_version
-    ending in .r2) are naturally isolated from v1 rows (.r1) — no eval/
+    The stamp moves on its own: `enrich_inputs_digest()` derives from the prompt, so a
+    prompt edit makes every already-enriched item a candidate again with nobody having
+    to remember. PINNED_ENRICH_RULESET_DATE is only a human-readable prefix; bumping it
+    by hand is not required and costs a redundant full-window re-enrich.
+
+    Draining the resulting backlog through a wider `--since` needs the pipeline lock:
+    `run.sh` does not take the flock `pipeline.sh` holds, so a manual backfill run
+    alongside a scheduled round makes that round's `db.migrate()` fail with
+    "database is locked" and takes its whole fetch stage down (measured 2026-09-08).
+
+    The .r2 revision suffix keeps v2 rows isolated from v1 (.r1) — no eval/
     content_contract dependency, per the content-v2 integration decision.
     """
-    date = PINNED_RULESET_DATE or datetime.now(UTC).strftime("%Y-%m-%d")
-    return f"{date}.{RULESET_REV_V2}"
+    date = PINNED_ENRICH_RULESET_DATE or datetime.now(UTC).strftime("%Y-%m-%d")
+    return f"{date}.{RULESET_REV_V2}.{enrich_inputs_digest()}"
 
 
 def current_score_version() -> str:

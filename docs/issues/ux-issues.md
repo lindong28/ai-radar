@@ -41,3 +41,11 @@
   - 后果：作者提供了可访问描述时，读屏用户仍然什么都听不到。ADR-058 给 lightbox 加的 `aria-live` 计数器能播报"第 2 张，共 4 张"，但播报不了图是什么——那要靠描述穿过投影契约。
   - 未随 ADR-058 修的原因：`media_assets` 是**会被本进程之外的消费者读到、且字段名与值会被人读到**的数据契约，加字段要走 `/custom:review-schema`（见 user-CLAUDE.md「数据契约 / Schema 设计」），并处理三处消费端（CSR / SSR / lightbox）与旧收藏快照的兼容。属独立改动，不随 UI 借鉴那一轮做。
   - 若要修：投影补 `alt`（缺失时省略该键而不是写空串——空串与"作者没写描述"在下游分不开），三处消费端在有值时写进 `alt`、无值时保持 `alt=""`（无描述的图确实该按装饰处理）。
+
+### `/curated?run_id=` 与 `/curated?date=` 会对同一条目给出不同分类（2026-09-08，未修）
+
+`src/airadar/web/routes/curated_digest.py` 的 `_load_precomputed` 读 `curated_items.summary_json`——那是 curate 那一刻冻结的 enrich 快照——并**直接拿冻结值做分类筛选**。而 `/curated?date=` 与首页（无 run_id）走 `curated_archive._archive_items`，读的是活的最新 enrich 行。
+
+平时两者差别很小；enrich 重算期不然：2026-09-08 实测 524 条重算里 **29.4% 的条目类别发生了变化**。快照保留期 7 天（`precompute.py` `DEFAULT_KEEP_DAYS = 7`），这期间同一条目在两条路径上会显示不同分类、不同标题、不同摘要。
+
+归类：基线独立 / 边界命中。未修：统一口径要决定「digest 视图到底该显示当时的快照还是当前值」——快照有它的道理（digest 是某一期的存档），所以这不是一个纯 bug 修复。

@@ -310,3 +310,46 @@ def test_evaluate_item_classifies_normalizer_rejection_as_output_rejected() -> N
     assert enriched is None
     assert error is not None and error.startswith("output rejected after retry: tags must contain")
     assert output["attempts"] == 2
+
+
+def test_candidate_rows_serve_new_items_before_recomputing_old_ones(tmp_path: Path) -> None:
+    """A ruleset bump must not starve arrivals, and `fetched_at` cannot prevent that.
+
+    `fetched_at` is assigned per source batch and refreshed whenever a feed re-lists an
+    old entry, so ordering by it alone really orders by "which source was fetched
+    first". Measured on production minutes after the enrich stamp moved: 2757 candidates
+    in the 24h window, all 40 slots of the next round taken by recomputes, and the 18
+    brand-new items ranked 303rd to 2440th — two days out at the observed round rate,
+    by which time they would have left the window unenriched and permanently. An
+    unenriched item shows its raw foreign-language title, carries no summary, and is
+    invisible to every category filter.
+
+    Here the stale items are the *newer* ones by `fetched_at`, so an ordering that
+    ignores enrich history puts every one of them ahead of the fresh arrival.
+    """
+    conn = _db(tmp_path)
+    # _db seeds one never-enriched item of its own; both must keep their slots.
+    seeded = conn.execute("SELECT id FROM items").fetchone()[0]
+    fresh = _add_prefiltered_item(conn, "Brand new arrival", 40)
+    stale = [_add_prefiltered_item(conn, f"Already enriched {n}", 20 - n) for n in range(5)]
+    for item_id in stale:
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (
+              item_id, stage, ruleset_version, model_id, input_json, output_json,
+              numeric_json, latency_ms, cost_usd, evaluated_at, error
+            )
+            VALUES (?, 'enrich', 'retired.r2', 'fake', '{}', '{}', '{}', 1, 0, ?, NULL)
+            """,
+            (item_id, _recent_iso(10)),
+        )
+    conn.commit()
+
+    from airadar.enrich import runner_v2
+
+    # Five stale items carry a newer fetched_at than either never-enriched one, so an
+    # ordering that ignores enrich history hands both slots to recomputes.
+    rows = runner_v2._candidate_rows(conn, "48h", "current.r2", 2)
+    picked = {row[0] for row in rows}
+    assert picked == {seeded, fresh}, "a never-enriched item lost its slot to a recompute"
+    assert not picked & set(stale)

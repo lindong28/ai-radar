@@ -433,3 +433,10 @@ A5 在微信解读被配置关闭时可从既有 firing 直接进入 resolved，
 `run_pricing_notifications()` 接受独立的 notification state 与 event ledger 路径，却没有像 A1–A7/W1 状态机一样调用 `_validate_alert_paths`。两者指向同一文件时，通知仍可能被 transport 接受且 state 存在，但 event 写入因 JSON 形状冲突而 fail-open，留下无 D3 历史的已送达事件。该机制撤回 T4 后仍成立，本轮只登记，不顺带改 D3。
 
 **闭合方向**：D3 在 sender/state 写入前校验其实际使用的 state/event/ledger-lock，并补 distinct path 正例与 state=event、state/event 对应 ledger-lock 冲突的负例；若后续同时把 D3 纳入 `_alert_state_lock`，再复用 A1–A7/W1 的四向校验。该问题与 [cost-observability.md ISSUE-018](cost-observability.md) 的 episode 配对缺口分别验收。
+
+### A1 的「上游错误率」分母混了全部 stage，enrich 重算期会把它稀释（2026-09-08，未修）
+
+- **现象**：`src/airadar/admin/alerts.py` 的 `_recent_upstream_stats` 把**所有 stage** 的 `item_evaluations` 行放进同一个分母。基线日产出约 3000–4000 行；enrich 版本戳移动后的重算期按每轮 40 条 × 实际轮频推算另加约 1900 行/天，且几乎全部 `error IS NULL`，分母涨 50–100%，`upstream_error_rate` 相应下降同一比例，而阈值是常数 `0.1817`。
+- **后果**：一次本该 page 的上游故障，在重算期可能被稀释到阈值以下。
+- **执行约束（无需改代码）**：`calibrate_thresholds` 不在 cron 上，但**重算期不要跑它**——`thresholds.py` 的阈值是从实测数据推的，被稀释的分母一旦被校准固化，这个偏差就永久写进阈值。
+- **归类**：基线独立 / 边界命中——缺陷本来就在，是 2026-09-08 的 enrich 戳位移动把它的触发概率抬起来了。未修：改分母要动 A1 的既有语义（它现在量的是"全链路 LLM 调用错误率"，按 stage 拆分是另一个设计决定），不在那次改动的范围内。
