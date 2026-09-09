@@ -61,7 +61,7 @@ def _observation(*, empty: bool = False) -> dict[str, object]:
         "artifact_type": "aihot_observation",
         "status": "success",
         "captured_at": "2026-08-13T00:00:00Z",
-        "endpoint": "https://aihot.virxact.com/api/v1/items",
+        "endpoint": "https://aihot.news/api/v1/items",
         "query": {"mode": "all", "by": "timeline", "window": "7d", "limit": 100},
         "contract_sha256": _sha(CONTRACT),
         "code_sha256_by_path_relative_to_repository_root": {

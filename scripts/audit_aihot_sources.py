@@ -26,7 +26,7 @@ from airadar.audit.receipts import (  # noqa: E402
 )
 from airadar.egress import selector_httpx_client  # noqa: E402
 
-ENDPOINT = "https://aihot.virxact.com/api/v1/items"
+ENDPOINT = "https://aihot.news/api/v1/items"
 QUERY: dict[str, str | int] = {"mode": "all", "by": "timeline", "window": "7d", "limit": 100}
 
 

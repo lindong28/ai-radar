@@ -151,7 +151,7 @@ def _observation(
         "artifact_type": "aihot_observation",
         "status": "success",
         "captured_at": captured_at,
-        "endpoint": "https://aihot.virxact.com/api/v1/items",
+        "endpoint": "https://aihot.news/api/v1/items",
         "query": {"mode": "all", "by": "timeline", "window": "7d", "limit": 100},
         "contract_sha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(),
         "code_sha256_by_path_relative_to_repository_root": {

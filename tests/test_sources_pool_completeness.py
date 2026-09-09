@@ -82,7 +82,9 @@ def test_config_matches_contract_with_optional_mp2rss(monkeypatch) -> None:
 
 
 def test_main_fetch_urls_are_original_and_not_paid_or_comparison_hosts() -> None:
-    forbidden = {"aihot.virxact.com", "mp2rss.com", "mp2rss.cn"}
+    # AIHOT moved to aihot.news (2026-09-09); the old host still resolves and 301s,
+    # so both must stay un-ingestable -- it is the comparison target, not a source.
+    forbidden = {"aihot.news", "aihot.virxact.com", "mp2rss.com", "mp2rss.cn"}
     for row in _contract():
         if not row["ai_radar_main_timeline_member"]:
             continue

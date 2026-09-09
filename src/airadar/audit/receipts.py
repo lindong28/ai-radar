@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-AIHOT_ENDPOINT = "https://aihot.virxact.com/api/v1/items"
+AIHOT_ENDPOINT = "https://aihot.news/api/v1/items"
 AIHOT_QUERY = {"mode": "all", "by": "timeline", "window": "7d", "limit": 100}
 X_PROBE_SCOPE = {
     "identity_requests_max": 1,
