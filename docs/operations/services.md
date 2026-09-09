@@ -102,7 +102,7 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 | cron 守护 | macOS 自带，默认运行 | `pgrep cron` |
 | launchd | 系统自带，登录后自动运行 | `launchctl print gui/$UID` |
 | pipeline LLM key | `DEEPSEEK_API_KEY` / `ARK_API_KEY` / `OPENAI_API_KEY` / `GLM_API_KEY` 任一 | 只读存在性：`grep -c '_API_KEY=.' .env ~/.claude/.env 2>/dev/null`（逐文件出计数，不回显值；`.env:0` 表示该文件里一个都没有）。**存在 ≠ 可用**：key 有效性只有真实调用才证明得了，日常由 A1 告警在生产调用上覆盖；要当场确认就实跑一次最小调用 `./run.sh prefilter --limit 1`（**会写一行 prefilter 结果，不是只读**），看它是否报 provider 错误。**不要**拿 `./install.sh pipeline` 当验证——它会写 crontab 与 `.env` |
-| domain-routing selector | system-config 提供 `check-proxy-status --format=kv`、domain router 与 route audit；AI Radar 不安装或切换它 | `./run.sh egress-preflight` 应输出 `status=healthy policy_id=domain-routing-v2 policy_sha256=<64 hex>`；失败时不得安装/重跑 pipeline。此读数不证明真实出口，live 验收见下节边界 |
+| 本地出网端口 | 有东西在 `AI_RADAR_EGRESS_PROXY_PORT`（默认 59527）上提供 HTTP 代理；今天是 clash，此前是 domain router。AI Radar 不安装也不切换它 | `./run.sh egress-preflight` 应输出 `status=healthy policy_id=local-egress-port-v1 policy_sha256=<64 hex>`；失败时先 `lsof -nP -iTCP:<该端口> -sTCP:LISTEN`，不得安装/重跑 pipeline。**此读数只证明那个端口有人在听**，不证明真实出口，live 验收见下节边界 |
 | alert 发送器 | `~/.local/bin/im-notify` + page 的 `FEISHU_GENERAL_ALERT_WEBHOOK` + notice 的 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`；两个 webhook 任缺一个都拒绝 alert 安装 | `test -x "$HOME/.local/bin/im-notify"` 后运行下文无发送 preflight；已安装时检查 plist 同时有两个 key |
 | Playwright Chromium | 微信原文抓取、scheduled pipeline 的 W1 前检与默认 `performance-probe` | 部署前显式运行 `uv run playwright install chromium`；`install.sh` 不自动下载或校验。`./run.sh wechat-browser-preflight` 应为 `PRESENT`/exit 0；exit 1 缺失，exit 2 未核实，均不得继续 scheduled pipeline |
 | Cloudflare tunnel | `deploy/cloudflared/config.yml` | 存在还不够，要判它不是 example 占位：`rg -c '^tunnel: [0-9a-f]{8}-' deploy/cloudflared/config.yml`（真实 tunnel UUID）与 `rg '^\s+- hostname: ' deploy/cloudflared/config.yml`（应列出实际托管的 hostname，不含 `example.com`） |
@@ -112,12 +112,14 @@ curl -sf https://news.aiplanet.live/api/v1/healthz
 
 ## AI Radar 域名 selector 出网
 
-AI Radar 不再读取 `AI_RADAR_PROXY_FILE` 或 `current-proxy`，也不信任父进程的 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 及小写形式。每轮 pipeline 在第一个外部 stage 前运行 strict preflight；缺字段、重复/畸形字段、mode/policy/address mismatch、router/三路 upstream/route attribution/overall 任一非 healthy 或 status 命令失败，都会写 `=== egress preflight FAIL (exit N) ===` 并在外部 stage 前退出。
+AI Radar 不读取 `AI_RADAR_PROXY_FILE` 或 `current-proxy`，也不信任父进程的 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 及小写形式。**所有自有 transport 只从一个本地端口出去**（`AI_RADAR_EGRESS_PROXY_PORT`，默认 59527）；每轮 pipeline 在第一个外部 stage 前经该端口**实发一次请求**（目标 `AI_RADAR_EGRESS_PROBE_URL`，默认 `https://api.github.com/zen`），拿不到 HTTP 响应就写 `=== egress preflight FAIL (exit N) ===` 并在外部 stage 前退出。**不是端口探活**——那区分不了「本地 listener 活着」与「上游隧道通」（CHANGELOG 2026-08-18：listener 正常而同轮 162 源全 `Connection refused`）。
+
+**2026-09-09 起放弃了一项性质，写在这里以免被当成仍然成立**：此前 preflight 断言 `check-proxy-status` 的十二个字段，应用因此对「哪个 hostname 走哪条线路」有一份 fail-closed 的契约。现在 routing 全部由监听那个端口的东西决定，应用既不约束也观测不到它——下面那段「预期 policy」描述的是 domain router 的行为，只在它就是那个监听者时才成立。换掉十二字段断言的直接原因：它读的是 selector 的**存储模式**而非路径本身，2026-09-09 因此 fail-closed 了 9 小时，而代理全程在正常服务——一次它无法与真故障区分的假阴性。
 
 只读排障顺序：
 
 1. 在 pipeline 日志确认 preflight 是 `OK` 还是 `FAIL`；不要再找旧的 `=== egress proxy:` 行。
-2. `FAIL` 时运行 `check-proxy-status --format=kv`，核对 `domain-routing` mode、`domain-routing-v2` policy identity、projection matched、router/三路 upstream/route attribution/overall healthy。不要用端口探活或父进程 proxy env 代替这些字段。
+2. `FAIL` 时读它的 reason——它点名了端口。`lsof -nP -iTCP:<该端口> -sTCP:LISTEN` 看有没有监听者；没有就把监听者起起来，或把 `AI_RADAR_EGRESS_PROXY_PORT` 指向真正在听的那个端口。
 3. preflight `OK` 但请求失败时，用 `agent-proxy-route-audit --format=jsonl` 按 hostname 联合查看 `selected_route`、`outcome` 与 `outcome_scope`。`outcome_scope=upstream-application` 且 `outcome=unknown` 表示线路已归因但该事件不观测应用结果；`proxy-connect` 的 success/failure 表示代理 CONNECT 结果；`direct-sentinel` 的 success 只证明受控直连哨兵。`airadar.egress.audit` 只证明调用点以哪个 policy identity 尝试 launch，不能证明实际走了 GCP、Tencent 或 direct。
 
 路由契约是 Anthropic-owned hostname → GCP SG 且 fail closed；OpenAI/ChatGPT/X → OpenAI provider route（Tencent primary、ZYT fallback，两者均不可用时 fail closed）；Ark/DeepSeek/RSS/news/web → direct。域名表只在 system-config，AI Radar 不复制；preflight 的 aggregate healthy 不等于 Tencent primary healthy，实际档位与单次出口分别看 `tencent_route_mode` 和 route audit `selected_route`。应用侧调用点闭包由 `src/airadar/egress_registry.py` 与 guard test 持有；新增网络入口必须先分类。loopback/synthetic 请求与 `im-notify` 这类明确 direct 的本地工具不依赖 selector status，后者会先清除父进程六个 proxy 变量。外部 `AI_ASSISTANT_ROOT` 还必须满足 [summary-agent selector compatibility contract](../references/ai-assistant-contract.md#selector-compatibility-receipt)，仅传入清洗后的标准 env 不构成兼容证据。

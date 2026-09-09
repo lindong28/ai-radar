@@ -32,12 +32,17 @@ Both scripts run with `cwd=$AI_ASSISTANT_ROOT`. AI Radar removes `VIRTUAL_ENV` a
 
 ## Selector compatibility receipt
 
-Interpret remains disabled for an external root unless `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` exists and exactly matches this schema:
+Interpret remains disabled for an external root unless `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` exists and exactly matches this schema.
+`policy_sha256` is now derived from the exit port AI Radar will actually use, so **moving the exit
+invalidates every existing receipt** and interpret goes quiet — cleanly, exit 0, no alert — until the
+receipt is regenerated against the new value. That happened on 2026-09-09 when `policy_id` changed from
+`domain-routing-v2` to `local-egress-port-v1`; read the live value from `./run.sh egress-preflight`
+rather than copying one out of this document.
 
 ```json
 {
   "schema_version": 2,
-  "policy_id": "domain-routing-v2",
+  "policy_id": "local-egress-port-v1",
   "policy_sha256": "<64 lowercase hex of the tested T1 policy>",
   "egress_implementation_sha256": "<64 lowercase hex of the framed code/lock closure>",
   "parent_gcp_env_selector_only_test": "passed",

@@ -414,9 +414,11 @@ def evaluate_rules(
         # round that reached the preflight says it was not healthy, that IS the
         # cause; the skip count is dropped rather than shown beside it.
         if signals.egress_preflight_status and signals.egress_preflight_status != "healthy":
-            # The reason is copied verbatim from a line the pipeline wrote, which in
-            # turn embeds `check-proxy-status` output of unbounded length; it goes on
-            # to become an argv element for im-notify, so it is capped here.
+            # The reason is copied verbatim from a line the pipeline wrote, and its
+            # length is not bounded by anything we control; it goes on to become an
+            # argv element for im-notify, so it is capped here. (Until 2026-09-09 the
+            # unbounded part was `check-proxy-status` output; it is now whatever the
+            # preflight itself reports.)
             #
             # 400, not a round 200: the longest reason across 770 real rounds is
             # exactly 201 (`missing status fields:` with 11 field names, 14 rounds
@@ -431,7 +433,8 @@ def evaluate_rules(
             reason_text = f"，reason={reason}" if reason else ""
             skip_note = f"（最近一轮出网 preflight status={signals.egress_preflight_status}{reason_text}）"
             heartbeat_action = (
-                "出网 preflight 未通过：运行 check-proxy-status --format=kv 核 selector，"
+                "出网 preflight 未通过：上面 reason 点名的那个本地出口端口没人在听或不通，"
+                "用 lsof -nP -iTCP:<该端口> -sTCP:LISTEN 核，改出口端口用 AI_RADAR_EGRESS_PROXY_PORT；"
                 "见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
             )
         else:

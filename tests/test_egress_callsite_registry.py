@@ -32,6 +32,7 @@ NETWORK_API_PREFIXES = {
         "request",
         "stream",
     },
+    "socket": {"create_connection", "create_server", "socket"},
     "subprocess": {"Popen", "call", "check_call", "check_output", "run"},
     "urllib.request": {"build_opener", "urlopen", "urlretrieve"},
 }

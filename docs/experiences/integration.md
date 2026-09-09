@@ -24,6 +24,22 @@
 
 改 `src/airadar/egress.py` 会改变 `egress_implementation_sha256`、使收据失效并需重新 attestation，所以别为了一个未经验证的假设去改它。
 
+## 2026-09-09 出网边界改写使**全部现存收据失效**——端口一立起来 interpret 就静默停产
+
+- **状态**: 未闭合，动作在用户那边（需要跑那五个兼容性测试的人签字，agent 不能代签）。
+- **发生了什么**: 出网边界从「十二字段 `check-proxy-status` 证明」换成「单一本地端口 + 经它实发一次请求」，`policy_id` 由 `domain-routing-v2` 变为 `local-egress-port-v1`，`policy_sha256` 改为按**出口端口**派生。现场 `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` 仍是旧值，必然对不上。
+- **两种表现，危险的是恢复之后那种**（这正是上一条记的形态）：出口端口没人在听时 `require_selector_policy()` 抛错 → `interpret FAIL (exit 1)`，**响**；端口一旦立起来，preflight 过、收据比对失败 → `skip interpret: selector compatibility is unproven` → `cli._interpret` 返回 **0** → `pipeline.sh` 打 `=== interpret OK ===`。**pipeline 自己的成功信号在说谎**，直到 A5 在 4 小时后开火。`docs/issues/archive/closed.md` 记过同形态持续 **138 轮 / 215 篇** 未处理。
+- **新的 `policy_sha256`（按出口端口，`sha256("local-egress-port-v1\n" + agent_proxy + "\n")`）**:
+
+```
+59527: f6368fdc8b82fd491cd52f3524d53eef0bbe84a92eac8135c7ee2019b831290d
+  7897: 0c83bc529767b079b63bbdf5d5942aec517e417476f8dfbe74312086d3acf58f
+  59521: 5bf7faef4d3512456537edff0aeeef649f7904c1868e00cf1e2dc5cb40d2c837
+```
+
+- **重新签发**（**只能由跑过那五个测试的人做**）：`uv run python -m airadar.interpret.receipt_writer --tested-policy-sha <上表中对应端口那个> ...`。写入器只校验 policy 与 implementation 摘要在写盘那一刻是活的，**它不跑那五个测试、只记录调用者的断言**——所以代签等于伪造证据。
+- **换出口端口就要重签一次**：sha 依赖端口，`AI_RADAR_EGRESS_PROXY_PORT` 一改，收据立刻再次失效。这是上一条「竞态」的新形态：以前跟着另一个仓的策略文件变，现在跟着本机配置变。
+
 ## 2026-09-05 `/wechat` 停更而抓取正常时，先查 interpret 的 egress 收据闸——它 fail-closed 且干净退出 0
 
 - **Problem**: `/wechat` 只显示有解读的文章（`JOIN wechat_interpretations WHERE save_decision=1`），所以「抓取入库正常、页面停更」这个组合的第一嫌疑不是抓取层，而是 `interpret`。该阶段的前置校验一旦不通过就**干净退出 0、一个外部脚本都不启动**，pipeline 仍打印 `=== interpret OK ===`，A1–A7 全部沉默。实测代价：2026-09-01 15:00 起连续跳过 138 轮、215 篇微信文章无解读，无任何告警，直到用户肉眼发现页面不动。

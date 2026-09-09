@@ -295,7 +295,7 @@ def _egress_preflight() -> int:
     except EgressPreflightError as exc:
         print(f"egress-preflight status=unavailable reason={exc}")
         print("Impact: no managed external pipeline stage was started")
-        print("Next: restore a healthy domain-routing selector, then retry")
+        print("Next: get something listening on the egress port named above, then retry")
         return 1
     print(f"egress-preflight status=healthy policy_id={policy.policy_id} policy_sha256={policy.policy_sha256}")
     return 0

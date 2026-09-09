@@ -32,18 +32,33 @@ import collections
 import json
 import re
 import sys
-import urllib.request
 from pathlib import Path
+from urllib.request import Request
 
 CATS = ["tutorial", "model", "product", "industry", "paper"]
 DEFAULT_URL = "https://news.aiplanet.live/"
 REPO = Path(__file__).resolve().parents[2]
-EVALSET = REPO / "data/eval-fit/evalset-staging/aihot-fit-v1/questions.jsonl"
+sys.path.insert(0, str(REPO / "src"))
+
+from airadar.egress import open_external_url  # noqa: E402
+
+# 权威副本在 ai-radar-data 子模块里（tracked）；data/eval-fit/ 是 gitignored 的，
+# 量具不该静默依赖一个不在 git 里的目录。
+EVALSET = REPO / "benchmarks/aihot/evalsets/aihot-fit-v1/questions.jsonl"
+
+
+def urlopen(request: Request, timeout: float):  # noqa: ANN201
+    """走应用的出网边界，而不是绕过它——同 scripts/web_contract_golden.py。"""
+    return open_external_url(
+        request,
+        callsite_id="scripts.eval.measure_live_composition",
+        timeout=timeout,
+    )
 
 
 def live_distribution(url: str) -> collections.Counter[str]:
     """页面把逐条数据以 JSON 内嵌在 HTML 里，直接数其中的 primary_category。"""
-    with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 - fixed https host
+    with urlopen(Request(url, headers={"Accept": "text/html"}), timeout=30) as resp:
         html = resp.read().decode("utf-8", errors="replace")
     found = re.findall(r'"primary_category"\s*:\s*"([^"]+)"', html)
     return collections.Counter(c for c in found if c in CATS)

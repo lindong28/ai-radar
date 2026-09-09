@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import socket
-import subprocess
 import threading
 import urllib.error
 from collections.abc import Iterator
@@ -17,43 +17,25 @@ import pytest
 
 from airadar import cli
 from airadar.egress import (
-    STATUS_COMMAND,
+    DEFAULT_EGRESS_PROXY_PORT,
+    EGRESS_POLICY_ID,
+    EGRESS_PROBE_URL_ENV,
+    EGRESS_PROXY_PORT_ENV,
     EgressPreflightError,
     EgressRouteBoundaryError,
     SelectorPolicy,
     direct_subprocess_env,
+    egress_proxy_port,
     managed_subprocess_env,
     open_external_url,
-    parse_proxy_status,
     playwright_launch_proxy,
+    policy_for_port,
+    probe_egress_port,
     require_selector_policy,
     reset_selector_policy_cache,
     selector_httpx_client,
     selector_openai_client,
 )
-
-POLICY_SHA = "a" * 64
-
-
-def _healthy_status(*, proxy: str) -> str:
-    return "\n".join(
-        (
-            "stored_mode=domain-routing",
-            "effective_mode=domain-routing",
-            f"agent_proxy={proxy}",
-            "status_schema_id=agent-domain-routing-status-v2",
-            "policy_id=domain-routing-v2",
-            f"policy_sha256={POLICY_SHA}",
-            "policy_projection=matched",
-            "router_status=running",
-            "route_attribution=available",
-            "gcp_sg_standard_status=healthy",
-            "tencent_status=healthy",
-            "tencent_status_scope=openai-provider-route-aggregate",
-            "direct_status=healthy",
-            "overall_status=healthy",
-        )
-    )
 
 
 class _RecordingHandler(BaseHTTPRequestHandler):
@@ -118,114 +100,167 @@ def _server(*, response_body: bytes = b"ok", response_status: int = 200) -> Iter
 
 
 def _policy(proxy: str) -> SelectorPolicy:
-    return parse_proxy_status(_healthy_status(proxy=proxy), expected_agent_proxy=proxy)
+    port = int(proxy.rsplit(":", 1)[1])
+    return policy_for_port(port)
 
 
-def test_parse_proxy_status_accepts_only_complete_healthy_contract() -> None:
-    proxy = "http://selector.invalid:1"
+@contextlib.contextmanager
+def _refusing_port() -> Iterator[int]:
+    """A port that reliably refuses: bound (so nothing else can take it), never listening."""
 
-    policy = parse_proxy_status(_healthy_status(proxy=proxy), expected_agent_proxy=proxy)
-
-    assert policy == SelectorPolicy(
-        agent_proxy=proxy,
-        policy_id="domain-routing-v2",
-        policy_sha256=POLICY_SHA,
-    )
-
-
-def test_production_status_contract_requires_the_stable_selector_address() -> None:
-    contract_proxy = "http://127.0.0.1:59521"
-
-    assert parse_proxy_status(_healthy_status(proxy=contract_proxy)).agent_proxy == contract_proxy
-    with pytest.raises(EgressPreflightError, match="agent_proxy"):
-        parse_proxy_status(_healthy_status(proxy="http://selector.invalid:1"))
-
-
-def test_status_command_loads_the_shell_function_without_interactive_startup_output() -> None:
-    assert STATUS_COMMAND == (
-        "/bin/zsh",
-        "-fc",
-        'source "$HOME/.zshrc" >/dev/null 2>&1; check-proxy-status --format=kv',
-    )
-
-
-def test_status_command_failure_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "airadar.egress._run_status",
-        lambda _command: subprocess.CompletedProcess([], 7, stdout="", stderr="unhealthy"),
-    )
-    reset_selector_policy_cache()
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
     try:
-        with pytest.raises(EgressPreflightError, match="returned 7"):
-            require_selector_policy()
+        yield int(sock.getsockname()[1])
     finally:
-        reset_selector_policy_cache()
+        sock.close()
 
 
-def test_missing_status_command_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    def missing(_command: object) -> subprocess.CompletedProcess[str]:
-        raise FileNotFoundError("synthetic missing status command")
+def test_default_exit_port_is_the_pinned_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """59527, spelled out: the constant and the reader must be able to disagree.
 
-    monkeypatch.setattr("airadar.egress._run_status", missing)
-    reset_selector_policy_cache()
-    try:
-        with pytest.raises(EgressPreflightError, match="FileNotFoundError"):
-            require_selector_policy()
-    finally:
-        reset_selector_policy_cache()
+    Comparing egress_proxy_port() against DEFAULT_EGRESS_PROXY_PORT would pass for
+    any value of the constant, and would also fail on any machine configured the way
+    the preflight's own error message tells operators to configure it.
+    """
+
+    monkeypatch.delenv(EGRESS_PROXY_PORT_ENV, raising=False)
+
+    assert DEFAULT_EGRESS_PROXY_PORT == 59527
+    assert egress_proxy_port() == 59527
 
 
-@pytest.mark.parametrize(
-    ("mutation", "message"),
-    [
-        (lambda rows: [row for row in rows if not row.startswith("policy_id=")], "missing"),
-        (lambda rows: [row for row in rows if not row.startswith("status_schema_id=")], "missing"),
-        (lambda rows: [row for row in rows if not row.startswith("tencent_status_scope=")], "missing"),
-        (lambda rows: [*rows, "policy_id=domain-routing-v2"], "duplicate"),
-        (lambda rows: [*rows, "not-kv"], "malformed"),
-        (
-            lambda rows: ["overall_status=degraded" if row.startswith("overall_status=") else row for row in rows],
-            "overall_status",
-        ),
-        (
-            lambda rows: [
-                "policy_projection=mismatch" if row.startswith("policy_projection=") else row for row in rows
-            ],
-            "policy_projection",
-        ),
-        (
-            lambda rows: ["policy_sha256=ABC" if row.startswith("policy_sha256=") else row for row in rows],
-            "policy_sha256",
-        ),
-        (
-            lambda rows: [
-                "status_schema_id=agent-domain-routing-status-v1"
-                if row.startswith("status_schema_id=")
-                else row
-                for row in rows
-            ],
-            "status_schema_id",
-        ),
-        (
-            lambda rows: [
-                "tencent_status_scope=tencent-primary-only"
-                if row.startswith("tencent_status_scope=")
-                else row
-                for row in rows
-            ],
-            "tencent_status_scope",
-        ),
-    ],
-)
-def test_parse_proxy_status_rejects_missing_duplicate_malformed_and_nonhealthy(
-    mutation: object,
-    message: str,
+def test_exit_port_is_overridable_for_a_differently_configured_router(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    proxy = "http://selector.invalid:1"
-    rows = _healthy_status(proxy=proxy).splitlines()
+    monkeypatch.setenv(EGRESS_PROXY_PORT_ENV, "7897")
+
+    assert egress_proxy_port() == 7897
+
+
+def test_blank_exit_port_falls_back_to_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(EGRESS_PROXY_PORT_ENV, "   ")
+
+    assert egress_proxy_port() == DEFAULT_EGRESS_PROXY_PORT
+
+
+@pytest.mark.parametrize(("value", "message"), [("not-a-port", "integer"), ("0", "range"), ("70000", "range")])
+def test_unusable_exit_port_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, value: str, message: str
+) -> None:
+    monkeypatch.setenv(EGRESS_PROXY_PORT_ENV, value)
 
     with pytest.raises(EgressPreflightError, match=message):
-        parse_proxy_status("\n".join(mutation(rows)), expected_agent_proxy=proxy)  # type: ignore[operator]
+        egress_proxy_port()
+
+
+def test_probe_is_fail_closed_when_nothing_serves_the_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The message must name the port, how to inspect it, and the override."""
+
+    monkeypatch.delenv(EGRESS_PROBE_URL_ENV, raising=False)
+    with _refusing_port() as dead:
+        with pytest.raises(EgressPreflightError) as raised:
+            probe_egress_port(dead)
+
+    text = str(raised.value)
+    assert str(dead) in text
+    assert "lsof" in text
+    assert EGRESS_PROXY_PORT_ENV in text
+
+
+def test_probe_rejects_a_listener_that_is_not_a_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The regression this probe exists for. A TCP connect cannot see it.
+
+    On 2026-08-18 00:04 the round header read a healthy
+    `=== egress proxy: http://127.0.0.1:59527 ===` while all 162 sources failed
+    with `Connection refused`; CHANGELOG 2026-08-18 concluded that a port probe
+    "区分不了「本地 listener 活着」与「上游隧道通」". A socket that accepts and
+    then says nothing useful is exactly that state, and it must not pass.
+    """
+
+    monkeypatch.delenv(EGRESS_PROBE_URL_ENV, raising=False)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        port = int(listener.getsockname()[1])
+        # A plain TCP connect against this succeeds -- assert that, so the test
+        # states what it is discriminating against rather than implying it.
+        with socket.create_connection(("127.0.0.1", port), timeout=5):
+            pass
+        with pytest.raises(EgressPreflightError, match="no request got through"):
+            probe_egress_port(port)
+    finally:
+        listener.close()
+
+
+def test_probe_passes_when_a_real_proxy_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Negative control for the two above: the probe is not simply always red.
+
+    Also asserts the request actually traversed the proxy -- the stub records the
+    absolute-form request URI that a forward proxy receives.
+    """
+
+    with _server() as (proxy_url, requests):
+        monkeypatch.setenv(EGRESS_PROBE_URL_ENV, "http://egress.probe.invalid/ok")
+        probe_egress_port(int(proxy_url.rsplit(":", 1)[1]))
+
+    assert ("GET", "http://egress.probe.invalid/ok") in requests
+
+
+def test_require_selector_policy_hands_out_the_port_it_probed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate's whole job: probe port A and then hand out a policy for port A.
+
+    Without this, probing 7897 while every transport proxies to 59527 passes the
+    preflight, reports healthy, and fails every request.
+    """
+
+    reset_selector_policy_cache()
+    try:
+        with _server() as (proxy_url, requests):
+            port = int(proxy_url.rsplit(":", 1)[1])
+            monkeypatch.setenv(EGRESS_PROXY_PORT_ENV, str(port))
+            monkeypatch.setenv(EGRESS_PROBE_URL_ENV, "http://egress.probe.invalid/ok")
+
+            policy = require_selector_policy()
+
+        assert policy.agent_proxy == f"http://127.0.0.1:{port}"
+        assert policy == policy_for_port(port)
+        assert ("GET", "http://egress.probe.invalid/ok") in requests
+    finally:
+        reset_selector_policy_cache()
+
+
+def test_require_selector_policy_probes_before_handing_out_a_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A policy must never be issued for an exit that is not there."""
+
+    reset_selector_policy_cache()
+    try:
+        monkeypatch.delenv(EGRESS_PROBE_URL_ENV, raising=False)
+        with _refusing_port() as dead:
+            monkeypatch.setenv(EGRESS_PROXY_PORT_ENV, str(dead))
+            with pytest.raises(EgressPreflightError, match="no request got through"):
+                require_selector_policy()
+    finally:
+        reset_selector_policy_cache()
+
+
+def test_policy_identity_follows_the_exit_port() -> None:
+    """The interpret receipt gate pins policy_sha256, so moving the exit must move it."""
+
+    first = policy_for_port(59527)
+    again = policy_for_port(59527)
+    elsewhere = policy_for_port(7897)
+
+    assert first == again
+    assert first.agent_proxy == "http://127.0.0.1:59527"
+    assert first.policy_id == EGRESS_POLICY_ID
+    assert len(first.policy_sha256) == 64
+    assert first.policy_sha256 != elsewhere.policy_sha256
 
 
 @pytest.mark.parametrize(
@@ -584,8 +619,8 @@ def test_cli_preflight_reports_policy_identity_without_proxy_url(
 
     output = capsys.readouterr().out
     assert "egress-preflight status=healthy" in output
-    assert "policy_id=domain-routing-v2" in output
-    assert POLICY_SHA in output
+    assert f"policy_id={EGRESS_POLICY_ID}" in output
+    assert policy.policy_sha256 in output
     assert policy.agent_proxy not in output
 
 
@@ -603,7 +638,11 @@ def test_cli_preflight_failure_names_impact_and_next_action(
     output = capsys.readouterr().out
     assert "status=unavailable" in output
     assert "no managed external pipeline stage was started" in output
-    assert "restore a healthy domain-routing selector" in output
+    # Not pinned to a literal: what must hold is that the line tells the reader
+    # what to do about the egress port, which is what the reason line names.
+    assert "Next:" in output
+    assert "listening on the egress port" in output
+    assert "domain-routing selector" not in output
 
 
 def test_playwright_proxy_split_is_explicit_for_external_and_loopback() -> None:
@@ -717,7 +756,7 @@ def test_audit_json_excludes_sensitive_request_and_proxy_material() -> None:
     serialized = json.dumps(records, sort_keys=True)
     assert "fetch.feed" in serialized
     assert "api.anthropic.com" in serialized
-    assert POLICY_SHA in serialized
+    assert policy.policy_sha256 in serialized
     for secret in ("private", "token", "secret", "Authorization", "Bearer", selector_url):
         assert secret not in serialized
     assert set(records[-1]) == {

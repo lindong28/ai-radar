@@ -5078,11 +5078,14 @@ def test_a2_attributes_a_stale_heartbeat_to_the_egress_preflight() -> None:
 def test_a2_remediation_names_a_command_that_exists() -> None:
     """The whole point of this change is not sending the reader somewhere useless.
 
-    `check-proxy-status` is what `airadar.egress.STATUS_COMMAND` actually runs and
-    what the runbook section named here documents; `./run.sh admin egress` is not a
-    real subcommand and an earlier draft of this fix shipped it.
+    Two ways that has already gone wrong here: `./run.sh admin egress` never
+    existed, and `check-proxy-status --format=kv` stopped being the answer on
+    2026-09-09 when the egress boundary moved off the twelve-field selector
+    attestation onto a single configurable local port.  A message can go stale
+    without anything raising, so the identifier it hands the operator is
+    imported rather than typed: rename or drop it and this test goes red.
     """
-    from airadar.egress import STATUS_COMMAND
+    from airadar.egress import EGRESS_PROXY_PORT_ENV
 
     signals = replace(
         _normal_signals(),
@@ -5090,15 +5093,15 @@ def test_a2_remediation_names_a_command_that_exists() -> None:
         egress_preflight_status="unavailable",
     )
     action = _a2(signals).action
-    # STATUS_COMMAND is a zsh -fc invocation; the operator-facing part is the
-    # command inside it, which is what the message must name.
-    assert "check-proxy-status --format=kv" in " ".join(STATUS_COMMAND)
-    assert "check-proxy-status --format=kv" in action
+
+    assert EGRESS_PROXY_PORT_ENV in action
+    assert "lsof" in action
+    # Both retired pointers, kept named so neither can quietly come back.
     assert "run.sh admin egress" not in action
+    assert "check-proxy-status" not in action
     assert "出网 selector 的 preflight 与实际 route" in action
     runbook = Path(__file__).resolve().parents[1] / "docs/operations/monitoring-alerting.md"
     assert "出网 selector 的 preflight 与实际 route" in runbook.read_text(encoding="utf-8")
-
 
 def test_a2_leaves_the_stage_remediation_alone_when_the_heartbeat_is_fresh() -> None:
     """A2 also fires on stage error rate and P95; those still need the stage logs.

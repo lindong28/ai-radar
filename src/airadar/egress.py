@@ -1,19 +1,31 @@
 """Application-owned egress boundary for checked-in AI Radar transports.
 
-The domain router remains the route authority.  This module only validates its
-machine status, launches owned transports through the validated selector, and
-emits redacted application-side attempt records.
+Every owned transport leaves through one local proxy port.  Whatever listens on
+that port -- clash today, the domain router before it -- is the route authority;
+this module does not re-derive routing decisions, it only pins the single exit,
+refuses to run when nothing is serving it, and emits redacted attempt records.
+
+Before 2026-09-09 the exit was pinned by attesting a twelve-field
+`check-proxy-status` projection.  That attestation read the selector's *stored
+mode* rather than the path, so it failed closed for nine hours on 2026-09-09
+while the proxy itself was demonstrably serving requests -- a false negative it
+had no way to distinguish from a real outage.
+
+The replacement sends one real request through the port we are about to use.  A
+TCP connect would not do: this repository measured that distinction on
+2026-08-18, when a healthy-looking `http://127.0.0.1:59527` proxy line sat above
+162 sources all failing `Connection refused`, and wrote the rule into CHANGELOG
+2026-08-18 -- "端口探测区分不了「本地 listener 活着」与「上游隧道通」".
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
-import re
-import subprocess
 import urllib.request
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -23,15 +35,15 @@ import httpx
 from openai import OpenAI
 from playwright.sync_api import ProxySettings
 
-EXPECTED_AGENT_PROXY = "http://127.0.0.1:59521"
-EXPECTED_POLICY_ID = "domain-routing-v2"
-EXPECTED_STATUS_SCHEMA_ID = "agent-domain-routing-status-v2"
-EXPECTED_TENCENT_STATUS_SCOPE = "openai-provider-route-aggregate"
-STATUS_COMMAND = (
-    "/bin/zsh",
-    "-fc",
-    'source "$HOME/.zshrc" >/dev/null 2>&1; check-proxy-status --format=kv',
-)
+EGRESS_PROXY_PORT_ENV = "AI_RADAR_EGRESS_PROXY_PORT"
+DEFAULT_EGRESS_PROXY_PORT = 59527
+EGRESS_POLICY_ID = "local-egress-port-v1"
+EGRESS_PROBE_URL_ENV = "AI_RADAR_EGRESS_PROBE_URL"
+# Deliberately unrelated to anything this pipeline fetches, so a probe failure is
+# never confounded with the outage being diagnosed -- the reason CHANGELOG
+# 2026-08-18 picked this same endpoint.
+DEFAULT_EGRESS_PROBE_URL = "https://api.github.com/zen"
+_PROBE_TIMEOUT_SECONDS = 10.0
 PROXY_ENV_NAMES = (
     "http_proxy",
     "https_proxy",
@@ -41,21 +53,6 @@ PROXY_ENV_NAMES = (
     "ALL_PROXY",
 )
 LOOPBACK_NO_PROXY = "localhost,127.0.0.1,::1"
-_POLICY_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
-_REQUIRED_VALUES = {
-    "stored_mode": "domain-routing",
-    "effective_mode": "domain-routing",
-    "status_schema_id": EXPECTED_STATUS_SCHEMA_ID,
-    "policy_id": EXPECTED_POLICY_ID,
-    "policy_projection": "matched",
-    "router_status": "running",
-    "gcp_sg_standard_status": "healthy",
-    "tencent_status": "healthy",
-    "tencent_status_scope": EXPECTED_TENCENT_STATUS_SCOPE,
-    "direct_status": "healthy",
-    "route_attribution": "available",
-    "overall_status": "healthy",
-}
 _AUDIT_LOGGER = logging.getLogger("airadar.egress.audit")
 _AUDIT_LOGGER.setLevel(logging.INFO)
 _AUDIT_LOGGER.propagate = False
@@ -81,59 +78,71 @@ class SelectorPolicy:
     policy_sha256: str
 
 
-def parse_proxy_status(
-    raw: str,
-    *,
-    expected_agent_proxy: str = EXPECTED_AGENT_PROXY,
-) -> SelectorPolicy:
-    fields: dict[str, str] = {}
-    for line_number, raw_line in enumerate(raw.splitlines(), start=1):
-        line = raw_line.strip()
-        if not line or "=" not in line:
-            raise EgressPreflightError(f"malformed status line {line_number}")
-        key, value = line.split("=", 1)
-        if not key or not value or key.strip() != key or value.strip() != value:
-            raise EgressPreflightError(f"malformed status line {line_number}")
-        if key in fields:
-            raise EgressPreflightError(f"duplicate status field: {key}")
-        fields[key] = value
+def egress_proxy_port() -> int:
+    """The single local port every owned transport leaves through."""
 
-    missing = sorted(({*_REQUIRED_VALUES, "agent_proxy", "policy_sha256"}) - fields.keys())
-    if missing:
-        raise EgressPreflightError(f"missing status fields: {','.join(missing)}")
-    for key, expected in _REQUIRED_VALUES.items():
-        if fields[key] != expected:
-            raise EgressPreflightError(f"{key} must be {expected}")
-    if fields["agent_proxy"] != expected_agent_proxy:
-        raise EgressPreflightError("agent_proxy does not match the domain-router contract")
-    if not _POLICY_SHA_RE.fullmatch(fields["policy_sha256"]):
-        raise EgressPreflightError("policy_sha256 must be 64 lowercase hexadecimal characters")
-    return SelectorPolicy(
-        agent_proxy=fields["agent_proxy"],
-        policy_id=fields["policy_id"],
-        policy_sha256=fields["policy_sha256"],
-    )
+    raw = os.environ.get(EGRESS_PROXY_PORT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_EGRESS_PROXY_PORT
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise EgressPreflightError(f"{EGRESS_PROXY_PORT_ENV} is not an integer") from exc
+    if not 1 <= port <= 65535:
+        raise EgressPreflightError(f"{EGRESS_PROXY_PORT_ENV} is out of range: {port}")
+    return port
 
 
-def _run_status(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(command),
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+def policy_for_port(port: int) -> SelectorPolicy:
+    """Derive the policy record for one exit port.
+
+    `policy_sha256` still exists because the interpret receipt gate compares it
+    against the value captured when that repository last proved selector
+    compatibility.  It is now a digest of the exit this process will actually
+    use, so the pin keeps meaning "the egress contract has not moved under you".
+    """
+
+    agent_proxy = f"http://127.0.0.1:{port}"
+    digest = hashlib.sha256(f"{EGRESS_POLICY_ID}\n{agent_proxy}\n".encode()).hexdigest()
+    return SelectorPolicy(agent_proxy=agent_proxy, policy_id=EGRESS_POLICY_ID, policy_sha256=digest)
+
+
+def probe_egress_port(port: int) -> None:
+    """Fail closed unless a real request gets through the exit port.
+
+    NOT a TCP connect. A connect proves a socket is accepting on loopback and
+    nothing else, and this repository has already paid for that distinction:
+    on 2026-08-18 00:04 the proxy line read a perfectly healthy
+    `http://127.0.0.1:59527` while all 162 sources in the same round failed with
+    `Connection refused` from the far side. CHANGELOG 2026-08-18 wrote the rule
+    down -- verify by sending a request through the proxy, "端口探测区分不了
+    「本地 listener 活着」与「上游隧道通」" -- and the port in that incident is
+    the same one this module defaults to.
+
+    Any HTTP response counts, not only 200: reaching the origin at all means
+    CONNECT succeeded and the tunnel carried TLS. A status check would instead
+    tie our pipeline to one third party's uptime *and* its response codes.
+    """
+
+    url = os.environ.get(EGRESS_PROBE_URL_ENV, "").strip() or DEFAULT_EGRESS_PROBE_URL
+    proxy = f"http://127.0.0.1:{port}"
+    try:
+        with httpx.Client(proxy=proxy, timeout=_PROBE_TIMEOUT_SECONDS, trust_env=False) as client:
+            client.get(url)
+    except httpx.HTTPError as exc:
+        raise EgressPreflightError(
+            f"no request got through the egress proxy 127.0.0.1:{port} "
+            f"({type(exc).__name__}); check who is listening there with "
+            f"`lsof -nP -iTCP:{port} -sTCP:LISTEN`, then set "
+            f"{EGRESS_PROXY_PORT_ENV} to the port your local router serves"
+        ) from exc
 
 
 @lru_cache(maxsize=1)
 def require_selector_policy() -> SelectorPolicy:
-    try:
-        completed = _run_status(STATUS_COMMAND)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise EgressPreflightError(f"status command failed: {type(exc).__name__}") from exc
-    if completed.returncode != 0:
-        raise EgressPreflightError(f"status command returned {completed.returncode}")
-    return parse_proxy_status(completed.stdout)
+    port = egress_proxy_port()
+    probe_egress_port(port)
+    return policy_for_port(port)
 
 
 def reset_selector_policy_cache() -> None:

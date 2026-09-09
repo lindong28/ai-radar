@@ -6,6 +6,18 @@
 
 **迁出记录 2026-09-05**：用户点名的「interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态」在本分支基线中尚无条目；本轮已补录完整事实并直接按终态生命周期写入 [`archive/closed.md`](archive/closed.md)，未把已闭合事项留在 open 清单。
 
+## 2026-09-09 出网边界改写：一次对抗审查提出、本轮**未处置**的几条
+
+改动本身见 `docs/experiences/integration.md` 与 `docs/architecture.md`。下面是审查提出、当轮判为不修的，逐条给了理由；不修不等于不成立。
+
+- **逐 hostname 的线路契约没有了**（最重的一条，属设计取舍不是缺陷）。旧证明断言 `gcp_sg_standard_status` / `tencent_status` / `direct_status` 等字段，应用因此对「Anthropic→GCP SG、OpenAI→Tencent primary、其余 direct」有一份 fail-closed 的契约，且能用 `agent-proxy-route-audit` 核。现在 routing 全部由监听那个端口的东西决定，应用既不约束也观测不到。**这是用户 2026-09-09 明确选择的方向**（「clash 会负责对这个端口上的流量进行 routing」），记在这里是因为文档里那段「预期 policy」从此只在 domain router 恰好是那个监听者时成立。
+- **`policy_for_port()` 是导出的，能凭空造出一份未经探针验证的 policy**，而所有下游都接受显式传入的 `policy=` 而优先于闸。当前无生产调用方（`grep 'SelectorPolicy(' src/ scripts/` 只命中 `egress.py` 自己），故是潜在隐患而非在开的洞——fail-closed 现在靠约定，不靠类型不可伪造。
+- **默认端口 59527 落在系统临时端口区间**（`sysctl net.inet.ip.portrange` → 49152–65535），任何 `bind(("127.0.0.1", 0))` 都可能拿到它。实发请求的探针把危害压得很低（随机开发服务器答不了 CONNECT，已实测：`501 Unsupported method`），但端口本身仍可被抢占。改默认端口是用户的决定，他点名了 59527。
+- **`require_selector_policy` 带 `lru_cache`，探针每进程只跑一次**。`serve` 在 `KeepAlive=true` 下能连跑数天；出口端口中途搬家时它会一直往一个死地址代理，不重探也不报错。旧设计有同样的缓存，但那时缓存的是一次状态读数、不是一次可达性证明，所以这条现在更承重。
+- **`policy_sha256` 是代理 URL 的可逆编码**：输入是 `policy_id\n<agent_proxy>\n`，取值空间 65535，公开可枚举。`test_audit_json_excludes_sensitive_request_and_proxy_material` 断言的「审计里没有代理 URL」因此只在字面上成立。影响很小（那是 loopback 地址），但那条断言不再守着它原本要守的东西。
+- **探针的目标地址没有任何断言绑定到 transport 的目标地址**。今天两者都是 `127.0.0.1` 字面量、一致；把探针改成 `localhost` 或 `0.0.0.0` 会让它检查另一个端点，而全部测试仍绿（审查实测两种变异都不被捕获）。
+- **`scripts/eval/measure_live_composition.py` 现在经代理量自家线上站**。走出网边界与登记册一致是对的，但它量的是「代理出口所到的那个边缘节点看到的页面」，而边缘选择对该 host 是已知活变量（见 memory `aiplanet延迟跨洋根因`）。类别构成受边缘副本新旧影响，该脚本 docstring 已警告过 90 秒边缘缓存；此处补记它多了一层。
+
 ## [open] ISSUE-GENERAL-20260905-e7a1 · `check-proxy-status` 间歇返回 1 会静默停掉整轮 pipeline
 
 - **现象**：2026-09-05 20:45、21:00 两轮 `=== egress preflight FAIL (exit 1) ===`，interpret/enrich 一个都没跑；21:15 起自行恢复。同日 15:00 轮也失败过一次。

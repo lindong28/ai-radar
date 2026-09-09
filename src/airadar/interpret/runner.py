@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .. import db
-from ..egress import managed_subprocess_env, require_selector_policy
+from ..egress import EGRESS_POLICY_ID, managed_subprocess_env, require_selector_policy
 from ..llm_usage import (
     LlmUsageRecord,
     record_llm_usage_best_effort,
@@ -163,7 +163,7 @@ def expected_selector_compatibility_receipt(
 
     return {
         "schema_version": 2,
-        "policy_id": "domain-routing-v2",
+        "policy_id": EGRESS_POLICY_ID,
         "policy_sha256": policy_sha256,
         "egress_implementation_sha256": egress_implementation_sha256,
         "parent_gcp_env_selector_only_test": "passed",
