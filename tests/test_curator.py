@@ -594,3 +594,35 @@ def test_a_weights_file_without_them_still_loads() -> None:
     )
     assert loaded.significance == pytest.approx(0.0)
     assert loaded.uses_tier_multiplier is False
+
+
+def test_category_multiplier_only_touches_the_two_listed_categories() -> None:
+    """Everything unlisted must score exactly as before, including the empty category.
+
+    An item can be scored before it is enriched, so "no category" is the ordinary state of
+    the newest candidates -- not an error, and not a reason to change their score.
+    """
+    from airadar.curator.select import CATEGORY_MULTIPLIERS, category_multiplier
+
+    assert set(CATEGORY_MULTIPLIERS) == {"paper", "tutorial"}
+    assert category_multiplier("paper") == 0.90
+    assert category_multiplier("tutorial") == 1.12
+    for untouched in ("model", "product", "industry", "", "unknown-slug"):
+        assert category_multiplier(untouched) == 1.0
+
+
+def test_primary_category_reads_enrich_output_and_never_raises() -> None:
+    """It runs per candidate inside the load loop; one malformed row must not fail a run."""
+    import json as _json
+
+    from airadar.curator.select import _primary_category
+
+    assert _primary_category(_json.dumps({"primary_category": "paper"})) == "paper"
+    # Every shape that reaches here from a real row, plus the ones that would raise.
+    assert _primary_category(None) == ""
+    assert _primary_category("") == ""
+    assert _primary_category("not json at all") == ""
+    assert _primary_category(_json.dumps(["a", "list"])) == ""
+    assert _primary_category(_json.dumps({"other": "field"})) == ""
+    assert _primary_category(_json.dumps({"primary_category": None})) == ""
+    assert _primary_category(_json.dumps({"primary_category": 7})) == ""

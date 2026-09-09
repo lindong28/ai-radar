@@ -19,6 +19,7 @@ class ScoredCandidate:
     reason: dict[str, Any]
     source_id: str = ""
     kind: str = "feed"
+    primary_category: str = ""
 
 
 def tier_multiplier(tier: str) -> float:

@@ -179,12 +179,66 @@ def _calibrate_selected_scores(selected: list[ScoredCandidate]) -> list[ScoredCa
     return calibrated
 
 
+# Per-category ranking multipliers, chosen 2026-09-09 by the repository owner.
+#
+# WHY THESE TWO AND NOT A QUOTA. AIHOT's own selection was characterised first, from the
+# evalset's `reference.selected` + `category_slug` (its raw slug, deterministically mapped;
+# NOT our enrich output): its flow -> its picks lifts tutorial 0.90x, product 0.88x,
+# paper 0.92x, industry 0.69x and model 2.19x. So it is near category-neutral and simply
+# has more tutorial in its flow (35.7%) than we do (23.8%). Ours lifted paper 2.63x and
+# that is the one clear defect -- opposite in sign to the reference.
+#
+# WHAT THESE NUMBERS ARE, STATED PLAINLY: they were fitted to minimise the composition
+# distance on one 48h pool, so they are a fit to a reading, not a transcription of AIHOT's
+# decision function. Copying its lift coefficients was measured and REJECTED: it lands at
+# TV 0.215, worse than the 0.203 baseline, because the same coefficient on a different flow
+# yields a different composition (35.7%x0.90=32.1% vs 23.8%x0.90=21.4%). The owner chose the
+# result over the method with that tradeoff in front of them.
+#
+# CONSEQUENCES FOR WHOEVER TOUCHES THIS NEXT. The pool drifts, so these need re-fitting;
+# they were validated on a single 48h window with no cross-window stability check. This is
+# deliberately a score multiplier and not a quota: a quota would force the target share
+# whatever the pool holds, while this only reorders and lets composition float with the pool.
+# Measured on the real selection path (_load_candidates + dedup + threshold + fresh pool +
+# _fill), not a simplification -- an earlier simplified model put the baseline at 0.494
+# against a real 0.214 and every coefficient derived from it was wrong.
+CATEGORY_MULTIPLIERS: dict[str, float] = {"paper": 0.90, "tutorial": 1.12}
+
+
+def category_multiplier(category: str) -> float:
+    """1.0 for anything unlisted, including items with no enrich row yet."""
+
+    return CATEGORY_MULTIPLIERS.get(category, 1.0)
+
+
+def _primary_category(output_json: str | None) -> str:
+    """Empty string when the item has no usable enrich row -- it then scores unmultiplied.
+
+    Not an error: scoring and enrich are separate stages and an item can be scored before it
+    is enriched, so this is the ordinary state for the newest candidates.
+    """
+
+    if not output_json:
+        return ""
+    try:
+        payload = json.loads(output_json)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    category = payload.get("primary_category")
+    return category if isinstance(category, str) else ""
+
+
 def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredCandidate]:
     rows = conn.execute(
         """
         SELECT
           e.id, i.id, i.content_hash, i.url, i.published_at, s.tier,
-          s.id, COALESCE(s.kind, 'feed'), e.numeric_json
+          s.id, COALESCE(s.kind, 'feed'), e.numeric_json,
+          (SELECT en.output_json FROM item_evaluations en
+            WHERE en.item_id=e.item_id AND en.stage='enrich' AND en.error IS NULL
+            ORDER BY en.id DESC LIMIT 1)
         FROM item_evaluations e
         JOIN items i ON i.id=e.item_id
         JOIN sources s ON s.id=i.source_id
@@ -203,7 +257,8 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
     candidates: list[ScoredCandidate] = []
     for row in rows:
         numeric: dict[str, Any] = json.loads(row[8])
-        score = weighted_score(numeric, weights, row[5])
+        category = _primary_category(row[9])
+        score = weighted_score(numeric, weights, row[5]) * category_multiplier(category)
         reason = {
             "scores": numeric,
             "tier": row[5],
@@ -211,6 +266,11 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
             # while the score no longer carries it puts a 1.25 next to a number that was never
             # multiplied, and every consumer of reason_json reads them as a pair.
             "tier_multiplier": tier_multiplier(row[5]) if weights.uses_tier_multiplier else 1.0,
+            "category": category,
+            # Recorded for the same reason as tier_multiplier above: reason_json's consumers
+            # read the factor and the score as a pair, so a score that was multiplied must
+            # say by how much.
+            "category_multiplier": category_multiplier(category),
             "weighted_score": score,
         }
         candidates.append(
@@ -224,6 +284,7 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
                 reason=reason,
                 source_id=row[6],
                 kind=row[7],
+                primary_category=category,
             )
         )
     return candidates
