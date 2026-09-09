@@ -1588,14 +1588,21 @@ class _StructuralDetailHtmlParser(HTMLParser):
         normalized_tag = tag.lower()
         normalized_attrs = tuple((name.lower(), value) for name, value in attrs)
         self.attribute_values.extend(value for _name, value in normalized_attrs if value is not None)
-        if normalized_tag == "article":
-            if self._active_stack:
-                raise DatasetContractError("ssr_parse_failed", "nested detail articles are invalid")
+        if normalized_tag == "article" and not self._active_stack:
             article = _StructuralDetailNode(normalized_tag, normalized_attrs, [], [])
             self.article_roots.append(article)
             if not self_closing:
                 self._active_stack.append(article)
             return
+        # An <article> *inside* the detail article is body content, not a second detail
+        # root -- AIHOT renders the source post's own markup, and a post that quotes an
+        # article carries the tag through. Measured 2026-09-09 on
+        # /items/cmtsbhco705grrobqf8nwtikb, whose body opens `<article><p>I have audited
+        # ...`: rejecting it stopped the whole daily capture, and because it is
+        # content-dependent it is rare -- 110 other pages sampled that day parsed clean.
+        # Falling through treats it as an ordinary child, which is what it is. The real
+        # invariant is untouched: two *sibling* detail articles still produce two roots
+        # and still fail the "exactly one article" check below.
         if not self._active_stack:
             return
         node = _StructuralDetailNode(normalized_tag, normalized_attrs, [], [])
@@ -1651,25 +1658,8 @@ def _parse_structural_detail_item(
     request_url: str | None,
 ) -> tuple[str, str, list[str]] | None:
     parser = _StructuralDetailHtmlParser()
-    try:
-        parser.feed(markup)
-        parser.close()
-    except DatasetContractError as exc:
-        # Name the page. Without this the error says only what went wrong, not where,
-        # and the only way back to the offending URL is to re-fetch and re-parse the
-        # whole traversal by hand -- measured 2026-09-09: 110 pages sampled that way
-        # (50 list + 60 detail) all parsed clean and still did not find it.
-        # str() already carries the "<code>: " prefix the constructor adds, so strip it
-        # rather than nesting it a second time.
-        detail = str(exc)
-        prefix = f"{exc.code}: "
-        if detail.startswith(prefix):
-            detail = detail[len(prefix):]
-        raise DatasetContractError(
-            exc.code,
-            f"{detail} (request_url={request_url or 'unknown'})",
-            details={**exc.details, "request_url": request_url},
-        ) from exc
+    parser.feed(markup)
+    parser.close()
     if not parser.article_roots:
         return None
     if len(parser.article_roots) != 1:
@@ -1822,7 +1812,24 @@ def _parse_ssr_tag_observations(
     parser.close()
     parsed_items = parser.items
     if channel == "detail" and not parsed_items:
-        structural_item = _parse_structural_detail_item(markup, request_url=request_url)
+        try:
+            structural_item = _parse_structural_detail_item(markup, request_url=request_url)
+        except DatasetContractError as exc:
+            # Name the page. Without this the error says what broke but not where, and
+            # recovering the URL means re-fetching and re-parsing the whole traversal by
+            # hand -- measured 2026-09-09, 110 pages sampled that way without finding it.
+            # Wrapped here rather than around the parser alone: the checks after parsing
+            # (article count, identity shape, tag groups) are just as locationless.
+            # str() already carries the "<code>: " prefix, so strip it before rebuilding.
+            detail = str(exc)
+            prefix = f"{exc.code}: "
+            if detail.startswith(prefix):
+                detail = detail[len(prefix):]
+            raise DatasetContractError(
+                exc.code,
+                f"{detail} (request_url={request_url or 'unknown'})",
+                details={**exc.details, "request_url": request_url},
+            ) from exc
         if structural_item is not None:
             parsed_items = [structural_item]
     try:

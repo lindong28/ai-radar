@@ -236,6 +236,27 @@ def test_structural_detail_parser_rejects_empty_tags_when_request_identity_is_un
     assert raised.value.code == "ssr_parse_failed"
 
 
+def test_structural_detail_accepts_an_article_inside_the_body(ds: Any) -> None:
+    """An <article> in the item body is content, not a second detail root.
+
+    AIHOT renders the source post's own markup, so a post that quotes an article
+    carries the tag through. Measured 2026-09-09 on /items/cmtsbhco705grrobqf8nwtikb,
+    whose body opens `<article><p>I have audited ...`: rejecting it stopped the whole
+    daily capture, and because it is content-dependent it is rare -- 110 other pages
+    sampled that day parsed clean, which is why it went unnoticed.
+    """
+
+    parser = ds._StructuralDetailHtmlParser()
+    parser.feed(
+        '<article class="dt-detail" data-fictional-id="a">'
+        "<div><article><p>quoted source post</p></article></div>"
+        "</article>"
+    )
+    parser.close()
+    assert len(parser.article_roots) == 1
+    assert parser.article_roots[0].attrs[0] == ("class", "dt-detail")
+
+
 def test_structural_detail_parse_failure_names_the_page(ds: Any) -> None:
     """A parse failure must say which URL it failed on, not just what broke.
 
@@ -246,8 +267,14 @@ def test_structural_detail_parse_failure_names_the_page(ds: Any) -> None:
 
     url = "https://aihot.invalid/items/fiction-item-nested"
     with pytest.raises(ds.DatasetContractError) as excinfo:
-        ds._parse_structural_detail_item(
-            '<article data-fictional-id="a"><article data-fictional-id="b"></article></article>',
+        # Two SIBLING detail articles -- still invalid. A *nested* article is now
+        # accepted as body content, so it can no longer serve as the failing case.
+        # Goes through _parse_ssr_tag_observations because the URL is attached there,
+        # which is what makes the checks *after* parsing locatable too.
+        ds._parse_ssr_tag_observations(
+            b'<article data-fictional-id="a"></article>'
+            b'<article data-fictional-id="b"></article>',
+            channel="detail",
             request_url=url,
         )
     assert excinfo.value.code == "ssr_parse_failed"
@@ -345,18 +372,6 @@ def test_structural_detail_parser_fails_closed_on_ambiguous_shape(ds: Any, body:
     ("body", "request_url", "message"),
     [
         (
-            structural_detail_html().replace(
-                b"<div>",
-                (
-                    b'<article class="fictional-nested" '
-                    b'data-fictional-binding="fiction-item-alpha"><div>'
-                ),
-                1,
-            ),
-            "https://aihot.invalid/items/fiction-item-alpha",
-            "nested detail articles are invalid",
-        ),
-        (
             structural_detail_html().replace(b"</article>", b""),
             "https://aihot.invalid/items/fiction-item-alpha",
             "SSR HTML ended inside a detail article",
@@ -432,7 +447,6 @@ def test_structural_detail_parser_fails_closed_on_ambiguous_shape(ds: Any, body:
         ),
     ],
     ids=(
-        "line-1585-nested-article",
         "line-1626-unclosed-article",
         "line-1651-multiple-articles",
         "line-1666-article-identity-shape",
