@@ -24,6 +24,13 @@
 
 改 `src/airadar/egress.py` 会改变 `egress_implementation_sha256`、使收据失效并需重新 attestation，所以别为了一个未经验证的假设去改它。
 
+## 2026-09-09 出口端口可配置之后，一个陈旧的覆盖会把出网静默指向死端口
+
+- **形态**：`AI_RADAR_EGRESS_PROXY_PORT` 让端口可配置，代价是**任何一层的陈旧覆盖都会赢过代码默认**——`.env`、调用方 shell、继承来的进程环境都算。当天实测两次：① `.env` 钉着 7897 而 clash 已搬到 59527，10:30/10:45 两轮 `preflight FAIL`；② 一次 400 条重算 **400/400 全错**，`latency_ms=22`。
+- **为什么难认**：失败串是 `all DeepSeek provider endpoints failed: …`，读起来像 provider 挂了。**要看 latency**——22ms 是连接被拒（本地端口没人听），~19000ms 才是网络超时。两者的上层文案一模一样。
+- **判据**：怀疑出网时，先分清「代码默认」与「实际生效值」。`./run.sh egress-preflight` 的 reason 里**印着实际用的那个端口**，照它查；要看不受调用方污染的值就 `env -i PATH="$PATH" HOME="$HOME" ./run.sh egress-preflight`。cron 不继承交互 shell，所以**交互式读数为 FAIL 不等于生产 FAIL**，反之亦然——当天正是这种分叉：我的 shell 恒指 7897（失败），同一时刻 11:00 轮 `preflight OK` 且 30 分钟入库 4393 条。
+- **对长跑脚本的纪律**：任何排队跑批的脚本先 `unset AI_RADAR_EGRESS_PROXY_PORT` 再调 `./run.sh`，让它走代码默认；否则调用方环境里的一个陈旧值就能把整批跑废，而且废得像上游故障。
+
 ## 2026-09-09 出网边界改写使**全部现存收据失效**——端口一立起来 interpret 就静默停产
 
 - **状态**: 未闭合，动作在用户那边（需要跑那五个兼容性测试的人签字，agent 不能代签）。
