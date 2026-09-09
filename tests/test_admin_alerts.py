@@ -5359,6 +5359,122 @@ def test_a2_holds_for_a_count_of_evaluations_not_a_stretch_of_time(tmp_path: Pat
     assert not any("已恢复" in text for text, _ in deliveries)
 
 
+def test_a_hold_of_one_round_claims_no_confirmations(tmp_path: Path) -> None:
+    """`resolve_debounce_rounds: 1` is a legal config that holds nothing.
+
+    At 1 the first quiet evaluation both records the timestamp and releases the recovery,
+    so a clause saying the condition was confirmed over further evaluations would be
+    false and its timestamp would equal the message's own send time -- zero information
+    stated as if it were evidence.
+    """
+    from airadar.admin import alerts as alerts_module
+
+    result = AlertRuleResult(
+        rule_id="A2", title="t", detail="all ok", action="none", firing=False
+    )
+    text = alerts_module._format_resolved(
+        result,
+        "2026-09-09T08:00:00+08:00",
+        quiet_since="2026-09-09T08:05:00+08:00",
+        held_rounds=1,
+    )
+    assert "已恢复" in text
+    assert "2026-09-09T08:05:00+08:00" not in text
+    assert "确认" not in text
+
+
+def test_recovery_message_states_the_actual_number_of_confirmations(tmp_path: Path) -> None:
+    """The count is in hand; "several" would make the reader unable to subtract the hold."""
+    from airadar.admin import alerts as alerts_module
+
+    result = AlertRuleResult(
+        rule_id="A2", title="t", detail="all ok", action="none", firing=False
+    )
+    text = alerts_module._format_resolved(
+        result,
+        "2026-09-09T08:00:00+08:00",
+        quiet_since="2026-09-09T08:05:00+08:00",
+        held_rounds=2,
+    )
+    assert "2 次评估" in text
+
+
+def test_a2_recovery_message_dates_the_clearing_not_the_announcement(tmp_path: Path) -> None:
+    """The ✅ must say when the condition actually cleared, not let the reader date it here.
+
+    The hold delays the announcement by one or two evaluations, so a reader who dates the
+    episode's end to this message overstates it by exactly that much -- while the system
+    knew the real time all along. Asserts the earlier timestamp is present, which is the
+    property; asserting merely that some clause exists would pass on a wrong time.
+    """
+    from airadar.admin.thresholds import ALERT_THRESHOLDS
+
+    configured = ALERT_THRESHOLDS["a2"]["resolve_debounce_rounds"]
+    state_path = tmp_path / "alert-state.json"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    first_quiet = now + timedelta(minutes=5)
+    _a2_run(state_path, deliveries, _normal_signals(), first_quiet)
+    for index in range(1, configured - 1):
+        _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(minutes=5 * (index + 1)))
+    _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(minutes=5 * configured))
+
+    resolved = [text for text, _ in deliveries if "已恢复" in text]
+    assert resolved, "no recovery was announced"
+    assert first_quiet.isoformat() in resolved[-1], (
+        "the ✅ does not carry the moment the condition actually cleared"
+    )
+
+
+def test_quiet_since_survives_the_hold_and_does_not_outlive_a_refire(tmp_path: Path) -> None:
+    """Two failures in one: silently dropped each round, or carried into the next episode.
+
+    The first makes the clause above show the latest quiet evaluation rather than the
+    first; the second dates a later episode's clearing to an earlier one's.
+    """
+    state_path = tmp_path / "alert-state.json"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(minutes=5))
+    held = json.loads(state_path.read_text(encoding="utf-8"))
+    quiet_since = held["A2"]["lifecycles"]["page"]["quiet_since"]
+    assert quiet_since == (now + timedelta(minutes=5)).isoformat()
+    # Finding (2): during the hold, `detail` is still the outage text while
+    # `last_evaluated_at` is fresh -- identical rendering for two different states.
+    # `quiet_since` is what now tells them apart; assert the surface can actually see it.
+    assert held["A2"]["state"] == "firing"
+    assert held["A2"]["lifecycles"]["page"].get("quiet_since"), (
+        "the admin surface has no way to distinguish 'still broken' from 'confirming recovery'"
+    )
+
+    # Firing again ends the pending recovery; the stale timestamp must not survive it.
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now + timedelta(minutes=10))
+    refired = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "quiet_since" not in refired["A2"]["lifecycles"]["page"], (
+        "a part-served hold's timestamp survived a re-fire"
+    )
+
+
+def test_rules_without_a_debounce_get_no_extra_clause() -> None:
+    """The clause is opt-in with the debounce; every other rule's ✅ is unchanged."""
+    from airadar.admin import alerts as alerts_module
+
+    result = AlertRuleResult(
+        rule_id="A9",
+        title="fictional rule",
+        detail="all within thresholds",
+        action="none",
+        firing=False,
+    )
+    text = alerts_module._format_resolved(result, "2026-09-09T08:00:00+08:00")
+    assert "已恢复" in text
+    assert "恢复滞回" not in text
+
+
 def test_a2_announces_recovery_on_the_configured_count(tmp_path: Path) -> None:
     """Negative control: the hold is a delay, not a block, and it ends where configured.
 

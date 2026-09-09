@@ -351,6 +351,24 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
   | ② | 滞回期间管理面 `detail` 仍是旧故障文案、而 `last_evaluated_at` 是新的（两种状态同一呈现） | **记账后续做** | 暴露窗口就是滞回本身（5–10 分钟），而修法要改 `detail` 的生成语义（它现在恒等于最近一次评估的 detail）。收益/风险比低于 ①，与 ① 一起做更省 |
   | ③ | 滞回只覆盖七条 ok 路径中的一条，其余（A7 全暂停关闭、severity 交接）不经过它 | **判定不做，改为在使用现场加锚点**（已完成） | 今天零影响：实测只有 A2 开了这个选项，而 A2 的 episode 都由普通路径结束。真正的风险不是"少覆盖六条"，是**下一个开启该选项的人不知道**——所以把作用域写进 `thresholds.py` 里 `resolve_debounce_rounds` 的定义处（那是他必然会读的地方），而不是重构七条出口。重构要等第二个规则真的需要 |
 
+  **①② 已于 2026-09-09 实现**（`quiet_since` 纯记录字段；判定仍只由计数决定）。**独立审查报回 10 条，这是当日同一面第三次「我自评通过、独立审查判否」**，逐条处置如下：
+
+  | finding | 判定 | 处置 |
+  |---|---|---|
+  | **F1（HIGH）②在真实管理面根本没兑现**：`metrics.py:_load_alert_summary` 是 `/admin` 与 metrics API 的唯一渲染路径，它只读 `state`/`detail`，不读 `quiet_since`；审查用两份 state 实测渲染**逐字相同** | 成立 | **已修**：渲染层加 `_resolve_confirming_since()`，firing 行附「条件已于 X 转为正常，正在确认恢复」。`detail` 刻意不动（那是 episode 开火的证据），区分是**加法**。测试改打在 `_load_alert_summary` 上——**此前我的断言打在原始 JSON 上，审查原话「断言文案宣称的比它测到的宽」** |
+  | **F4（MED）** `resolve_debounce_rounds: 1` 是合法配置，此时第一次安静既记时刻又立刻放行，消息却声称「多确认了若干次」而实际 0 次 | 成立 | **已修**：只在 `held_rounds > 1` 时挂该句 |
+  | **F8（LOW）我写进代码的注释是假的事实主张**：注释称 `prepare_notification` 会丢掉未提前读的字段，审查实测它**保留全部 key**（真正丢它的是其后的 `_ok_lifecycle`） | 成立 | **已修**，并在注释里写明上一版错在哪 |
+  | **F9（LOW）** 措辞两处反向偏差：`quiet_since` 是**上界**（首次读到正常）却写成点值；`N` 在手边却写「若干次」 | 成立 | **已修**：「条件**最迟**已于 X…之后又确认了 **N** 次评估」 |
+  | **F7（LOW，今日不可达）** `scope_limited` 分支早返回，子句被丢 | 成立 | **已修**（一行）。它恰是最需要解释「为何现在才发」的那类消息 |
+  | **F2（MED，今日可达性 0）** notice→page 交接的**反方向**没有 pop：outgoing lifecycle 的 `quiet_since`/计数穿过 re-fire 存活，✅ 给出的「转为正常」时刻**早于中间那次故障**，且滞回少走一轮 | 成立 | **未修，记账**。A2 是唯一开滞回的规则且 severity 恒为 `page`，故今日不可达。**注意**：`thresholds.py` 那段 SCOPE 锚点只警告滞回在交接出口「never applies」，**没覆盖「状态穿过交接存活」这一形态**——别把那条锚点读成已经写下了这一条 |
+  | **F6（LOW，今日不可达）** `in_progress` 已被显式挡在滞回外，`degraded` 没有：一次系统自己标为「不可评估」的评估会推进恢复计数、并被写成 `quiet_since` | 成立 | **未修，记账**。写 `in_progress` 那段的人已经知道「观测不到的评估不该推进状态」，`degraded` 是同一判断没延伸到的一格 |
+  | **F10（LOW，一次性）** 部署瞬间正有一次在飞滞回（旧 state 有计数无时刻）时，`seen == 1` 已过，戳永不补上，那条 ✅ 静默退回旧行为且与「本就没开滞回」同形 | 成立 | **未修，记账**。一次性窗口 |
+  | **F3（LOW）** page→notice 那半个 pop **无任何测试守护**（审查变异后全套 171 passed） | 成立 | **仍无覆盖，如实记**。我曾补过一个测试，但它自己 pop 再断言 pop 生效、根本没走生产路径——**那种测试比没有更坏**（它让人以为有覆盖），已删除。真正测它要构造 page→notice 交接，而 A2 恒 page，需要另一个规则 |
+
+  **②只解决了一半**：`detail` 文案本身仍是开火时的故障文案，两态靠**后缀**区分而不是靠 detail 本身。**F5（MED）事故账本仍多算**——`alert-events.jsonl` 的 resolved 行 `ts` 仍是宣告时刻、`values` 里没有 `quiet_since`，而条目 ① 原文把「恢复消息**与事故账本**」并列，本次只动了前者。**未修，记账。**
+
+  **审查另外给了一个仪器坑，值得单独记**：`pyproject.toml` 的 `[tool.pytest.ini_options] pythonpath = ["src"]` **会盖掉环境变量 `PYTHONPATH`**，把改过的副本放进 `PYTHONPATH` 跑 pytest 会**静默地测未变异的原树**（审查第一次跑阳性对照就拿到了全绿假读数）。做变异实验要用 `-o pythonpath=<副本路径>`，或 `cd` 进副本让 rootdir 相对解析。
+
   **① 的修法（写下来，后续做的人不必重新分析）**：滞回判定继续用计数、不要改回时间。另加一个**纯记录**字段 `quiet_since`：在 `quiet_evaluations` 由无变 1 的那一次写入当时时刻；`_normalized_lifecycle` 的 allow-list 里按 `state == "firing"` 保留它（与 `quiet_evaluations` 同款，否则每轮被静默丢弃）；两处 `pop("quiet_evaluations")` 同时 pop 它；`_format_resolved` 增参并在 `（since …）` 之后补一句「条件已于 … 清除，等待 N 次评估确认」。**验收要钉的是**：滞回期跨轮不丢该字段、re-fire 后不残留、消息里那句在 `resolve_debounce_rounds=0` 的规则上不出现。
 
 - **闭合进度（2026-09-08 更新）**：闭合方向 ① 有两半，本次只做了第一半。**已实施**：A2 的心跳支路读最近一个**非 SKIP** 轮的 `egress-preflight status=…` 行，非 healthy 时正文写「最近一轮出网 preflight status=… reason=…」、撤掉那个恒为噪声的 SKIP 计数，处置改为 `check-proxy-status --format=kv` 并指向本文档「出网 selector 的 preflight 与实际 route」节。**未实施、无人认领**：① 的第二半「连续 ≥3 轮 preflight FAIL（45 min）作为 A2 的提前触发」——本次明确排除（不改开火条件），于是同节测得的**探测延迟仍在**：2026-09-04 迟 77 分钟、2026-09-08 迟 71 分钟。这两项留在本单元里，不另开条目。

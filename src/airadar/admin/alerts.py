@@ -1082,8 +1082,29 @@ _RESOLVED_EVIDENCE_POINTERS = {
 }
 
 
-def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
+def _format_resolved(
+    result: AlertRuleResult,
+    since: str | None,
+    *,
+    quiet_since: str | None = None,
+    held_rounds: int | None = None,
+) -> str:
+    """`quiet_since` is when the condition actually cleared, when a debounce held the ✅.
+
+    Without it the reader dates the episode's end to this message, overstating it by the
+    hold -- and the system knew the real time all along (P8: do not withhold what you
+    know). Only rules with `resolve_debounce_rounds > 0` ever carry it, so the extra
+    clause simply does not appear for every other rule.
+    """
+
     suffix = f"（since {since}）" if since else ""
+    # `quiet_since` is the first evaluation that READ normal, so the condition cleared
+    # somewhere in (previous evaluation, quiet_since] -- state it as the upper bound it
+    # is, not as a point. And say the actual count: it is in hand, and the whole point is
+    # to let the reader subtract the hold rather than date the episode to this message.
+    held = ""
+    if quiet_since and held_rounds and held_rounds > 1:
+        held = f"\n条件最迟已于 {quiet_since} 转为正常，之后又确认了 {held_rounds} 次评估才宣告恢复"
     evidence_pointer = _RESOLVED_EVIDENCE_POINTERS.get(result.rule_id)
     pointer_suffix = f"\n{evidence_pointer}" if evidence_pointer else ""
     if result.evaluation_state == "degraded":
@@ -1096,7 +1117,7 @@ def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
             result.rule_id, _SCOPE_LIMITED_RESOLVED_FALLBACK
         )
         return (
-            f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title}：{headline}{suffix}{caveat}\n"
+            f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title}：{headline}{suffix}{caveat}{held}\n"
             f"{evidence_label}：{result.detail}{pointer_suffix}"
         )
     action_suffix = (
@@ -1105,7 +1126,7 @@ def _format_resolved(result: AlertRuleResult, since: str | None) -> str:
         else ""
     )
     return (
-        f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}\n"
+        f"【{ALERT_SOURCE}】✅ {result.rule_id} {result.title} 已恢复{suffix}{held}\n"
         f"恢复证据：{result.detail}{pointer_suffix}{action_suffix}"
     )
 
@@ -1341,6 +1362,8 @@ def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
     # made the debounce unreachable (caught by its own test, not by review).
     if state == "firing" and isinstance(entry.get("quiet_evaluations"), int):
         normalized["quiet_evaluations"] = entry.get("quiet_evaluations")
+    if state == "firing" and isinstance(entry.get("quiet_since"), str):
+        normalized["quiet_since"] = entry.get("quiet_since")
     if (firing_basis := _normalize_firing_basis(entry.get("firing_basis"))) is not None:
         normalized["firing_basis"] = firing_basis
     if state == "firing" and (source_ids := _normalize_source_ids(entry.get("source_ids"))):
@@ -2417,6 +2440,7 @@ def _apply_alert_results(
                 # version carrying the count across a page-to-notice handoff and
                 # resolving eleven minutes after the fault last showed.
                 lifecycles[PAGE_SEVERITY].pop("quiet_evaluations", None)
+                lifecycles[PAGE_SEVERITY].pop("quiet_since", None)
                 state[result.rule_id] = project(PAGE_SEVERITY)
                 continue
             debounce = _debounce_window(thresholds, result.rule_id, effective_severity)
@@ -2556,6 +2580,7 @@ def _apply_alert_results(
             # Firing again ends any pending recovery: the next quiet stretch must
             # earn its own count rather than inherit a stale one.
             lifecycles[effective_severity].pop("quiet_evaluations", None)
+            lifecycles[effective_severity].pop("quiet_since", None)
             state[result.rule_id] = project(effective_severity)
             if should_notify:
                 _write_state(state_path, state)
@@ -2580,6 +2605,15 @@ def _apply_alert_results(
                     if resolve_rounds > 0:
                         seen = lifecycle.get("quiet_evaluations")
                         seen = seen + 1 if isinstance(seen, int) and seen >= 0 else 1
+                        if seen == 1:
+                            # Record-only, never a judgement input: the hold is still
+                            # decided by the count, which an evaluator outage cannot
+                            # advance. This timestamp exists so the resolved message can
+                            # say when the condition actually cleared instead of letting
+                            # the reader date it to the announcement, and so the admin
+                            # surface can tell "still broken" from "waiting to confirm
+                            # recovery" -- without it those two render identically.
+                            lifecycle["quiet_since"] = current.isoformat()
                         if seen < resolve_rounds:
                             lifecycle["quiet_evaluations"] = seen
                             state[result.rule_id] = project(projected_severity)
@@ -2596,6 +2630,12 @@ def _apply_alert_results(
                         lifecycle=lifecycle,
                         paused_source_ids=paused_source_ids,
                     )
+                    # Read here for locality, not out of necessity: `prepare_notification`
+                    # rebuilds the dict but preserves every other key, so this would still
+                    # be readable after it. What does drop it is `_ok_lifecycle` below, and
+                    # that runs after the message is built. (An earlier version of this
+                    # comment claimed the rebuild loses it -- measured false.)
+                    quiet_since = lifecycle.get("quiet_since")
                     lifecycle, notification_nonce = prepare_notification(
                         lifecycle,
                         severity=severity,
@@ -2609,6 +2649,8 @@ def _apply_alert_results(
                         text=_format_resolved(
                             resolved_result,
                             str(lifecycle.get("since") or ""),
+                            quiet_since=quiet_since if isinstance(quiet_since, str) else None,
+                            held_rounds=_resolve_debounce_rounds(thresholds, result.rule_id),
                         ),
                         severity=(
                             NOTICE_SEVERITY

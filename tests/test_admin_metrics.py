@@ -525,3 +525,59 @@ def test_collect_alert_signals_does_not_claim_browser_cause_without_success_anch
     )
 
     assert signals.browser_preflight_only_failed_runs == 0
+
+
+def test_admin_summary_distinguishes_a_held_recovery_from_a_live_outage(tmp_path: Path) -> None:
+    """The rendered surface must tell the two apart, not just the state file.
+
+    A rule held by a resolve debounce stays `firing` with the `detail` it fired on while
+    `last_evaluated_at` moves, so an operator reading /admin during the hold sees a live
+    outage and starts handling an incident that already ended. Asserted on
+    `_load_alert_summary` -- the actual path to /admin and the metrics API -- because a
+    state file carrying the field proves nothing about what gets rendered.
+    """
+    import json
+
+    from airadar.admin.metrics import _load_alert_summary
+
+    def _state(quiet_since: str | None) -> Path:
+        page: dict[str, object] = {"state": "firing", "announced": True}
+        if quiet_since:
+            page["quiet_since"] = quiet_since
+        path = tmp_path / f"state-{quiet_since or 'none'}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "A2": {
+                        "state": "firing",
+                        "detail": "最近成功 pipeline 已超过 166 分钟",
+                        "lifecycles": {"page": page},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    broken = _load_alert_summary(_state(None))["firing"]
+    confirming = _load_alert_summary(_state("2026-09-09T08:05:00+08:00"))["firing"]
+
+    assert len(broken) == 1 and len(confirming) == 1
+    assert broken != confirming, "a held recovery renders identically to a live outage"
+    assert "2026-09-09T08:05:00+08:00" in confirming[0]
+    # The evidence the episode fired on must survive; the distinction is additive.
+    assert "最近成功 pipeline 已超过 166 分钟" in confirming[0]
+
+
+def test_admin_summary_unchanged_for_rules_without_a_debounce(tmp_path: Path) -> None:
+    """Only rules that opt into the debounce carry the field; everything else is untouched."""
+    import json
+
+    from airadar.admin.metrics import _load_alert_summary
+
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps({"A3": {"state": "firing", "detail": "healthz 连续失败", "lifecycles": {}}}),
+        encoding="utf-8",
+    )
+    assert _load_alert_summary(path)["firing"] == ["A3 healthz 连续失败"]

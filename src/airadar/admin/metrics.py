@@ -501,6 +501,25 @@ def collect_metrics(
     }
 
 
+def _resolve_confirming_since(lifecycles: object) -> str | None:
+    """When a resolve debounce is holding a rule's recovery, the moment it went quiet.
+
+    Only rules with `resolve_debounce_rounds > 0` ever carry `quiet_since`, so this is
+    None for every other rule and the caller's rendering is unchanged.
+    """
+
+    if not isinstance(lifecycles, dict):
+        return None
+    for severity in ("page", "notice"):
+        entry = lifecycles.get(severity)
+        if not isinstance(entry, dict):
+            continue
+        quiet_since = entry.get("quiet_since")
+        if isinstance(quiet_since, str) and quiet_since:
+            return quiet_since
+    return None
+
+
 def _load_alert_summary(path: Path) -> dict[str, list[str]]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -519,6 +538,13 @@ def _load_alert_summary(path: Path) -> dict[str, list[str]]:
         if raw.get("state") == "firing":
             lifecycles = raw.get("lifecycles")
             page = lifecycles.get("page") if isinstance(lifecycles, dict) else None
+            # A rule held by a resolve debounce is still `firing` with the outage `detail`
+            # it fired on, while `last_evaluated_at` moves -- so "still broken" and
+            # "waiting to confirm recovery" render identically here. That is the state an
+            # operator would start handling an already-finished incident from. `detail` is
+            # deliberately left alone (it is the evidence the episode fired on); the
+            # distinction is carried as a suffix instead.
+            confirming = _resolve_confirming_since(lifecycles)
             pending = page.get("pending_notification") if isinstance(page, dict) else None
             if (
                 rule_id == "W1"
@@ -549,7 +575,8 @@ def _load_alert_summary(path: Path) -> dict[str, list[str]]:
                     )
                 firing.append(f"W1 {detail}; {impact} {action}")
             else:
-                firing.append(f"{rule_id} {detail}")
+                held = f"（条件已于 {confirming} 转为正常，正在确认恢复）" if confirming else ""
+                firing.append(f"{rule_id} {detail}{held}")
         elif raw.get("evaluation_state") in {"degraded", "in_progress"}:
             degraded.append(f"{rule_id} {detail}")
     return {"firing": firing, "degraded": degraded}
