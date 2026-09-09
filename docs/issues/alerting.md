@@ -328,6 +328,8 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
   - **闸的位置已定位到一处，比上一条写的窄**：`_ok_lifecycle` 有 **7 个调用点**，各有其义，**只有一个是真正的"宣告恢复"**——`alerts.py:2570`，在 resolved 通知**已成功投递之后**。其余六处都不该加迟滞：`:2308` 是来源被人为暂停、`:2403` 是从没通知过（没有恢复可宣告）、`:2501` 是刚发完 firing、`:2583` 是兜底。**给这些加迟滞会朝反方向坏**——探针坏掉、这轮评不出来时告警反而一直挂着，正是 P9 的反面。所以闸要加在**决定构造并发出 resolved 通知之前**，不是加在 `_ok_lifecycle` 里面。
   - **`evaluation_state` 不能当判别器**（我查过才知道）：7 个调用点全部传默认的 `healthy`，它是在 `AlertRuleResult` 上设的、不在这里分叉。
   - **仍欠一个状态字段**：`_ok_lifecycle` 把 `since` 置 `None`，而迟滞要知道"连续不 firing 多久了"。持久化在 `data/alert-state.json`（`json.dump`，无 schema 版本号），加字段前要确认旧状态文件读得进来。
+  - **同一处已有一个现成先例，照它写即可**：`alerts.py:2530-2537`，`_entry_announced(lifecycle)` 分支里的 `_a7_mixed_pause_resolution_has_current_evidence(...)` —— 它返回 False 时的动作就是 `state[rule_id] = project(...)` 然后 `continue`，即**保持 firing、跳过这一次 resolve**，正是迟滞要的形状。所以闸是"在这个分支里并联第二个守卫"，不必新造机制。欠的那个状态字段（"连续不 firing 多久了"）挂在 lifecycle 上即可，`since` 仍保持"firing 起点"的原义不变。
+
   - **做成按规则可选**（threshold section 里一个键，默认 0 = 今天的行为），这样只有 A2 改变恢复语义，其余规则一个字节不动——这也是它能留在 A2 这个授权范围内的前提。
 
   - **可复用的形状**：开火侧那套（threshold section 里的 `debounce_minutes` + 一个算"确认时刻"的纯函数）就是 resolve 侧该照的样子——不必另发明一套。
