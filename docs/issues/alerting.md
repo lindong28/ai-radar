@@ -288,6 +288,20 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 - **那 76 分钟的成因追到一半，并否掉了最顺手的那个解释**：不是「出网恢复后的积压补抓」。同日各轮 fetch 的 `attempted` **恒为 162**，16:45 轮 `inserted=109` 居中，而 13.2 分钟的 16:15 轮做的是同样的活（162/40）、出网恢复首轮 14:45 反而只用 19.2 分钟（162/339，插入量最大）。**同样的活慢 5.8 倍 ⇒ 是卡，不是量。** 该轮 4 个失败源的签名全在出网层：`EgressPreflightError: status command returned 1`、`ProxyError: 503`、`SSL: UNEXPECTED_EOF_WHILE_READING`、`ConnectTimeout: handshake operation timed out`，与「出网 selector 在恢复后仍在抖」一致。
 - **但定位不到是哪个源，因为 fetch 段没有逐源耗时**：整个 fetch 段（325 行）只有 2 行带时间戳（`=== fetch START ===` 与 `=== fetch OK ===`），逐源的 `OK <source> fetched=… inserted=…` 不带时刻，所以耗时分布**从来没有被测过**。
 - **因此加阶段超时不是第一步，逐源耗时才是。** 三条理由：① 阈值要从耗时分布里取，而那个分布现在不存在——只有一个 76 分钟的观测，据它定阈是盲定；② 阶段级超时的粒度是错的：为了摆脱一个卡住的源而杀掉整个 fetch 阶段，会连带丢掉另外 161 个源这一轮的产出；③ 超时时长本身是一条**时效性/可用性**的非功能属性，追溯不到用户表达过的目标或既有契约，按 `~/.claude/CLAUDE.md`「非功能属性不自行加码」它的取值归用户，而「既有档位」此刻的诚实读数是**未实测**。逐源耗时是纯增量日志、无行为面，先加它，拿到分布再把阈值作为一次选择交出去。
+- **第三个实例（2026-09-08 23:45 → 09-09 进行中）。它与前两个不同：真因分两段，A2 两段都报对了。** 逐轮实况（`grep -oE 'egress preflight (OK|FAIL)|pipeline SKIP'`，不折叠）：
+
+  | 时段 | 实况 | A2 当时说什么 |
+  |---|---|---|
+  | 21:30 轮 | `egress preflight OK`，fetch 跑 **117.98 分钟**（21:30:09→23:28:07）后**正常完成**，整轮 23:38:43 `PIPELINE DONE (failed=1)` | — |
+  | 21:45–23:30 | **连续 8 轮 `pipeline SKIP`**——上一轮还握着锁 | 22:34 / 23:06 / 23:43「连续 SKIP 7/9 次，疑似卡死/僵尸锁」← **当时是对的**，此刻确实没有任何一轮走到过 preflight |
+  | 23:45 起 | 首个 `egress preflight FAIL`，至今 **35 轮**，零摄入 **8.8 小时** | 00:17 起「最近一轮出网 preflight status=unavailable，reason=missing status fields:…」← 也是对的 |
+
+  **这正是闭合方向 ① 第一半的生产验证，但要按它真实的机制读，别读成「修复前报错了」**：该信号取**最近一个非 SKIP 轮**的 preflight 行，而 23:45 之前不存在这样的轮次——所以它在 23:45 前不说出网、23:45 后立刻说，是设计使然而非延迟。从首个可观测的 FAIL（23:45）到 A2 报出出网归因（00:17）是 **32 分钟**（即一个 alert-check 周期加一次轮转），不是前两次那种 71 / 77 分钟的探测延迟——**那个延迟量在本实例上不可比**，因为前 2 小时的真因本就不是出网。
+- **本次真正的根因，与前两次同类但恢复路径不同**：`~/.config/agent-proxy/current-proxy` 于 **09-08 21:41:22** 被写成 `http://127.0.0.1:7897`（clash），而 `egress.py` 要 `stored_mode/effective_mode=domain-routing` + `policy_id=domain-routing-v2`，clash 的状态输出不含 `direct_status/overall_status/policy_id` 等字段 → `missing status fields` → fail-closed。
+- **但出网通路本身没坏，坏的是那份出网证明记录**——这条区分决定了恢复动作：21:30 那轮在 21:41 掉模式**之后**仍把 fetch 跑到 23:28、enrich 跑到 23:37 且**全部成功**，因为它已在 21:30 通过 preflight 并带着代理环境跑；domain-router 服务自始至终活着（`agent-domain-router-run-service` 与 `tencent-zyt-selector.py` 两进程，服务于 127.0.0.1:59627）。**掉的只是模式记录，不是路由。**
+- **恢复动作卡在机器层**：`_sc_clash_managed` 判为 **no**（clash 未接管，故 `egress.py` 的 pin 未过期，方向是恢复而非改 pin）；但重跑 `enable-proxy-domain-routing` 报 `agent-domain-router: parent lock handoff is not from this process parent`、`mode 未提交`——那个活着的 router 服务持着父锁而不是该命令的子进程。收敛需要先处置在跑的服务，属机器层动作，不在本仓范围内。
+- **顺带确认了一条与告警无关、但属于 pipeline 稳定性的事实**：长 fetch 是**复发**的，不是孤例。09-06→09-09 四天内超过 60 分钟的 fetch 有三轮——`20260908-213000` 118.0m、`20260908-164500` 76.1m、`20260907-170001` 67.5m——**三轮全部自行完成**，但每一轮都让后续数轮 SKIP。它与本条告警不同源，处置见 pipeline 阶段超时的判断（结论：超时不适用于 fetch，因 70–118m 落在它自己的 p95 47m–max 118m 区间内，任何杀得掉它的阈值都会误杀正常轮）。
+
 - **闭合进度（2026-09-08 更新）**：闭合方向 ① 有两半，本次只做了第一半。**已实施**：A2 的心跳支路读最近一个**非 SKIP** 轮的 `egress-preflight status=…` 行，非 healthy 时正文写「最近一轮出网 preflight status=… reason=…」、撤掉那个恒为噪声的 SKIP 计数，处置改为 `check-proxy-status --format=kv` 并指向本文档「出网 selector 的 preflight 与实际 route」节。**未实施、无人认领**：① 的第二半「连续 ≥3 轮 preflight FAIL（45 min）作为 A2 的提前触发」——本次明确排除（不改开火条件），于是同节测得的**探测延迟仍在**：2026-09-04 迟 77 分钟、2026-09-08 迟 71 分钟。这两项留在本单元里，不另开条目。
 - **审出来的几条，写下为什么没在本次修**：
   - **`consecutive_skip_logs` 名不副实，else 分支与 `values` 里照旧**（基线独立 / 边界命中）。它数的是「距上次成功以来的全部 SKIP 轮」而非连续轮数，本次只在出网归因那一支把它藏起来；出网健康而心跳过期时读者在正文里拿到它；**而且两条支路都照旧把它写进 `values["consecutive_skip_logs"]`**——也就是进每一行 A2 事件账与 metrics API，下一次事故复盘读的正是那份账（09-08 这次复盘就被这个数字绊了一下）。**改它要动 A2 的既有语义、且会改变出网健康时的文案**，超出「只改归因」这次的范围，交用户裁决要不要单独做。
