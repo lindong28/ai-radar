@@ -1651,8 +1651,25 @@ def _parse_structural_detail_item(
     request_url: str | None,
 ) -> tuple[str, str, list[str]] | None:
     parser = _StructuralDetailHtmlParser()
-    parser.feed(markup)
-    parser.close()
+    try:
+        parser.feed(markup)
+        parser.close()
+    except DatasetContractError as exc:
+        # Name the page. Without this the error says only what went wrong, not where,
+        # and the only way back to the offending URL is to re-fetch and re-parse the
+        # whole traversal by hand -- measured 2026-09-09: 110 pages sampled that way
+        # (50 list + 60 detail) all parsed clean and still did not find it.
+        # str() already carries the "<code>: " prefix the constructor adds, so strip it
+        # rather than nesting it a second time.
+        detail = str(exc)
+        prefix = f"{exc.code}: "
+        if detail.startswith(prefix):
+            detail = detail[len(prefix):]
+        raise DatasetContractError(
+            exc.code,
+            f"{detail} (request_url={request_url or 'unknown'})",
+            details={**exc.details, "request_url": request_url},
+        ) from exc
     if not parser.article_roots:
         return None
     if len(parser.article_roots) != 1:

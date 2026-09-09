@@ -236,6 +236,27 @@ def test_structural_detail_parser_rejects_empty_tags_when_request_identity_is_un
     assert raised.value.code == "ssr_parse_failed"
 
 
+def test_structural_detail_parse_failure_names_the_page(ds: Any) -> None:
+    """A parse failure must say which URL it failed on, not just what broke.
+
+    Measured 2026-09-09: a capture died on one page out of ~350 with a message
+    carrying no location, and recovering the URL meant re-fetching and re-parsing
+    the traversal by hand -- 110 pages, which still did not find it.
+    """
+
+    url = "https://aihot.invalid/items/fiction-item-nested"
+    with pytest.raises(ds.DatasetContractError) as excinfo:
+        ds._parse_structural_detail_item(
+            '<article data-fictional-id="a"><article data-fictional-id="b"></article></article>',
+            request_url=url,
+        )
+    assert excinfo.value.code == "ssr_parse_failed"
+    assert url in str(excinfo.value)
+    assert excinfo.value.details["request_url"] == url
+    # The constructor prefixes the code itself; it must not appear twice.
+    assert str(excinfo.value).count("ssr_parse_failed") == 1
+
+
 def test_structural_detail_parser_rejects_unequal_duplicate_tag_sequences(ds: Any) -> None:
     assert (
         error_code(
