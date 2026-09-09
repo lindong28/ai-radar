@@ -33,7 +33,7 @@
 
 ## 2026-09-09 出网边界改写使**全部现存收据失效**——端口一立起来 interpret 就静默停产
 
-- **状态**: 未闭合，动作在用户那边（需要跑那五个兼容性测试的人签字，agent 不能代签）。
+- **状态**: **已关闭——2026-09-09 用户裁定不重签**，并要求停止一切准备工作。下面整条留着是为了解释现象，不是待办。**被接受的后果**：出口端口正常时 `interpret` 静默跳过（`skip interpret: selector compatibility is unproven`，干净退出 0），`pipeline.sh` 仍打 `=== interpret OK ===`，`/wechat` 因而停更、A5 4 小时后才叫。**排查 `/wechat` 停更时看到这个，不要当新故障追**——先确认是不是本条。要重开只能由用户发起。
 - **发生了什么**: 出网边界从「十二字段 `check-proxy-status` 证明」换成「单一本地端口 + 经它实发一次请求」，`policy_id` 由 `domain-routing-v2` 变为 `local-egress-port-v1`，`policy_sha256` 改为按**出口端口**派生。现场 `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` 仍是旧值，必然对不上。
 - **两种表现，危险的是恢复之后那种**（这正是上一条记的形态）：出口端口没人在听时 `require_selector_policy()` 抛错 → `interpret FAIL (exit 1)`，**响**；端口一旦立起来，preflight 过、收据比对失败 → `skip interpret: selector compatibility is unproven` → `cli._interpret` 返回 **0** → `pipeline.sh` 打 `=== interpret OK ===`。**pipeline 自己的成功信号在说谎**，直到 A5 在 4 小时后开火。`docs/issues/archive/closed.md` 记过同形态持续 **138 轮 / 215 篇** 未处理。
 - **新的 `policy_sha256`（按出口端口，`sha256("local-egress-port-v1\n" + agent_proxy + "\n")`）**:
