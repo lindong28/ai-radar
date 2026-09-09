@@ -1466,6 +1466,7 @@ def _invoke_sender(
     episode_since: object,
     notification_nonce: int,
     transport_dedup: bool,
+    condition_cleared_at: object = None,
 ) -> dict[str, object]:
     send_result: object
     if transport_dedup:
@@ -1500,6 +1501,7 @@ def _invoke_sender(
         "delivered": delivered,
         "notification_nonce": notification_nonce,
         "episode_since": episode_since,
+        "condition_cleared_at": condition_cleared_at,
     }
 
 
@@ -1746,6 +1748,23 @@ def _record_notification_events(
             if key not in {"paused_source_ids", "evaluated_source_ids"}
         }
 
+    def cleared_column(receipt: dict[str, object]) -> dict[str, object]:
+        """Present only when a debounce actually held this recovery.
+
+        Without it the ledger's only timestamps are the episode start and this
+        announcement, so anyone recomputing duration from it silently gets the hold added
+        in -- finding (1) named "the message AND the ledger" and the earlier commit did
+        only the message. Conditional rather than always-present because this file is
+        append-only: an unconditional key would put a null on every row ever written, and
+        the row shape is pinned by contract test
+        `test_notification_ledger_records_exact_successful_firing_resolved_cycle`.
+        """
+
+        cleared_at = receipt.get("condition_cleared_at")
+        if isinstance(cleared_at, str) and cleared_at:
+            return {"condition_cleared_at": cleared_at}
+        return {}
+
     _record_event_rows(
         event_path,
         current=current,
@@ -1760,6 +1779,7 @@ def _record_notification_events(
                 "channel": receipt["channel"],
                 "episode_since": receipt.get("episode_since"),
                 "notification_nonce": receipt.get("notification_nonce"),
+                **cleared_column(receipt),
             }
             for receipt, result in delivered
             if receipt.get("delivered") is True
@@ -2558,6 +2578,15 @@ def _apply_alert_results(
                 sent.append(receipt)
                 delivered.append((receipt, result))
                 delivery_succeeded = receipt["delivered"] is True
+            # Unconditional, and before the branch below: the rule is firing again, so
+            # the previous episode's quiet streak is void on EVERY outgoing severity.
+            # The branch below only converts them when delivery succeeded or the rule was
+            # already announced; in the remaining case the outgoing lifecycle is left
+            # as-is and would carry a part-served hold into the next episode -- making a
+            # later ✅ date the clearing to before the intervening outage.
+            for _severity, outgoing in announced_outgoing:
+                outgoing.pop("quiet_evaluations", None)
+                outgoing.pop("quiet_since", None)
             if delivery_succeeded or previously_announced:
                 for severity, outgoing in announced_outgoing:
                     lifecycles[severity] = _ok_lifecycle(
@@ -2602,10 +2631,20 @@ def _apply_alert_results(
                     # the fault continues. Same branch and same shape as the A7
                     # guard below -- keep firing, skip this resolve.
                     resolve_rounds = _resolve_debounce_rounds(thresholds, result.rule_id)
+                    # Only an evaluation that actually observed the subject may advance the
+                    # count -- `degraded` means it could not, and counting it would let a
+                    # blind reading serve as one of the confirmations the hold exists to
+                    # require. (`in_progress` never reaches here; it returns earlier.)
+                    # Deliberately narrowed to the count rather than excluding `degraded`
+                    # from this whole branch: A7 closes a faded source through here with
+                    # `degraded`, and short-circuiting that path swallows its 🟡 notice --
+                    # measured, it reddened test_a7_faded_source_closes_as_unevaluable.
+                    if resolve_rounds > 0 and result.evaluation_state == "degraded":
+                        resolve_rounds = 0
                     if resolve_rounds > 0:
                         seen = lifecycle.get("quiet_evaluations")
                         seen = seen + 1 if isinstance(seen, int) and seen >= 0 else 1
-                        if seen == 1:
+                        if seen == 1 or not lifecycle.get("quiet_since"):
                             # Record-only, never a judgement input: the hold is still
                             # decided by the count, which an evaluator outage cannot
                             # advance. This timestamp exists so the resolved message can
@@ -2652,6 +2691,7 @@ def _apply_alert_results(
                             quiet_since=quiet_since if isinstance(quiet_since, str) else None,
                             held_rounds=_resolve_debounce_rounds(thresholds, result.rule_id),
                         ),
+                        condition_cleared_at=quiet_since,
                         severity=(
                             NOTICE_SEVERITY
                             if result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID

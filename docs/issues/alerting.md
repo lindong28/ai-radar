@@ -360,12 +360,16 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
   | **F8（LOW）我写进代码的注释是假的事实主张**：注释称 `prepare_notification` 会丢掉未提前读的字段，审查实测它**保留全部 key**（真正丢它的是其后的 `_ok_lifecycle`） | 成立 | **已修**，并在注释里写明上一版错在哪 |
   | **F9（LOW）** 措辞两处反向偏差：`quiet_since` 是**上界**（首次读到正常）却写成点值；`N` 在手边却写「若干次」 | 成立 | **已修**：「条件**最迟**已于 X…之后又确认了 **N** 次评估」 |
   | **F7（LOW，今日不可达）** `scope_limited` 分支早返回，子句被丢 | 成立 | **已修**（一行）。它恰是最需要解释「为何现在才发」的那类消息 |
-  | **F2（MED，今日可达性 0）** notice→page 交接的**反方向**没有 pop：outgoing lifecycle 的 `quiet_since`/计数穿过 re-fire 存活，✅ 给出的「转为正常」时刻**早于中间那次故障**，且滞回少走一轮 | 成立 | **未修，记账**。A2 是唯一开滞回的规则且 severity 恒为 `page`，故今日不可达。**注意**：`thresholds.py` 那段 SCOPE 锚点只警告滞回在交接出口「never applies」，**没覆盖「状态穿过交接存活」这一形态**——别把那条锚点读成已经写下了这一条 |
-  | **F6（LOW，今日不可达）** `in_progress` 已被显式挡在滞回外，`degraded` 没有：一次系统自己标为「不可评估」的评估会推进恢复计数、并被写成 `quiet_since` | 成立 | **未修，记账**。写 `in_progress` 那段的人已经知道「观测不到的评估不该推进状态」，`degraded` 是同一判断没延伸到的一格 |
-  | **F10（LOW，一次性）** 部署瞬间正有一次在飞滞回（旧 state 有计数无时刻）时，`seen == 1` 已过，戳永不补上，那条 ✅ 静默退回旧行为且与「本就没开滞回」同形 | 成立 | **未修，记账**。一次性窗口 |
+  | **F2（MED，今日可达性 0）** notice→page 交接的**反方向**没有 pop：outgoing lifecycle 的 `quiet_since`/计数穿过 re-fire 存活，✅ 给出的「转为正常」时刻**早于中间那次故障**，且滞回少走一轮 | 成立 | **已修**（重新开火时**无条件**清 outgoing 的滞回状态，放在原分支之前——原分支只在投递成功或此前已 announced 时才转换）。**⚠️ 无测试守护**：撤掉该修复全套仍 175 passed。要测它须构造 severity 交接，而 A2 恒 `page`。**注意** `thresholds.py` 那段 SCOPE 锚点只警告滞回在交接出口「never applies」，**没覆盖「状态穿过交接存活」这一形态** |
+  | **F6（LOW，今日不可达）** `in_progress` 已被显式挡在滞回外，`degraded` 没有：一次系统自己标为「不可评估」的评估会推进恢复计数 | 成立 | **已修**，但**只守计数那一点**、不动路径——第一版把 `degraded` 并进 `in_progress` 的 early-return，**实测打破 `test_a7_faded_source_closes_as_unevaluable`**：A7 正是用 `degraded` 走完整路径发它的 🟡，短路会把那条消息吞掉。**⚠️ 无测试守护**：撤掉该守卫全套仍 175 passed；要测须造一个 `degraded` 且开滞回的规则 |
+  | **F10（LOW，一次性）** 部署瞬间正有一次在飞滞回（旧 state 有计数无时刻）时戳永不补上，那条 ✅ 与「本就没开滞回」同形 | 成立 | **已修**（`seen == 1 or not lifecycle.get("quiet_since")`）。**有测试守护**：撤掉该条件后 `test_a_hold_already_in_flight_at_deploy_time_still_gets_its_stamp` 变红 |
   | **F3（LOW）** page→notice 那半个 pop **无任何测试守护**（审查变异后全套 171 passed） | 成立 | **仍无覆盖，如实记**。我曾补过一个测试，但它自己 pop 再断言 pop 生效、根本没走生产路径——**那种测试比没有更坏**（它让人以为有覆盖），已删除。真正测它要构造 page→notice 交接，而 A2 恒 page，需要另一个规则 |
 
-  **②只解决了一半**：`detail` 文案本身仍是开火时的故障文案，两态靠**后缀**区分而不是靠 detail 本身。**F5（MED）事故账本仍多算**——`alert-events.jsonl` 的 resolved 行 `ts` 仍是宣告时刻、`values` 里没有 `quiet_since`，而条目 ① 原文把「恢复消息**与事故账本**」并列，本次只动了前者。**未修，记账。**
+  **②只解决了一半**：`detail` 文案本身仍是开火时的故障文案，两态靠**后缀**区分而不是靠 detail 本身。
+
+  **F5（MED）事故账本已修**：resolved 行现在带 `condition_cleared_at`，**且只在真被滞回拖过时才有这个键**——`alert-events.jsonl` 是 append-only，无条件加会给此后每一行都留一个 null，而行的字段集被契约测试 `test_notification_ledger_records_exact_successful_firing_resolved_cycle` 精确钉住（`set(row) == {...}`）。**有测试守护**：撤掉该列后 `test_ledger_carries_the_clearing_time_only_when_a_hold_occurred` 变红。
+
+  **覆盖状况盘点（2026-09-09，逐条跑变异测的，不是推断）**：F1 / F4 / F9 / F5 / F10 **有**测试守护（各自变异后对应测试变红）；**F2 / F6 / F3 无**（变异后全套 175 passed 不变）。无守护的三条共同点是**今日生产可达性为 0**，也正因为不可达才难以构造测试。**别把 175 passed 读成它们被覆盖了**——按 guard-mutation 的判据，撤掉它们套件读数完全相同，所以那个数字对它们零信息。
 
   **审查另外给了一个仪器坑，值得单独记**：`pyproject.toml` 的 `[tool.pytest.ini_options] pythonpath = ["src"]` **会盖掉环境变量 `PYTHONPATH`**，把改过的副本放进 `PYTHONPATH` 跑 pytest 会**静默地测未变异的原树**（审查第一次跑阳性对照就拿到了全绿假读数）。做变异实验要用 `-o pythonpath=<副本路径>`，或 `cd` 进副本让 rootdir 相对解析。
 

@@ -5359,6 +5359,65 @@ def test_a2_holds_for_a_count_of_evaluations_not_a_stretch_of_time(tmp_path: Pat
     assert not any("已恢复" in text for text, _ in deliveries)
 
 
+def test_a_hold_already_in_flight_at_deploy_time_still_gets_its_stamp(tmp_path: Path) -> None:
+    """One-shot, but silent: the ✅ would look exactly like a rule with no debounce at all.
+
+    A state written before this field existed can carry `quiet_evaluations` with no
+    `quiet_since`. Stamping only on the transition to 1 would leave that hold unstamped
+    forever, and the resulting ✅ is indistinguishable from an unheld one.
+    """
+    state_path = tmp_path / "alert-state.json"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    pre = json.loads(state_path.read_text(encoding="utf-8"))
+    # Simulate the pre-upgrade shape: counted, never stamped.
+    pre["A2"]["lifecycles"]["page"]["quiet_evaluations"] = 1
+    pre["A2"]["lifecycles"]["page"].pop("quiet_since", None)
+    state_path.write_text(json.dumps(pre), encoding="utf-8")
+
+    # With the threshold at 2, this evaluation is the second quiet one, so it releases.
+    # The point is what the ✅ carries: without the stamp it reads exactly like a rule
+    # that never had a debounce at all.
+    resumed = now + timedelta(minutes=5)
+    _a2_run(state_path, deliveries, _normal_signals(), resumed)
+    resolved = [text for text, _ in deliveries if "已恢复" in text]
+    assert resolved, "no recovery was announced"
+    assert resumed.isoformat() in resolved[-1], (
+        "a hold in flight across the upgrade announces with no clearing time"
+    )
+
+
+def test_ledger_carries_the_clearing_time_only_when_a_hold_occurred(tmp_path: Path) -> None:
+    """Finding (1) named the message AND the ledger; the message alone leaves recomputation wrong.
+
+    Also pins the shape: the key is absent (not null) on rows with no hold, because this
+    file is append-only and an unconditional key would put a null on every row forever.
+    """
+    state_path = tmp_path / "alert-state.json"
+    events = state_path.with_name("alert-events.jsonl")
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+    from airadar.admin.thresholds import ALERT_THRESHOLDS
+
+    configured = ALERT_THRESHOLDS["a2"]["resolve_debounce_rounds"]
+
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    first_quiet = now + timedelta(minutes=5)
+    for index in range(configured):
+        _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(minutes=5 * (index + 1)))
+
+    rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines() if line]
+    firing_rows = [r for r in rows if r["type"] == "firing"]
+    resolved_rows = [r for r in rows if r["type"] == "resolved"]
+    assert resolved_rows, "no resolved row was written"
+    assert resolved_rows[-1]["condition_cleared_at"] == first_quiet.isoformat()
+    assert all("condition_cleared_at" not in r for r in firing_rows), (
+        "a firing row carries a key that only a held recovery should produce"
+    )
+
+
 def test_a_hold_of_one_round_claims_no_confirmations(tmp_path: Path) -> None:
     """`resolve_debounce_rounds: 1` is a legal config that holds nothing.
 
