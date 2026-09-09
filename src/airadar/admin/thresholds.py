@@ -13,6 +13,15 @@ ALERT_THRESHOLDS: dict[str, object] = {
         # samples, so the rule crosses back and forth and emits an alternating
         # 🔴/✅ stream for one continuous condition. Counted rather than timed, so
         # an alert-check outage cannot let the hold expire unobserved.
+        #
+        # SCOPE, before you enable this on another rule: the guard sits on ONE of the
+        # seven paths that can end an announced episode -- the ordinary "rule stopped
+        # firing" path. A7's all-paused close and the severity handoff do not pass
+        # through it, so a rule whose episodes usually end by one of those would get a
+        # debounce that silently never applies. Measured 2026-09-09: only A2 opts in,
+        # and A2's episodes end by the ordinary path, so today the gap is inert. It was
+        # left inert rather than generalised because widening it means restructuring all
+        # seven exits, which buys nothing until a second rule actually needs it.
         "resolve_debounce_rounds": 2,
         "window_minutes": 15,
         "min_samples": {

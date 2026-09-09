@@ -133,6 +133,31 @@ def prefilter_inputs_digest() -> str:
     return digest.hexdigest()[:8]
 
 
+def score_inputs_digest() -> str:
+    """Digest of the rendered scoring prompt, so its stamp moves when the prompt does.
+
+    Third instance of the same defect; the first two are documented above. `runner.py`'s
+    candidate query carries `NOT EXISTS (... scored.ruleset_version=?)`, so a scoring
+    prompt edit that leaves the stamp alone can never reach an already-scored item, and
+    the rows it does write are indistinguishable from rows produced by the older prompt.
+
+    Measured 2026-09-09 before this change: scoring's 46,601 rows at `2026-09-06.r1` all
+    came from a single prompt generation, so unlike enrich this had not yet gone wrong --
+    the 2026-09-06 bump was done by hand and was correct. What made it worth fixing
+    anyway is that a date cannot carry the bump: this project edits prompts more than
+    once a day, and a same-day second edit leaves the date identical. That is the enrich
+    argument verbatim, and scoring was simply the one stage that never got it.
+    """
+
+    from .scorer.prompts import render_scoring_prompt
+
+    rendered = render_scoring_prompt(_DIGEST_PROBE_ITEM)  # type: ignore[arg-type]
+    digest = hashlib.sha256()
+    digest.update(rendered["system"].encode("utf-8"))
+    digest.update(rendered["user"].encode("utf-8"))
+    return digest.hexdigest()[:8]
+
+
 def current_version_v2() -> str:
     """r2 ruleset stamp for the content-v2 enrich pipeline (runner_v2).
 
@@ -154,10 +179,12 @@ def current_version_v2() -> str:
 
 
 def current_score_version() -> str:
-    """Scoring's own stamp. Bump PINNED_SCORE_RULESET_DATE whenever scoring behaviour changes.
+    """Scoring's own stamp. The digest moves it; the date is a human-readable prefix.
 
-    A bump makes every already-scored item a candidate again, so the next run re-scores whatever
-    falls inside its --since window and a wider window backfills the rest.
+    A move makes every already-scored item a candidate again, so the next run re-scores whatever
+    falls inside its --since window and a wider window backfills the rest. Note what that does
+    NOT do: `pipeline.sh` scores `--since 24h`, so rows whose item fell out of that window are
+    never revisited by the scheduled job and need an explicit wider backfill.
     """
     date = PINNED_SCORE_RULESET_DATE or datetime.now(UTC).strftime("%Y-%m-%d")
-    return f"{date}.{RULESET_REV}"
+    return f"{date}.{RULESET_REV}.{score_inputs_digest()}"
