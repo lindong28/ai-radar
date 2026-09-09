@@ -41,8 +41,14 @@ def git_short_hash() -> str:
 
 
 def current_version() -> str:
+    """Prefilter's stamp. Moves on its own when the criterion moves.
+
+    PINNED_RULESET_DATE is only a human-readable prefix now; bumping it by hand is not
+    required and costs a redundant full-window recompute.
+    """
+
     date = PINNED_RULESET_DATE or datetime.now(UTC).strftime("%Y-%m-%d")
-    return f"{date}.{RULESET_REV}"
+    return f"{date}.{RULESET_REV}.{prefilter_inputs_digest()}"
 
 
 class _DigestProbeItem:
@@ -101,6 +107,29 @@ def enrich_inputs_digest() -> str:
     digest.update(rendered["user"].encode("utf-8"))
     for name in _ENRICH_RUNTIME_ENV:
         digest.update(f"{name}={os.environ.get(name, '')}\u0000".encode())
+    return digest.hexdigest()[:8]
+
+
+def prefilter_inputs_digest() -> str:
+    """Digest of the rendered prefilter prompt, so its stamp moves when the prompt does.
+
+    Same defect and same fix as the enrich stamp below. Prefilter's PINNED_RULESET_DATE
+    sat at 2026-05-13 while the criterion changed, and `current_version()` is what the
+    candidate query's `NOT EXISTS (... ruleset_version=?)` compares — so an edited
+    criterion was unreachable for every already-judged item, and worse, new rows carried
+    the same stamp as rows produced by a different criterion, making the two
+    indistinguishable after the fact.
+
+    Digest the *rendered* prompt, not the module bytes: editing a comment or reflowing
+    a line would otherwise trigger a redundant full-window recompute.
+    """
+
+    from .prefilter.prompts import render_prefilter_prompt
+
+    rendered = render_prefilter_prompt(_DIGEST_PROBE_ITEM)  # type: ignore[arg-type]
+    digest = hashlib.sha256()
+    digest.update(rendered["system"].encode("utf-8"))
+    digest.update(rendered["user"].encode("utf-8"))
     return digest.hexdigest()[:8]
 
 

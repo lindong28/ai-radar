@@ -141,3 +141,46 @@ def test_run_prefilter_records_parse_errors(monkeypatch, tmp_path: Path) -> None
     assert summary.errors == 1
     error = conn.execute("SELECT error FROM item_evaluations").fetchone()[0]
     assert "json parse failed" in error
+
+
+def test_candidate_rows_serve_never_judged_items_before_recomputing_old_ones(tmp_path: Path) -> None:
+    """A criterion change must not starve arrivals, and `fetched_at` cannot prevent it.
+
+    Prefilter's stamp now derives from the criterion, so editing the criterion makes
+    every in-window item a candidate at once — measured 2026-09-09, 7020 items in the
+    24h window. `fetched_at` cannot separate those recomputes from new arrivals: it is
+    assigned per source batch and refreshed whenever a feed re-lists its archive
+    (openai_blog re-fetched 1173 of its 1204 items within 24h). The same shape already
+    bit enrich, where 18 brand-new items ranked 303rd to 2440th behind recomputes.
+
+    So the fixture makes the already-judged items the *newer* ones by `fetched_at`: an
+    ordering that ignores prefilter history hands every slot to a recompute.
+    """
+    conn = _db(tmp_path)
+    fresh = _seed_item_with_dates(
+        conn, "Brand new arrival", "text", published_at=_recent_iso(50), fetched_at=_recent_iso(50)
+    )
+    stale = [
+        _seed_item_with_dates(
+            conn, f"Already judged {n}", "text", published_at=_recent_iso(20 - n), fetched_at=_recent_iso(20 - n)
+        )
+        for n in range(5)
+    ]
+    for item_id in stale:
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (
+              item_id, stage, ruleset_version, model_id, input_json, output_json,
+              numeric_json, latency_ms, cost_usd, evaluated_at, error
+            )
+            VALUES (?, 'prefilter', 'retired.r1.deadbeef', 'fake', '{}', '{}', '{}', 1, 0, ?, NULL)
+            """,
+            (item_id, _recent_iso(10)),
+        )
+    conn.commit()
+
+    from airadar.prefilter import runner
+
+    rows = runner._candidate_rows(conn, "48h", "current.r1.cafebabe", 1, False)
+
+    assert [row[0] for row in rows] == [fresh], "a never-judged item lost its slot to a recompute"

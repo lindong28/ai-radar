@@ -75,7 +75,18 @@ def _candidate_rows(
       JOIN sources s ON s.id=i.source_id
       WHERE {item_filter}
       {skip_existing}
-      ORDER BY i.fetched_at DESC, i.published_at DESC
+      ORDER BY
+        -- Never-judged items first, always. A stamp move makes every in-window item a
+        -- candidate again, and `fetched_at` cannot separate arrivals from recomputes:
+        -- it is assigned per source batch and refreshed whenever a feed re-lists its
+        -- archive (openai_blog re-fetched 1173 of 1204 items in 24h, measured
+        -- 2026-09-08). Without this, brand-new items rank behind thousands of
+        -- recomputes and can leave the window never having been judged at all.
+        EXISTS (
+          SELECT 1 FROM item_evaluations seen
+          WHERE seen.item_id=i.id AND seen.stage='prefilter' AND seen.error IS NULL
+        ) ASC,
+        i.fetched_at DESC, i.published_at DESC
     """
     if limit is not None:
         sql += " LIMIT ?"

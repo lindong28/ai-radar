@@ -138,7 +138,13 @@ run_stage() {
 }
 
 run_stage fetch
-run_stage prefilter --since 24h
+# Bounded batch, same reasoning as enrich below. Prefilter's stamp now derives from
+# its criterion, so editing the criterion makes every in-window item a candidate at
+# once -- measured 2026-09-09: 7020 items in the 24h window, and an unbounded round
+# would hold the lock about 3h at the observed 40 items/min, skipping every later
+# round. 400 clears the ~73 that arrive per 15-minute round and drains the rest in
+# roughly 21 rounds, at about 10 minutes of lock per round.
+run_stage prefilter --since 24h --limit 400
 run_stage score --since 24h
 # Bounded batch per run (same reasoning as interpret below): switching the
 # enrich ruleset turns every prefilter-passed item in the window into a new

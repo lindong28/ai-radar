@@ -11,17 +11,36 @@ SYSTEM_PROMPT = (
 
 USER_TEMPLATE = Template(
     """
-Decide whether this RSS item is meaningfully related to AI models, AI systems,
-model engineering, AI developer tools, evaluation, inference, agents, or applied
-ML infrastructure.
+Decide what this item is ABOUT, then answer whether that thing is AI.
 
-Non-AI content includes, but is not limited to: consumer electronics accessories
-such as printers, PC cases, ink, and peripherals; home appliances; film and TV
-entertainment such as series or movie release news; automotive manufacturing,
-factories, or parts; and pure hardware reviews that do not involve AI.
+The test is aboutness, not association. Ask "what is the one thing this
+item reports?" and judge that thing. An item mentioning AI, using AI, or
+shipping with an AI feature is not thereby about AI.
 
-非 AI 内容包括（不限于此）：消费电子配件（打印机、机箱、墨水）、家电、影视娱乐（剧集、电影上映消息）、
-汽车工业（工厂、零部件）、纯硬件评测但不涉及 AI。
+is_ai_related = true when the thing it reports is: an AI model, system,
+agent or dataset; model engineering, training, evaluation or inference;
+AI developer tools or applied ML infrastructure; AI research; or a
+business, funding, regulatory or personnel event whose subject is AI
+itself (an AI company's raise, an AI chip order, an AI policy ruling).
+
+is_ai_related = false when the thing it reports is something else that
+merely involves AI. The launch, pricing, colourway, availability or
+review of a consumer device -- a phone, car, pair of glasses, appliance,
+laptop -- is about that device even when it ships an assistant, a
+"smart" mode, or an AI chip. Same for entertainment, sports, general
+business news, and accessories. Deciding by the presence of the word
+"AI", or by the vendor being a technology company, gets these wrong.
+
+If the item carries no judgeable content -- an empty body, a bare link,
+a title with no claim in it -- answer false: there is nothing to be
+about. Do not infer a topic from the source or the URL.
+
+判据是**这条内容在讲的那一件事**是不是 AI，不是它有没有提到、用到或内置 AI。
+一部手机、一辆车、一副眼镜、一台家电的发布、定价、配色、上市或评测，讲的是
+那件硬件——即使它搭载助手、"智能"模式或 AI 芯片，也是 false。娱乐、体育、
+泛商业新闻、配件同理。**别按"出现了 AI 这个词"或"厂商是科技公司"来判。**
+正文空、只有一个裸链接、或标题不含任何主张时，答 false——没有可判的对象，
+且不要从来源或 URL 反推主题。
 
 Source tier: {{ item.tier }}
 Source id: {{ item.source_id }}
