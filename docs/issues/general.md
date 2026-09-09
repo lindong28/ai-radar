@@ -14,8 +14,8 @@
 - **`policy_for_port()` 是导出的，能凭空造出一份未经探针验证的 policy**，而所有下游都接受显式传入的 `policy=` 而优先于闸。当前无生产调用方（`grep 'SelectorPolicy(' src/ scripts/` 只命中 `egress.py` 自己），故是潜在隐患而非在开的洞——fail-closed 现在靠约定，不靠类型不可伪造。
 - **默认端口 59527 落在系统临时端口区间**（`sysctl net.inet.ip.portrange` → 49152–65535），任何 `bind(("127.0.0.1", 0))` 都可能拿到它。实发请求的探针把危害压得很低（随机开发服务器答不了 CONNECT，已实测：`501 Unsupported method`），但端口本身仍可被抢占。改默认端口是用户的决定，他点名了 59527。
 - **`require_selector_policy` 带 `lru_cache`，探针每进程只跑一次**。`serve` 在 `KeepAlive=true` 下能连跑数天；出口端口中途搬家时它会一直往一个死地址代理，不重探也不报错。旧设计有同样的缓存，但那时缓存的是一次状态读数、不是一次可达性证明，所以这条现在更承重。
-- **`policy_sha256` 是代理 URL 的可逆编码**：输入是 `policy_id\n<agent_proxy>\n`，取值空间 65535，公开可枚举。`test_audit_json_excludes_sensitive_request_and_proxy_material` 断言的「审计里没有代理 URL」因此只在字面上成立。影响很小（那是 loopback 地址），但那条断言不再守着它原本要守的东西。
-- **探针的目标地址没有任何断言绑定到 transport 的目标地址**。今天两者都是 `127.0.0.1` 字面量、一致；把探针改成 `localhost` 或 `0.0.0.0` 会让它检查另一个端点，而全部测试仍绿（审查实测两种变异都不被捕获）。
+- **`policy_sha256` 是代理 URL 的可逆编码**：输入是 `policy_id\n<agent_proxy>\n`，取值空间 65535，公开可枚举。`test_audit_json_excludes_sensitive_request_and_proxy_material` 断言的「审计里没有代理 URL」因此只在字面上成立。**接受而不修**（2026-09-09 裁定）：地址是 loopback，而给摘要加盐会移动 `policy_sha256`、再次作废外部 interpret 收据，代价远大于收益。已在该测试的 docstring 里写明它**不**证明出口地址不可复原，免得后来的读者把它当成一条安全保证。
+- ~~**探针的目标地址没有任何断言绑定到 transport 的目标地址**~~ —— **2026-09-09 已修**。根因是两处独立 f-string（`egress.py` 的 105 与 128 行）可以静默漂移；改为探针从 `policy_for_port(port).agent_proxy` 派生，字面量只剩一处。新增 `test_probe_goes_where_the_policy_points_not_where_it_guesses`：把 policy 指向第二个 stub、要求探针跟过去。审查点名的两个变异（退回自拼字面量、换 `localhost`）现在**各自都让该测试变红**，还原后转绿。
 - **`scripts/eval/measure_live_composition.py` 现在经代理量自家线上站**。走出网边界与登记册一致是对的，但它量的是「代理出口所到的那个边缘节点看到的页面」，而边缘选择对该 host 是已知活变量（见 memory `aiplanet延迟跨洋根因`）。类别构成受边缘副本新旧影响，该脚本 docstring 已警告过 90 秒边缘缓存；此处补记它多了一层。
 
 ## [open] ISSUE-GENERAL-20260905-e7a1 · `check-proxy-status` 间歇返回 1 会静默停掉整轮 pipeline

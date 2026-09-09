@@ -208,6 +208,32 @@ def test_probe_passes_when_a_real_proxy_answers(monkeypatch: pytest.MonkeyPatch)
     assert ("GET", "http://egress.probe.invalid/ok") in requests
 
 
+def test_probe_goes_where_the_policy_points_not_where_it_guesses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe must derive its endpoint, not spell one of its own.
+
+    Two independent f-strings for the same address drift silently: the probe
+    then verifies an endpoint the transports never use, so it passes while
+    every request fails and no downstream reading differs. Asking whether the
+    two strings look alike cannot catch that -- this points the policy at a
+    second server and requires the probe to follow it.
+    """
+
+    with _server() as (real_url, real_requests), _server() as (decoy_url, decoy_requests):
+        real_port = int(real_url.rsplit(":", 1)[1])
+        decoy_port = int(decoy_url.rsplit(":", 1)[1])
+        monkeypatch.setenv(EGRESS_PROBE_URL_ENV, "http://egress.probe.invalid/ok")
+        monkeypatch.setattr(
+            "airadar.egress.policy_for_port", lambda _port: policy_for_port(real_port)
+        )
+
+        probe_egress_port(decoy_port)
+
+    assert ("GET", "http://egress.probe.invalid/ok") in real_requests
+    assert decoy_requests == []
+
+
 def test_require_selector_policy_hands_out_the_port_it_probed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -731,6 +757,18 @@ def test_playwright_external_and_loopback_reach_the_selected_listener() -> None:
 
 
 def test_audit_json_excludes_sensitive_request_and_proxy_material() -> None:
+    """Query strings and headers stay out; the proxy URL only *textually* so.
+
+    Since 2026-09-09 `policy_sha256` is sha256 over the policy id and the exit
+    URL, so its input space is the 65535 loopback ports -- publicly derivable
+    and brute-forced in milliseconds. The `selector_url not in serialized`
+    assertion below therefore holds by text, not by secrecy, and this test does
+    not establish that the exit address is unrecoverable from an audit record.
+    That is accepted rather than fixed: the address is loopback, and salting the
+    digest would move it and invalidate the external interpret receipt again.
+    Recorded in docs/issues/general.md.
+    """
+
     messages: list[str] = []
 
     class CaptureHandler(logging.Handler):

@@ -125,7 +125,10 @@ def probe_egress_port(port: int) -> None:
     """
 
     url = os.environ.get(EGRESS_PROBE_URL_ENV, "").strip() or DEFAULT_EGRESS_PROBE_URL
-    proxy = f"http://127.0.0.1:{port}"
+    # Derived, never spelled a second time: a probe that checks a different
+    # endpoint than the transports use passes while every request fails, and
+    # nothing downstream can tell. Two independent f-strings drift silently.
+    proxy = policy_for_port(port).agent_proxy
     try:
         with httpx.Client(proxy=proxy, timeout=_PROBE_TIMEOUT_SECONDS, trust_env=False) as client:
             client.get(url)
