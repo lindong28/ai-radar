@@ -31,6 +31,20 @@
 - **判据**：怀疑出网时，先分清「代码默认」与「实际生效值」。`./run.sh egress-preflight` 的 reason 里**印着实际用的那个端口**，照它查；要看不受调用方污染的值就 `env -i PATH="$PATH" HOME="$HOME" ./run.sh egress-preflight`。cron 不继承交互 shell，所以**交互式读数为 FAIL 不等于生产 FAIL**，反之亦然——当天正是这种分叉：我的 shell 恒指 7897（失败），同一时刻 11:00 轮 `preflight OK` 且 30 分钟入库 4393 条。
 - **对长跑脚本的纪律**：任何排队跑批的脚本先 `unset AI_RADAR_EGRESS_PROXY_PORT` 再调 `./run.sh`，让它走代码默认；否则调用方环境里的一个陈旧值就能把整批跑废，而且废得像上游故障。
 
+## 2026-09-09 改全局出网闸时，要扫一遍 `git worktree list`——钉在旧 commit 上的 cron 会被打死，且没人会知道
+
+`egress.py` 从十二字段 attestation 换成单端口实发请求（`9741bdf`）之后，日捕获 cron 每天都失败，而这在主 checkout 上完全看不出来。
+
+**成因是那个 cron 的设计本身**：`scripts/capture_aihot_daily.sh` 故意跑在一棵专用 worktree 里——捕获要记录工具 checkout 的精确 HEAD 且拒绝脏树，而主 checkout 常年被别的 session 弄脏。于是它按设计**钉在一个旧 commit 上**，`main` 上的修复到不了它。fail-closed 的闸只要换了形状，每一个这样的消费者都会当场死掉。
+
+**它为什么不会被发现**：那棵树不出现在主 checkout 的 `git status` 里；测试跑的是主 checkout 的代码；失败只写进 `logs/` 里一个没人读的文件。本例是在做台账对账、顺手核 T8 的解除条件时撞见的，不是任何机制报出来的。
+
+**代价可以不可回收**：AIHOT 只服务 7 天滚动窗，当天没抓到就没有补抓——所以"每天静默失败"在这里等于每天永久丢一份数据。
+
+**判据**：改动的是一个 fail-closed 的全局闸（出网、鉴权、身份校验）时，`git worktree list` 是必查项，`crontab -l` 同理——问的是"谁在跑我刚改掉的那个契约的旧版本"。逐棵树把新代码并进去，然后**在那棵树里实际调一次**那个闸，别只看它 import 得动。
+
+**本次扫的读数（判据是"有没有调度器指着它"，不是"有没有陈旧的树"）**：本机 12 棵 worktree 里 **11 棵**仍带旧 attestation，但 `crontab -l` 五条与 `~/Library/LaunchAgents` 四个 ai-radar plist **除日捕获外全部指向主 checkout**——所以真正被打死的只有一个，其余 11 棵是没有调度器的休眠分支，坏着也不产生后果。**两个数都要报**：只报 11 会把休眠树说成事故，只报 1 会让人以为不用扫。
+
 ## 2026-09-09 出网边界改写使**全部现存收据失效**——端口一立起来 interpret 就静默停产
 
 - **状态**: **已关闭——2026-09-09 用户裁定不重签**，并要求停止一切准备工作。下面整条留着是为了解释现象，不是待办。**被接受的后果**：出口端口正常时 `interpret` 静默跳过（`skip interpret: selector compatibility is unproven`，干净退出 0），`pipeline.sh` 仍打 `=== interpret OK ===`，`/wechat` 因而停更、A5 4 小时后才叫。**排查 `/wechat` 停更时看到这个，不要当新故障追**——先确认是不是本条。要重开只能由用户发起。

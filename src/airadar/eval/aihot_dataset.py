@@ -3289,7 +3289,7 @@ class HttpxTransport:
         self._user_agent = _non_empty_string(user_agent, field_name="user_agent")
         self._client = selector_httpx_client(
             callsite_id="eval.aihot_dataset.capture",
-            request_url="https://aihot.virxact.com",
+            request_url="https://aihot.news",
             follow_redirects=False,
             timeout=self._timeout_seconds,
             headers={"User-Agent": self._user_agent},
@@ -4068,7 +4068,13 @@ def capture_dataset(
     writer = CaptureWriter(
         tool_repo_root=tool_root,
         output_root=output_root,
-        base_url="https://aihot.virxact.com",
+        # AIHOT moved to aihot.news; aihot.virxact.com now 301s there. Measured 2026-09-09:
+        # the old host still answers /api/v1/items with 200, but every SSR path redirects, so the
+        # API pass succeeded and the /all pass died on `HTTP 301 is not a successful response`
+        # (follow_redirects is off on purpose -- a capture must record the URL it actually read).
+        # Old captures are unaffected: base_url is stored per manifest and same-origin checks run
+        # against that manifest's own value, not against this default.
+        base_url="https://aihot.news",
         user_agent=user_agent,
         transport=transport,
         limiter=GlobalRateLimiter(),

@@ -39,6 +39,16 @@ START="$(date -u -v-2d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '2 days ago
 # It hides genuine gitlink changes too, which costs nothing here -- nothing else moves it.
 git config --local submodule.benchmarks/aihot.ignore dirty
 
+# The egress exit port is configurable, and a stale value in the environment routes this job at a
+# port nobody serves. Cron hands us a near-empty environment so this is a no-op there -- it is the
+# manual re-run that is exposed, and a manual re-run is the documented recovery for a missed
+# window, which cannot be re-taken later. Measured 2026-09-09: a recovery run inherited
+# AI_RADAR_EGRESS_PROXY_PORT=7897 from the shell that launched it (clash had since moved to 59527,
+# nothing was listening on 7897) and died with `no request got through the egress proxy`. That text
+# reads like an outage, so the operator goes looking at the proxy rather than at their own shell.
+# Unset rather than pin: the code default is the single source for the port.
+unset AI_RADAR_EGRESS_PROXY_PORT
+
 echo "requesting $START .. $END"
 
 # Seam so the git-handling below can be exercised without spending a real AIHOT window.

@@ -4698,7 +4698,7 @@ def test_json_and_gzip_serialization_is_deterministic(ds: Any) -> None:
 def test_synthetic_contract_contains_no_live_aihot_content() -> None:
     source = Path(__file__).read_text(encoding="utf-8")
     forbidden_hosts = [
-        "aihot" + ".virxact.com",
+        "aihot" + ".news",
         "https://" + "aihot.ai",
         "www." + "aihot.ai",
     ]
@@ -5924,7 +5924,7 @@ def test_httpx_transport_uses_selector_factory_and_sets_timeout_and_user_agent(
     transport.close()
     assert observed["client_kwargs"] == {
         "callsite_id": "eval.aihot_dataset.capture",
-        "request_url": "https://" + "aihot" + ".virxact.com",
+        "request_url": "https://" + "aihot" + ".news",
         "follow_redirects": False,
         "timeout": 13.0,
         "headers": {"User-Agent": "Fictional-Test-UA/1.0"},
