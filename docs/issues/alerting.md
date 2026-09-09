@@ -321,6 +321,12 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
 
   **结构性根因，也是重做时要先解决的那个**：fire 侧去抖 3 轮、resolve 侧去抖 0 —— 非对称去抖必然 flap（P7）。所以正确的实现要给 resolve 侧加迟滞，那是改 A2 的生命周期，不是调一个开火条件；**按此重估，它不再是一个「小改动」**，而收益中位仅约 11 分钟。
 
+  **重做的第一步已定位（2026-09-09，用户裁定重做，先加 resolve 迟滞）**，并订正上一段的一处措辞：
+  - **开火侧已有可配置去抖**：`_debounce_window(thresholds, rule_id, severity)` 读各规则 section 的 `debounce_minutes` / `debounce_minutes_by_severity`（默认 0），由 `_transition_since` 用来算 firing 起点。**A2 的 section 里连 `debounce` 键都没有。**
+  - **resolve 侧结构上没有迟滞**：`_ok_lifecycle` 直接返回 `state="ok" / since=None / announced=False`，不收 debounce 参数、也没有"连续 N 次判 ok 才宣告恢复"的概念。所以非对称不是配漏了，是那一侧没建。
+  - **因此波及面比上一段写的大**：上面说「改 A2 的生命周期」——**不准确**，`_ok_lifecycle` 是**全部规则共用**的，加迟滞会改变每一条规则的恢复语义。重做时这一步要单独定档与评审，不能挂在 A2 的账上做。
+  - **可复用的形状**：开火侧那套（threshold section 里的 `debounce_minutes` + 一个算"确认时刻"的纯函数）就是 resolve 侧该照的样子——不必另发明一套。
+
   **同一次审查另外指出、重做时一并要处理的**：消息从不说是哪条支路触发（正文头号数字仍是那个**未越线**的心跳分钟数，而 runbook 写着 120 分钟）；「已连续 N 轮」没有时间锚也没有阈值参照，实测可横跨 3 天或 9 个日志文件（`_load_pipeline_runs` 对 `logs/` 全量 glob，无时间下界，而 `pipeline.sh` 的 `find -mtime +7 -delete` 只在有轮次拿到锁之后才跑）；新支路专挑 `heartbeat_fresh=True` 的窗口开火，而那正是既有 correlation 把 A2 并进 A5 的窗口，归因会被丢掉；手动跑 `./pipeline.sh` 三次即可在生产完全健康时凑出 streak=3；阈值 `3` 只以调用点魔数存在、未进 `thresholds.py`、也无 `max(1, …)` 下限（配 0 则恒 firing）；新量未进 `values`，事故账上分不出是哪条支路开的火。
   **还有一条元问题**：上面那个「复算方法」在触发器上线后会**自我度量**——它要减的那个 `A2 firing` 从此就是本触发器产生的，差值恒 ≈0。重做时复算要固定在上线前的历史窗口上。
 
