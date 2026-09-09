@@ -223,6 +223,31 @@ def _debounce_window(
     return timedelta(minutes=_int_threshold(section, "debounce_minutes", 0))
 
 
+def _resolve_debounce_rounds(thresholds: dict[str, object], rule_id: str) -> int:
+    """How many consecutive not-firing evaluations a rule owes before it resolves.
+
+    Counted, not timed. A2's background-stage P95 rides on one or two tail calls in
+    a 2h window of ~10-20 samples, so it crosses its threshold back and forth and
+    the rule flaps firing/resolved (the reasoning is written out beside those
+    thresholds). Holding the announcement until the quiet has been *observed* more
+    than once turns that into one episode.
+
+    A wall-clock hold would be wrong in the direction that matters: an evaluator
+    outage lets the clock run unobserved, so the first evaluation after the gap
+    would resolve on a single reading -- and evaluator stalls correlate with the
+    faults these rules report. A count cannot advance while nothing is looking.
+    This mirrors A4's `account_resolve_rounds` (docs/operations/monitoring-alerting.md,
+    "恢复（无状态滞回）"), which counts distinct evidence rounds for the same reason.
+
+    0 disables it, which is every rule's default; the floor of 1 below matches A4
+    and keeps a negative or malformed value from silently disabling the guard.
+    """
+
+    section = _threshold_section(thresholds, rule_id.lower())
+    configured = _int_threshold(section, "resolve_debounce_rounds", 0)
+    return max(1, configured) if configured > 0 else 0
+
+
 def _minutes_elapsed_today(now: datetime) -> int:
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elapsed = int((now - start).total_seconds() // 60)
@@ -1309,6 +1334,13 @@ def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
             else "healthy"
         ),
     }
+    # Survives the reload only while still firing: it counts how many consecutive
+    # evaluations have read not-firing, and a resolved lifecycle has nothing to
+    # count. This allow-list is rebuilt from scratch on every load, so a field
+    # absent here is silently dropped -- which reset the count every evaluation and
+    # made the debounce unreachable (caught by its own test, not by review).
+    if state == "firing" and isinstance(entry.get("quiet_evaluations"), int):
+        normalized["quiet_evaluations"] = entry.get("quiet_evaluations")
     if (firing_basis := _normalize_firing_basis(entry.get("firing_basis"))) is not None:
         normalized["firing_basis"] = firing_basis
     if state == "firing" and (source_ids := _normalize_source_ids(entry.get("source_ids"))):
@@ -2379,6 +2411,12 @@ def _apply_alert_results(
                     "detail": result.detail,
                     "evaluation_state": result.evaluation_state,
                 }
+                # Same reason as the pop below: the rule is firing again, so a
+                # part-served quiet count must not survive. This branch returns via
+                # `continue` and never reaches that pop -- review found the earlier
+                # version carrying the count across a page-to-notice handoff and
+                # resolving eleven minutes after the fault last showed.
+                lifecycles[PAGE_SEVERITY].pop("quiet_evaluations", None)
                 state[result.rule_id] = project(PAGE_SEVERITY)
                 continue
             debounce = _debounce_window(thresholds, result.rule_id, effective_severity)
@@ -2515,6 +2553,9 @@ def _apply_alert_results(
                 ),
                 "evaluation_state": result.evaluation_state,
             }
+            # Firing again ends any pending recovery: the next quiet stretch must
+            # earn its own count rather than inherit a stale one.
+            lifecycles[effective_severity].pop("quiet_evaluations", None)
             state[result.rule_id] = project(effective_severity)
             if should_notify:
                 _write_state(state_path, state)
@@ -2528,6 +2569,21 @@ def _apply_alert_results(
                 if lifecycle is None or lifecycle.get("state") != "firing":
                     continue
                 if _entry_announced(lifecycle):
+                    # Hold the announcement until not-firing has lasted. One
+                    # evaluation that happens to see nothing wrong is not a
+                    # recovery, and announcing on it costs more than the delay it
+                    # saves: the resolved message reads "all within thresholds",
+                    # and COOLDOWN then swallows the re-fire for 30 minutes while
+                    # the fault continues. Same branch and same shape as the A7
+                    # guard below -- keep firing, skip this resolve.
+                    resolve_rounds = _resolve_debounce_rounds(thresholds, result.rule_id)
+                    if resolve_rounds > 0:
+                        seen = lifecycle.get("quiet_evaluations")
+                        seen = seen + 1 if isinstance(seen, int) and seen >= 0 else 1
+                        if seen < resolve_rounds:
+                            lifecycle["quiet_evaluations"] = seen
+                            state[result.rule_id] = project(projected_severity)
+                            continue
                     if not _a7_mixed_pause_resolution_has_current_evidence(
                         result,
                         lifecycle=lifecycle,

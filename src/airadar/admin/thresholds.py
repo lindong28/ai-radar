@@ -7,6 +7,13 @@ ALERT_THRESHOLDS: dict[str, object] = {
         "upstream_error_rate": 0.5,
     },
     "a2": {
+        # Two consecutive quiet evaluations before announcing recovery. The fault
+        # this addresses is the P95 flap described beside stage_p95_latency_ms
+        # below: one or two tail calls slide in and out of a 2h window of ~10-20
+        # samples, so the rule crosses back and forth and emits an alternating
+        # 🔴/✅ stream for one continuous condition. Counted rather than timed, so
+        # an alert-check outage cannot let the hold expire unobserved.
+        "resolve_debounce_rounds": 2,
         "window_minutes": 15,
         "min_samples": {
             "prefilter": 4,

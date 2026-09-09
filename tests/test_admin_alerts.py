@@ -5297,3 +5297,109 @@ def test_a2_marks_the_cut_when_a_reason_does_exceed_the_cap() -> None:
     detail = _a2(signals).detail
     assert "已截断" in detail
     assert len(detail) < 600
+
+
+def _a2_firing_signals() -> AlertSignals:
+    return replace(
+        _normal_signals(),
+        minutes_since_successful_pipeline=166,
+        egress_preflight_status="unavailable",
+        egress_preflight_reason="no request got through the egress proxy 127.0.0.1:59527",
+    )
+
+
+def _a2_run(state_path: Path, deliveries: list, signals: AlertSignals, when: datetime):
+    return run_alert_state_machine(
+        signals,
+        state_path=state_path,
+        event_path=state_path.with_name("alert-events.jsonl"),
+        now=when,
+        send=_recording_sender(deliveries),
+        healthz_probe=_healthz_ok,
+    )
+
+
+def test_a2_does_not_announce_recovery_on_a_single_quiet_evaluation(tmp_path: Path) -> None:
+    """One reading that sees nothing wrong is not a recovery.
+
+    A2's background-stage P95 rides on one or two tail calls inside a 2h window of
+    ~10-20 samples, so it crosses its threshold back and forth; announcing on the
+    first quiet reading turns one continuous condition into an alternating stream
+    of 🔴 and ✅, and the 30-minute COOLDOWN then swallows the next real page.
+    """
+    state_path = tmp_path / "alert-state.json"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+
+    fired = _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    quiet = _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(minutes=5))
+
+    assert fired["sent_count"] == 1
+    assert quiet["sent_count"] == 0, "a single quiet evaluation announced a recovery"
+    assert not any("已恢复" in text for text, _ in deliveries)
+
+
+def test_a2_holds_for_a_count_of_evaluations_not_a_stretch_of_time(tmp_path: Path) -> None:
+    """The hold must not expire while nothing is watching.
+
+    A wall-clock hold reads as satisfied after any long enough gap, so the first
+    evaluation following an alert-check outage would resolve on a single reading --
+    and evaluator stalls correlate with the faults these rules exist to report.
+    Here a whole day passes between the fault and the one quiet reading; a timed
+    hold resolves, a counted one cannot.
+    """
+    state_path = tmp_path / "alert-state.json"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    after_gap = _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(hours=24))
+
+    assert after_gap["sent_count"] == 0
+    assert not any("已恢复" in text for text, _ in deliveries)
+
+
+def test_a2_announces_recovery_on_the_configured_count(tmp_path: Path) -> None:
+    """Negative control: the hold is a delay, not a block, and it ends where configured.
+
+    Pinned against the configured value rather than a hard-coded 2, so raising the
+    threshold without revisiting this test fails here instead of silently widening
+    the hold.
+    """
+    from airadar.admin.thresholds import ALERT_THRESHOLDS
+
+    configured = ALERT_THRESHOLDS["a2"]["resolve_debounce_rounds"]
+    assert configured >= 2, "a hold of one is no hold at all"
+
+    state_path = tmp_path / "alert-state.json"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    for index in range(configured - 1):
+        held = _a2_run(
+            state_path, deliveries, _normal_signals(), now + timedelta(minutes=5 * (index + 1))
+        )
+        assert held["sent_count"] == 0, f"resolved after only {index + 1} quiet evaluations"
+
+    settled = _a2_run(
+        state_path, deliveries, _normal_signals(), now + timedelta(minutes=5 * configured)
+    )
+
+    assert settled["sent_count"] == 1
+    assert any("已恢复" in text for text, _ in deliveries)
+
+
+def test_a2_firing_again_makes_the_next_quiet_stretch_start_over(tmp_path: Path) -> None:
+    """Otherwise a flapping fault accumulates quiet readings it never actually had."""
+    state_path = tmp_path / "alert-state.json"
+    deliveries: list[tuple[str, str]] = []
+    now = datetime.fromisoformat("2026-09-09T08:00:00+08:00")
+
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now)
+    _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(minutes=5))
+    _a2_run(state_path, deliveries, _a2_firing_signals(), now + timedelta(minutes=10))
+    resumed = _a2_run(state_path, deliveries, _normal_signals(), now + timedelta(minutes=15))
+
+    assert resumed["sent_count"] == 0
+    assert not any("已恢复" in text for text, _ in deliveries)
