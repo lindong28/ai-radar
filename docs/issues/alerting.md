@@ -325,6 +325,11 @@ ADR-060 引入的 `hot-candidate-keeper` 线程是热点榜唯一的生产者。
   - **开火侧已有可配置去抖**：`_debounce_window(thresholds, rule_id, severity)` 读各规则 section 的 `debounce_minutes` / `debounce_minutes_by_severity`（默认 0），由 `_transition_since` 用来算 firing 起点。**A2 的 section 里连 `debounce` 键都没有。**
   - **resolve 侧结构上没有迟滞**：`_ok_lifecycle` 直接返回 `state="ok" / since=None / announced=False`，不收 debounce 参数、也没有"连续 N 次判 ok 才宣告恢复"的概念。所以非对称不是配漏了，是那一侧没建。
   - **因此波及面比上一段写的大**：上面说「改 A2 的生命周期」——**不准确**，`_ok_lifecycle` 是**全部规则共用**的，加迟滞会改变每一条规则的恢复语义。重做时这一步要单独定档与评审，不能挂在 A2 的账上做。
+  - **闸的位置已定位到一处，比上一条写的窄**：`_ok_lifecycle` 有 **7 个调用点**，各有其义，**只有一个是真正的"宣告恢复"**——`alerts.py:2570`，在 resolved 通知**已成功投递之后**。其余六处都不该加迟滞：`:2308` 是来源被人为暂停、`:2403` 是从没通知过（没有恢复可宣告）、`:2501` 是刚发完 firing、`:2583` 是兜底。**给这些加迟滞会朝反方向坏**——探针坏掉、这轮评不出来时告警反而一直挂着，正是 P9 的反面。所以闸要加在**决定构造并发出 resolved 通知之前**，不是加在 `_ok_lifecycle` 里面。
+  - **`evaluation_state` 不能当判别器**（我查过才知道）：7 个调用点全部传默认的 `healthy`，它是在 `AlertRuleResult` 上设的、不在这里分叉。
+  - **仍欠一个状态字段**：`_ok_lifecycle` 把 `since` 置 `None`，而迟滞要知道"连续不 firing 多久了"。持久化在 `data/alert-state.json`（`json.dump`，无 schema 版本号），加字段前要确认旧状态文件读得进来。
+  - **做成按规则可选**（threshold section 里一个键，默认 0 = 今天的行为），这样只有 A2 改变恢复语义，其余规则一个字节不动——这也是它能留在 A2 这个授权范围内的前提。
+
   - **可复用的形状**：开火侧那套（threshold section 里的 `debounce_minutes` + 一个算"确认时刻"的纯函数）就是 resolve 侧该照的样子——不必另发明一套。
 
   **同一次审查另外指出、重做时一并要处理的**：消息从不说是哪条支路触发（正文头号数字仍是那个**未越线**的心跳分钟数，而 runbook 写着 120 分钟）；「已连续 N 轮」没有时间锚也没有阈值参照，实测可横跨 3 天或 9 个日志文件（`_load_pipeline_runs` 对 `logs/` 全量 glob，无时间下界，而 `pipeline.sh` 的 `find -mtime +7 -delete` 只在有轮次拿到锁之后才跑）；新支路专挑 `heartbeat_fresh=True` 的窗口开火，而那正是既有 correlation 把 A2 并进 A5 的窗口，归因会被丢掉；手动跑 `./pipeline.sh` 三次即可在生产完全健康时凑出 streak=3；阈值 `3` 只以调用点魔数存在、未进 `thresholds.py`、也无 `max(1, …)` 下限（配 0 则恒 firing）；新量未进 `values`，事故账上分不出是哪条支路开的火。
