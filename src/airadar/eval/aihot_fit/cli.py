@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from ... import db
-from .common import DEFAULT_EVALSET_DIR, DEFAULT_RUNS_DIR, DEFAULT_WORKERS, sha256_file
+from .common import DEFAULT_EVALSET_DIR, DEFAULT_RUNS_DIR, DEFAULT_WORKERS, prune_old_runs, sha256_file
 
 
 def add_eval_fit_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
@@ -95,6 +95,10 @@ def run_eval_fit(args: argparse.Namespace) -> int:
         from .run import default_run_id, run_stages
 
         questions_path = Path(args.questions)
+        # Before writing a new run, not after: pruning is about the disk this run is
+        # about to use, and a run that fails partway still leaves its directory behind.
+        for pruned in prune_old_runs():
+            print(f"pruned old run: {pruned}")
         out_dir = Path(args.out) if args.out else DEFAULT_RUNS_DIR / default_run_id(sha256_file(questions_path))
         stages = tuple(stage.strip() for stage in args.stages.split(",") if stage.strip())
         summary = run_stages(

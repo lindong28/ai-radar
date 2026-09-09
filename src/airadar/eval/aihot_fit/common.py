@@ -4,9 +4,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Iterable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,51 @@ DEFAULT_RUNS_DIR = db.PROJECT_ROOT / "data" / "eval-fit" / "runs"
 
 EVAL_USAGE_DB = DEFAULT_RUNS_DIR.parent / "llm-usage-eval.db"
 EVAL_BREAKER_STATE = DEFAULT_RUNS_DIR.parent / "ark-breaker-eval.json"
+
+# Runs are reproducible from the evalset plus prompt version, and each run's key readings
+# and sha256 are recorded in ADR-499e, so pruning drops reproducible bulk rather than
+# evidence. Measured 2026-09-09: 42 MB over 32 run dirs in four days, ~10 MB/day, growing
+# without bound. 14 days chosen by the repository owner on 2026-09-09, matching the window
+# already set for AIHOT captures so there is one rule rather than two.
+EVAL_RUNS_RETAIN_DAYS_ENV = "AI_RADAR_EVAL_RUNS_RETAIN_DAYS"
+DEFAULT_EVAL_RUNS_RETAIN_DAYS = 14
+_RUN_ID_STAMP_RE = re.compile(r"^(\d{8}T\d{6}Z)-")
+
+
+def prune_old_runs(runs_dir: Path | None = None, *, retain_days: int | None = None) -> list[str]:
+    """Delete run directories older than the retention window. Returns what was pruned.
+
+    Age comes from the directory NAME, not mtime: a fresh clone stamps every directory
+    with the checkout time, so an mtime predicate prunes nothing for the first N days and
+    then the whole history at once -- and it fails that way silently. Same reasoning, and
+    the same window, as `scripts/capture_aihot_daily.sh`.
+
+    A directory whose name does not start with a run stamp is never pruned. Those are
+    hand-named comparison runs (`CAT-AB-A-baseline` and friends): deliberately kept, and
+    undatable, so there is no window that could justify deleting them.
+    """
+
+    root = runs_dir if runs_dir is not None else DEFAULT_RUNS_DIR
+    days = retain_days
+    if days is None:
+        raw = os.environ.get(EVAL_RUNS_RETAIN_DAYS_ENV, "").strip()
+        try:
+            days = int(raw) if raw else DEFAULT_EVAL_RUNS_RETAIN_DAYS
+        except ValueError:
+            days = DEFAULT_EVAL_RUNS_RETAIN_DAYS
+    if days <= 0 or not root.is_dir():
+        return []
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y%m%dT%H%M%SZ")
+    pruned: list[str] = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        match = _RUN_ID_STAMP_RE.match(child.name)
+        if match is None or match.group(1) >= cutoff:
+            continue
+        shutil.rmtree(child)
+        pruned.append(child.name)
+    return pruned
 
 
 def isolate_side_effects() -> dict[str, str]:
