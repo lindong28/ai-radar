@@ -596,18 +596,19 @@ def test_a_weights_file_without_them_still_loads() -> None:
     assert loaded.uses_tier_multiplier is False
 
 
-def test_category_multiplier_only_touches_the_two_listed_categories() -> None:
-    """Everything unlisted must score exactly as before, including the empty category.
+def test_category_multipliers_are_inert_until_deliberately_set() -> None:
+    """Everything scores exactly as before, including the empty category.
 
     An item can be scored before it is enriched, so "no category" is the ordinary state of
     the newest candidates -- not an error, and not a reason to change their score.
     """
     from airadar.curator.select import CATEGORY_MULTIPLIERS, category_multiplier
 
-    assert set(CATEGORY_MULTIPLIERS) == {"paper", "tutorial"}
-    assert category_multiplier("paper") == 0.90
-    assert category_multiplier("tutorial") == 1.12
-    for untouched in ("model", "product", "industry", "", "unknown-slug"):
+    # Empty since the 2026-09-09 withdrawal: a cross-window check with categories recomputed
+    # at one prompt showed the shipped coefficients made 4 of 6 windows worse. The mechanism
+    # stays, so this pins that it is inert until someone deliberately fills it.
+    assert CATEGORY_MULTIPLIERS == {}
+    for untouched in ("paper", "tutorial", "model", "product", "industry", "", "unknown-slug"):
         assert category_multiplier(untouched) == 1.0
 
 

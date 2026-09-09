@@ -179,38 +179,34 @@ def _calibrate_selected_scores(selected: list[ScoredCandidate]) -> list[ScoredCa
     return calibrated
 
 
-# Per-category ranking multipliers, chosen 2026-09-09 by the repository owner.
+# Per-category ranking multipliers. EMPTY ON PURPOSE -- one set shipped 2026-09-09 and was
+# withdrawn the same day when a proper cross-window check said it made things worse.
 #
-# WHY THESE TWO AND NOT A QUOTA. AIHOT's own selection was characterised first, from the
-# evalset's `reference.selected` + `category_slug` (its raw slug, deterministically mapped;
-# NOT our enrich output): its flow -> its picks lifts tutorial 0.90x, product 0.88x,
-# paper 0.92x, industry 0.69x and model 2.19x. So it is near category-neutral and simply
-# has more tutorial in its flow (35.7%) than we do (23.8%). Ours lifted paper 2.63x and
-# that is the one clear defect -- opposite in sign to the reference.
+# The mechanism is kept (candidates carry `primary_category`, and reason_json records the
+# factor) because the characterisation behind it still holds and the next attempt will need
+# both. What did not hold was the evidence for those particular numbers.
 #
-# WHAT THESE NUMBERS ARE, STATED PLAINLY: they were fitted to minimise the composition
-# distance on one 48h pool, so they are a fit to a reading, not a transcription of AIHOT's
-# decision function. Copying its lift coefficients was measured and REJECTED: it lands at
-# TV 0.215, worse than the 0.203 baseline, because the same coefficient on a different flow
-# yields a different composition (35.7%x0.90=32.1% vs 23.8%x0.90=21.4%). The owner chose the
-# result over the method with that tradeoff in front of them.
+# WHAT WENT WRONG, because it will recur otherwise. AIHOT's own selection is near
+# category-neutral (tutorial 0.90x, product 0.88x, paper 0.92x, industry 0.69x) with model at
+# 2.19x; ours lifted paper 2.63x, which looked like a clear defect to correct. Coefficients
+# {paper: 0.90, tutorial: 1.12} were fitted against a paired reading on one pool and shipped
+# at TV 0.193 -> 0.151. Then the cross-window check: TV is computed over CATEGORIES, and each
+# day's categories come from whichever enrich prompt was live that day. Re-running enrich for
+# 900 items at one prompt so the windows became comparable flipped the answer --
 #
-# CONSEQUENCES FOR WHOEVER TOUCHES THIS NEXT. A cross-window check was attempted and did
-# NOT come off, which is worth knowing before you trust one: TV is computed over categories,
-# and each day's categories come from whichever enrich prompt was live then -- measured
-# 2026-09-09, the last six day-windows are dominated by five different prompt generations
-# (09-04/05 by a retired f422dfa6 at 96%/92%, 09-09 by e04c9a50 at 100%). So comparing them
-# compares labelling regimes, not days. Across those six the multipliers never made TV worse
-# (5 improved, 1 unchanged, worst delta +0.000), but only 09-09 is a clean reading (-0.041)
-# and 09-08 a half-clean one (-0.015). A real cross-window check needs enrich re-run at one
-# prompt over several windows. The pool also drifts within minutes, so these need re-fitting.
-# This is
-# deliberately a score multiplier and not a quota: a quota would force the target share
-# whatever the pool holds, while this only reorders and lets composition float with the pool.
-# Measured on the real selection path (_load_candidates + dedup + threshold + fresh pool +
-# _fill), not a simplification -- an earlier simplified model put the baseline at 0.494
-# against a real 0.214 and every coefficient derived from it was wrong.
-CATEGORY_MULTIPLIERS: dict[str, float] = {"paper": 0.90, "tutorial": 1.12}
+#   window   no multipliers -> with them
+#   09-04    0.325 -> 0.259   (-0.066)
+#   09-05    0.178 -> 0.107   (-0.071)
+#   09-06    0.271 -> 0.403   (+0.132)
+#   09-07    0.255 -> 0.333   (+0.078)
+#   09-08    0.169 -> 0.191   (+0.022)
+#   09-09    0.183 -> 0.209   (+0.026)   <- the same window read -0.041 before the re-run
+#
+# 4 of 6 worse, mean +0.020. The 09-09 reversal is the whole lesson: the reading that
+# justified shipping was taken over stale category labels, and it inverted once they were
+# recomputed. Any future fit here must re-enrich its windows at one prompt FIRST -- otherwise
+# it is fitting the labelling regime, not the ranking.
+CATEGORY_MULTIPLIERS: dict[str, float] = {}
 
 
 def category_multiplier(category: str) -> float:
