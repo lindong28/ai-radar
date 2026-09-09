@@ -195,8 +195,16 @@ def _calibrate_selected_scores(selected: list[ScoredCandidate]) -> list[ScoredCa
 # yields a different composition (35.7%x0.90=32.1% vs 23.8%x0.90=21.4%). The owner chose the
 # result over the method with that tradeoff in front of them.
 #
-# CONSEQUENCES FOR WHOEVER TOUCHES THIS NEXT. The pool drifts, so these need re-fitting;
-# they were validated on a single 48h window with no cross-window stability check. This is
+# CONSEQUENCES FOR WHOEVER TOUCHES THIS NEXT. A cross-window check was attempted and did
+# NOT come off, which is worth knowing before you trust one: TV is computed over categories,
+# and each day's categories come from whichever enrich prompt was live then -- measured
+# 2026-09-09, the last six day-windows are dominated by five different prompt generations
+# (09-04/05 by a retired f422dfa6 at 96%/92%, 09-09 by e04c9a50 at 100%). So comparing them
+# compares labelling regimes, not days. Across those six the multipliers never made TV worse
+# (5 improved, 1 unchanged, worst delta +0.000), but only 09-09 is a clean reading (-0.041)
+# and 09-08 a half-clean one (-0.015). A real cross-window check needs enrich re-run at one
+# prompt over several windows. The pool also drifts within minutes, so these need re-fitting.
+# This is
 # deliberately a score multiplier and not a quota: a quota would force the target share
 # whatever the pool holds, while this only reorders and lets composition float with the pool.
 # Measured on the real selection path (_load_candidates + dedup + threshold + fresh pool +
