@@ -60,8 +60,9 @@ logs/
 # Wechat2RSS container runtime state (subscriptions DB, recreated by the service).
 deploy/wechat2rss/data/
 
+# Human-eval / labeling tooling and served bundles (never committed).
+/.label-serve/
+
 # Execution-plan workspace (audit trail is promoted to docs/plans/ after completion)
 /plans/
 
-# Human-eval / labeling tooling and served bundles (never committed).
-/.label-serve/

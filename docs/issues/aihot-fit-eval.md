@@ -990,3 +990,31 @@ industry/tip 遵守度是**第二个面**。它真实、用户可见（29.8% 的
 而分歧的主体在 AIHOT 的 tip 桶那一侧。
 
 **仍未闭合**：这是 24 条抽样 + 我自己的判断，不是逐条标注；AIHOT 自己发布的类目定义仍然仓内无记载。
+
+### AIHOT 不公开它的类目定义——查过三处，取不到，且这不是暂时的（2026-09-10）
+
+评审者列为承重的那条「AIHOT 自己的类目定义仓内无记载 ⇒『两侧同界』是推断而非引用」，已尽力去取。查了三处：
+
+| 来源 | 结果 |
+|---|---|
+| 抓取快照里的 OpenAPI 规格（`captures/…/raw/probes/01-openapi.json.gz`） | 只列枚举值：`"description": "Current values: ai-models, ai-products, industry, paper, tip."` —— **没有语义** |
+| 抓取快照里的 SSR 详情页 | 无带显示名的类别导航；slug 附近唯一有信息的是 `paper` 旁的「论文」 |
+| 站点实时 `/about` 与首页 | `/about` 全文只有「每天抓 AI 圈的新动静。用 AI 帮我筛掉噪声。把真正值得看的几条留下来。」——无类目定义 |
+
+⇒ **它没有公开这套定义。** 所以「两侧同界」**永久是推断**，不是「暂时未核实」——这个状态不会因为再等一等
+或再查一次而改变。`aihot_fit/common.py` 的注释已按此措辞（写明是推断、并写明反方向也未逐条查）。
+
+**唯一能把它变成读数的路**：拿一批条目让 AIHOT 与我方独立标注、从行为反推它的边界——那就是本档
+「反方向已查」那一节做的事（n=24 抽样），要更强只能扩样本。**不存在读文档就能引用的版本。**
+
+### `/plans/` 之后的 ignore 规则已重排（2026-09-10，已修）
+
+`test_repository_hygiene.py::test_execution_plan_workspace_is_ignored_and_untracked` 断言 `.gitignore` 里
+`/plans/` 之后没有别的规则，而 `/.label-serve/` 就在它后面，于是该测试长期红——**代价是任何改到这个文件的
+commit，`create-commit` 的导出树执行检查都读出 `1 failed`**。
+
+已把 `/.label-serve/` 块移到 `/plans/` 之前。**两条路径不相交，故重排对 git 语义无影响**，实测确认：
+
+- 重排前 `plans/x` 命中 `:64`、`.label-serve/x` 命中 `:67`；重排后分别命中 `:67` 与 `:64`——**同样被忽略，只是行号互换**
+- 反向对照：`src/airadar/db.py`、`README.md` 重排后仍未被忽略
+- `tests/test_repository_hygiene.py` 现在 **2 passed**（此前 1 failed / 1 passed）
