@@ -4,7 +4,12 @@ ADR-20260907-a1c4 §M2. Two steps, in this order:
 
   1. a category-conditional linear fit, `a * base + b[category]`, because AIHOT scores the
      same base differently depending on what kind of item it is -- our `weighted_score` has
-     no category term at all and so cannot express that;
+     no category term at all and so cannot express that (still true of `weighted_score` as of
+     2026-09-10, but no longer of the ORDERING: `select.ranking_key` applies
+     `CATEGORY_MULTIPLIERS` -- today `paper` at 0.80 -- on top of it. If this module is ever
+     wired in, check it does not deduct twice; both terms move papers the same direction. The
+     staleness guard in `tests/test_aihot_scale.py` compares the recorded weights vector against
+     `Weights.default()` and structurally cannot see that table, which is not part of `Weights`);
   2. a quantile alignment of the fitted score onto AIHOT's own score distribution, because
      the fit regresses to the mean: it spans 18.4-68.1 where AIHOT spans 0-91.
 

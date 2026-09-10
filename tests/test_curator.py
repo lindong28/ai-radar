@@ -10,8 +10,14 @@ import pytest
 from airadar import cli
 from airadar.curator.dedup import deduplicate_candidates
 from airadar.curator.score import ScoredCandidate, weighted_score
-from airadar.curator.select import DEFAULT_SOURCE_QUOTA, SourceQuota, curate, parse_source_quota
-from airadar.curator.weights import DEFAULT_WEIGHTS, Weights, load_weights, weights_from_mapping
+from airadar.curator.select import (
+    CATEGORY_MULTIPLIERS,
+    DEFAULT_SOURCE_QUOTA,
+    SourceQuota,
+    curate,
+    parse_source_quota,
+)
+from airadar.curator.weights import DEFAULT_WEIGHTS, DIMENSIONS, Weights, load_weights, weights_from_mapping
 from airadar.db import migrate
 
 
@@ -596,20 +602,212 @@ def test_a_weights_file_without_them_still_loads() -> None:
     assert loaded.uses_tier_multiplier is False
 
 
-def test_category_multipliers_are_inert_until_deliberately_set() -> None:
-    """Everything scores exactly as before, including the empty category.
+def test_category_multipliers_hold_exactly_the_fitted_table() -> None:
+    """Only `paper` is scaled; everything else, including the empty category, scores unchanged.
 
     An item can be scored before it is enriched, so "no category" is the ordinary state of
     the newest candidates -- not an error, and not a reason to change their score.
     """
     from airadar.curator.select import CATEGORY_MULTIPLIERS, category_multiplier
 
-    # Empty since the 2026-09-09 withdrawal: a cross-window check with categories recomputed
-    # at one prompt showed the shipped coefficients made 4 of 6 windows worse. The mechanism
-    # stays, so this pins that it is inert until someone deliberately fills it.
-    assert CATEGORY_MULTIPLIERS == {}
-    for untouched in ("paper", "tutorial", "model", "product", "industry", "", "unknown-slug"):
+    # `paper` only, fitted 2026-09-09 against AIHOT's own score with one enrich stamp behind the
+    # labels; see the comment at the definition for the readings and for why the other four are
+    # 1.0. Pinning the exact table catches both a silent refill and a silent emptying.
+    assert CATEGORY_MULTIPLIERS == {"paper": 0.95}
+    assert category_multiplier("paper") == 0.95
+    for untouched in ("tutorial", "model", "product", "industry", "", "unknown-slug"):
         assert category_multiplier(untouched) == 1.0
+
+
+def test_paper_multiplier_reorders_without_changing_eligibility_or_the_archived_score(
+    tmp_path: Path,
+) -> None:
+    """The behaviour test for the category factor. Pins WHERE it is applied, not just its value.
+
+    Three items, all above the 6.5 threshold on their raw score, none of them fresh (published
+    long ago, so the freshness segment is empty and the whole run is filled from `filtered` in
+    ranking order -- no dependence on the clock).
+
+      p-high  paper     raw 8.2   ->  ranks at 8.2 * 0.95 = 7.79
+      i-mid   industry  raw 7.9   ->  ranks at 7.9
+      p-low   paper     raw 6.8   ->  ranks at 6.46, but 6.8 is what the threshold sees
+
+    The two raw scores straddle the factor: 8.2 > 7.9 unmultiplied, 7.79 < 7.9 multiplied. Any
+    coefficient change has to keep that straddle or this test stops testing anything -- pick the
+    scores from the coefficient, not the other way round.
+
+    Each assertion below fails on a different way of getting this wrong:
+      order      -> the factor is not applied at all (removing it from ranking_key)
+      p-low in   -> the factor is applied to weighted_score, so it reaches the 6.5 gate too
+      8.2 stored -> the factor leaked into the archived score, making
+                    SOURCE_QUOTA_SCORE_SEMANTICS ("unadjusted_...") false
+
+    This exercises the `filtered` sort only -- nothing here is fresh, on purpose, so the run is
+    clock-independent. The fresh sort carries 36 of the 40 slots and has its own test below;
+    reverting only `fresh.sort` leaves this one green, which is why both exist.
+    """
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO sources (id,name,url,tier,enabled,meta_json,synced_at)"
+        " VALUES ('s','S','https://example.com','T1.5',1,'{}','2026-05-08T00:00:00Z')"
+    )
+    for item_id, category, raw in (("p-high", "paper", 8.2), ("i-mid", "industry", 7.9), ("p-low", "paper", 6.8)):
+        conn.execute(
+            """
+            INSERT INTO items (id, source_id, url, title, author, published_at, fetched_at,
+                               content_text, content_html, content_hash, extra_json)
+            VALUES (?, 's', ?, ?, NULL, '2026-05-08T00:00:00Z', '2026-05-08T00:00:00Z',
+                    'content', NULL, ?, '{}')
+            """,
+            (item_id, f"https://example.com/{item_id}", item_id, f"hash-{item_id}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (item_id, stage, ruleset_version, model_id, input_json,
+                                          output_json, numeric_json, latency_ms, cost_usd,
+                                          evaluated_at, error)
+            VALUES (?, 'scoring', 'test.r1', 'fake', '{}', '{}', ?, 1, 0, '2026-05-08T00:00:00Z', NULL)
+            """,
+            (item_id, json.dumps(dict.fromkeys(DIMENSIONS, raw))),
+        )
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (item_id, stage, ruleset_version, model_id, input_json,
+                                          output_json, numeric_json, latency_ms, cost_usd,
+                                          evaluated_at, error)
+            VALUES (?, 'enrich', 'test.r1', 'fake', '{}', ?, NULL, 1, 0, '2026-05-08T00:00:00Z', NULL)
+            """,
+            (item_id, json.dumps({"primary_category": category})),
+        )
+    conn.commit()
+
+    run = curate(conn, ruleset_version="test.r1", weights=Weights.default(), source_quota=None)
+
+    assert run.output_curated_ids == ["i-mid", "p-high", "p-low"]
+    rows = dict(
+        conn.execute(
+            "SELECT item_id, weighted_score FROM curated_items WHERE run_id=?", (run.id,)
+        ).fetchall()
+    )
+    assert set(rows) == {"i-mid", "p-high", "p-low"}
+    reasons = {
+        item_id: json.loads(reason)
+        for item_id, reason in conn.execute(
+            "SELECT item_id, reason_json FROM curated_items WHERE run_id=?", (run.id,)
+        ).fetchall()
+    }
+    assert reasons["p-high"]["weighted_score"] == pytest.approx(8.2)
+    assert reasons["p-high"]["raw_weighted_score"] == pytest.approx(8.2)
+    assert reasons["p-high"]["category_multiplier"] == pytest.approx(0.95)
+    assert reasons["i-mid"]["category_multiplier"] == pytest.approx(1.0)
+
+
+def test_run_record_carries_the_category_multipliers_that_produced_its_ordering(
+    tmp_path: Path,
+) -> None:
+    """`weights_json` has to describe the whole ranking function, not just the weight vector.
+
+    Without this the stored run says nothing about which coefficients ordered it, so two runs
+    from either side of a change to CATEGORY_MULTIPLIERS read alike -- the same failure
+    SOURCE_QUOTA_SCORE_SEMANTICS exists to prevent, and the reason that constant carries a
+    comment about the retired tier multiplier.
+    """
+    conn = _setup_curator_db(tmp_path, count=3)
+
+    run = curate(conn, ruleset_version="test.r1", weights=Weights.default(), source_quota=None)
+
+    stored = json.loads(
+        conn.execute("SELECT weights_json FROM curation_runs WHERE id=?", (run.id,)).fetchone()[0]
+    )
+    assert "category_multipliers" in stored
+    assert stored["category_multipliers"] == CATEGORY_MULTIPLIERS
+    # The weight vector itself must still be readable from the same record.
+    assert stored["significance"] == pytest.approx(Weights.default().significance)
+
+
+def test_paper_multiplier_reorders_the_fresh_segment_too(tmp_path: Path) -> None:
+    """The fresh sort carries 36 of the 40 slots; the test above only reaches the other 4.
+
+    Reported by an adversarial reviewer: reverting `fresh.sort` alone to the pre-factor key left
+    the whole suite green while losing three quarters of the effect on the real pool, because the
+    other test deliberately makes the fresh segment empty to stay clock-independent.
+
+    This one keeps the clock out a different way -- a freshness window wide enough that the fixed
+    published_at is always inside it -- so every candidate lands in `fresh` and the ordering under
+    test is the one production actually uses for 36 of its 40 slots.
+    """
+    db_path = tmp_path / "radar.db"
+    migrate(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO sources (id,name,url,tier,enabled,meta_json,synced_at)"
+        " VALUES ('s','S','https://example.com','T1.5',1,'{}','2026-05-08T00:00:00Z')"
+    )
+    for item_id, category, raw in (("p-high", "paper", 8.2), ("i-mid", "industry", 7.9)):
+        conn.execute(
+            """
+            INSERT INTO items (id, source_id, url, title, author, published_at, fetched_at,
+                               content_text, content_html, content_hash, extra_json)
+            VALUES (?, 's', ?, ?, NULL, '2026-05-08T00:00:00Z', '2026-05-08T00:00:00Z',
+                    'content', NULL, ?, '{}')
+            """,
+            (item_id, f"https://example.com/{item_id}", item_id, f"hash-{item_id}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (item_id, stage, ruleset_version, model_id, input_json,
+                                          output_json, numeric_json, latency_ms, cost_usd,
+                                          evaluated_at, error)
+            VALUES (?, 'scoring', 'test.r1', 'fake', '{}', '{}', ?, 1, 0, '2026-05-08T00:00:00Z', NULL)
+            """,
+            (item_id, json.dumps(dict.fromkeys(DIMENSIONS, raw))),
+        )
+        conn.execute(
+            """
+            INSERT INTO item_evaluations (item_id, stage, ruleset_version, model_id, input_json,
+                                          output_json, numeric_json, latency_ms, cost_usd,
+                                          evaluated_at, error)
+            VALUES (?, 'enrich', 'test.r1', 'fake', '{}', ?, NULL, 1, 0, '2026-05-08T00:00:00Z', NULL)
+            """,
+            (item_id, json.dumps({"primary_category": category})),
+        )
+    conn.commit()
+
+    run = curate(
+        conn,
+        ruleset_version="test.r1",
+        weights=Weights.default(),
+        source_quota=None,
+        freshness_window_hours=24 * 365 * 100,
+    )
+
+    assert run.output_curated_ids == ["i-mid", "p-high"]
+
+
+def test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on() -> None:
+    """Red when the enrich ruleset moves -- the coefficient was fitted on one specific one.
+
+    Not a runtime guard: ranking applies the factor to whatever the newest enrich row says. This
+    exists so a prompt revision cannot silently change which items are demoted. When it fails,
+    the decision is not "bump the string" -- it is "re-measure whether `paper` still needs 0.80
+    under the new labels", the same precondition the 2026-09-09 withdrawal wrote into select.py.
+    """
+    from airadar.curator.select import CATEGORY_MULTIPLIERS, CATEGORY_MULTIPLIERS_FITTED_ON_ENRICH
+    from airadar.ruleset import current_version_v2
+
+    if not CATEGORY_MULTIPLIERS:
+        pytest.skip("no coefficients in force, so nothing is pinned to an enrich generation")
+    assert current_version_v2() == CATEGORY_MULTIPLIERS_FITTED_ON_ENRICH
+
+
+def test_category_multiplier_keys_are_real_categories() -> None:
+    """A typo'd key is a silent no-op -- `{"papers": 0.80}` would leave ranking untouched."""
+    from airadar.curator.select import CATEGORY_MULTIPLIERS
+    from airadar.eval.aihot_fit.common import PRIMARY_CATEGORIES
+
+    assert set(CATEGORY_MULTIPLIERS) <= set(PRIMARY_CATEGORIES)
 
 
 def test_primary_category_reads_enrich_output_and_never_raises() -> None:

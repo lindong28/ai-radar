@@ -607,3 +607,36 @@ reviewer 复算了 diff 与文档里的全部读数（0.4502 / 0.6286 / 0.5925 /
 戳位修复之后，池子会在数天内从旧世代逐轮迁到新世代，**该脚本每跑一次得到的都是一个持续漂移的混合读数，而输出里没有任何东西提示这一点**。讽刺的是这次改动第一次让 `ruleset_version` 具备了区分 prompt 世代的能力，脚本却还没用上它。
 
 未修：改它要同时定「分层之后报哪一层」这个口径问题（当前世代？全部世代并列？），属独立工作单元。**在它被改之前，读它的输出要自己先查一遍世代分布。**
+
+### 排序期类别系数上线后，评测台量的已经不是生产排序（2026-09-10，未修）
+
+`src/airadar/eval/aihot_fit/run.py:196` 写 `record["weighted_score"] = weighted_score(numeric, DEFAULT_WEIGHTS, tier)`，**不施加 `select.CATEGORY_MULTIPLIERS`**。`metrics.py` 的 `selected_auc`、`day_buckets` / `pooled_precision`、`score_spearman` 全部读这个字段，`thresholds.json` 的达标判定建在其上。
+
+这份双重计算在乘数表为空时**按构造恒等**，因而一直不可达；2026-09-10 填入 `{"paper": 0.80}` 让它可达了。此后评测台报的是**生产已经不再使用的那个排序**——有人把系数调坏、跑一次 aihot-fit 回归，各项读数会与上一轮逐字相同、`threshold_verdicts` 全绿、体系宣布无变化。
+
+**边界**：生产的 `weighted_score` 字段本身仍不含类别因子（系数只进 `select.ranking_key`），所以评测台与生产在**分值**上仍一致；分叉只在**次序与选中**上。修法是让 eval 侧共用 `select.ranking_key`，属独立工作单元。由 review-gate 的对抗评审报出（M3）。
+
+### 没有任何东西把 `CATEGORY_MULTIPLIERS` 绑到某个 enrich ruleset（2026-09-10，未修）
+
+系数是对**单一 enrich 戳**（`2026-09-08.r2.31b2065e`）的标签拟合出来的，但 `_load_candidates` 读的是"最新成功 enrich 行"，不按戳过滤。本地库里它能读到的带类别行有 **56% 仍挂 `2026-05-13.r2`**（四个月前）。实测暴露面（最近 8 个日窗的 fresh pool）：标为 `paper` 的 206 条里 **57 条（27.7%）挂旧戳**；两种戳下 `paper` 的精确率是旧戳 98%（n=66）对当前戳 94%（n=49），**方向无害**，但这是当下的巧合而不是保障。
+
+下一次 enrich prompt 改版会改变谁被降级。**已加一道测试型守卫**：常量 `CATEGORY_MULTIPLIERS_FITTED_ON_ENRICH` 记下标定所用的戳，`test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on` 在 `current_version_v2()` 变动时转红，强制有人回来判「paper 在新标签下还是不是这个意思」。**仍未闭合的是运行期**：`ranking_key` 对所有戳无条件施加，未按戳收窄覆盖面——刻意如此，按戳过滤会让系数覆盖面在每次重算期剧烈波动。由 review-gate 的对抗评审报出（M2），decision-review 判该守卫「足以充当未来变更的 tripwire，但不闭合当前混合戳的施加范围」。
+
+### 类别系数在两处边界上可达但今日未触发（2026-09-10，记账不修）
+
+两条都由 review-gate 的对抗评审报出并给了可达性实测，均为 `基线独立 · 边界命中`：
+
+- **去重幸存者可能翻转**（L2）：`dedup.py:10` 按 `-weighted_score` 取首个。系数不进 `weighted_score`，故**这一条在改成排序期施加后已不可达**；留档是因为若将来有人把系数折回 `weighted_score` 就会复活。实测当时：33 个多成员重复组里 21 组类别不一致，**含 `paper` 的 0 组**。
+- **展示分徽章跟着名次掉档**（L3）：`app.js:375` 用 rank-linear 校准分算徽章、阈值 80/65，而 about 页把分数解释为质量。被降名次的 paper 徽章会掉档。这是 `rank_linear_v1` 的既有缺陷（plan 的 F3），本次改动新增一个触发源。
+
+### `measure_curated_composition.py` 的五条已知缺陷（2026-09-10，记账不修）
+
+新脚本是排序期类别系数的发现通道，由 review-gate 与 decision-review 两轮对抗评审报出以下五条，用户裁定本轮只修两条 HIGH、其余记账：
+
+- **`--depth aihot` 并不真对齐深度**。`_fill` 的 fresh 段**不受 `limit` 约束**（`select.py` 明写这是为生产的 `limit=40 > quota=36` 形态刻意设计的）。该脚本是第一个传 `limit < freshness_quota` 的调用方（AIHOT 每天十几条），于是实测 `limit=12→14 条`、`limit=15→18 条`、`limit=20→24 条`，**超出 20–25%**。kind 未配 cap 时 `kind_cap = limit` 能兜住单一 kind，混 kind 就漏。而该模式存在的唯一理由就是「对齐深度好比构成」，类别在名次上又分布不均——超出量会把它要消除的偏差重新引入。**`--depth aihot` 的读数目前不可用。**
+- **POOLED 闸是裸不等式，没有分辨率**。撤回判据比的是两个 arm 的 POOLED TV（0.156 vs 0.176，gap 0.020），而脚本只为**逐日** TV 印了噪声底，POOLED 那一行没有带宽。
+- **两个 arm 分两次调用，配对靠一个未强制的前提**：两次之间池子没变。`data/radar.db` 由 pipeline 每 15 分钟写，单次调用要跑数分钟。实测两次跑的逐日候选列完全一致（例：09-09 = 826/826），**本次未漂**，属结构性风险。修法是让 `--multiplier` 一次调用跑多个 arm，或 pin 一个快照。
+- **脚本自带一份 ranking key 的副本**。局部 `rank()` 没有复用 `select.ranking_key`（因为要支持 `--multiplier` 覆盖）。今天两者结构一致，但 `ranking_key` 的 tie-break 一变，这个发现通道就会静默偏离——与「评测台不施加本系数」是同一类失效。
+- **词表守卫比的是副本不是权威**。`test_category_multiplier_keys_are_real_categories` 用 `eval/aihot_fit/common.PRIMARY_CATEGORIES`，而生产词表的权威是 `enrich/classification.py` 的 Literal。两处今天相同、无交叉校验；enrich 加第六类时评测侧会滞后，守卫会否决一个合法的新 key。
+
+另：`docs/prd/PRD_v0.md` 对 `weights_json` 的描述（「本次使用的权重」）未随 `category_multipliers` 键的追加更新。PRD 是只读参考档，按其自述以 `architecture.md` 为准，故不改，记于此。

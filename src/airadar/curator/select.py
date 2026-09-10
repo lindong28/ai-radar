@@ -179,8 +179,9 @@ def _calibrate_selected_scores(selected: list[ScoredCandidate]) -> list[ScoredCa
     return calibrated
 
 
-# Per-category ranking multipliers. EMPTY ON PURPOSE -- one set shipped 2026-09-09 and was
-# withdrawn the same day when a proper cross-window check said it made things worse.
+# Per-category ranking multipliers. One entry, `paper`, fitted 2026-09-09 against AIHOT's own
+# published 0-100 score. An earlier set shipped and was withdrawn the same day; that history
+# is kept below because it defines the precondition this fit had to satisfy.
 #
 # The mechanism is kept (candidates carry `primary_category`, and reason_json records the
 # factor) because the characterisation behind it still holds and the next attempt will need
@@ -206,13 +207,191 @@ def _calibrate_selected_scores(selected: list[ScoredCandidate]) -> list[ScoredCa
 # justified shipping was taken over stale category labels, and it inverted once they were
 # recomputed. Any future fit here must re-enrich its windows at one prompt FIRST -- otherwise
 # it is fitting the labelling regime, not the ranking.
-CATEGORY_MULTIPLIERS: dict[str, float] = {}
+#
+# THE 2026-09-09 `paper` FIT, and how it differs from the withdrawn one. Two things changed.
+# The precondition above is met ON THE FITTING SIDE: every label the coefficient was fitted
+# against comes from one enrich stamp (2026-09-08.r2.31b2065e). It is NOT met on the applying
+# side and cannot be -- `_load_candidates` reads whatever the newest clean enrich row says, and
+# 56% of the rows it can reach still carry `2026-05-13.r2`. Measured exposure where it matters,
+# the fresh pool of the last eight windows: 57 of 206 items labelled `paper` (27.7%) carry an
+# older stamp. Their labels are not worse -- `paper` precision against AIHOT's own label is 98%
+# (n=66) on the old stamp against 94% (n=49) on the current one -- so the drift is real but
+# points the harmless way today. Nothing binds this table to an enrich version; the next prompt
+# revision silently changes who gets demoted, with no test and no alert. See
+# docs/issues/aihot-fit-eval.md. And the fitting target is no longer composition TV -- it is
+# per-input agreement with AIHOT's own score, which is a function of the input rather than a
+# marginal proportion. TV was the wrong target twice over: it is measured across two different
+# labellers (ours agrees with AIHOT's on 68.5% of identical items, worth 0.129 TV by itself),
+# and per day it is saturated -- AIHOT's own daily composition sits 0.269 from its own pooled
+# average while pure resampling noise at 5-35 picks/day already produces 0.253.
+#
+# The defect: our scorer puts papers at the 71st percentile of the pool where AIHOT's puts them
+# at the 47th (n=2000 matched items, AIHOT's labels). Papers score high on density (6.30, the
+# highest of any category) and authority (6.91), which carry 0.40 and 0.10 of the weight -- but
+# a digest is news, and a dense authoritative preprint is usually not news.
+#
+# Readings, all 20-seed half/half holdout:
+#   per-input Spearman vs AIHOT's score   0.2977 -> 0.3679   +0.086, 20/20 seeds, t=15.5
+#   pooled page composition over 9 windows, AIHOT's labels on both sides, via
+#   scripts/eval/measure_curated_composition.py:
+#     paper 14.2% -> 12.0% (AIHOT 8.2%), TV 0.176 -> 0.156
+# Corroborated independently by a hand-labelled estimate of the whole page (not just the
+# AIHOT-matched 30% of it): paper ran +14.7pp over AIHOT's share.
+#
+# WHY 0.95 AND NOT THE POOLED OPTIMUM. The per-input curve keeps improving past 0.70 because
+# Spearman over the whole pool rewards pushing a systematically over-scored class to the bottom,
+# and the pooled composition keeps improving to 0.80. Both of those are pooled quantities. The
+# single-page behaviour is not, and it decided this value:
+#
+#   factor   pooled paper / TV      live pool 2026-09-10, papers of 40
+#   1.00     14.2%  0.176           4
+#   0.95     12.0%  0.156           3      <- this. AIHOT's 8.2% is 3.3 of 40.
+#   0.90     11.9%  0.161           2
+#   0.85     10.6%  0.154           1
+#   0.80      9.8%  0.150           0      <- pooled-best, and an empty category on the page
+#
+# 0.80 wins pooled by 0.006 -- and that metric has no stated bandwidth at n=234, so the gap is
+# inside the noise -- while producing a page with no papers at all on the window that happened to
+# be live. 0.95 lands at 3 of 40 against the reference's 3.3. Chosen by the user 2026-09-10 after
+# both readings were on the table.
+#
+# The mechanism behind the single-page cliff, because it is not obvious: 36 of the 40 slots come
+# from `fresh`, which is the newest day's candidates -- about 200 of them -- cut at rank 36.
+# Demoting a class inside that pool moves it past the cut in one step. Papers ranked
+# [3, 18, 24, 25, 34] there before the factor and [31, 72, 86, 87, 97] after it at 0.80.
+#
+# RECONCILING TWO EARLIER NEGATIVES that look like they forbid this. Both were checked, and
+# neither measured this mechanism:
+#   ISSUE-FIT-23 (2026-09-06) fitted offsets for ALL FIVE categories into the composite score and
+#     got +0.0011 (sd 0.0034, 13/20 seeds) -- indistinguishable from zero, and its learned paper
+#     offset was +0.7, i.e. almost nothing. Re-measured here on the current data the five-offset
+#     version reads -0.0135 (sd 0.0514, 12/20): the SAME null. The difference is parameter count,
+#     not disagreement -- five offsets fitted against 121 reference picks overfit, while the
+#     single paper coefficient holds at +0.084 (20/20). FIT-23 never tested a one-parameter form.
+#   ADR-20260907-a1c4's wire-and-withdraw (2026-09-08) replaced the whole score scale with a
+#     category-conditional affine map plus quantile alignment AND moved the admission threshold;
+#     it pushed TV 0.394 -> 0.615. That is a much larger intervention than an ordering factor and
+#     is not evidence about this one. It does stand as a warning that category terms have failed
+#     here before, which is why this entry is one category, applied in one place, with the
+#     detection channel below.
+# Stratifying this fit by enrich stamp does NOT explain the FIT-23 gap: paper demotion helps
+# under both regimes (current stamp +0.0839, old stamp +0.0145, 20/20 seeds each).
+#
+# HOW YOU FIND OUT IF THIS IS WRONG. No existing alert watches page composition, so this is a
+# manual channel with named checks. Owner: whoever deploys this change.
+#
+#   T+1 run (within 15 minutes of deploy -- pipeline.sh runs every 15). This step verifies the
+#   DEPLOY, not the decision. It has no revert criterion, and that is not an oversight:
+#     sqlite3 data/radar.db "SELECT DISTINCT json_extract(reason_json,'\$.category'),
+#       json_extract(reason_json,'\$.category_multiplier') FROM curated_items
+#       WHERE run_id=(SELECT id FROM curation_runs ORDER BY id DESC LIMIT 1)"
+#     Expect paper -> 0.95 and every other category -> 1.0. Anything else means the new code is
+#     not what ran.
+#   TWO SINGLE-RUN CHECKS THAT LOOK RIGHT AND ARE NOT -- both were written into this comment and
+#   both were wrong, so they are recorded rather than deleted:
+#     * "revert if paper = 0 of 40, one run is enough, because a reorder-only factor would leave
+#       ~4". False, and it misfired on its first real run. Reordering alone DOES produce 0 of 40
+#       when the fresh segment is cut deep: 36 of 40 slots come from the newest day's top 36, and
+#       demoting a class inside a ~200-candidate fresh pool moves it past that cut in one step.
+#       Live pool 2026-09-10, papers of 40 by factor: 1.00 -> 4, 0.95 -> 3, 0.90 -> 2, 0.85 -> 1,
+#       0.80 -> 0. Composition on a single page is not evidence about this change.
+#     * "revert if any selected item has raw_weighted_score < 6.5, since the factor cannot reach
+#       the gates". Also false: the fresh segment gates at freshness_floor (4.0), not threshold,
+#       so sub-6.5 selections are ordinary -- the live run returns 16 of them. More fundamentally
+#       there is NO crisp single-run test for a gate leak, because a leak makes items ABSENT and
+#       absence is not visible in the output.
+#   So the revert criterion lives entirely in the pooled step below.
+#
+#   T+24h, and then weekly. The daily AIHOT capture refreshes the reference, so:
+#     uv run python scripts/eval/measure_curated_composition.py
+#     uv run python scripts/eval/measure_curated_composition.py --multiplier paper=1.0
+#     REVERT IF: the first POOLED TV is worse than the second. This is the ONLY revert criterion.
+#     Reproduced 2026-09-10 at 0.156 against 0.176. Both arms must be run back to back -- the
+#     pairing assumes the pool did not change between them, and pipeline.sh writes every 15
+#     minutes (recorded, not enforced; see docs/issues/aihot-fit-eval.md). Read only the POOLED line; that script prints the per-day noise floor
+#     (0.176 on this data -- equal to the no-factor pooled value, which is exactly why per-day
+#     numbers cannot be used here) precisely because the per-day numbers cannot resolve this effect.
+#     LATEST DETECTION: one week. Past that the archive cost below stops being bounded by
+#     anything anyone is watching.
+#
+# WHAT THIS CHANNEL DOES NOT CATCH, stated because it reads like full coverage otherwise: a page
+# with a normal paper count where the WRONG papers were demoted, or where the items promoted into
+# the freed slots are worse. Both need per-item judgement against the reference and there is no
+# instrument for it -- the aihot-fit harness cannot see this factor at all (see
+# docs/issues/aihot-fit-eval.md), so its own verdicts stay green either way.
+# The cost of being wrong is NOT symmetric with the code change: reverting this constant is one
+# line, but `/all` and the curated archive accumulate across runs, and no rollback path un-selects
+# an item that was already archived (`admin curate rollback-quota` covers quotas only). So the
+# real reversal cost is 40 items per run for however many runs it takes to notice -- which is why
+# the first-round check above is part of this decision and not a follow-up.
+#
+# The other four stay at 1.0 deliberately. The largest remaining gap is model (ours 12.0% of the
+# page against AIHOT's 30.2%), but a model multiplier does NOT survive cross-window holdout
+# (+0.010 pooled TV, 9/20 splits better) -- AIHOT's 121 selected items over 9 windows cannot
+# support fitting it. Ranking our own pool purely by our own score already yields 28.3% model,
+# so that gap is in what reaches the ranker, not in the score. Revisit when the daily captures
+# have accumulated roughly 500 selected items.
+CATEGORY_MULTIPLIERS: dict[str, float] = {"paper": 0.95}
+# The enrich ruleset the coefficient above was calibrated against. It is NOT enforced at runtime:
+# `_load_candidates` reads each item's newest clean enrich row whatever its stamp, and on this
+# machine 27.7% of the fresh pool's `paper` labels come from an older one. Filtering by stamp
+# would make the coefficient's coverage lurch during every recompute, which is worse. So the
+# guard is a test instead -- `test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on`
+# goes red when the enrich ruleset moves, which is the moment a human has to decide whether
+# `paper` still means what it meant here. Without it a prompt revision silently changes who gets
+# demoted, and 2026-09-09's withdrawal was caused by exactly that kind of silent label drift.
+CATEGORY_MULTIPLIERS_FITTED_ON_ENRICH = "2026-09-08.r2.31b2065e"
 
 
 def category_multiplier(category: str) -> float:
     """1.0 for anything unlisted, including items with no enrich row yet."""
 
     return CATEGORY_MULTIPLIERS.get(category, 1.0)
+
+
+def ranking_key(candidate: ScoredCandidate) -> tuple[float, str, str]:
+    """Ordering key for curation. The category factor lives HERE and nowhere else.
+
+    Deliberately not folded into ``weighted_score``: that value is read by two absolute gates
+    (``threshold`` and ``freshness_floor``), by dedup, and by the archived ``raw_weighted_score``.
+    Scaling it there would turn a ranking multiplier into a category-specific ADMISSION bar --
+    at 0.80 a paper's effective threshold becomes 8.125 rather than 6.5, which is a different
+    mechanism from the one the coefficient was fitted for, and one measurement said it drops 95
+    papers out of the candidate pool over nine windows. It would also make
+    ``SOURCE_QUOTA_SCORE_SEMANTICS`` ("unadjusted_before_rank_calibration") a false statement.
+
+    Reproduce with `scripts/eval/measure_curated_composition.py` (nine windows, pooled, AIHOT's
+    own labels on both sides). Readings 2026-09-10:
+
+        --multiplier paper=1.0   paper 14.2%   TV 0.176
+        (default, this)          paper 12.0%   TV 0.156
+        --multiplier paper=0.80  paper  9.8%   TV 0.150   (better pooled, but see WHY 0.95)
+        --gate at 0.80           paper  9.8%   TV 0.150   and 219 items dropped from the pool
+
+    The last row is the point: scaling the gates as well produces the SAME page while making 219
+    items ineligible. So this is not a trade of effect for safety -- the ordering-only form is
+    strictly the smaller mechanism at the same outcome. (An earlier version of this comment
+    claimed ordering-only keeps "77% of the improvement", from a scratch script that mismatched
+    the day basis between the two sides and narrowed the tail slots to one day's candidates. That
+    number does not reproduce; the script above is the corrected instrument.)
+
+    WHAT IT DOES CHANGE, in full -- ordering is relative, so "only the order" understates it:
+      * which items are selected, because the limit cuts a reordered list at a different place;
+      * their rank;
+      * their displayed score, which ``_calibrate_selected_scores`` derives linearly FROM the
+        rank -- a demoted paper therefore shows a lower number to readers;
+      * their score badge, since ``app.js`` buckets that displayed number at 80/65.
+    The last two are not uniform across categories, which is the point of the factor but also
+    means the reader-facing score moves for a reason the About page has to state. It does not
+    change ``weighted_score`` itself, so the two absolute gates, dedup, and the archived
+    ``raw_weighted_score`` are all untouched.
+    """
+
+    return (
+        -candidate.weighted_score * category_multiplier(candidate.primary_category),
+        candidate.published_at,
+        candidate.item_id,
+    )
 
 
 def _primary_category(output_json: str | None) -> str:
@@ -262,7 +441,7 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
     for row in rows:
         numeric: dict[str, Any] = json.loads(row[8])
         category = _primary_category(row[9])
-        score = weighted_score(numeric, weights, row[5]) * category_multiplier(category)
+        score = weighted_score(numeric, weights, row[5])
         reason = {
             "scores": numeric,
             "tier": row[5],
@@ -271,9 +450,10 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
             # multiplied, and every consumer of reason_json reads them as a pair.
             "tier_multiplier": tier_multiplier(row[5]) if weights.uses_tier_multiplier else 1.0,
             "category": category,
-            # Recorded for the same reason as tier_multiplier above: reason_json's consumers
-            # read the factor and the score as a pair, so a score that was multiplied must
-            # say by how much.
+            # Unlike tier_multiplier above, this factor is NOT in "weighted_score" -- it is
+            # applied only in the ordering key (see ranking_key). Recorded anyway because a
+            # consumer that reproduces the ordering needs it, and because a run where the table
+            # was empty and one where it was filled would otherwise read alike.
             "category_multiplier": category_multiplier(category),
             "weighted_score": score,
         }
@@ -292,6 +472,29 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
             )
         )
     return candidates
+
+
+def _ranking_record(weights: Weights) -> dict[str, Any]:
+    """What goes into ``curation_runs.weights_json``: the ranking PARAMETERS, not just the weights.
+
+    Deliberately not called "the whole ranking function". It does not pin the tie-breakers in
+    ranking_key, the code version, or -- the one that actually bites -- each candidate's category,
+    which comes from an enrich row that can be rewritten later. Before 2026-09-10 category was
+    not a ranking input at all, so enrich-row identity was irrelevant to reproducing an ordering;
+    it is now, and this record does not close that. See docs/issues/aihot-fit-eval.md.
+
+    ``Weights.as_record()`` is everything needed to reproduce a *score*. Since 2026-09-10 the
+    *ordering* also depends on ``CATEGORY_MULTIPLIERS`` (see ranking_key), which is not part of
+    ``Weights`` and must not be -- it is not a per-dimension weight. Recording it here anyway,
+    because otherwise a stored run no longer says which coefficients produced its ordering, and
+    two runs from either side of a change to that table read alike. That is the same failure the
+    ``SOURCE_QUOTA_SCORE_SEMANTICS`` comment above exists to prevent.
+
+    Purely additive: nothing in this repo parses ``weights_json`` structurally (checked
+    2026-09-10 -- every reference is an INSERT), so the extra key breaks no consumer.
+    """
+
+    return {**weights.as_record(), "category_multipliers": dict(CATEGORY_MULTIPLIERS)}
 
 
 def curate(
@@ -313,7 +516,7 @@ def curate(
 
     candidates = deduplicate_candidates(_load_candidates(conn, selected_weights))
     filtered = [candidate for candidate in candidates if candidate.weighted_score >= selected_threshold]
-    filtered.sort(key=lambda c: (-c.weighted_score, c.published_at, c.item_id))
+    filtered.sort(key=ranking_key)
     cutoff = datetime.now(UTC) - timedelta(hours=freshness_window_hours)
     fresh_pool = [
         candidate
@@ -329,7 +532,7 @@ def curate(
         for candidate in fresh_pool
         if latest_fresh_date and _shanghai_date(candidate.published_at) == latest_fresh_date
     ]
-    fresh.sort(key=lambda c: (-c.weighted_score, c.published_at, c.item_id))
+    fresh.sort(key=ranking_key)
     selected = _fill(fresh, filtered, limit, freshness_quota, source_quota)
     shadow_json: str | None = None
     if source_quota is not None:
@@ -393,7 +596,7 @@ def curate(
         (
             run.id,
             run.ruleset_version,
-            _json(run.weights.as_record()),
+            _json(_ranking_record(run.weights)),
             run.threshold,
             _json(run.input_eval_ids),
             _json(run.output_curated_ids),
