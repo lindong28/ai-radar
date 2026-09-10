@@ -167,6 +167,7 @@
 | [20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md](adr/20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮、过期即「未评估」；401/402 账户层失败升 page 并按来源组给处置 |
 
 | [20260904-d708-fail-pipeline-before-wechat-browser-degradation.md](adr/20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline；W1 复用共享告警状态机，成功态只证明可执行文件路径存在 |
+| [20260910-9e21-pin-the-category-snapshot-with-one-integer.md](adr/20260910-9e21-pin-the-category-snapshot-with-one-integer.md) | 类别快照用一个整数（`enrich_watermark`）固定；不按 enrich 戳收窄类别系数施加面；评测台追加 `selected_auc_ranked` 而不替换既有指标 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

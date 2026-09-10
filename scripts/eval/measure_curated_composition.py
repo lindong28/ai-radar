@@ -15,10 +15,14 @@
 
 **边界，读数之前必须知道三条**：
 
-1. 只覆盖我方精选中**被 AIHOT 也收录过**的那部分（约 30%）。这是一个有偏子集——AIHOT 收录什么
-   本身是它的选择。**整页口径本脚本不覆盖、也没有别的可复现入口**：唯一的整页读数来自人工标注
-   外推（标注者盲测一致率 81.7%，但 tutorial 召回仅 50%、误判去向 paper/industry，故整页 paper
-   估计偏高）。这一条是已知未闭合项，不要把本脚本的 POOLED 读成整页结论。
+1. **覆盖率现在是打印出来的读数，不是写死在这里的一句话。** 每次运行都报「标注/版面」逐窗与
+   合并两档；未达 100% 时 POOLED 是**已标注子集**的构成，不是整页构成——脚本会自己这么说。
+   `--labels` 指向的补充标注补上 AIHOT 未收录的那些条目，覆盖率随标注累积而涨。
+   补充标注**不等于 AIHOT 的标签**：它的标注者逐条记在文件里（当前那一栏是个模型名，
+   不是人），校准读数只在它与 AIHOT 有重叠条目时才产生，脚本会说有没有。
+   （历史订正：这里原先写死「约 30%」。那个数取自**当天的实时页面**——最新的条目 AIHOT 往往
+   还没发布或匹配不上。9 个历史日窗重放实测是 **234/360 = 65.0%**。一个写死的常数会在两种
+   口径上各错一次，所以改成每次现算。）
 2. **逐日构成 TV 饱和于抽样噪声**：AIHOT 自己每天与它自己的合并均值就差 ~0.27，而按当日条数
    （5–35）从合并分布重抽的纯噪声已有 ~0.25。所以只读 `POOLED` 那一行，逐日行仅供查异常。
 3. 两边的**截断深度不同**（我方 40 条/天、AIHOT 十几条），而类别在排序上分布不均，故深度本身就
@@ -29,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import random
 import sqlite3
@@ -47,16 +52,37 @@ from airadar.eval.aihot_fit.build import normalize_url  # noqa: E402
 
 SUBMODULE = REPO / "benchmarks" / "aihot"
 CAPTURES_REF = "origin/captures/daily"
-# AIHOT 的 slug -> 我们这套五类名。映射不是猜的：在 aihot-fit-v1 题集上，五个 slug 对
-# reference.primary_category 各 100% 一致（n=641/304/305/979/512）。
-SLUG_TO_CATEGORY = {
+DEFAULT_LABELS = REPO / "data" / "eval-fit" / "labels" / "page-categories.jsonl"
+
+# AIHOT 的 slug -> **AIHOT 自己的桶名**。这里刻意不再翻译成我方的五类名。
+#
+# 此前这张表把 `tip` 写成 `tutorial`，并声称「在题集上五个 slug 对 reference.primary_category
+# 各 100% 一致」。那个校准是**循环的**：题集的 `reference.primary_category` 本来就是从同一个
+# slug 派生的，所以它只证明了 slug->名字这一步没写错，证明不了 AIHOT 的 `tip` 与我方
+# `tutorial` 指同一件事。2026-09-10 实测它们不指同一件事（n=1491 双标注）：
+#
+#   P(我方标签 | AIHOT=tip)：industry 43.2% · 无标签 23.2% · tutorial 20.9% · product 6.3% · model 6.2%
+#   形态：AIHOT `tip` 桶 71.0% 是 X 形态、正文中位 297 字；AIHOT `industry` 桶 40.1% / 467 字
+#   争议条目（我方 industry / AIHOT tip）65.9% 是 X 形态，双方一致的 industry 只有 32.9%
+#
+# 即 AIHOT 的 `tip` 是**短文/观点/吐槽的残余桶**，不是 how-to 教程。翻译成 `tutorial` 会让
+# 「我方标签 vs AIHOT 标签」的任何比较凭空多出一个 +24.7pp 的 industry 差。
+#
+# 注意这条只作用于**跨标注器**的比较：本脚本的 TV 两侧都用 AIHOT 标签，桶名是双射改名，
+# 故历史 TV 读数（含 CATEGORY_MULTIPLIERS 的拟合依据）**不受影响**。
+#
+# 生产侧 `classification.PRIMARY_CATEGORY_SLUGS` 把我方 `tutorial` 的 URL slug 也写作 `tip`。
+# 那是**用户可见的 URL**，不在本脚本的射程内，不要顺手改。
+SLUG_TO_BUCKET = {
     "ai-products": "product",
     "paper": "paper",
     "ai-models": "model",
-    "tip": "tutorial",
+    "tip": "tip",
     "industry": "industry",
 }
-CATEGORIES = ("tutorial", "model", "product", "industry", "paper")
+CATEGORIES = ("tip", "model", "product", "industry", "paper")
+# 补充标注必须用上面这套 AIHOT 桶名（标注者在模仿 AIHOT 的划分，不是在用我方分类器的词表）。
+LABEL_VOCABULARY = "aihot-bucket-v1"
 
 
 def _git(*args: str) -> bytes:
@@ -111,13 +137,82 @@ def load_aihot() -> dict[str, dict]:
                     continue
                 items[row["id"]] = {
                     "url": (row.get("links") or {}).get("original") or "",
-                    "category": SLUG_TO_CATEGORY.get(row.get("category")),
+                    "category": SLUG_TO_BUCKET.get(row.get("category")),
                     "selected": bool(row.get("selected")),
                     # 上海日，与我方 `sel._shanghai_date` 同一口径。直接截 publishedAt[:10]
                     # 是 UTC 日，两侧会在 UTC 16:00 之后错开一天。
                     "published": sel._shanghai_date(row.get("publishedAt") or ""),
                 }
     return items
+
+
+def load_extra_labels(path: Path) -> tuple[dict[str, str], dict]:
+    """读补充标注，并连同它的内容身份一起返回。
+
+    **不要把它叫「人评标注」。** 每条自带 `labeller`，而目前那一栏写的是一个模型名。标注者是
+    人还是模型会改变读者对这批标签的信任度，所以身份逐条存、并原样打印出来——把模型标的东西
+    印成「人评」，是一次关于证据来源的假陈述。
+
+    身份不是装饰：标注文件会随时间增长，同一条命令在两个时刻会读到不同的标注集，而两次输出
+    在别的字段上一模一样。sha256 + 条数是唯一能把两份读数区分开的东西。
+
+    每行一条：{"item_id","category","labeller","labelled_at","vocabulary"}。
+    `category` 与 `vocabulary` **逐条校验**：报告里那个词表名此前是无条件打印的常量，于是一份
+    用错词表的文件会被原样接收、身份栏却仍显示正确词表。三类坏行分开计数（词表不符 / 桶名不在
+    词表 / 解析失败），因为「标了但写错」与「没标」必须读得出区别。
+    """
+
+    empty = {"path": str(path), "present": False, "n": 0, "sha256": None}
+    if str(path) in ("off", "OFF", "none", ""):
+        # 显式关闭。没有这条出路时，唯一的关法是传一个不存在的路径（而 `--labels ""` 会走到
+        # `Path(".")`，`exists()` 为真、`read_bytes()` 抛 IsADirectoryError 裸 traceback）。
+        # 于是「只用 AIHOT 标签」这个历史口径从入口不可达，而拟合依据正是那个口径。
+        return {}, {**empty, "path": "off（显式关闭，只用 AIHOT 标签）"}
+    if not path.exists():
+        return {}, empty
+    if path.is_dir():
+        raise SystemExit(f"--labels 指向的是一个目录，不是文件: {path}（要关闭请传 `off`）")
+    raw = path.read_bytes()
+    labels: dict[str, str] = {}
+    bad = {"unparsable": 0, "wrong_vocabulary": 0, "unknown_bucket": 0}
+    duplicates = conflicting = 0
+    labellers: Counter = Counter()
+    for line in raw.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            record = json.loads(line)
+            item_id, bucket = str(record["item_id"]), record["category"]
+        except (ValueError, KeyError, TypeError):
+            bad["unparsable"] += 1
+            continue
+        if record.get("vocabulary") != LABEL_VOCABULARY:
+            bad["wrong_vocabulary"] += 1
+            continue
+        if bucket not in CATEGORIES:
+            bad["unknown_bucket"] += 1
+            continue
+        if item_id in labels:
+            # 同一条目出现两次是正常的（它可能同时出现在两个日窗的版面上），静默折叠也没错。
+            # 但**取值不同**的两行是标注冲突，静默按文件顺序覆盖会把它藏起来。
+            duplicates += 1
+            if labels[item_id] != bucket:
+                conflicting += 1
+        labels[item_id] = bucket
+        labellers[str(record.get("labeller") or "(未注明)")] += 1
+    return labels, {
+        "path": str(path),
+        "present": True,
+        "n": len(labels),
+        "lines_accepted": sum(labellers.values()),
+        "duplicates": duplicates,
+        "conflicting": conflicting,
+        "rejected": bad,
+        "sha256": hashlib.sha256(raw).hexdigest()[:16],
+        "vocabulary": LABEL_VOCABULARY,
+        "labellers": dict(labellers),
+    }
 
 
 def total_variation(left: Counter, right: Counter) -> float | None:
@@ -160,6 +255,14 @@ def main() -> None:
         "默认只进排序键，与生产一致。",
     )
     parser.add_argument(
+        "--labels",
+        default=str(DEFAULT_LABELS),
+        help="补充标注文件（JSONL）。补上 AIHOT 未收录条目的类别，把读数从 AIHOT 匹配子集"
+        "推向整页。冲突时 AIHOT 的标签权威，补充标注只填空缺。"
+        "传 `off` 只用 AIHOT 标签——**复现 2026-09-10 之前的历史读数（含 CATEGORY_MULTIPLIERS "
+        "的拟合依据）必须用它**，因为本参数默认是开的。",
+    )
+    parser.add_argument(
         "--depth",
         choices=("ours", "aihot"),
         default="ours",
@@ -173,6 +276,7 @@ def main() -> None:
         overrides[name] = float(factor)
 
     aihot = load_aihot()
+    hand, hand_identity = load_extra_labels(Path(args.labels))
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     conn.execute("PRAGMA busy_timeout=60000")
 
@@ -190,6 +294,15 @@ def main() -> None:
             our_id = index.get(normalize_url(record["url"])[0])
             if our_id:
                 labels[our_id] = record["category"]
+    # 权威规则：AIHOT 自己发布的标签胜出，补充标注只填 AIHOT 没有的那些条目。参照物的划分就是
+    # 定义，标注者是在模仿它——让人评覆盖它等于用摹本改原件。
+    # 两者都有的条目不合并，但要数出来：那是这个标注者的校准读数。
+    # **注意它不会自己长出来**：若标注只覆盖 AIHOT 缺失的条目，重叠恒为零、这条通道饿死。
+    # 要有校准就得**刻意留一批与 AIHOT 重叠的条目**去标，见 docs/issues/aihot-fit-eval.md。
+    hand_only = {k: v for k, v in hand.items() if k not in labels}
+    overlap = [(k, hand[k], labels[k]) for k in hand if k in labels]
+    hand_agree = sum(1 for _, mine, theirs in overlap if mine == theirs)
+    labels.update(hand_only)
 
     candidates = sel.deduplicate_candidates(sel._load_candidates(conn, DEFAULT_WEIGHTS))
     all_eligible: list = []  # 见下方 gate_score 定义之后填充
@@ -229,6 +342,30 @@ def main() -> None:
     )
 
     all_eligible.extend(c for c in candidates if gate_score(c) >= sel.DEFAULT_THRESHOLD)
+    if hand_identity["present"]:
+        rejected = hand_identity["rejected"]
+        print(
+            f"补充标注: {hand_identity['path']}\n"
+            f"          n={hand_identity['n']} sha={hand_identity['sha256']} "
+            f"词表={hand_identity['vocabulary']} "
+            f"标注者={hand_identity['labellers']}\n"
+            f"          丢弃: 解析失败 {rejected['unparsable']} · 词表不符 {rejected['wrong_vocabulary']} "
+            f"· 桶名不在词表 {rejected['unknown_bucket']}"
+            f"   重复 {hand_identity['duplicates']}（其中取值冲突 {hand_identity['conflicting']}）\n"
+            f"          与 AIHOT 重叠 {len(overlap)} 条"
+            + (
+                f"、一致 {hand_agree} 条（{100 * hand_agree / len(overlap):.1f}%）<- 标注者校准读数"
+                if overlap
+                else "  <- 零重叠，本次没有标注者校准读数；下面 POOLED 里由补充标注贡献的那部分未经校准"
+            )
+            + f"   仅补充标注贡献 {len(hand_only)} 条"
+        )
+    else:
+        print(
+            f"补充标注: {hand_identity['path']}"
+            + ("" if hand_identity["path"].startswith("off") else "  （文件不存在）")
+            + "  -> 本次只用 AIHOT 标签"
+        )
     print(
         f"覆盖的系数: {overrides or '（无）'}   施加面: "
         f"{'排序键+两道闸（被否决的实现）' if args.gate else '仅排序键（生产）'}   "
@@ -236,9 +373,10 @@ def main() -> None:
     )
     if args.gate:
         print(f"因系数跌破 threshold 而整个掉出候选池的条目: {dropped_by_gate}")
-    print(f"{'日期':12}{'候选':>7}{'带AIHOT标签':>12}{'我方':>26}{'AIHOT':>26}{'TV':>8}")
+    print(f"{'日期':12}{'候选':>7}{'覆盖(标注/版面)':>17}{'我方':>26}{'AIHOT':>26}{'TV':>8}")
     ours_pooled, reference_pooled = Counter(), Counter()
     day_sizes = []
+    page_slots = labelled_slots = 0
     for day in days:
         pool = by_day[day]
         # 与生产同形：`fresh` 只取被重放那一天（生产取「最新 fresh 日」），而尾部槽位的
@@ -261,8 +399,11 @@ def main() -> None:
             for c in CATEGORIES
         )
         labelled = sum(1 for c in picked if c.item_id in labels)
+        page_slots += len(picked)
+        labelled_slots += labelled
+        coverage = f"{labelled}/{len(picked)} {100 * labelled / max(len(picked), 1):.0f}%"
         print(
-            f"{day:12}{len(pool):7d}{labelled:12d}  {share(mine):24}  {share(reference_by_day[day]):24}"
+            f"{day:12}{len(pool):7d}{coverage:>17}  {share(mine):24}  {share(reference_by_day[day]):24}"
             f"{'  n<8' if value is None else f'{value:8.3f}'}"
         )
     pooled = total_variation(ours_pooled, reference_pooled)
@@ -274,7 +415,21 @@ def main() -> None:
         f"{'AIHOT':12}{'':7}{sum(reference_pooled.values()):12d}  "
         f"{' '.join(f'{c[:4]}={100 * reference_pooled[c] / max(sum(reference_pooled.values()), 1):.1f}%' for c in CATEGORIES)}"
     )
-    print(f"\n>>> POOLED TV = {pooled:.3f}   <- 唯一该读的那个数")
+    coverage_pct = 100 * labelled_slots / max(page_slots, 1)
+    print(
+        f"\n>>> 标注覆盖率 = {labelled_slots}/{page_slots} = {coverage_pct:.1f}% 的版面格位"
+        + (
+            "   <- 100% 的格位都有标签"
+            + (
+                "，但其中有补充标注贡献的部分，故 POOLED 是**跨标注器**构成"
+                if hand_only
+                else "，且全部来自 AIHOT，故 POOLED 就是整页构成"
+            )
+            if labelled_slots == page_slots
+            else "   <- 未达 100%，下面的 POOLED 是**已标注子集**的构成，不是整页构成"
+        )
+    )
+    print(f">>> POOLED TV = {pooled:.3f}   <- 唯一该读的那个数")
     print(f"    逐日 TV 的噪声底（同分布重抽）= {sampling_noise(reference_pooled, day_sizes):.3f}")
     print("    逐日 TV 低于噪声底即无信息量；只用它查异常，不用它判改进。")
 

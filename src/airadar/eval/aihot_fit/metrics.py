@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ...curator import select as curator_select
+from ...curator.select import category_multiplier
 from ...enrich.normalizers.production_enrich_provider_output_v2 import (
     AIHOT_TO_RADAR_TAG_MAP,
     is_in_v2_vocabulary,
@@ -370,6 +372,73 @@ def selected_auc(rows: Sequence[Joined]) -> Metric:
     )
 
 
+def ranking_score(row: Joined) -> float | None:
+    """The number production actually ORDERS by, not the one it stores.
+
+    Since 2026-09-10 (ADR-20260910-3f8b) `select.ranking_key` multiplies `weighted_score` by
+    `CATEGORY_MULTIPLIERS[primary_category]`. `weighted_score` itself is deliberately left
+    unscaled, so every metric here that ranked on it stopped describing production's ordering
+    that day. This derives the ordering score instead of storing it, for two reasons: the score
+    stage runs BEFORE enrich, so the category is not known when the score record is written; and
+    deriving it means every archived run can be recomputed without spending an LLM call.
+
+    Missing enrich is factor 1.0, NOT exclusion, because that is what production does: an item
+    scored but not yet enriched reaches `_load_candidates` with `category == ""` and
+    `category_multiplier("")` returns 1.0. Excluding those rows instead was measured on FULL3 and
+    is a different metric, not a cleaner one: n drops 2741 -> 2624 and AUC reads 0.7879 rather
+    than 0.7929. Whichever way this goes it must match production, so it is pinned here rather
+    than left to the caller.
+    """
+
+    if row.weighted_score is None:
+        return None
+    category = (row.enrich or {}).get("primary_category")
+    return float(row.weighted_score) * category_multiplier(category if isinstance(category, str) else "")
+
+
+def selected_auc_ranked(rows: Sequence[Joined]) -> Metric:
+    """`selected_auc` computed on the ordering score. Additive: the original stays.
+
+    Not a replacement, because ADR-20260906-7c31 used `selected_auc` as the "did the reselection
+    hurt?" reading (0.7907 -> 0.7878) and `thresholds.json` records its baselines; redefining the
+    name in place would make runs from either side of 2026-09-10 read alike while measuring
+    different things. Same reason `run.py` keeps both `weighted_score` and `fit_score`.
+
+    Only AUC gets a ranked twin. A `selected_p_at_k_ranked` was built and dropped: on FULL3 it
+    reads 0.2692 both with and without the coefficient, while merely changing the intra-day
+    tie-breaker moves it 0.2727 -> 0.2597. Tie-break noise larger than the whole signal is a
+    sentinel that cannot fire, which is the defect the decision gate's criterion 3 names. AUC is
+    immune -- it scores ties at 0.5 rather than ordering them.
+    """
+
+    pairs = [
+        (score, bool(row.reference.get("selected")))
+        for row in rows
+        if (score := ranking_score(row)) is not None
+    ]
+    return Metric(
+        name="selected_auc_ranked",
+        n=len(pairs),
+        value=auc(pairs),
+        ci95=bootstrap_ci(pairs, auc),
+        baseline={"kind": "random_ranking", "value": 0.5},
+        extra={
+            "positives": sum(1 for _, selected in pairs if selected),
+            "ordering": "weighted_score * CATEGORY_MULTIPLIERS[primary_category]",
+            "category_multipliers": dict(curator_select.CATEGORY_MULTIPLIERS),
+            # Deliberately not "as production does". It matches production for an item never
+            # enriched (`category == ""` -> 1.0). It does NOT for an item whose enrich FAILED in
+            # this run: `_stage_output` returns None on an error record, so this gives 1.0, while
+            # production's subquery filters `error IS NULL` and falls back to the previous
+            # SUCCESSFUL row, which may well be `paper` at 0.95. A single-shot eval has no
+            # previous row to fall back to, so 1.0 is the only available choice -- the point is
+            # that the archived record must not claim equivalence it does not have.
+            "missing_enrich": "factor 1.0; also applied to rows whose enrich errored, where "
+            "production would instead fall back to the previous successful row",
+        },
+    )
+
+
 def _utc_day(value: Any) -> str | None:
     if not value:
         return None
@@ -509,6 +578,7 @@ def compute_all(rows: Sequence[Joined]) -> dict[str, Metric]:
         tag_jaccard_mean(rows),
         score_spearman(rows),
         selected_auc(rows),
+        selected_auc_ranked(rows),
         selected_p_at_k(rows),
         closeness_mean(rows, "summary"),
         bigram_jaccard(rows, "summary"),
@@ -595,6 +665,22 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
             "reason": "judge identity differs",
             "current": current_judge,
             "baseline": baseline_judge,
+        }
+    # `selected_auc_ranked` is derived at compute time from CATEGORY_MULTIPLIERS, so the same
+    # archived outputs yield a different value after that table changes. Without this gate the
+    # report presents a pure configuration change as an effect: a baseline stored under
+    # {"paper": 0.95} against a recompute under {} reads as 0.7929 -> 0.7907 with an `improved`
+    # verdict attached. The judge-identity check three lines up exists for exactly this shape;
+    # this is the ranking half of it. Reported by an adversarial reviewer, who noted the
+    # `ranking` block was being written where neither this function nor the report ever read it.
+    current_ranking = (current.get("ranking") or {}).get("category_multipliers")
+    baseline_ranking = (baseline.get("ranking") or {}).get("category_multipliers")
+    if current_ranking != baseline_ranking:
+        return {
+            "comparable": False,
+            "reason": "ranking category_multipliers differ",
+            "current": current_ranking,
+            "baseline": baseline_ranking,
         }
     deltas: dict[str, Any] = {}
     for name, metric in current["metrics"].items():
@@ -752,6 +838,19 @@ def compute_metrics(
         "stages": (run_meta.get("identity") or {}).get("stages"),
         "n_questions_run": run_meta.get("n"),
         "n_joined": len(rows),
+        # Part of this file's OWN identity, not the run's. `identity` below is copied from
+        # run.json and describes what produced the stored outputs; `selected_auc_ranked` is
+        # derived here from the CATEGORY_MULTIPLIERS table live at compute time, so the same
+        # archived run recomputed after that table changes yields a different number. Without
+        # this key the two metrics.json would be byte-identical in every identity field and
+        # differ only in the metric value, which reads as a measurement change rather than a
+        # configuration change.
+        "ranking": {
+            "category_multipliers": dict(curator_select.CATEGORY_MULTIPLIERS),
+            "applied_in": "ordering only (select.ranking_key); weighted_score is left unscaled",
+            "missing_enrich": "factor 1.0 (also for rows whose enrich errored; see "
+            "selected_auc_ranked.missing_enrich)",
+        },
         "bootstrap": {"rounds": BOOTSTRAP_ROUNDS, "seed": BOOTSTRAP_SEED, "level": 0.95},
         "identity": run_meta.get("identity"),
         "judge": None
@@ -804,6 +903,15 @@ def render_report(
     lines = [f"# aihot-fit report — run `{payload['run_id']}`", ""]
     lines += ["## 身份", ""]
     lines += [f"- git HEAD: `{git.get('head')}` dirty={git.get('dirty')}"]
+    # The ranking coefficients belong in the human-readable identity block, not only in
+    # metrics.json. `selected_auc_ranked` is derived from them at compute time, so two reports
+    # across a coefficient change otherwise differ only in a metric value -- which reads as a
+    # measurement change. Reported by an adversarial reviewer.
+    ranking = payload.get("ranking") or {}
+    lines += [
+        f"- 排序系数: `{ranking.get('category_multipliers')}`"
+        f"（施加面: {ranking.get('applied_in') or 'n/a'}）"
+    ]
     lines += [
         f"- 题集 sha256: `{payload['questions_sha256']}`；run n={payload['n_questions_run']}（joined {payload['n_joined']}）"
     ]

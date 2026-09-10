@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from airadar import cli
+from airadar.curator import select as select_module
 from airadar.curator.dedup import deduplicate_candidates
 from airadar.curator.score import ScoredCandidate, weighted_score
 from airadar.curator.select import (
@@ -715,6 +716,10 @@ def test_run_record_carries_the_category_multipliers_that_produced_its_ordering(
     comment about the retired tier multiplier.
     """
     conn = _setup_curator_db(tmp_path, count=3)
+    # The fixture scores items but never enriches them, so without this the watermark is
+    # legitimately None and says nothing about whether it tracks enrich rows at all.
+    _insert_enrich_row(conn, "item-00")
+    conn.commit()
 
     run = curate(conn, ruleset_version="test.r1", weights=Weights.default(), source_quota=None)
 
@@ -725,6 +730,41 @@ def test_run_record_carries_the_category_multipliers_that_produced_its_ordering(
     assert stored["category_multipliers"] == CATEGORY_MULTIPLIERS
     # The weight vector itself must still be readable from the same record.
     assert stored["significance"] == pytest.approx(Weights.default().significance)
+
+    # Tie-breakers carry a DIRECTION, not just field names. ranking_key sorts ascending on a
+    # tuple whose first element is negated, so score descends while the other two ascend; a bare
+    # field list replays the ordering backwards on ties and reads perfectly correct doing it.
+    assert stored["ranking_tiebreakers"] == [
+        {"field": "weighted_score_x_category_multiplier", "direction": "desc"},
+        {"field": "published_at", "direction": "asc"},
+        {"field": "item_id", "direction": "asc"},
+    ]
+
+    # The category snapshot, as one integer. It has to be a real upper bound on the enrich rows
+    # this run could have read -- a watermark taken after the load, or left null, names a
+    # different set of categories than the ones that ordered the page, and the replay would come
+    # back subtly different with nothing to indicate why.
+    # With no concurrent writer the largest enrich row read IS the largest in the table. This
+    # equality is therefore necessary but NOT sufficient -- it holds for a `SELECT MAX(id)` taken
+    # at any point in a single-threaded fixture, which is exactly why the concurrency test below
+    # exists. An adversarial reviewer showed that this assert alone left the original (wrong)
+    # implementation green.
+    live_max = conn.execute(
+        "SELECT MAX(id) FROM item_evaluations WHERE stage='enrich' AND error IS NULL"
+    ).fetchone()[0]
+    assert stored["enrich_watermark"] == live_max
+
+    # And it must actually move when the table grows, otherwise a constant would satisfy the
+    # assert above on a database that never changes.
+    # Has to be an item that is actually a candidate: the watermark is the max enrich id this
+    # load READ, so a row for some unrelated item_id is correctly ignored.
+    _insert_enrich_row(conn, "item-00")
+    conn.commit()
+    second = curate(conn, ruleset_version="test.r1", weights=Weights.default(), source_quota=None)
+    stored_second = json.loads(
+        conn.execute("SELECT weights_json FROM curation_runs WHERE id=?", (second.id,)).fetchone()[0]
+    )
+    assert stored_second["enrich_watermark"] > stored["enrich_watermark"]
 
 
 def test_paper_multiplier_reorders_the_fresh_segment_too(tmp_path: Path) -> None:
@@ -825,3 +865,65 @@ def test_primary_category_reads_enrich_output_and_never_raises() -> None:
     assert _primary_category(_json.dumps({"other": "field"})) == ""
     assert _primary_category(_json.dumps({"primary_category": None})) == ""
     assert _primary_category(_json.dumps({"primary_category": 7})) == ""
+
+
+def _insert_enrich_row(conn: sqlite3.Connection, item_id: str, category: str = "paper") -> int:
+    conn.execute(
+        "INSERT INTO item_evaluations (item_id, stage, ruleset_version, model_id, input_json,"
+        " output_json, numeric_json, latency_ms, cost_usd, evaluated_at, error)"
+        " VALUES (?, 'enrich', 'test.r1', 'fake', '{}', ?, '{}', 1, 0, '2026-09-10T00:00:00Z', NULL)",
+        (item_id, json.dumps({"primary_category": category})),
+    )
+    return int(conn.execute("SELECT MAX(id) FROM item_evaluations").fetchone()[0])
+
+
+def test_enrich_watermark_covers_rows_that_appear_while_candidates_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The watermark must cover every enrich row the load actually read -- including one that
+    lands mid-load.
+
+    This is the only test on this axis that can fail. The equality assert in the test above is
+    satisfied by a `SELECT MAX(id)` taken at ANY point, because nothing writes to
+    `item_evaluations` during a single-threaded `curate`; measured, `(MAX before, MAX after)` was
+    identical on every call. So the first implementation -- a separate `SELECT MAX(id)` before
+    the load -- passed while being wrong in the direction that matters: a row committed between
+    the two queries is visible to the load but excluded from the watermark, and replaying at
+    `id <= watermark` then reads the item's PREVIOUS category and orders it differently.
+
+    Simulating that here by writing from a second connection inside `_load_candidates`, which is
+    what enrich does in production (it is a separate pipeline stage against the same file).
+    """
+    conn = _setup_curator_db(tmp_path, count=3)
+    real_load = select_module._load_candidates
+    intruder = sqlite3.connect(str(tmp_path / "radar.db"))
+    injected: list[int] = []
+
+    after: list[int] = []
+
+    def load_with_a_concurrent_enrich_commit(connection, weights):  # type: ignore[no-untyped-def]
+        # Lands BEFORE the load's own SELECT -> the load reads it -> must be covered.
+        injected.append(_insert_enrich_row(intruder, "item-00", "paper"))
+        intruder.commit()
+        result = real_load(connection, weights)
+        # Lands AFTER -> the load never saw it -> must NOT be covered. Without this half the
+        # test is one-sided: moving the query to after the load also satisfies ">= injected",
+        # and that placement is wrong the other way -- a replay would read a category newer
+        # than the one this ordering used. Verified: this assert is what turns that mutation red.
+        after.append(_insert_enrich_row(intruder, "item-01", "model"))
+        intruder.commit()
+        return result
+
+    monkeypatch.setattr(select_module, "_load_candidates", load_with_a_concurrent_enrich_commit)
+    run = curate(conn, ruleset_version="test.r1", weights=Weights.default(), source_quota=None)
+    intruder.close()
+
+    stored = json.loads(
+        conn.execute("SELECT weights_json FROM curation_runs WHERE id=?", (run.id,)).fetchone()[0]
+    )
+    assert injected, "the fixture did not actually inject a row"
+    # The row landed before the load's own SELECT, so the load read it. The watermark has to
+    # reach it; a pre-load `SELECT MAX(id)` stops one short and this assert is what catches that.
+    assert stored["enrich_watermark"] is not None
+    assert stored["enrich_watermark"] >= injected[-1]
+    assert after and stored["enrich_watermark"] < after[-1]

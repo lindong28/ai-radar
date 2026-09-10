@@ -608,19 +608,33 @@ reviewer 复算了 diff 与文档里的全部读数（0.4502 / 0.6286 / 0.5925 /
 
 未修：改它要同时定「分层之后报哪一层」这个口径问题（当前世代？全部世代并列？），属独立工作单元。**在它被改之前，读它的输出要自己先查一遍世代分布。**
 
-### 排序期类别系数上线后，评测台量的已经不是生产排序（2026-09-10，未修）
+### 排序期类别系数上线后，评测台量的已经不是生产排序（2026-09-10 提出，**同日已修**）
 
 `src/airadar/eval/aihot_fit/run.py:196` 写 `record["weighted_score"] = weighted_score(numeric, DEFAULT_WEIGHTS, tier)`，**不施加 `select.CATEGORY_MULTIPLIERS`**。`metrics.py` 的 `selected_auc`、`day_buckets` / `pooled_precision`、`score_spearman` 全部读这个字段，`thresholds.json` 的达标判定建在其上。
 
 这份双重计算在乘数表为空时**按构造恒等**，因而一直不可达；2026-09-10 填入 `{"paper": 0.80}` 让它可达了。此后评测台报的是**生产已经不再使用的那个排序**——有人把系数调坏、跑一次 aihot-fit 回归，各项读数会与上一轮逐字相同、`threshold_verdicts` 全绿、体系宣布无变化。
 
-**边界**：生产的 `weighted_score` 字段本身仍不含类别因子（系数只进 `select.ranking_key`），所以评测台与生产在**分值**上仍一致；分叉只在**次序与选中**上。修法是让 eval 侧共用 `select.ranking_key`，属独立工作单元。由 review-gate 的对抗评审报出（M3）。
+**边界**：生产的 `weighted_score` 字段本身仍不含类别因子（系数只进 `select.ranking_key`），所以评测台与生产在**分值**上仍一致；分叉只在**次序与选中**上。由 review-gate 的对抗评审报出（M3）。
 
-### 没有任何东西把 `CATEGORY_MULTIPLIERS` 绑到某个 enrich ruleset（2026-09-10，未修）
+**已修（[ADR-20260910-9e21](../adr/20260910-9e21-pin-the-category-snapshot-with-one-integer.md) §三）**：`metrics.py` 新增 `ranking_score()` 与 `selected_auc_ranked`，**追加而不替换**既有指标——ADR-7c31 拿 `selected_auc` 当过「精选有没有被伤到」的读数，改名换义会让 2026-09-10 两侧的 run 读起来一样却量的是两回事。在 metrics 层派生而非 run.py 落盘时算，故**全部历史 run 无需重跑 LLM 即可重算**。`FULL3-20260906` 上：系数表为空时 0.7907（与既有指标逐位相同，阴性对照）、`paper=0.95` → 0.7929、`paper=0.50` → 0.7878。
+
+**`selected_p_at_k_ranked` 建了又撤**：同一个真实 run 上它在有无系数时都读 0.2692，而仅仅换掉日内 tie-breaker 就让它从 0.2727 变到 0.2597 —— **tie-break 噪声大于全部信号的哨兵不会开火**。AUC 对并列记 0.5，不受此影响。
+
+**仍未闭合**：`selected_auc_ranked` 在 metrics 层读**当时**的系数表，故同一份归档 run 在系数变化后重算会得到不同数值。已在 `metrics.json` 顶层加 `ranking` 块记录该表，但**没有**让 `compare_to_baseline` 据它判不可比。
+
+### 没有任何东西把 `CATEGORY_MULTIPLIERS` 绑到某个 enrich ruleset（2026-09-10 提出，**同日结清**）
 
 系数是对**单一 enrich 戳**（`2026-09-08.r2.31b2065e`）的标签拟合出来的，但 `_load_candidates` 读的是"最新成功 enrich 行"，不按戳过滤。本地库里它能读到的带类别行有 **56% 仍挂 `2026-05-13.r2`**（四个月前）。实测暴露面（最近 8 个日窗的 fresh pool）：标为 `paper` 的 206 条里 **57 条（27.7%）挂旧戳**；两种戳下 `paper` 的精确率是旧戳 98%（n=66）对当前戳 94%（n=49），**方向无害**，但这是当下的巧合而不是保障。
 
-下一次 enrich prompt 改版会改变谁被降级。**已加一道测试型守卫**：常量 `CATEGORY_MULTIPLIERS_FITTED_ON_ENRICH` 记下标定所用的戳，`test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on` 在 `current_version_v2()` 变动时转红，强制有人回来判「paper 在新标签下还是不是这个意思」。**仍未闭合的是运行期**：`ranking_key` 对所有戳无条件施加，未按戳收窄覆盖面——刻意如此，按戳过滤会让系数覆盖面在每次重算期剧烈波动。由 review-gate 的对抗评审报出（M2），decision-review 判该守卫「足以充当未来变更的 tripwire，但不闭合当前混合戳的施加范围」。
+下一次 enrich prompt 改版会改变谁被降级。**已加一道测试型守卫**：常量 `CATEGORY_MULTIPLIERS_FITTED_ON_ENRICH` 记下标定所用的戳，`test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on` 在 `current_version_v2()` 变动时转红，强制有人回来判「paper 在新标签下还是不是这个意思」。**运行期这一半已结清（[ADR-20260910-9e21](../adr/20260910-9e21-pin-the-category-snapshot-with-one-integer.md) §一/§二，用户 2026-09-10 裁决）**：
+
+**不收窄**，并且这次有了读数而不只是「刻意如此」。按戳分层量 `paper` 的稳定性：旧戳 `2026-05-13.r2` 精确率 **98.5%**（n=65）/ 召回 71.1%（n=90），拟合口径戳 **94.1%**（n=51）/ 63.2%（n=76）——**旧戳反而更准**。收窄会让候选池 244 条过阈值 `paper` 里的 **141 条（57.8%）不再被修正**，9 个日窗回放里也只改变 5/360 个版面格位（今天的页面是 0）。⇒ 收窄的收益是负的。
+
+**改为把类别来源变成可审计的记录**：`enrich_watermark` = 载入候选**之前**取的 `MAX(item_evaluations.id)`，一个整数。复放 = 对每条目取 `id <= watermark` 的最新成功 enrich 行。够用的依据是 `item_evaluations` 运行期只增不改（全仓唯一的 UPDATE/DELETE 是两个一次性 migration）；实测按当前水位线复放与生产 `_load_candidates` 逐条 **0 处不一致**（n=23604）。它在 **626 条（2.7%）类别真的变过**的条目上做实事。
+
+**作用域**：那组精确率读数**只覆盖 `paper`**，也只覆盖「AIHOT 收录 ∩ 我方候选」的 1491 条。将来给别的类别加系数（尤其 industry / tip，跨标注器极不稳）时本结论**不自动延续**。
+
+**代价写明**：只增不改是**约定，没有数据库约束兜着**。将来有人加运行期 UPDATE 会让所有已存水位线静默失效，且没有任何东西会发现。
 
 ### 类别系数在两处边界上可达但今日未触发（2026-09-10，记账不修）
 
@@ -640,3 +654,123 @@ reviewer 复算了 diff 与文档里的全部读数（0.4502 / 0.6286 / 0.5925 /
 - **词表守卫比的是副本不是权威**。`test_category_multiplier_keys_are_real_categories` 用 `eval/aihot_fit/common.PRIMARY_CATEGORIES`，而生产词表的权威是 `enrich/classification.py` 的 Literal。两处今天相同、无交叉校验；enrich 加第六类时评测侧会滞后，守卫会否决一个合法的新 key。
 
 另：`docs/prd/PRD_v0.md` 对 `weights_json` 的描述（「本次使用的权重」）未随 `category_multipliers` 键的追加更新。PRD 是只读参考档，按其自述以 `architecture.md` 为准，故不改，记于此。
+
+### industry 超配的第一刀：那个 +8.5pp 里有一半是我自己的量具造出来的（2026-09-10）
+
+用户 2026-09-10 要求「industry 超配那条别整条搁置——拟合要等约 40 天数据，但归因分析和部分推进不用等」，
+并指定第一刀切哪儿由 agent 自己判。**切在了「先验证这个量本身」上**，而不是切在修它上。理由：要修的那个数
+（industry +8.5pp）从来没被单独验证过，而验证它比拟合它便宜三个数量级。
+
+**结论：`tip → tutorial` 这个映射是错的，而 industry 超配的量因此被放大了约一倍。**
+
+#### 读数（双标注 n=1491，我方候选池 ∩ AIHOT 收录；两侧都是**正向**读数，不做混淆矩阵反解）
+
+`P(AIHOT 标签 | 我方标签)`，行=我方：
+
+| 我方 \ AIHOT | tip | model | product | industry | paper | n | 一致 |
+|---|---|---|---|---|---|---|---|
+| tutorial | 77.2% | 3.2% | 7.4% | 6.3% | 5.8% | 189 | 77.2% |
+| model | 18.2% | 61.9% | 12.3% | 0.4% | 7.2% | 236 | 61.9% |
+| product | 13.8% | 7.2% | 75.2% | 3.1% | 0.6% | 319 | 75.2% |
+| **industry** | **47.9%** | 6.0% | 6.7% | **35.7%** | 3.8% | **631** | **35.7%** |
+| paper | 1.7% | 0.9% | 0.9% | 0.0% | 96.6% | 116 | 96.6% |
+
+逐条一致率 43.6%。**单一主导混淆是 industry → tip：我方标 industry 的 631 条里 302 条（47.9%）AIHOT 标 tip。**
+
+反向 `P(我方标签 | AIHOT=tip)`（n=699）：industry 43.2% · 无标签 23.2% · tutorial 20.9% · product 6.3% · model 6.2%。
+**AIHOT 的 tip 桶只有五分之一被我方叫 tutorial。**
+
+#### `tip` 到底是什么桶（按信源形态与正文长度刻画，不靠看标题）
+
+| AIHOT 桶 | n | X 形态占比 | 正文中位 | <200 字 |
+|---|---|---|---|---|
+| **tip** | 699 | **71.0%** | 297 | 33.9% |
+| model | 274 | 66.8% | 289 | 34.3% |
+| product | 437 | 54.5% | 311 | 28.6% |
+| **industry** | 352 | **40.1%** | **467** | 25.6% |
+| paper | 231 | 46.3% | 140 | 51.9% |
+
+争议条目（我方 industry / AIHOT tip）**65.9% 是 X 形态**，双方一致的 industry 只有 **32.9%** —— 两倍差。
+
+抽样标题印证：争议侧是「a reset a day keeps anthropic away」「Day 1 after AGI. Still can't build a good
+frontend」「我的最爱 AI 账号回 X 了」；双方一致的 industry 侧是融资、收购、诉讼、IPO 交表。
+⇒ **AIHOT 的 `tip` 是短文 / 观点 / 吐槽的残余桶，不是 how-to 教程**；它的 `industry` 是硬商业新闻。
+
+#### 那个「五类各 100% 一致」的校准是循环的
+
+`SLUG_TO_CATEGORY` 的注释此前写着「映射不是猜的：在 aihot-fit-v1 题集上五个 slug 对
+`reference.primary_category` 各 100% 一致」。**题集的 `reference.primary_category` 本身就是从同一个 slug
+派生的**，所以那个读数只证明 slug→名字这一步没写错，证明不了 AIHOT 的 `tip` 与我方 `tutorial` 指同一件事。
+
+#### 作用面：哪些读数受影响、哪些不受
+
+- **不受影响：`measure_curated_composition.py` 的全部 TV 读数，含 `paper: 0.95` 的拟合依据。** 该脚本两侧
+  **都**用 AIHOT 的标签（`labels[our_id]` 与 `reference_by_day[day]` 同一映射），桶名是双射改名，TV 不变。
+  **已实测**：改名前后 `POOLED TV = 0.156` 完全相同。
+- **受影响：台账里那张人评整页表**（industry 22.0% vs 13.5% = +8.5pp / tutorial 27.4% vs 33.3%）。它的未匹配
+  70% 用的是 agent 自己的标注，而那次标注的盲测记录着 **tutorial 召回仅 50%、误判去向 paper/industry**——
+  方向与本映射错误一致。⇒ **那张表的 industry 超配与 tutorial 欠配都被放大了。**
+
+#### 订正后的缺口（单标注器、对齐深度、覆盖率 87.6%）
+
+| | 我方页面 | AIHOT 精选 | 差 |
+|---|---|---|---|
+| tip | 32.4% | 32.8% | −0.4pp |
+| **model** | 18.9% | 31.1% | **−12.2pp** |
+| product | 18.2% | 14.8% | +3.4pp |
+| **industry** | 17.6% | 13.1% | **+4.5pp** |
+| paper | 12.8% | 8.2% | +4.6pp |
+
+**industry 是 +4.5pp，不是 +8.5pp；tutorial/tip 的欠配整个消失。**
+
+`model −12.2pp` 与本档早前那张「版面深度」表里的「同深度下 29.2% vs 30.2%、基本无缺口」**不矛盾，两者限定不同**：
+那张表把**候选池**也限制到 AIHOT 收录过的条目，因而剔掉了我方页面上 AIHOT 从未收录的那约 70%；本表用全候选池。
+两条合起来说的是同一件事——model 的缺口不在排序，在**什么东西进了排序器**（流侧），与 T13 的结论一致。
+
+#### 没有重复 T7 已做过的信源覆盖检查
+
+用户明确要求别重复。本刀切的是**标注口径**，与 T7 的「题集 manifest 未匹配 7.1%」是两回事。
+
+#### 用户裁决：对齐 AIHOT 的划分（2026-09-10）
+
+摆了三个选项（不对齐只修选择差 / 对齐 AIHOT / 只改量具产品口径搁置），agent 推荐第一个，
+**用户选了「对齐 AIHOT 的划分」**，即改 enrich 的类别定义让 industry/tip 边界与 AIHOT 一致。这是一个新工作单元，
+它的已知代价（在选项里已如实摆出）：
+
+1. **作废当前 enrich 戳**，而那正是 `CATEGORY_MULTIPLIERS_FITTED_ON_ENRICH` 钉住的硬前提 ⇒
+   `test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on` 会转红，强制重判 `paper: 0.95`
+   在新标签下还是不是那个意思。**这正是那道 tripwire 设计时想要的行为。**
+2. 要重算存量（30 天窗口约 135 分钟）。
+3. 触及**用户可见**的分类页与 URL slug 语义：生产 `classification.PRIMARY_CATEGORY_SLUGS` 把我方 `tutorial`
+   的 slug 也写作 `tip`，而对齐之后那个桶装的是短文观点，`tutorial` 这个显示名会名不副实。
+   **这一条里有一个尚未问过用户的子决策：那个桶在 UI 上叫什么。**
+
+### 量具侧已改（2026-09-10）
+
+- `SLUG_TO_CATEGORY` → `SLUG_TO_BUCKET`，`tip` 现在就叫 `tip`，**只改了错的那一个条目**，其余四个不动。
+  判据写进常量注释，并明写不要顺手改生产的 `PRIMARY_CATEGORY_SLUGS`（那是用户可见 URL）。
+- 新增 `--labels`：合并补充标注，AIHOT 的标签权威、补充标注只填空缺。文件身份（路径 + 条数 + sha256 +
+  词表 + 逐类丢弃计数 + 重复/冲突计数 + **标注者身份**）每次运行打印。
+- **覆盖率改成每次现算并打印**，逐窗 + 合并两档；未达 100% 时脚本自己声明「POOLED 是已标注子集的构成，
+  不是整页构成」。顺带订正一个写死的错数：docstring 原写「约 30%」，那取自当天实时页面；9 个历史日窗重放
+  实测是 **234/360 = 65.0%**。补上 39 条标注后 **83.3%**。
+- **标注者校准通道**：与 AIHOT 重叠的条目不参与构成，只用来报一致率。它**不会自己长出来**——若只标 AIHOT
+  缺失的条目，重叠恒为零、通道饿死（第一批 42 条正是如此，reviewer 报出）。故刻意补了一批重叠的盲测样本。
+
+### 标注者校准：80.0%，且 `tip` 召回从 50% 提到 75%（2026-09-10）
+
+40 条**有 AIHOT 标签**的版面条目，先出无标签清单、标完再对 key：
+
+| 读数 | 值 |
+|---|---|
+| 盲测一致率 | **32/40 = 80.0%**，Wilson 95% CI [65.2%, 89.5%] |
+| 多数类基线 | 30.0%（tip） |
+| 逐类召回 | model 10/10 · product 4/5 · **tip 9/12 = 75.0%** · industry 6/8 · paper 3/5 |
+
+**关键不是那个 80.0%**（与更早那次 81.7% 在统计上分不开），**而是 `tip` 召回从 50% 变成 75%**——错误恰好
+集中在纠正过的那一类上，且 industry 不再是系统性的误判归宿（错判散成 model→tip 2 / tip→industry 2 /
+其余四类各 1）。
+
+**更早那次 81.7% 对本批不适用**：它是在 `tip == tutorial` 的错误理解下做的。标注文件里逐条写了这句。
+
+**已知未闭合**：`paper` 召回只有 3/5（n=5，撑不住任何结论）；40 条的 CI 宽 24pp。

@@ -421,6 +421,9 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
           s.id, COALESCE(s.kind, 'feed'), e.numeric_json,
           (SELECT en.output_json FROM item_evaluations en
             WHERE en.item_id=e.item_id AND en.stage='enrich' AND en.error IS NULL
+            ORDER BY en.id DESC LIMIT 1),
+          (SELECT en.id FROM item_evaluations en
+            WHERE en.item_id=e.item_id AND en.stage='enrich' AND en.error IS NULL
             ORDER BY en.id DESC LIMIT 1)
         FROM item_evaluations e
         JOIN items i ON i.id=e.item_id
@@ -469,19 +472,62 @@ def _load_candidates(conn: sqlite3.Connection, weights: Weights) -> list[ScoredC
                 source_id=row[6],
                 kind=row[7],
                 primary_category=category,
+                enrich_eval_id=int(row[10]) if row[10] is not None else None,
             )
         )
     return candidates
 
 
-def _ranking_record(weights: Weights) -> dict[str, Any]:
-    """What goes into ``curation_runs.weights_json``: the ranking PARAMETERS, not just the weights.
+def _enrich_watermark(candidates: list[ScoredCandidate]) -> int | None:
+    """The whole category snapshot, as one integer: the largest enrich row id THIS LOAD READ.
 
-    Deliberately not called "the whole ranking function". It does not pin the tie-breakers in
-    ranking_key, the code version, or -- the one that actually bites -- each candidate's category,
-    which comes from an enrich row that can be rewritten later. Before 2026-09-10 category was
-    not a ranking input at all, so enrich-row identity was irrelevant to reproducing an ordering;
-    it is now, and this record does not close that. See docs/issues/aihot-fit-eval.md.
+    Since 2026-09-10 each candidate's category is a ranking input (see ranking_key), and it comes
+    from "the latest successful enrich row", which is not a fixed thing: re-enriching an item
+    appends a newer row and the same code then orders it differently. Measured on this database:
+    19.1% of candidates have more than one successful enrich row and **626 (2.7%) have had their
+    category actually change**. So an ordering cannot be replayed without pinning which enrich
+    rows were current.
+
+    **Why it is derived from the loaded rows and not from `SELECT MAX(id)`.** A separate `MAX(id)`
+    query gets its own snapshot, and neither placement is correct. Taken BEFORE the load it is a
+    *lower* bound -- a row committed in between is visible to the load but excluded from the
+    watermark, so a replay at `id <= watermark` silently reads the item's PREVIOUS category.
+    Reproduced in-process: the load ordered an item as `paper` (x0.95) off enrich row 4 while the
+    recorded watermark was 3, and the replay came back with no category at all (x1.0). Taken
+    AFTER the load it is wrong the other way, naming rows the load never saw. The first version
+    of this function did it before the load and its comment claimed "upper bound"; an adversarial
+    reviewer showed the claim was inverted, and that the test guarding it could not see the
+    difference because `MAX(id)` is constant across the load in a single-threaded fixture.
+
+    Taking the max of the ids actually read is exact. `item_evaluations.id` is
+    `INTEGER PRIMARY KEY AUTOINCREMENT` (migrations/001_init.sql), and SQLite serialises writers,
+    so id order is commit order and ids are never reused. Therefore "the snapshot contains id=N"
+    implies it contains every existing row with a smaller id, and `id <= max(read)` is necessarily
+    a subset of what this load saw.
+
+    The alternative was writing the categories themselves: 23.6k rows per run, measured at 829 KB
+    per run and ~6.93 GB/year, against a production DB that syncs as a ~5 GB snapshot. A
+    fixed-length prefix does not work either -- on 2026-09-07 the source quotas pushed ``_fill``
+    to rank 243 of a 243-item fresh pool, so any constant N can miss the cut.
+
+    **What it rests on**, in the order that would bite:
+
+    1. **Ids are never renumbered.** A migration that rebuilds the table (016 already did:
+       RENAME / CREATE / INSERT..SELECT / DROP) preserves ids only because its INSERT lists `id`
+       explicitly. One that omits the column silently invalidates every stored watermark, and it
+       would contain no UPDATE or DELETE for a grep to find.
+    2. **The table is append-only at runtime** -- the only UPDATE/DELETE anywhere are two
+       one-time migrations (004 deletes, 017 nulls `cost_usd`); neither runs in production again.
+
+    Neither is a database constraint. That is the price of the 8 bytes.
+    """
+
+    ids = [candidate.enrich_eval_id for candidate in candidates if candidate.enrich_eval_id is not None]
+    return max(ids) if ids else None
+
+
+def _ranking_record(weights: Weights, enrich_watermark: int | None) -> dict[str, Any]:
+    """What goes into ``curation_runs.weights_json``: the ranking PARAMETERS, not just the weights.
 
     ``Weights.as_record()`` is everything needed to reproduce a *score*. Since 2026-09-10 the
     *ordering* also depends on ``CATEGORY_MULTIPLIERS`` (see ranking_key), which is not part of
@@ -490,11 +536,29 @@ def _ranking_record(weights: Weights) -> dict[str, Any]:
     two runs from either side of a change to that table read alike. That is the same failure the
     ``SOURCE_QUOTA_SCORE_SEMANTICS`` comment above exists to prevent.
 
+    The other two ordering inputs are recorded for the same reason. ``ranking_tiebreakers`` carries
+    the direction, not just the field names: ranking_key sorts ascending on a tuple whose first
+    element is negated, so score is descending while the two tie-breakers are ascending, and a
+    field list alone does not say that. ``enrich_watermark`` pins the categories -- see
+    ``_enrich_watermark``.
+
+    Still NOT pinned: the code version of ranking_key itself. A future edit to that function
+    reorders past runs on replay and nothing here records which version produced them.
+
     Purely additive: nothing in this repo parses ``weights_json`` structurally (checked
-    2026-09-10 -- every reference is an INSERT), so the extra key breaks no consumer.
+    2026-09-10 -- every reference is an INSERT), so the extra keys break no consumer.
     """
 
-    return {**weights.as_record(), "category_multipliers": dict(CATEGORY_MULTIPLIERS)}
+    return {
+        **weights.as_record(),
+        "category_multipliers": dict(CATEGORY_MULTIPLIERS),
+        "ranking_tiebreakers": [
+            {"field": "weighted_score_x_category_multiplier", "direction": "desc"},
+            {"field": "published_at", "direction": "asc"},
+            {"field": "item_id", "direction": "asc"},
+        ],
+        "enrich_watermark": enrich_watermark,
+    }
 
 
 def curate(
@@ -514,7 +578,14 @@ def curate(
     selected_threshold = DEFAULT_THRESHOLD if threshold is None else threshold
     selected_ruleset = ruleset_version or current_version()
 
-    candidates = deduplicate_candidates(_load_candidates(conn, selected_weights))
+    loaded = _load_candidates(conn, selected_weights)
+    # Derived from the rows just read, not from a second `SELECT MAX(id)` -- see
+    # `_enrich_watermark` for why neither placement of a separate query is correct. Taken over
+    # `loaded` rather than the deduplicated list: dedup drops candidates, but their categories
+    # were still read by this load and a replay has to see the same rows to reach the same
+    # dedup decisions.
+    enrich_watermark = _enrich_watermark(loaded)
+    candidates = deduplicate_candidates(loaded)
     filtered = [candidate for candidate in candidates if candidate.weighted_score >= selected_threshold]
     filtered.sort(key=ranking_key)
     cutoff = datetime.now(UTC) - timedelta(hours=freshness_window_hours)
@@ -596,7 +667,7 @@ def curate(
         (
             run.id,
             run.ruleset_version,
-            _json(_ranking_record(run.weights)),
+            _json(_ranking_record(run.weights, enrich_watermark)),
             run.threshold,
             _json(run.input_eval_ids),
             _json(run.output_curated_ids),

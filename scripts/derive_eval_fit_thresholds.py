@@ -36,7 +36,13 @@ GATE_AT_SUBSET = (
     "summary_bigram_jaccard",
 )
 GATE_AT_FULL_POPULATION = ("reason_closeness_mean", "reason_bigram_jaccard")
-NOT_GATED = ("selected_auc", "selected_p_at_k")
+# `selected_auc_ranked` joins these for the same reason as the other two (78 positives, an
+# interval far wider than any floor worth setting) -- and it matters more here: it is the
+# only metric that describes production's REAL ordering, so leaving it out of every table
+# means the ledger carries no record of why it has no gate. ADR-499e: a floor below the
+# random baseline "只会让读者以为这一维被覆盖了"; the same reads in reverse for a metric
+# absent from all three lists.
+NOT_GATED = ("selected_auc", "selected_p_at_k", "selected_auc_ranked")
 
 
 def _metric(payload: dict, name: str) -> dict:

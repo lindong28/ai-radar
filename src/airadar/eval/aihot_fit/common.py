@@ -99,6 +99,23 @@ def isolate_side_effects() -> dict[str, str]:
 
 # Single owner of the AIHOT category slug -> PrimaryCategory mapping used by the
 # evalset. Values match ``airadar.enrich.classification.PrimaryCategory``.
+#
+# WARNING, measured 2026-09-10: the `tip -> tutorial` row is not a semantic equivalence, and
+# this table is load-bearing -- `build.py` uses it for each question's
+# `reference.primary_category`, which `category_agreement` scores against, and that metric HAS a
+# floor in `thresholds.json`. So the mismatch below is currently charged to our classifier.
+#
+# AIHOT's `tip` is a short-form takes/commentary bucket, not how-to: 71.0% of it is X-form with a
+# 297-char median body, against 40.1% / 467 chars for its `industry`. On 1491 dual-labelled items,
+# P(our label | AIHOT=tip) is industry 43.2% / unlabelled 23.2% / tutorial 20.9%. The earlier
+# justification for this row ("five slugs agree 100% with reference.primary_category on the
+# evalset") is circular: that field is derived from this very slug.
+#
+# NOT changed here, deliberately: editing it moves every historical `category_agreement` reading
+# and the floor derived from them. The user decided on 2026-09-10 to align our taxonomy to
+# AIHOT's instead, which is the work unit that should settle this row -- see
+# docs/issues/aihot-fit-eval.md. Reported by an adversarial reviewer, who noted the fix shipped
+# that day named only the production URL slug as the other consumer and stopped there.
 CATEGORY_SLUG_TO_PRIMARY: dict[str, str] = {
     "ai-models": "model",
     "ai-products": "product",

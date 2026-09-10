@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from airadar.curator import select as curator_select
+from airadar.eval.aihot_fit import metrics  # noqa: F401
 from airadar.eval.aihot_fit.metrics import (
     Joined,
     category_agreement,
+    ranking_score,
+    selected_auc,
+    selected_auc_ranked,
     selected_p_at_k,
     tag_jaccard_mean,
 )
@@ -87,3 +92,47 @@ def test_selected_p_at_k_rewards_ranking_selected_items_first() -> None:
     assert good.n == 1 and good.value == 1.0 and good.extra["days"][0]["k"] == 2
     assert bad.n == 1 and bad.value == 0.0
     assert good.baseline["value"] == 0.5  # k/n = 2/4 selected rate
+
+
+def test_ranked_auc_reduces_to_plain_auc_when_no_category_is_demoted(monkeypatch) -> None:
+    """The negative control the metric itself has to pass.
+
+    `selected_auc_ranked` is a derivation, not a stored number, so the way it fails is by
+    quietly ranking on something other than production's ordering score. With an empty
+    multiplier table the ordering score IS `weighted_score`, so the two metrics must agree to
+    the last digit; any indexing or fallback slip shows up here as a mismatch. Verified on the
+    real FULL3 run too, where both read 0.7907 with the table emptied.
+    """
+
+    rows = [
+        _row("q1", category="paper", predicted="paper", score=9.0, selected=True),
+        _row("q2", category="model", predicted="model", score=8.0, selected=False),
+        _row("q3", category="paper", predicted="paper", score=7.0, selected=False),
+    ]
+    monkeypatch.setattr(curator_select, "CATEGORY_MULTIPLIERS", {})
+    assert selected_auc_ranked(rows).value == selected_auc(rows).value
+
+    # And it must actually respond to the table -- otherwise the assert above is satisfied by a
+    # metric that ignores the coefficient entirely, which is the whole defect being fixed.
+    monkeypatch.setattr(curator_select, "CATEGORY_MULTIPLIERS", {"paper": 0.5})
+    assert selected_auc_ranked(rows).value != selected_auc(rows).value
+
+
+def test_ranked_auc_keeps_unenriched_rows_at_factor_one_like_production() -> None:
+    """`_load_candidates` gives an un-enriched item `category == ""`, and
+    `category_multiplier("")` is 1.0 -- it ranks, it is not dropped. Excluding those rows here
+    would silently measure a different population than the one production ranks (2624 vs 2741
+    rows on FULL3), and n is the only place that would show it."""
+
+    rows = [
+        _row("q1", category="paper", predicted="paper", score=9.0, selected=True),
+        Joined(
+            question_id="q2",
+            reference={"primary_category": "model", "selected": False, "published_at": "2026-08-19T08:00:00Z"},
+            enrich=None,
+            weighted_score=8.0,
+        ),
+    ]
+    metric = selected_auc_ranked(rows)
+    assert metric.n == 2
+    assert ranking_score(rows[1]) == 8.0

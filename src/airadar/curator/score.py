@@ -20,6 +20,10 @@ class ScoredCandidate:
     source_id: str = ""
     kind: str = "feed"
     primary_category: str = ""
+    # Which enrich row `primary_category` came from. Since 2026-09-10 the category is a ranking
+    # input, so replaying an ordering needs to know which enrich rows were in play -- and the
+    # only exact answer is the ids this load actually read. See select._ranking_record.
+    enrich_eval_id: int | None = None
 
 
 def tier_multiplier(tier: str) -> float:
