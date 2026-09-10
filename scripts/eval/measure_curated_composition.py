@@ -249,6 +249,42 @@ def sampling_noise(pooled: Counter, day_sizes: list[int], trials: int = 200) -> 
     return statistics.mean(draws) if draws else float("nan")
 
 
+def pooled_null(reference: Counter, n_ours: int, trials: int = 20000) -> dict:
+    """合并口径 TV 的零假设：两侧构成**完全相同**时，仅因样本量会看到多少 TV。
+
+    这个函数迟到了。`sampling_noise` 只给逐日的噪声底，于是合并 TV——本 program 的头号指标——
+    一直是个没有参照的绝对值：0.156 与 0.122 都被当成「差距」读，而没人算过同分布下它取什么值。
+    2026-09-10 补算的结果是它们**落在噪声内**（对齐深度 p=0.21），也就是说此前用这个绝对值判
+    「离 AIHOT 有多远」的每一次，都超出了这个指标当时的分辨力。
+
+    两侧都从参照构成里抽，所以它同时计入了双方的抽样误差。**已知二阶缺口**：那组权重本身估自
+    参照物那 122 条，故权重也带误差，本函数不计。
+
+    配对比较（同窗口、同池子、只改系数）不受此限——它消掉的正是这里的方差；受限的是**绝对值**。
+    """
+
+    total = sum(reference[c] for c in CATEGORIES)
+    if total < 8 or n_ours < 8:
+        return {}
+    weights = [reference[c] / total for c in CATEGORIES]
+    draws = []
+    for seed in range(trials):
+        rng = random.Random(seed)
+        a = Counter(rng.choices(CATEGORIES, weights=weights, k=n_ours))
+        b = Counter(rng.choices(CATEGORIES, weights=weights, k=total))
+        value = total_variation(a, b)
+        if value is not None:
+            draws.append(value)
+    draws.sort()
+    return {
+        "median": statistics.median(draws),
+        "p95": draws[int(0.95 * len(draws))],
+        "n_ours": n_ours,
+        "n_reference": total,
+        "draws": draws,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", default=str(REPO / "data" / "radar.db"))
@@ -441,6 +477,21 @@ def main() -> None:
         )
     )
     print(f">>> POOLED TV = {pooled:.3f}   <- 唯一该读的那个数")
+    # 零假设必须与它同时打印。少了它，这个数在「真有差距」与「样本量就这么大」两种情况下同形——
+    # 而 2026-09-10 补算发现对齐深度下正是后者（p=0.21）。
+    null = pooled_null(reference_pooled, sum(ours_pooled[c] for c in CATEGORIES))
+    if null and pooled is not None:
+        above = sum(1 for x in null["draws"] if x >= pooled) / len(null["draws"])
+        print(
+            f"    零假设（两侧同构成，n={null['n_ours']} vs {null['n_reference']}）:"
+            f" 中位 {null['median']:.3f}  95% 分位 {null['p95']:.3f}"
+        )
+        verdict = (
+            "  **落在噪声内：这个绝对值判不出差异**" if above >= 0.05
+            else "  显著高于噪声" if above < 0.01 else "  勉强出噪声"
+        )
+        print(f"    ⇒ 同构成下出现 >= {pooled:.3f} 的概率 = {above:.3f}{verdict}")
+        print("    配对比较（同窗口同池子、只改系数）不受此限；受限的是绝对值。")
     print(f"    逐日 TV 的噪声底（同分布重抽）= {sampling_noise(reference_pooled, day_sizes):.3f}")
     print("    逐日 TV 低于噪声底即无信息量；只用它查异常，不用它判改进。")
 
