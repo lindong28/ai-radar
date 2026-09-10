@@ -956,3 +956,37 @@ industry/tip 遵守度是**第二个面**。它真实、用户可见（29.8% 的
 
 **所以三个选项一个都不取**，理由写在这里。要做分类器徽章正确性时，入口是 `model` 那一行；
 要做构成收敛时，入口是流侧（T13 已定位：我方页面约 70% 的条目 AIHOT 根本没收录）或 `DEFAULT_LIMIT`。
+
+### 反方向已查：AIHOT 的 industry 也不是严格事件制（2026-09-10，闭合评审者的承重未核实项）
+
+评审者列为承重的那条——「AIHOT 标 industry 而不满足我方准入线的条目没查，而 `metrics.py` 的
+`confusion_matrix.counts` 已有现成数据」——已查。用当前戳的 536 条双标注：
+
+**反方向 P(我方标签 | AIHOT 标签)**，一致率在最后一列：
+
+| AIHOT \ 我方 | tutorial | model | product | industry | paper | n | 一致 |
+|---|---|---|---|---|---|---|---|
+| tip | 62.7% | 13.0 | 2.7 | **21.1** | 0.5 | 185 | 62.7% |
+| model | 5.1 | **83.5%** | 7.6 | 2.5 | 1.3 | 79 | 83.5% |
+| product | 11.1 | 20.2 | **63.6%** | 4.0 | 1.0 | 99 | 63.6% |
+| **industry** | 12.2 | 1.0 | 1.0 | **85.7%** | 0.0 | 98 | **85.7%** |
+| paper | 14.7 | 20.0 | 0.0 | 2.7 | **62.7%** | 75 | 62.7% |
+
+**读数一：分歧是单向的。** AIHOT 标 industry 的条目我方 **85.7%** 也标 industry——那一侧基本没问题。
+分歧集中在 **AIHOT 的 tip 桶**：只有 62.7% 落到我方 tutorial，**21.1% 被我方叫成 industry**。
+所以「我方 industry 门太松」这个方向成立。
+
+**读数二（订正「同一条界」）：AIHOT 的 industry 也不是严格事件制。** 抽看 AIHOT-industry 的 24 条，
+**约 4–6 条**是我方准入线会判去 tutorial 的评论 / 表态：
+
+- 「chatgpt momentum is building, team has been doing an incredible job for our users」——纯评论，无事件
+- 「we're now moving into the AGI era (whether you view it as this model, the last one…)」——纯观点
+- 「Mistral 刚融了 30 亿欧元……**我觉得**大家投它未必真觉得它能把 OpenAI 干掉」——对融资事件的评论
+- 「OpenAI confirms 'wiki incident,' says it's 'working on a framework'」——公司表态；我方判 tutorial，
+  按我方准入线**是对的**，AIHOT 判 industry
+
+⇒ **「两侧同一条界」是近似，不是恒等。** AIHOT 的 industry 也吸收「关于商业事件的评论」乃至纯观点，
+比例约 17–25%（n=24 抽样）。这削弱但不反转前面那个方向性结论：我方 industry 仍然更松，
+而分歧的主体在 AIHOT 的 tip 桶那一侧。
+
+**仍未闭合**：这是 24 条抽样 + 我自己的判断，不是逐条标注；AIHOT 自己发布的类目定义仍然仓内无记载。

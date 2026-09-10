@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -927,3 +928,51 @@ def test_enrich_watermark_covers_rows_that_appear_while_candidates_load(
     assert stored["enrich_watermark"] is not None
     assert stored["enrich_watermark"] >= injected[-1]
     assert after and stored["enrich_watermark"] < after[-1]
+
+
+def test_ordering_code_digest_is_bound_to_all_four_ordering_functions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three properties. The previous attempt at this field satisfied none of them.
+
+    1. The value in the run record IS the live digest. A reviewer showed the earlier test only
+       asserted the stored field `is None` (inside a patched failure case), so setting it to a
+       constant `None` on the happy path left the whole suite green.
+    2. It moves when ANY of the four ordering functions changes -- not just `ranking_key`.
+       Swapping the earlier digest's target to an unrelated function also left the suite green,
+       because the test replaced the source-reading call rather than the function it read.
+    3. It does not read the filesystem. `co_code` comes from the loaded objects, so the three
+       measured failure modes of the `inspect.getsource` version (wrong code block, empty-file
+       digest, `tokenize.TokenError` escaping the except clause) are unreachable.
+    """
+    conn = _setup_curator_db(tmp_path, count=3)
+    _insert_enrich_row(conn, "item-00")
+    conn.commit()
+    run = curate(conn, ruleset_version="test.r1", weights=Weights.default(), source_quota=None)
+    stored = json.loads(
+        conn.execute("SELECT weights_json FROM curation_runs WHERE id=?", (run.id,)).fetchone()[0]
+    )
+    live = select_module._ordering_code_digest()
+    assert stored["ordering_code_sha256"] == live
+    assert len(live) == 12
+    assert stored["python"] == platform.python_version()
+
+    # Each of the four is load-bearing: replacing any one has to move the digest. Without this
+    # loop the field can be bound to one function while three others silently reorder replays.
+    for name in ("ranking_key", "category_multiplier", "_primary_category", "weighted_score"):
+        original = getattr(select_module, name)
+
+        def different(*_args: object, **_kwargs: object) -> float:
+            unused = 1 + 1  # noqa: F841 -- distinct bytecode is the whole point
+            return 0.0
+
+        monkeypatch.setattr(select_module, name, different)
+        assert select_module._ordering_code_digest() != live, f"digest ignores {name}"
+        monkeypatch.setattr(select_module, name, original)
+    assert select_module._ordering_code_digest() == live
+
+    # No filesystem read, asserted structurally: the module does not import `inspect` at all,
+    # so the three measured failure modes of the source-text version have no path in. Checking
+    # the import rather than patching it, because patching something absent would pass for the
+    # wrong reason.
+    assert not hasattr(select_module, "inspect")

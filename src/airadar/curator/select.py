@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import platform
 import secrets
 import sqlite3
 from dataclasses import dataclass, replace
@@ -526,6 +528,44 @@ def _enrich_watermark(candidates: list[ScoredCandidate]) -> int | None:
     return max(ids) if ids else None
 
 
+def _ordering_code_digest() -> str:
+    """sha256 over the BYTECODE of every function that decides the ordering, first 12 hex.
+
+    Editing any of them reorders every archived run on replay while no recorded field moves.
+    `category_multipliers`, `ranking_tiebreakers` and `enrich_watermark` pin the DATA; this pins
+    the code.
+
+    **Hashes `__code__.co_code`, deliberately, not the source text.** A first attempt used
+    `inspect.getsource` and was withdrawn the same day: it reads the file on DISK rather than the
+    loaded code, and the deploy lock (`data/.deploy.lock`) is disjoint from the pipeline lock, so
+    a deploy can rewrite `select.py` mid-curate. Measured on this interpreter, that gave a
+    plausible-looking digest of an unrelated code block, an empty-file digest, or a
+    `tokenize.TokenError` -- which is not an OSError, escaped the fail-soft clause, and would
+    have taken curation down to compute an audit field. Bytecode comes from memory: none of those
+    three states is reachable.
+
+    **Covers four sites, not one.** `ranking_key` alone is a 4-line return; half of what decides
+    the order lives outside it -- `category_multiplier`'s "unlisted means 1.0" default,
+    `_primary_category`'s fallbacks (a bad enrich row silently becomes ""), and the
+    `weighted_score` formula. A digest over `ranking_key` only would read unchanged across edits
+    to any of the other three.
+
+    **Two honest limits.** `co_code` excludes docstrings and comments, so a pure-comment edit no
+    longer moves it -- that is the intended trade (the source-text version fired on every comment
+    edit, and this docstring alone is ~40 lines of measurement notes). And bytecode is not stable
+    across interpreter versions, so the digest can move on a Python upgrade with no code change;
+    `python` records the version that produced it, making that case readable rather than
+    mysterious. It is a change DETECTOR, not a version: it says two runs were ordered by
+    different code, not which came first.
+    """
+
+    code = b"".join(
+        function.__code__.co_code
+        for function in (ranking_key, category_multiplier, _primary_category, weighted_score)
+    )
+    return hashlib.sha256(code).hexdigest()[:12]
+
+
 def _ranking_record(weights: Weights, enrich_watermark: int | None) -> dict[str, Any]:
     """What goes into ``curation_runs.weights_json``: the ranking PARAMETERS, not just the weights.
 
@@ -542,14 +582,7 @@ def _ranking_record(weights: Weights, enrich_watermark: int | None) -> dict[str,
     field list alone does not say that. ``enrich_watermark`` pins the categories -- see
     ``_enrich_watermark``.
 
-    Still NOT pinned: the ORDERING CODE. Editing `ranking_key`, `category_multiplier`'s default,
-    `_primary_category`'s fallbacks, or the `weighted_score` formula reorders every archived run
-    on replay, and no recorded field moves. A source digest via `inspect.getsource` was built for
-    this and withdrawn the same day: it reads the file on DISK, not the loaded code, so a deploy
-    rewriting `select.py` mid-curate (the deploy lock and the pipeline lock are disjoint) yields
-    a plausible-looking wrong digest, an empty-file digest, or a `tokenize.TokenError` -- which
-    is not an OSError and would take curation down. Whatever closes this must hash the loaded
-    code, and must cover the four sites above rather than one function.
+    ``ordering_code_sha256`` pins the ORDERING CODE -- see `_ordering_code_digest`.
 
     Purely additive: nothing in this repo parses ``weights_json`` structurally, so the extra keys
     break no consumer. (Checked 2026-09-10. An earlier version of this line said "every reference
@@ -568,6 +601,8 @@ def _ranking_record(weights: Weights, enrich_watermark: int | None) -> dict[str,
             {"field": "item_id", "direction": "asc"},
         ],
         "enrich_watermark": enrich_watermark,
+        "ordering_code_sha256": _ordering_code_digest(),
+        "python": platform.python_version(),
     }
 
 
