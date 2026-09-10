@@ -1389,3 +1389,28 @@ p=0.024（勉强出噪声）**，只有对齐深度才是 0.128 → p=0.274（�
 
 **记账不修**（LOW）：`-e` 与生产者 `exists() or is_symlink()` 在断链符号链接上分叉（方向 fail-closed）；
 趋势序列第一行的 `code_dirty=true`（提交后补一次干净重跑即可）。
+
+## `thresholds.json` 已按新代码重派生（2026-09-10，零 LLM 调用）
+
+记账那条终于结清。做法与 ADR-499e「迭代规模的读数不必另跑」一致：`eval-fit report` 从**归档产物**
+重算 `FULL3-20260906` 与 `GATE-300-seed7` 的 metrics（results.jsonl + judgments 都在，`ranking_score`
+刻意设计成从存储字段派生而不是存下来），再跑 `scripts/derive_eval_fit_thresholds.py`。**全程零 LLM 调用。**
+
+**新指标读数**：`selected_auc_ranked` FULL3 **0.7929** [0.7409, 0.8388] vs 未加权的 `selected_auc`
+0.7907 [0.7382, 0.8349]；gate 子集 0.6928 [0.5191, 0.8457] vs 0.6911 [0.5249, 0.8402]。
+两份 metrics 现在都带 `ranking` 身份块（`category_multipliers: {"paper": 0.95}`）。
+⇒ 类别系数对这个 AUC 的影响在噪声内（+0.0022，CI 宽度约 0.10），与「它只进排序键、不进 weighted_score」
+这个设计一致。gate 子集的 CI 宽 0.33，**印证了不给它设闸的原判**。
+
+**差异只有两行**：`derived_at` 09-06→09-10，以及 `_meta.not_gated` 多出 `selected_auc_ranked` 那条。
+**8 条 floor 一个都没动**——我记账时以为文件还是首版 floors（0.3907 一类），实际它早已按 FULL3 重定过
+（ISSUE-FIT-25），所以那条记账的真实缺口只是"新指标没在 `not_gated` 里露面"，比我以为的小。
+
+**顺带一条回归读数**：两份 run 用新 metrics 代码重算后，`thresholds: below=none undetermined=none`
+⇒ 本轮的 metrics 代码改动（新增两个指标、加可比性闸）**没有移动任何一条设闸指标**。
+（这不等于"paper 0.95 上线后测过了"——这两份 run 都早于那个系数。）
+
+**未做、且不归我**：把新文件放进数据仓 `evalsets/aihot-fit-v1/thresholds.json` 并在那边 commit。
+那是跨仓写入，按 `docs-organization-protocol.md` §4.8 只报不提交。产物在
+`data/eval-fit/evalset-staging/thresholds.json`（gitignored），放置命令一行：
+`cp data/eval-fit/evalset-staging/thresholds.json benchmarks/aihot/evalsets/aihot-fit-v1/thresholds.json`
