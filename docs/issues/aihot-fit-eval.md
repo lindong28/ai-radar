@@ -774,3 +774,39 @@ frontend」「我的最爱 AI 账号回 X 了」；双方一致的 industry 侧�
 **更早那次 81.7% 对本批不适用**：它是在 `tip == tutorial` 的错误理解下做的。标注文件里逐条写了这句。
 
 **已知未闭合**：`paper` 召回只有 3/5（n=5，撑不住任何结论）；40 条的 CI 宽 24pp。
+
+### 订正：分类口径**本来就是对齐的**，坏的是分类器不遵守它（2026-09-10）
+
+用户 2026-09-10 在三个选项里选了「对齐 AIHOT 的划分」，而那三个选项是我按「我方五类与 AIHOT 的划分
+不同」这个前提写的。**读了 `enrich/prompts_v2.py` 的类别边界之后，那个前提不成立。**
+
+现行 prompt 逐字写着：
+
+- `industry` = 「**一件可指认的商业或制度事件确实发生了**：钱动了（融资、收购、上市、财报、估值、
+  募资、大额采购与规模化部署），所有权或高管人事变了，或监管、司法、政策落地了」
+- `tutorial` = 「对以上这些的分析、评测、实测、复盘、解读与教学，**现象观察、观点**、访谈里的看法、
+  使用心得与技巧，**以及不属于上面四类的其余一切**」
+- 平局规则 = 「都不成立才是 tutorial」；字段文档 = 「**tutorial 是兜底类不是教程**」
+
+**这两条定义与 AIHOT 的 industry / tip 是同一条界。** 我方 `tutorial` 早就被设计成残余桶，不是 how-to。
+
+⇒ **不是口径不一致，是分类器不遵守自己已经写对的口径。** 那 302 条争议条目
+（「a reset a day keeps anthropic away」「Day 1 after AGI. Still can't build a good frontend」）
+没有一条满足「一件可指认的商业或制度事件确实发生了」，却都被判成了 `industry`。
+
+**这条订正把下一个工作单元整个换掉了**，而且换成便宜得多的那个：
+
+| 原以为要做 | 实际要做 |
+|---|---|
+| 重设计类别定义、作废 enrich 戳、重算存量、改用户可见的分类页与 URL 语义 | 让分类器遵守 `industry` 那条已有的准入线（收紧 prompt 的判定，或补反例）|
+| 需要用户先裁「那个桶在 UI 上叫什么」 | **不需要**——`tutorial` 已被文档写明是兜底类；显示名是否贴切是一个**先于本轮存在**的独立问题 |
+| 拟合类别偏置要等约 40 天日抓取 | **不用等**：手上已有 631 条我方标 industry 的双标注样本（302 条争议），逐条可判对错 |
+
+**这是 decision-review 判据 2 最纯的形态**——「凡依赖『我们要求过』的地方，有没有实测它确实发生了」。
+prompt 要求过了，而从来没有人量过它有没有发生。本 program 的 `docs/experiences/measurement.md` 里
+那条「陈述不变量的注释是 authority」讲的是同一件事的注释版本。
+
+**改 prompt 之前的硬前置**（记在这里，因为它会被跳过）：按 `~/.claude/references/prompt-writing-guidelines.md`
+与 `prompt-distribution-fitting.md` 走；后者明写**别拿边际比例当拟合的验收**，要比的是 **per-input
+一致率**，而这 631 条恰好逐条可比。同时注意任何 prompt 改动都会换 enrich 戳，从而触发
+`test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on`，强制重判 `paper: 0.95`。
