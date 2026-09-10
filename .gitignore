@@ -15,16 +15,13 @@ data/.wechat-discovery-session.*
 data/wechat-discovery-browser/
 data/recovery/wechat-discovery/
 # aihot-fit evalset staging + run artifacts (evalset is promoted to the data repo by hand)
-# Note the `/*` rather than `/`: git never descends into an excluded DIRECTORY, so a `!`
-# exception under `data/eval-fit/` would be unreachable. Excluding the contents instead
-# leaves the directory itself traversable and makes the exception below actually fire.
-data/eval-fit/*
-# ...except the category labels. They are a durable measurement INPUT, not a run artifact:
-# a few hundred lines of text that `scripts/eval/measure_curated_composition.py` reads on
-# every run, and that script lives in this repo. Ignored, they exist on one machine and the
-# "reproducible entry point" reproduces nothing for anyone else. The data-repo route is the
-# other option and is currently blocked on the user (docs/issues/aihot-fit-eval.md).
-!data/eval-fit/labels/
+# Keep this exclusion whole: the production deploy REFUSES any commit that tracks a path
+# under data/ (it is runtime-owned; `checkout-index -f` would clobber live state git
+# cannot restore -- see deploy/sync/deploy_code.py `_is_runtime_owned`, allowlist is three
+# config files). A `!data/...` exception here therefore does not just add a file, it
+# breaks deploys. Measured: it did, on 09dea35. Durable measurement inputs live next to
+# their consumer instead -- scripts/eval/labels/.
+data/eval-fit/
 
 # Python
 __pycache__/

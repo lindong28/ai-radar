@@ -52,7 +52,9 @@ from airadar.eval.aihot_fit.build import normalize_url  # noqa: E402
 
 SUBMODULE = REPO / "benchmarks" / "aihot"
 CAPTURES_REF = "origin/captures/daily"
-DEFAULT_LABELS = REPO / "data" / "eval-fit" / "labels" / "page-categories.jsonl"
+# Next to this script, NOT under data/: the production deploy refuses any commit that
+# tracks a data/ path (runtime-owned). Measured the hard way on 09dea35.
+DEFAULT_LABELS = Path(__file__).resolve().parent / "labels" / "page-categories.jsonl"
 
 # AIHOT 的 slug -> **AIHOT 自己的桶名**。这里刻意不再翻译成我方的五类名。
 #
