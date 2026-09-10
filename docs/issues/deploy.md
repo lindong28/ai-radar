@@ -168,3 +168,26 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 根因在 `unit_state()`：它用 `systemctl list-unit-files "ai-radar-serve@8000.service"` 的退出码判断 unit 是否安装，但磁盘上的 unit file 是模板 `ai-radar-serve@.service`，instance 名不会被该查询识别。后续 `systemctl is-active`、`is-enabled` 和 `show MainPID` 本来都能读取真实实例，却被提前返回跳过。
 
 闭合时应让模板实例的“已安装”判定识别对应 `@.service`，并增加至少三类 CLI 输出测试：模板已安装且实例 active、模板已安装但实例 inactive、模板不存在。修复后从生产直接运行 `status-server.sh`，确认 active slot 不再与 nginx upstream / systemd 真实状态矛盾。
+
+### `data/` 下 track 任何文件都会让部署被拒，而本地没有任何东西拦得住（2026-09-10，已修）
+
+`09dea35` 在 `.gitignore` 里开了个 `!data/eval-fit/labels/` 例外，把一份度量标注文件 track 进去。
+**push 成功、部署被拒**，生产停在旧代码上：`deploy/sync/deploy_code.py` 的 `_is_runtime_owned` 在动树
+之前拒绝任何 track 了 runtime-owned 路径的 commit，而 `data/` 整个是 runtime-owned（允许名单只有
+`data/sources.toml`、`data/aihot_retirements.json`、`data/wechat-discovery.toml` 三个）。理由正当：
+`checkout-index -f` 会覆盖 git 恢复不了的线上状态。
+
+**本地全绿，一条都没响**：ruff、mypy、2790 测试、导出树执行检查、`git check-ignore` 双向。
+`git push` 也报成功——post-receive 结构上无法让 push 失败，部署脚本自己也这么说
+（`NOTE: git push will still report success; post-receive cannot fail it`）。
+**唯一的信号是那几行 remote 输出**，翻过去就没了；下游只有健康检查会 page。
+
+**已修（`19978fd`）**：文件移到 `scripts/eval/labels/`，例外整条删除，`.gitignore` 里留下为什么不能
+再开这个例外。**没有**加进 `_RUNTIME_ALLOW`——那会为了一份度量数据削弱一道保护线上状态的闸。
+
+**补上的检查**：`tests/test_repository_hygiene.py::test_no_tracked_file_is_runtime_owned_on_the_deploy_server`
+拿本仓真实的 `git ls-files` 去过那个谓词。此前 `test_deploy_code.py` 有两个测试——一个测谓词、一个测
+合成 commit——**都不读这个仓自己的树**，所以这一类在本地零覆盖。两侧已验：犯规文件重新 track → 红。
+
+**残留缺口**：新测试要求 `.git` 存在，故它在**导出树**里 skip。`create-commit` 的导出树执行检查因此
+覆盖不到它，它的读数只来自工作树。
