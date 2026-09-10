@@ -1,6 +1,6 @@
 # ADR-20260910-3f8b：论文类在排序键上降权 0.95，且只在排序键上
 
-- Status: proposed（decision-review 复核中；放行后改 accepted）
+- Status: accepted（2026-09-10 上线，见 Consequences 的核验读数）
 - Date: 2026-09-10
 
 ## Context
@@ -53,6 +53,15 @@
 - **部分 supersede [ADR-20260906-7c31](20260906-7c31-rank-on-weights-fitted-to-the-reference.md)**：该 ADR 把生产排序收敛为「同一个拟合权重向量完整定义」。本决策打破的正是这个更宽的性质——排序此后由权重向量**加**一张类别系数表定义。它**没有**重新引入 7c31 移除的东西：那是来源分层乘数、乘进 `weighted_score`，被取消的理由是排序方向反了且 tier 与内容类型混淆；本系数作用于内容类型本身、且不进 `weighted_score`。`curation_runs.weights_json` 因此改为记录整个排序函数（追加 `category_multipliers` 键；仓内无任何结构化读取方，纯追加）。
 - **不与 [ISSUE-FIT-23](../issues/aihot-fit-eval.md) 冲突，两者量的不是同一个参数**。FIT-23（2026-09-06，n=2624）把**五类**偏移一起加进合成分，得 +0.0011（sd 0.0034，13/20），学到的 paper 偏移仅 +0.7。本轮独立重测同一形状得 −0.0135（12/20）——**同为零**。差别在参数个数：五个参数对着 121 条参照精选拟合会过拟合；**单参数版本 FIT-23 从未测过**，它在 20 seed 留出上是 +0.084（20/20，t=15.5）。按 enrich 戳分层不解释这个差（两种戳下均 20/20 为正）。
 - **不与 [ADR-20260907-a1c4](20260907-a1c4-align-architecture-not-just-fields.md) 的接线撤回冲突**：那次把整个分数换成类别条件仿射映射 + 分位对齐**并移动了准入阈值**，TV 0.394→0.615。机制量级远大于一个排序期系数。它仍作为「类别项在此处失败过」的警告成立，这也是本决策只取一个类别、只在一处施加、并带发现通道的原因。
+
+## 上线与核验（2026-09-10T01:49Z）
+
+`404ea80`，已推 `origin/main` / `aiplanet/main` / `tencent/main`（均 fast-forward；推往生产的 commit 集合恰好一个，其父节点与生产 HEAD 逐字相同）。部署前 `./run.sh admin edgeone check` rc=0（无漂移）。
+
+- **公网消费者通道**：`/api/v1/healthz` 200；`/about` 含「论文类条目按 0.95 参与排名」与「不影响是否达到 6.5 阈值」；首页 200 / 2.67s。
+- **T+1 部署验证**（部署后 90 秒的 run `20260910T014733Z-c0a3`）：`paper→0.95`、其余四类 `→1.0`；`weights_json.category_multipliers = {"paper":0.95}`。
+- **实际构成**：industry 14 / tutorial 13 / product 7 / **paper 3** / model 3 = 40。**paper 7.5%，参照 8.2%（≈3.3/40）**。
+- **验证**：六重变异全部转红（拆 `ranking_key` 的系数 / 折回 `weighted_score` / 改系数值 / 删 run 记录里的系数 / 只退 `fresh.sort` / 只退 `filtered.sort`）；全量 2788 passed，10 个 failure 经 stash 同选择器对照全部归为既有红或跨测试干扰；导出树执行检查 30 passed 且先验仪器打中。
 
 ## Consequences
 
