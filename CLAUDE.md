@@ -16,7 +16,7 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
 
 本仓的长期目标之一是**在用户可见的指标上足够接近 AIHOT**。这条工作有一套已定的判据与回路，
 **接手它之前先读** [docs/references/aihot-approximation-metrics.md](docs/references/aihot-approximation-metrics.md)——
-达标线、两个指标家族、数据数量达标的样本量表、以及外层归因回路都在那里，此处只放不可省的三条：
+目标原文、数据清点、达标线、五条轴的处置、量具纪律、外层归因回路都在那里，此处只放不可省的五条：
 
 - **达标线**（用户 2026-09-10 裁定）= **逐类占比落进 AIHOT 该类的 95% CI**，不是整页 TV
   （TV 的绝对值**指不出是哪一类**——相互抵消的偏差在它上面看不见）。权威口径是**生产深度**（用户看到的就是那 40 条，
@@ -30,6 +30,15 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
   [docs/issues/aihot-fit-eval.md](docs/issues/aihot-fit-eval.md) 写下带
   `differential_prediction` 的假设（取数**之前**写），再取对照读数。本仓已有多次"先取数后解释"
   导致结论自撤的记录，那一节列着。
+- **五条轴 2026-09-10 都测过一遍，重开各有条件**（类别乘数 · enrich 分类边界 · 打分聚合 · 流/信源 ·
+  深度）。逐条状态与重开条件在指标档「五条轴的处置」节，**别把它读成五条都已证伪**：深度那条是
+  「效应未建立」（训练/留出方向相反），不是测出没有。两条要点：**`CATEGORY_MULTIPLIERS = {"paper": 0.95}`
+  是当前生产、经用户裁决上线的，不要去撤**（被否的是在它之上再加系数）；**用 AIHOT 自己的真分数当排序键
+  会让达标从 3/5 掉到 0/5**，所以打分轴封顶低于现状。
+- **量具四条最贵的纪律**（完整九条在指标档「量具纪律」节，每条都来自一次实测失败）：
+  **① 逐日归属用 `_shanghai_date`，不用 `published_at[:10]`（UTC 日）**——错开一天，已作废过读数；
+  **② 比较窗口必须夹进参照语料的时间覆盖**；**③ 比两套打分器用同一池的百分位、不用绝对分**；
+  **④ 代理指标不算验收——权威指标要直接量，且改善要跨 split 同向才算效应**（POOLED 的改善不算）。
 
 **CI 会随数据积累变窄，所以判据会变严**：同一个系统的某一类可能从 IN 变成 OUT。那不是回归，
 是分辨力提高——读到这种翻转先看 `n_reference` 有没有变大。

@@ -43,7 +43,7 @@
 | [source-maintenance.md](references/source-maintenance.md) | 信源清单维护与验证规则 [Developer]（aihot_sources.json 机器契约、enabled/paused/fetchable 语义、audit 脚本） |
 | [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)，本档只留取证读数 |
 | [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源历史 recipe [User]（当前 checkout 不可直接执行；完整 package 须从 `29ca189^` 恢复并迁移 v2 contract；仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused） |
-| [aihot-approximation-metrics.md](references/aihot-approximation-metrics.md) | 衡量「与 AIHOT 近似度」的**达标线与指标索引** [Developer]：达标线自 2026-09-10 起是「逐类占比落进 AIHOT 该类 95% CI」，权威口径为生产深度（基线 **3/5**：model 欠配 −5.24pp、industry 超配 +2.40pp，判据自身零假设 P(5/5)=0.949 故为真信号），含「数据数量达标」的样本量表与趋势序列落点；另有逐条拟合台（8 条设闸）与版面构成（无闸）两家族的分辨力限定、**拿这些指标怎么迭代**，以及节奏裁定（不上定时评测，改持续收集） |
+| [aihot-approximation-metrics.md](references/aihot-approximation-metrics.md) | 衡量「与 AIHOT 近似度」的**达标线与指标索引** [Developer]：**这条工作线的单一入口**：任务目标原文与出处（台账不入 git，原文抄在此）、用什么数据判（两个源、并集 16 个日期 / 144 条精选；量具当前用到 9 窗 / 122 条，合并题集上界 10 窗 / 128 条——"数据里有"与"量具够得着"是两件事；含身份锚 `captures_sha` 与两条时间边界）、达标线（自 2026-09-10 起是「逐类占比落进 AIHOT 该类 95% CI」，权威口径生产深度，基线 **3/5**：model −5.24pp、industry +2.40pp，零假设 P(5/5)=0.949 故为真信号）、**五条轴的处置与各自的重开条件**（**不是五条都已证伪**；含"`paper: 0.95` 是当前生产、别去撤"这条警告）、**量具纪律九条**、样本量表与趋势序列落点（该序列现 n=1、尚无趋势可读）；另有逐条拟合台（8 条设闸）与版面构成（无闸）两家族的分辨力限定、**拿这些指标怎么迭代**，以及节奏裁定（不上定时评测，改持续收集） |
 | [web-contract-golden.md](references/web-contract-golden.md) | 行为等价 Web 重构的冻结 DB + HTTP golden 使用边界、命令与 re-baseline 规则 |
 
 ### docs/prd/ [Developer]
