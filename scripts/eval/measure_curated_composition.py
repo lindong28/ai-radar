@@ -695,8 +695,13 @@ def main() -> None:
         # 记录只能靠**删除**来避免污染趋势，因为行内没有任何字段能把它标成"前夹子版本"。
         head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
                               capture_output=True, check=False)
+        # 排除**记录文件自己**：上一轮 append 之后它就与 HEAD 不同，于是 `code_dirty` 从第二轮起
+        # 恒为 true，这个字段也就再区分不出"工作树跑的"与"干净树跑的"——一个自指的恒真字段。
+        # `-- . ':(exclude)<path>'` 用 git 自己的 pathspec 排除，不做字符串过滤。
+        rel_history = Path(args.record).resolve().relative_to(REPO).as_posix()
         dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain",
-                                "--untracked-files=no"], capture_output=True, check=False)
+                                "--untracked-files=no", "--", ".", f":(exclude){rel_history}"],
+                               capture_output=True, check=False)
         row = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "identity": {
