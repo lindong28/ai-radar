@@ -66,8 +66,6 @@ def test_no_tracked_file_is_runtime_owned_on_the_deploy_server() -> None:
     repository's own tracked file list, which is the thing that was wrong.
     """
     root = Path(__file__).resolve().parents[1]
-    if not (root / ".git").exists():
-        pytest.skip("requires a Git checkout")
     sys.path.insert(0, str(root / "deploy" / "sync"))
     import deploy_code
 
@@ -77,16 +75,25 @@ def test_no_tracked_file_is_runtime_owned_on_the_deploy_server() -> None:
     assert is_runtime_owned("data/radar.db")
     assert not is_runtime_owned("data/sources.toml")
 
+    # `git ls-files` only, and therefore SKIPPED where there is no .git -- including
+    # `create-commit`'s export-tree check, which is the gap. A filesystem-walk fallback was built
+    # for that and withdrawn: the most important .git-less tree in this project is the PRODUCTION
+    # home (code arrives via `checkout-index -f -a` from a bare repo, deploy/sync/deploy_code.py),
+    # and it has .env, data/ and logs/ by design -- exactly the three things this predicate
+    # rejects. There the walk produced a red in which no clause was true: those paths are not
+    # tracked, no commit was being refused, production was not stuck. Worse, it fires at the very
+    # moment the docstring above describes (a refused deploy) and points at the wrong cause.
+    # A pristine `git archive` export has no .venv and no `.deployed-sha`; whoever closes this
+    # should gate the fallback on that rather than on ".git is absent".
+    if not (root / ".git").exists():
+        pytest.skip("no .git: cannot tell a pristine export from the production tree")
     tracked = subprocess.run(
-        ["git", "ls-files"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=True,
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
     ).stdout.split()
-    assert tracked, "git ls-files returned nothing; the check would pass vacuously"
-    offenders = [path for path in tracked if is_runtime_owned(path)]
+    source = "git ls-files"
+    assert tracked, f"{source} returned nothing; the check would pass vacuously"
+    offenders = sorted(path for path in tracked if is_runtime_owned(path))
     assert offenders == [], (
-        "these tracked paths are runtime-owned; the deploy will refuse the commit and "
-        f"production will stay on the previous code: {offenders}"
+        f"[{source}] these tracked paths are runtime-owned; the deploy will refuse the "
+        f"commit and production will stay on the previous code: {offenders}"
     )

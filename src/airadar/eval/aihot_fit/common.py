@@ -100,22 +100,29 @@ def isolate_side_effects() -> dict[str, str]:
 # Single owner of the AIHOT category slug -> PrimaryCategory mapping used by the
 # evalset. Values match ``airadar.enrich.classification.PrimaryCategory``.
 #
-# WARNING, measured 2026-09-10: the `tip -> tutorial` row is not a semantic equivalence, and
-# this table is load-bearing -- `build.py` uses it for each question's
-# `reference.primary_category`, which `category_agreement` scores against, and that metric HAS a
-# floor in `thresholds.json`. So the mismatch below is currently charged to our classifier.
+# The `tip -> tutorial` row is most likely a semantic equivalence. Read the boundary below
+# before "fixing" it -- the reasoning went wrong twice, in opposite directions.
 #
-# AIHOT's `tip` is a short-form takes/commentary bucket, not how-to: 71.0% of it is X-form with a
-# 297-char median body, against 40.1% / 467 chars for its `industry`. On 1491 dual-labelled items,
-# P(our label | AIHOT=tip) is industry 43.2% / unlabelled 23.2% / tutorial 20.9%. The earlier
-# justification for this row ("five slugs agree 100% with reference.primary_category on the
-# evalset") is circular: that field is derived from this very slug.
+# 2026-09-10, first pass: measured that 47.9% of what our classifier calls `industry` AIHOT calls
+# `tip`, and concluded this row was a mismapping charged to our classifier. **Withdrawn.**
+# `enrich/prompts_v2.py` already defines `industry` as "一件可指认的商业或制度事件确实发生了"
+# and `tutorial` as "…现象观察、观点…以及不属于上面四类的其余一切", with the tie-break
+# "都不成立才是 tutorial" and a field doc reading "tutorial 是兜底类不是教程". Those four are
+# verbatim quotes. So our `tutorial` is a residual bucket by design, not a how-to class, and a
+# row mapping AIHOT's residual bucket onto it is intent-plausible.
 #
-# NOT changed here, deliberately: editing it moves every historical `category_agreement` reading
-# and the floor derived from them. The user decided on 2026-09-10 to align our taxonomy to
-# AIHOT's instead, which is the work unit that should settle this row -- see
-# docs/issues/aihot-fit-eval.md. Reported by an adversarial reviewer, who noted the fix shipped
-# that day named only the production URL slug as the other consumer and stopped there.
+# **What is NOT established, and an adversarial reviewer was right to flag it:** AIHOT's OWN
+# category definitions are recorded nowhere in this repo. The step "…therefore it is the same
+# boundary as AIHOT's" reads our side's text and INFERS AIHOT's side from observed behaviour. It
+# is an inference presented, in the first version of this comment, as a citation. The reverse
+# direction was never checked either -- items AIHOT files under `industry` that fail our
+# admission line -- and `metrics.py`'s `confusion_matrix.counts` already carries what it takes.
+#
+# Practical consequence, which does not depend on that gap: `category_agreement` scoring our
+# classifier against this row is measuring compliance with a boundary we wrote down, and its
+# floor in `thresholds.json` stands. Do not edit this row on the strength of the withdrawn
+# first-pass reasoning; the open question is AIHOT's definitions, in
+# docs/issues/aihot-fit-eval.md.
 CATEGORY_SLUG_TO_PRIMARY: dict[str, str] = {
     "ai-models": "model",
     "ai-products": "product",

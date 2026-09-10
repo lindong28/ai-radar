@@ -810,3 +810,100 @@ prompt 要求过了，而从来没有人量过它有没有发生。本 program �
 与 `prompt-distribution-fitting.md` 走；后者明写**别拿边际比例当拟合的验收**，要比的是 **per-input
 一致率**，而这 631 条恰好逐条可比。同时注意任何 prompt 改动都会换 enrich 戳，从而触发
 `test_category_multipliers_declare_the_enrich_stamp_they_were_fitted_on`，强制重判 `paper: 0.95`。
+
+### 再订正：industry 超配是真的、且大致就是记账上的量级（2026-09-10，覆盖率补到 100% 之后）
+
+本档上面那条「industry +4.5pp（不是 +8.5pp）」**取自一个有偏子集，已被更完整的覆盖推翻**。
+
+那个 +4.5pp 只用了版面上**被 AIHOT 收录过**的那部分（约 87.6%）。这个子集对 industry 是**系统性偏低**的：
+我方 industry 偏多的条目，恰恰不成比例地落在 AIHOT 从未收录的那 70% 里——所以拿它去估整页的 industry
+超配，方向注定偏小。这与本档「版面深度是混淆变量」那条同族：**不是仪器坏了，是比较的样本不是要问的样本**。
+
+把 9 个日窗版面上剩余 57 条全部标完、覆盖率到 **360/360 = 100%** 之后（对齐深度 165/169 = 97.6%）：
+
+| | 我方整页(40/天) | 我方·对齐深度 | AIHOT 精选 | 整页差 | 对齐深度差 |
+|---|---|---|---|---|---|
+| tip | 36.9% | 32.7% | 32.8% | +4.1pp | **−0.1pp** |
+| **model** | 15.8% | 17.6% | 31.1% | **−15.3pp** | **−13.5pp** |
+| product | 13.9% | 16.4% | 14.8% | −0.9pp | +1.6pp |
+| **industry** | 22.2% | 20.6% | 13.1% | **+9.1pp** | **+7.5pp** |
+| paper | 11.1% | 12.7% | 8.2% | +2.9pp | +4.5pp |
+| **TV** | **0.162** | **0.136** | — | | |
+
+**三条订正，逐条对应我之前说过的话**：
+
+1. **「industry 超配只有 +4.5pp、记账上那个 +8.5pp 有一半是量具造的」——撤回。** 对齐深度下是 **+7.5pp**，
+   整页 **+9.1pp**，与记账量级一致。`tip → tutorial` 那个误译**确实**污染过读数，但被它污染的主要是
+   **tutorial 那一列**（现在对齐深度下只差 −0.1pp，欠配整个消失），不是 industry 那一列。
+2. **对齐深度下真正最大的缺口是 model −13.5pp，不是 industry。** 与 T13 的归因一致：不在打分，
+   在「什么东西进了排序器」（我方页面约 70% 的条目 AIHOT 根本没收录）。这是流侧。
+3. **`paper: 0.95` 的对照在整页口径下仍然成立**：同一份标注，`--multiplier paper=1.0` 给 TV **0.168**、
+   生产给 **0.162**。方向与合并 AIHOT-only 口径（0.176 → 0.156）一致。
+
+**方法教训（本 program 第六次同族）**：前五次是「把非随机切片当总体读」，第六次是我**在已经知道这条
+教训、并且已经把它写进 `docs/experiences/measurement.md` 之后**，又用一个有偏子集去修正一个整体量，
+还把修正结果当成对记账的推翻交了出去。子集偏差的方向本来是可以先想清楚的：AIHOT 收录与否不是随机的。
+
+**整页口径入口自此可复现**：`scripts/eval/measure_curated_composition.py` 默认即整页（覆盖率 100%），
+脚本自己打印覆盖率与「跨标注器」限定；历史 AIHOT-only 口径用 `--labels off` 复现（TV 0.156 / 覆盖 65.0%）。
+
+### 三订正：整页那组数不作为权威读数保留（2026-09-10，第二轮 review gate 报出）
+
+上面「再订正」那张表（整页 TV 0.162、industry +9.1pp、对齐深度 +7.5pp、tip 欠配 −0.1pp）
+**撤回其权威性**。理由不是算错，是**它靠的那批标签的校准结构上覆盖不到它被用的地方**：
+
+- 校准读数（40 条、80.0%）取自 `hand ∩ AIHOT`；而实际参与构成的是它的**补集** `hand_only`
+  （`measure_curated_composition.py` 的权威规则：AIHOT 有标签就用 AIHOT 的）。
+- 于是 360 个格位里 **96 个**用的是模型标签，而那 96 个格位**一个都没被校准过**——校准永远采自
+  「AIHOT 收录过」的那一侧，模型标签永远用在「AIHOT 没收录」的那一侧。
+- **这正是本档上一节刚写下的那条教训点名的非随机切分，方向相反地又用了一次。**
+  连续三次：①「industry +4.5pp」用有偏子集偏小 → ②补到 100% 得 +9.1pp → ③而那 100% 是靠
+  校准覆盖不到的格位填的。
+
+评审者给的敏感度算术（**是在我的数上做的算术，不是新读数**）：新批 57 条里 industry 17 条，若 AIHOT
+的实际行为会把其中约一半划进 tip（用本轮量到的那一格比率），整页 industry 从 +9.1pp 移向 ~+7pp、
+tip 从 +4.1pp 移向 ~+6pp。**后者足以推翻「tip 欠配整个消失」那句。**
+
+**仍然站得住的**（不依赖模型标签）：
+- 覆盖率机制本身：脚本默认整页、覆盖率现算现打印、`--labels off` 复现历史 AIHOT-only 口径
+  （TV 0.156 / 覆盖 65.0%）。**「整页口径无可复现入口」这一项确实闭合了**——闭合的是入口，不是读数。
+- AIHOT-only 口径下 `paper: 0.95` 的对照：0.176 → 0.156。
+- 「industry 超配是真的」这个方向：三种口径（AIHOT-only 匹配子集 / 对齐深度 / 整页）都是正号。
+
+**闭合方式脚本自己写着**：刻意留一批**与 AIHOT 重叠**的条目、在新口径下标，才产出能覆盖到 `hand_only`
+那一侧的校准。未做。
+
+### 本轮撤回的两个实现（2026-09-10，第二轮 review gate）
+
+**一 · `ranking_key` 源码摘要（`ranking_key_sha256`）——建了又撤，同一轮。**
+`inspect.getsource` 读的是**磁盘上的文件，不是被加载的那份代码**。评审者在本仓解释器上实测三种形态：
+文件被新版本覆盖 → 返回**别的代码块**（拿到 `'import os\n'`），摘要是个看着完全正常的错值；
+文件被截空 → 摘要 `01ba4719c80b`，同样是正常形态的错值；文件只写了一半 → 抛 `tokenize.TokenError`，
+**它不是 `OSError`/`TypeError` 的子类**，我写的 `except (OSError, TypeError)` 接不住 ⇒ **整轮 curate 失败**。
+可达性是实的：生产部署用 `checkout-index -f -a` 直接刷 live 工作树、持 `data/.deploy.lock`，而 pipeline
+持的是 `.pipeline.flock`，`deploy_code.py` 对 pipeline 锁**零引用** ⇒ 部署可以在 curate 跑到一半时重写
+`select.py`。另外三条：记录字段可以永久是 `None` 而全套测试仍绿；把 `getsource(ranking_key)` 换成
+`getsource(_enrich_watermark)` 仍 32 passed（我的测试验的是「摘要是 getsource 返回值的函数」，不是
+「取自 ranking_key」）；摘要的射程比我在记录里宣称的窄（`category_multiplier` 的默认、
+`_primary_category` 的兜底、`weighted_score` 的算式都在它之外）。
+**撤回，理由写进 `_ranking_record` 的 docstring。** 用户点名的那一项（「类别快照与 tie-breaker」）由
+`enrich_watermark` + `ranking_tiebreakers` 已经满足，代码版本固定是我自己加的范围。
+
+**二 · tracked-path 守卫的导出树兜底——建了又撤，同一轮。**
+去掉 skip 之后，它在**生产部署目录**上给出一条**没有一句是真的**的红：生产 home 没有 `.git`（代码由裸仓
+经 `checkout-index` 刷入），而它按设计必然有 `.env`、`data/`、`logs/`——正是那个谓词要拦的三类。
+实测消息：`['.env', 'data/radar.db', 'logs/pipeline.log']` 被报成「tracked，部署会拒绝这个 commit，
+生产会停在旧代码」——三句都不成立。**而它开火的场合正是该测试自己描述的那次事故现场**（部署被拒、
+健康检查在 page），此时它把人指向错误的原因；改动前那里是 skip。
+**撤回。** 评审者同时给出了正确判据、而我把它扔了：纯净 `git archive` 导出树**没有 `.venv`、也没有
+`.deployed-sha`**（部署会写后者），兜底该按那个门，而不是按「`.git` 不存在」。已写进测试注释。
+
+### `/plans/` 之后多了一条 ignore 规则，`test_repository_hygiene` 因此常红（2026-09-10，未修）
+
+`tests/test_repository_hygiene.py::test_execution_plan_workspace_is_ignored_and_untracked` 断言
+`.gitignore` 里 `/plans/` 之后没有别的规则，而 `/.label-serve/` 就在它后面（来自 `6c03a09`）。
+工作树与 `git archive` 导出树上都是 `1 failed, 1 passed`。**非本轮改动，未代改**。
+
+**它的代价是实的**：`create-commit` 的导出树执行检查按**文件**跑，所以任何改到这个文件的 commit，
+那道闸读出来都是 `1 failed`。本轮我报「导出树里由 1 skipped 变 1 passed」，那个读数取自一次**过滤过的
+单测试运行**，同文件里的这条红被过滤掉了——评审者按 `边界命中` 报出，判得对。

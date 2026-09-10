@@ -542,11 +542,21 @@ def _ranking_record(weights: Weights, enrich_watermark: int | None) -> dict[str,
     field list alone does not say that. ``enrich_watermark`` pins the categories -- see
     ``_enrich_watermark``.
 
-    Still NOT pinned: the code version of ranking_key itself. A future edit to that function
-    reorders past runs on replay and nothing here records which version produced them.
+    Still NOT pinned: the ORDERING CODE. Editing `ranking_key`, `category_multiplier`'s default,
+    `_primary_category`'s fallbacks, or the `weighted_score` formula reorders every archived run
+    on replay, and no recorded field moves. A source digest via `inspect.getsource` was built for
+    this and withdrawn the same day: it reads the file on DISK, not the loaded code, so a deploy
+    rewriting `select.py` mid-curate (the deploy lock and the pipeline lock are disjoint) yields
+    a plausible-looking wrong digest, an empty-file digest, or a `tokenize.TokenError` -- which
+    is not an OSError and would take curation down. Whatever closes this must hash the loaded
+    code, and must cover the four sites above rather than one function.
 
-    Purely additive: nothing in this repo parses ``weights_json`` structurally (checked
-    2026-09-10 -- every reference is an INSERT), so the extra keys break no consumer.
+    Purely additive: nothing in this repo parses ``weights_json`` structurally, so the extra keys
+    break no consumer. (Checked 2026-09-10. An earlier version of this line said "every reference
+    is an INSERT", which is false -- ``web/routes/curated.py`` does ``SELECT * FROM
+    curation_runs`` and several tests select the column. What actually holds is the weaker,
+    sufficient claim: every read site was inspected and none destructures this JSON; the route
+    takes only ``id`` and ``ruleset_version``.)
     """
 
     return {

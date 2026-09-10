@@ -56,25 +56,34 @@ CAPTURES_REF = "origin/captures/daily"
 # tracks a data/ path (runtime-owned). Measured the hard way on 09dea35.
 DEFAULT_LABELS = Path(__file__).resolve().parent / "labels" / "page-categories.jsonl"
 
-# AIHOT 的 slug -> **AIHOT 自己的桶名**。这里刻意不再翻译成我方的五类名。
+# AIHOT 的 slug -> **AIHOT 自己的桶名**。这里刻意不翻译成我方的五类名，但理由不是「两套口径不同」。
 #
-# 此前这张表把 `tip` 写成 `tutorial`，并声称「在题集上五个 slug 对 reference.primary_category
-# 各 100% 一致」。那个校准是**循环的**：题集的 `reference.primary_category` 本来就是从同一个
-# slug 派生的，所以它只证明了 slug->名字这一步没写错，证明不了 AIHOT 的 `tip` 与我方
-# `tutorial` 指同一件事。2026-09-10 实测它们不指同一件事（n=1491 双标注）：
+# **我方这一侧的口径读起来就是那条界**（AIHOT 自己的类目定义仓内没有记载，见 common.py 的长注释——
+# 「两侧同界」是推断，不是引用）。`enrich/prompts_v2.py` 把 `industry` 定义成「一件可指认的商业或制度
+# 事件确实发生了」，把 `tutorial` 定义成「现象观察、观点…以及不属于上面四类的其余一切」，平局规则
+# 「都不成立才是 tutorial」，字段文档写着「tutorial 是兜底类不是教程」。那就是 AIHOT 的 industry/tip。
+#
+# **不同的是实测行为，不是定义**（n=1491 双标注，2026-09-10）：
 #
 #   P(我方标签 | AIHOT=tip)：industry 43.2% · 无标签 23.2% · tutorial 20.9% · product 6.3% · model 6.2%
-#   形态：AIHOT `tip` 桶 71.0% 是 X 形态、正文中位 297 字；AIHOT `industry` 桶 40.1% / 467 字
-#   争议条目（我方 industry / AIHOT tip）65.9% 是 X 形态，双方一致的 industry 只有 32.9%
+#   我方标 industry 的 631 条里 302 条（47.9%）AIHOT 标 tip；那些条目 65.9% 是 X 形态短文。
+#   抽看 20 条（「a reset a day keeps anthropic away」一类）没有一条满足「一件可指认的事件确实
+#   发生了」——**这是 20 条的抽样，不是对 302 条的全称断言**（本注释第一版把它写成了全称）
 #
-# 即 AIHOT 的 `tip` 是**短文/观点/吐槽的残余桶**，不是 how-to 教程。翻译成 `tutorial` 会让
-# 「我方标签 vs AIHOT 标签」的任何比较凭空多出一个 +24.7pp 的 industry 差。
+# 所以桶名保持 `tip`：**它命名的是 AIHOT 实际填进去的东西，而我方 `tutorial` 字段实际装的是另一批**。
+# 两个名字放在一起会让读者以为可以互换，而 P(我方=tutorial | AIHOT=tip) 只有 20.9%
+#（**单向条件概率**，不是对称的「重叠率」；反方向没量）。这是**分类器不遵守自己已有的准入
+# 线**，不是口径分歧——归因与下一步见 docs/issues/aihot-fit-eval.md。
+#
+# （历史：本注释第一版写的是「翻译成 tutorial 缺乏依据、它们不指同一件事」。读了 prompt 正文之后
+# 那句是错的——定义指同一件事，行为不指。改名的结论不变，理由换了。）
 #
 # 注意这条只作用于**跨标注器**的比较：本脚本的 TV 两侧都用 AIHOT 标签，桶名是双射改名，
-# 故历史 TV 读数（含 CATEGORY_MULTIPLIERS 的拟合依据）**不受影响**。
+# 故历史 TV 读数（含 CATEGORY_MULTIPLIERS 的拟合依据）**不受影响**——实测改名前后 POOLED TV
+# 都是 0.156。
 #
-# 生产侧 `classification.PRIMARY_CATEGORY_SLUGS` 把我方 `tutorial` 的 URL slug 也写作 `tip`。
-# 那是**用户可见的 URL**，不在本脚本的射程内，不要顺手改。
+# 生产侧 `classification.PRIMARY_CATEGORY_SLUGS` 把我方 `tutorial` 的 URL slug 也写作 `tip`，
+# 那是**用户可见的 URL**，不在本脚本射程内。按上面的订正，那个 slug 其实**取对了**。
 SLUG_TO_BUCKET = {
     "ai-products": "product",
     "paper": "paper",

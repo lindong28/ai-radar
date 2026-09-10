@@ -1,6 +1,7 @@
 # 版面条目的 AIHOT 桶标注。词表 = aihot-bucket-v1（tip/model/product/industry/paper）。
-# tip 是 AIHOT 的**短文/观点/吐槽残余桶**，不是 how-to 教程——判据见
-# scripts/eval/measure_curated_composition.py 的 SLUG_TO_BUCKET 注释。
+# tip 是残余桶（分析/复盘/观点/现象观察 + 其余一切），不是 how-to 教程。判据见
+# src/airadar/eval/aihot_fit/common.py 的长注释——**它同时写明「两侧同界」是推断而非引用**，
+# 因为 AIHOT 自己的类目定义仓内没有记载。本文件三批的自述口径并不一致，逐批看 batch 字段。
 # 冲突时 AIHOT 自己发布的标签权威，本文件只补它没有的条目。
 {"item_id": "ecd2f1d8db7d9836", "day": "2026-09-08", "category": "product", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "note": "标注时已知 tip 的真实语义；与本 session 早前那次 81.7% 盲测校准不可直接比较，那次校准是在 tip==tutorial 的错误理解下做的"}
 {"item_id": "5b3476f772257cb9", "day": "2026-09-08", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "note": "标注时已知 tip 的真实语义；与本 session 早前那次 81.7% 盲测校准不可直接比较，那次校准是在 tip==tutorial 的错误理解下做的"}
@@ -89,3 +90,65 @@
 {"item_id": "7e3ee8515955a639", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "calibration-20260910-blind"}
 {"item_id": "3c5ef25d4d08bfc2", "category": "model", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "calibration-20260910-blind"}
 {"item_id": "8ec30eece9f4ca18", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "calibration-20260910-blind"}
+#
+# 2026-09-10 第三批：把 9 个日窗版面上剩余未标注的 57 条补齐，使覆盖率到 100%。
+# 标注时的口径已按 prompts_v2.py 的原文校准：industry 要求「一件可指认的商业或制度事件
+# 确实发生了」（钱动了/所有权人事变了/监管司法政策落地了），tip 是残余桶（分析、评测、
+# 复盘、解读、现象观察、观点，以及不属于其余四类的一切）。
+{"item_id": "c07dbb70da6124b7", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "5211afa16c2be256", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "9a3fe0fc21d5e6c6", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "f7111c6a07905f28", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "2b3b9d754752a035", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "3c4f3d8af34f822c", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "4a354cb990bc301a", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "3f86ec01a1667e7e", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "ec743d76c8c68ec8", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "dac6e6daccb40045", "category": "product", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "47254d71586b0456", "category": "paper", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "b27c835c5b14ff33", "category": "paper", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "cb83578983bf3ae4", "category": "product", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "5d53470055fb2afe", "category": "paper", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "ef7fb1259cd178f1", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "8bb972e97349978c", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "b71b3dbfdb689b22", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "0315e2aa12aa6ad9", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "3df2dba6f4bd8f4d", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "bc74da4a1efb48b4", "category": "paper", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "2848e2a634b7975a", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "6362262796ac5d08", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "b9ec9fed0c86327a", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "55cf4416762c92c0", "category": "model", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "121b19677db20aa7", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "32287a2f0ffe1fd2", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "439b3b83c85d1c8c", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "d2cc0446565c79ba", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "c886d70b9cbd9ee8", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "ec9c6b501991d403", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "220f80942a81b17b", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "283cf42d3c31d478", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "36dfda966663479b", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "c907a0c71238fe1e", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "7ad7976e5eca7b64", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "431cae7d3cb77d66", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "e7ea8b4e0f43ea87", "category": "paper", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "5a94c3479067f379", "category": "model", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "43d5faa286ef2b61", "category": "model", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "ab53130ca4c27e8e", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "77a81bcae3ecd546", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "1047453cd7ee04f5", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "f85b6fd797b03483", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "685d122ae50e55e0", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "eb7e203d940ed11b", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "87c7587c6563f0ed", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "ecfbd4cd0f02feb8", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "3ce2381d8cdfe30c", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "201d9e6538e8209e", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "24904aae33c8b9bb", "category": "product", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "bb9f2cb14ac4b23e", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "ce836519b6ec0d94", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "a49cf4242cfb7e9c", "category": "industry", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "b2ad8aaca40314c4", "category": "product", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "3e808bc60ac69685", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "4278844f017a4de3", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
+{"item_id": "6464368125abf7ad", "category": "tip", "labeller": "claude-opus-5", "labelled_at": "2026-09-10", "vocabulary": "aihot-bucket-v1", "batch": "page-completion-20260910"}
