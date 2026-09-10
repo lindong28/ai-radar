@@ -43,7 +43,7 @@
 | [source-maintenance.md](references/source-maintenance.md) | 信源清单维护与验证规则 [Developer]（aihot_sources.json 机器契约、enabled/paused/fetchable 语义、audit 脚本） |
 | [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)，本档只留取证读数 |
 | [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源历史 recipe [User]（当前 checkout 不可直接执行；完整 package 须从 `29ca189^` 恢复并迁移 v2 contract；仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused） |
-| [aihot-approximation-metrics.md](references/aihot-approximation-metrics.md) | 衡量「与 AIHOT 近似度」的指标索引 [Developer]：逐条拟合台（8 条设闸）与版面构成（无闸）两个家族、各自住在哪、有没有达标线、以及读它们之前必须知道的四条分辨力限定；另含**拿这些指标怎么迭代**（外层归因回路 + 内层可比性闸 / floor 与样本量成对）与它当前断在哪三处（含「没有定时作业」） |
+| [aihot-approximation-metrics.md](references/aihot-approximation-metrics.md) | 衡量「与 AIHOT 近似度」的**达标线与指标索引** [Developer]：达标线自 2026-09-10 起是「逐类占比落进 AIHOT 该类 95% CI」，权威口径为生产深度（基线 **3/5**：model 欠配 −5.24pp、industry 超配 +2.40pp，判据自身零假设 P(5/5)=0.949 故为真信号），含「数据数量达标」的样本量表与趋势序列落点；另有逐条拟合台（8 条设闸）与版面构成（无闸）两家族的分辨力限定、**拿这些指标怎么迭代**，以及节奏裁定（不上定时评测，改持续收集） |
 | [web-contract-golden.md](references/web-contract-golden.md) | 行为等价 Web 重构的冻结 DB + HTTP golden 使用边界、命令与 re-baseline 规则 |
 
 ### docs/prd/ [Developer]

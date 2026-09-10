@@ -79,4 +79,37 @@ check "names the actual file" "$( grep -c 'loose.tmp' "$r"/tool/logs/*.log )" "1
 check "but does not fail the run -- it no longer blocks tomorrow" "$rc" "0"
 rm -rf "$r"
 
+echo "8. AIHOT has not advanced its canonical window yet -- the tool refuses to overwrite a"
+echo "   window that IS already on disk. That is the steady state on most days, not a failure."
+echo "   Measured 2026-09-10: a manual re-run ~9h after the cron slot fetched the whole surface"
+echo "   (33 min) and refused the same window, so the timing hypothesis is dead."
+echo "   The two assertions after the exit code are the ones every other terminal-state case"
+echo "   here already had, and their absence is exactly why the first version of this branch"
+echo "   could skip retention and the exit-time dirty check unnoticed."
+r=$(setup); rc=$(run "$r" 'bash -c "echo \"ERROR target_exists: refusing to overwrite windows/w1\"; echo \"Choose a new output path and retry; existing files are never overwritten.\"; exit 2" --')
+check "benign steady state exits 0"      "$rc" "0"
+check "names the window it skipped"      "$( grep -c 'SKIP: windows/w1' "$r"/tool/logs/*.log )" "1"
+check "retention still ran"              "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+check "clean at exit"                    "$(dirt "$r")" "0"
+rm -rf "$r"
+
+echo "8b. a refusal naming a window that is NOT on disk is a real defect (a date-computation"
+echo "    bug colliding with something else) and must NOT be silently passed. The message is"
+echo "    the verbatim line from logs/aihot-capture-20260910-103623.log, so the extraction is"
+echo "    pinned against a real sample rather than a hand transcription."
+r=$(setup); rc=$(run "$r" 'bash -c "echo \"ERROR target_exists: refusing to overwrite windows/2026-09-08T000000Z--2026-09-09T000000Z\"; exit 2" --')
+check "unknown window still fails"   "$rc" "2"
+check "and is not logged as a skip"  "$( grep -c 'SKIP:' "$r"/tool/logs/*.log )" "0"
+rm -rf "$r"
+
+echo "8c. a skip day that ALSO leaves the tree dirty must still fail: a dirty tool checkout"
+echo "    makes tomorrow's capture refuse to run, and tomorrow is not recoverable. \"No new"
+echo "    window today\" and \"nothing is wrong\" are two claims, not one."
+r=$(setup); rc=$(run "$r" 'bash -c "echo oops > oops.tmp; echo \"ERROR target_exists: refusing to overwrite windows/w1\"; exit 2" --')
+check "dirty tree overrides the skip"  "$rc" "2"
+check "and the dirt is reported"       "$( grep -c 'worktree dirty at exit' "$r"/tool/logs/*.log )" "1"
+rm -rf "$r"
+
+
+
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]

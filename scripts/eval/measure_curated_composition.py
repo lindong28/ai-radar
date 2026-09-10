@@ -8,10 +8,19 @@
 它同时是 `select.CATEGORY_MULTIPLIERS` 的**发现通道**：改了系数、或 enrich prompt 改版之后，
 跑它一次就能看出页面构成往哪边走。
 
-用法（只读，不写库，不出网）：
+用法（不写库、不出网；**传 `--record` 时会追加一行到历史序列文件**，那是唯一的写盘路径）：
 
     uv run python scripts/eval/measure_curated_composition.py
     uv run python scripts/eval/measure_curated_composition.py --multiplier paper=1.0   # 对照
+    uv run python scripts/eval/measure_curated_composition.py --depth ours --labels off --record
+                                                            # ^ 达标线的**权威口径** + 记一轮迭代
+
+**权威口径是 `--depth ours`，不是 `--depth aihot`。** 目标写的是"用户可见的指标"，用户看到的就是
+生产那 40 条；而且它的 n 是对齐深度的 2.6 倍，**判据只在这里有分辨力**——实测判据自身零假设
+P(5/5) 生产深度 0.949（`3/5` ⇒ p=0.002，真信号）vs 对齐深度 0.602（`3/5` ⇒ p=0.102，判不出）。
+对齐深度留作归因辅助：它分离"深度选择"与"排序质量"，但样本量不够判达标。
+（本 docstring 第一版把 `--depth aihot` 写成权威口径，与同一轮定下的决策相反——复核轮报出。
+文件头是下一个操作者唯一会照抄的东西，照抄它就会把一个不具分辨力的读数写进趋势文件。）
 
 **边界，读数之前必须知道三条**：
 
@@ -32,14 +41,17 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import gzip
 import hashlib
 import json
+import math
 import random
 import sqlite3
 import statistics
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -55,6 +67,9 @@ CAPTURES_REF = "origin/captures/daily"
 # Next to this script, NOT under data/: the production deploy refuses any commit that
 # tracks a data/ path (runtime-owned). Measured the hard way on 09dea35.
 DEFAULT_LABELS = Path(__file__).resolve().parent / "labels" / "page-categories.jsonl"
+# 达标线读数的历史序列。同样不在 data/ 下，理由同上；而它必须 git-tracked，因为「随迭代轮次
+# 逐步逼近 AIHOT 的 CI」这条期望（用户 2026-09-10）只有在读数**跨 session 存活**时才验证得了。
+DEFAULT_HISTORY = Path(__file__).resolve().parent / "composition-history.jsonl"
 
 # AIHOT 的 slug -> **AIHOT 自己的桶名**。这里刻意不翻译成我方的五类名，但理由不是「两套口径不同」。
 #
@@ -285,6 +300,105 @@ def pooled_null(reference: Counter, n_ours: int, trials: int = 20000) -> dict:
     }
 
 
+def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """二项占比的 Wilson 95% 区间。正态近似在 k 很小时会给出负下界，这里的类别恰好就那么小。"""
+
+    if n <= 0:
+        return (0.0, 1.0)
+    center = (k + z * z / 2) / (n + z * z)
+    half = z * math.sqrt(k * (n - k) / n + z * z / 4) / (n + z * z)
+    return (max(0.0, center - half), min(1.0, center + half))
+
+
+def class_verdicts(ours: Counter, reference: Counter) -> dict:
+    """达标线（用户 2026-09-10 裁定）：**逐类占比落进 AIHOT 该类的 95% CI**。
+
+    为什么换掉整页 TV：那个绝对值在当前样本量下判不出差异（对齐深度 p≈0.22，见 `pooled_null`），
+    于是「够不够接近」这个问题它永远答不了。逐类占比换来的是**现在就判得动**，且每类各自成立才算过，
+    比一个聚合标量更难糊弄——一类超配、另一类欠配可以在 TV 上互相抵消，在这里不行。
+
+    刻意只取 AIHOT 一侧的 CI（用户原话「落进 AIHOT 的 CI」），因此它**不计我方的抽样误差**：
+    我方占比自己的抖动就能把我们推出区间。方向是偏严而非偏宽——缓解措施是 `verdict_null()`：
+    它直接给出"我方构成正确时会落进几类"的分布，比逐类看我方 CI 更直接。我方自己的 CI 仍逐类算出
+    并写进 `--record` 的行里（`ours_ci`），只是不占屏幕宽度。（本 docstring 第一版写的是"下面
+    一并打印"，而新表不印它——复核轮报出这条自陈与代码相矛盾。）
+
+    已知限制：判据的分辨力就是各类 CI 的宽度，而它由 AIHOT 一侧的 n 决定。**逐类不同，别只报最窄
+    那一类**——当前（n_ref=122）实测半宽 tip ±8.22 / model ±8.11 / product ±6.29 / industry ±6.00 /
+    paper ±4.96 pp，所以盲区上界是 **±8.2pp**、不是 paper 那条 ±5pp（本 docstring 第一版就是这么
+    低估了 1.7 倍，第三轮 review gate 报出）。半宽随每次运行打印，不写死在这里。
+    """
+
+    n_ours = sum(ours[c] for c in CATEGORIES)
+    n_ref = sum(reference[c] for c in CATEGORIES)
+    # 与 `total_variation` / `pooled_null` 同一道最小样本闸。没有它时，n_ref=8 的 CI 半宽约 ±22pp，
+    # 几乎必然报 5/5 并打出「已达标」——一次空洞达标。此前挡住它的只是 `pooled` 为 None 时那句
+    # f-string 格式化崩溃，即一个与本判据无关的异常在充当守卫（第三轮 review gate 报出）。
+    if n_ours < 8 or n_ref < 8:
+        return {"n_ours": n_ours, "n_reference": n_ref, "rows": [], "inside_count": None,
+                "total": len(CATEGORIES), "passed": None, "reason": "样本不足（任一侧 < 8）"}
+    rows = []
+    for category in CATEGORIES:
+        low, high = wilson_ci(reference[category], n_ref)
+        ours_share = ours[category] / n_ours if n_ours else 0.0
+        rows.append(
+            {
+                "category": category,
+                "ours_k": ours[category],
+                "ours_share": ours_share,
+                "ours_ci": wilson_ci(ours[category], n_ours),
+                "reference_k": reference[category],
+                "reference_share": reference[category] / n_ref if n_ref else 0.0,
+                "reference_ci": (low, high),
+                # 这条就是本判据在这一类上的分辨力，逐类不同。打印出来，免得读者拿最窄那条当全局。
+                "reference_ci_halfwidth_pp": 100 * (high - low) / 2,
+                "inside": low <= ours_share <= high,
+                # 差多少才进得去——0 表示已在区间内。给方向，免得读者自己减。
+                "gap_pp": 0.0
+                if low <= ours_share <= high
+                else 100 * (ours_share - high if ours_share > high else ours_share - low),
+            }
+        )
+    inside = sum(1 for r in rows if r["inside"])
+    # 顶层键刻意叫 `inside_count` 而不是 `inside`：`rows[i].inside` 是布尔，同名不同型是
+    # 消费者最容易踩的一种——`if record["inside"]` 会把 1/5 读成"达标"。另给一个显式的 `passed`。
+    return {"n_ours": n_ours, "n_reference": n_ref, "rows": rows,
+            "inside_count": inside, "total": len(rows), "passed": inside == len(rows)}
+
+
+def verdict_null(reference: Counter, n_ours: int, trials: int = 20000) -> dict:
+    """达标线自己的零假设：**我方构成与 AIHOT 完全相同时，`inside` 会取什么值。**
+
+    这个函数是第三轮 review gate 报出的 HIGH：`class_verdicts` 的头条读数 `k/5` 在它下方 20 行
+    重建了 `pooled_null` 存在所要消灭的那个缺陷——一个绝对值没有零假设，于是「真有差距」与
+    「样本量就这么大」在输出上同形。实测（n_ours=137 / n_ref=122）：一张**完全符合** AIHOT 构成
+    的页面只有约 77% 概率拿到 5/5，而 4/5 是它第二常见的结果。也就是说单看 `4/5` 判不出
+    「差一类」与「已经完美、只是抖动」。
+
+    只抽我方一侧：判据本身就只拿我方点估计比 AIHOT 的 CI（那是用户定的形态），所以零假设要
+    复现的正是"我方以正确构成抽 n_ours 条"这件事，参照侧的 CI 保持它实际的样子。
+    """
+
+    total = sum(reference[c] for c in CATEGORIES)
+    if total < 8 or n_ours < 8:
+        return {}
+    weights = [reference[c] / total for c in CATEGORIES]
+    bounds = {c: wilson_ci(reference[c], total) for c in CATEGORIES}
+    counts: Counter = Counter()
+    for seed in range(trials):
+        rng = random.Random(1_000_000 + seed)
+        draw = Counter(rng.choices(CATEGORIES, weights=weights, k=n_ours))
+        inside = sum(
+            1 for c in CATEGORIES if bounds[c][0] <= draw[c] / n_ours <= bounds[c][1]
+        )
+        counts[inside] += 1
+    return {
+        "p_all_inside": counts[len(CATEGORIES)] / trials,
+        "expected_inside": sum(k * v for k, v in counts.items()) / trials,
+        "distribution": {k: counts[k] / trials for k in range(len(CATEGORIES) + 1)},
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", default=str(REPO / "data" / "radar.db"))
@@ -314,6 +428,16 @@ def main() -> None:
         choices=("ours", "aihot"),
         default="ours",
         help="ours=按生产的 40 条上限；aihot=按 AIHOT 当日实际条数（对齐深度，见 docstring 边界 3）",
+    )
+    parser.add_argument(
+        "--record",
+        nargs="?",
+        const=str(DEFAULT_HISTORY),
+        default=None,
+        metavar="PATH",
+        help="把本次逐类判据追加进历史序列（默认 scripts/eval/composition-history.jsonl）。"
+        "**只在这次运行代表一轮迭代时传它**——探索性对照（如 --multiplier paper=1.0）不该进序列，"
+        "否则「随迭代逼近」这条趋势会被同一时点的不同参数搅成噪声。",
     )
     args = parser.parse_args()
 
@@ -422,7 +546,8 @@ def main() -> None:
         print(f"因系数跌破 threshold 而整个掉出候选池的条目: {dropped_by_gate}")
     print(f"{'日期':12}{'候选':>7}{'覆盖(标注/版面)':>17}{'我方':>26}{'AIHOT':>26}{'TV':>8}")
     ours_pooled, reference_pooled = Counter(), Counter()
-    day_sizes = []
+    day_sizes: list[int] = []
+    day_params: list[dict] = []
     page_slots = labelled_slots = 0
     for day in days:
         pool = by_day[day]
@@ -435,7 +560,21 @@ def main() -> None:
             if args.depth == "aihot"
             else sel.DEFAULT_LIMIT
         )
-        picked = sel._fill(fresh, eligible, limit, sel.DEFAULT_FRESHNESS_QUOTA, sel.DEFAULT_SOURCE_QUOTA)
+        # `_fill` 的 fresh 段**不受 limit 夹**（`select.py` 那里自陈「the fresh segment is not
+        # clamped to limit」），而 `DEFAULT_FRESHNESS_QUOTA = 36`。生产 limit=40 > 36，所以那条
+        # 在生产上无后果；但 `--depth aihot` 的 limit 常常小于 36，于是它每天照样灌到 36 条——
+        # **深度根本没被对齐，而读数仍标着「对齐深度」**。实测（2026-09-10，第三轮 review gate
+        # 报出）：9 个日窗 picked 合计 **169**，而各日 limit 之和是 **122**。
+        #
+        # 修法两步：按生产的同一比例缩放 freshness 配额（36/40 = 0.9，保持"九成来自当日"这个
+        # 机制形状），再硬夹到 limit。只夹不缩放会让浅深度下 100% 来自 fresh 段，那是另一种失真。
+        freshness_quota = max(1, round(limit * sel.DEFAULT_FRESHNESS_QUOTA / sel.DEFAULT_LIMIT))
+        picked = sel._fill(fresh, eligible, limit, freshness_quota, sel.DEFAULT_SOURCE_QUOTA)[:limit]
+        # 逐日记生效值，不是模块默认值：`--depth aihot` 下 limit 是逐日的、配额是新算的，
+        # 身份块里放 `DEFAULT_LIMIT` 会是**对该次运行为假的字段**，而假字段比缺字段更坏
+        # （它看起来已经答过了）。复核轮报出。
+        day_params.append({"day": day, "limit": limit, "freshness_quota": freshness_quota,
+                           "picked": len(picked)})
         mine = Counter(labels[c.item_id] for c in picked if c.item_id in labels)
         ours_pooled += mine
         reference_pooled += reference_by_day[day]
@@ -480,6 +619,7 @@ def main() -> None:
     # 零假设必须与它同时打印。少了它，这个数在「真有差距」与「样本量就这么大」两种情况下同形——
     # 而 2026-09-10 补算发现对齐深度下正是后者（p=0.21）。
     null = pooled_null(reference_pooled, sum(ours_pooled[c] for c in CATEGORIES))
+    above = None
     if null and pooled is not None:
         above = sum(1 for x in null["draws"] if x >= pooled) / len(null["draws"])
         print(
@@ -494,6 +634,143 @@ def main() -> None:
         print("    配对比较（同窗口同池子、只改系数）不受此限；受限的是绝对值。")
     print(f"    逐日 TV 的噪声底（同分布重抽）= {sampling_noise(reference_pooled, day_sizes):.3f}")
     print("    逐日 TV 低于噪声底即无信息量；只用它查异常，不用它判改进。")
+
+    verdicts = class_verdicts(ours_pooled, reference_pooled)
+    print("\n>>> 达标线：逐类占比落进 AIHOT 该类的 95% CI（用户 2026-09-10 裁定的判据）")
+    if verdicts["inside_count"] is None:
+        print(f"    判不了：{verdicts['reason']}（我方 n={verdicts['n_ours']}，AIHOT n={verdicts['n_reference']}）")
+        vnull = {}
+    else:
+        print(f"{'类别':8}{'我方占比':>12}{'AIHOT 占比':>13}{'AIHOT 95% CI':>20}{'半宽':>8}{'判定':>6}{'离区间':>10}")
+        for row in verdicts["rows"]:
+            low, high = row["reference_ci"]
+            # 两位小数：一位会把边界情形印成自相矛盾的行（`OUT` 配 `+0.0pp`、我方占比与区间端点
+            # 印成同一个数）。第三轮 review gate 在参数网格上命中 700 个这样的组合，而真实运行
+            # 已经出过 `industry OUT +0.4pp` 这种同量级读数。
+            gap = "" if row["inside"] else f"{row['gap_pp']:+.2f}pp"
+            print(
+                f"{row['category']:8}{100 * row['ours_share']:11.2f}%{100 * row['reference_share']:12.2f}%"
+                f"   [{100 * low:5.2f},{100 * high:5.2f}]{row['reference_ci_halfwidth_pp']:7.2f}"
+                f"{'IN' if row['inside'] else 'OUT':>6}{gap:>10}"
+            )
+        print(
+            f"    ⇒ {verdicts['inside_count']}/{verdicts['total']} 类落进区间"
+            f"（我方 n={verdicts['n_ours']}，AIHOT n={verdicts['n_reference']}）"
+            + ("   **本判据下已达标**" if verdicts["passed"] else "")
+        )
+        # 这个头条读数自己的零假设。少了它，`4/5` 在「差一类」与「已经完美、只是抖动」两种情况下
+        # 同形——而后者的概率并不小。这是 `pooled_null` 那条教训在同一文件里的第二次兑现。
+        vnull = verdict_null(reference_pooled, verdicts["n_ours"])
+        if vnull:
+            print(
+                f"    零假设（我方构成 = AIHOT **本次观测到的**构成）: P(5/5) = {vnull['p_all_inside']:.3f}"
+                f"   E[落进数] = {vnull['expected_inside']:.2f}/5"
+            )
+            if verdicts["inside_count"] is not None and not verdicts["passed"]:
+                p_at_or_below = sum(
+                    v for k, v in vnull["distribution"].items() if k <= verdicts["inside_count"]
+                )
+                print(
+                    f"    ⇒ 完美页面拿到 <= {verdicts['inside_count']}/5 的概率 = {p_at_or_below:.3f}"
+                    + ("  **这个读数判不出「差」与「抖」**" if p_at_or_below >= 0.05 else "")
+                )
+        print("    判据只取 AIHOT 一侧的 CI，故我方 n 小的时候自身抖动就能判 OUT（我方 CI 见记录行）。")
+        print("    半宽随 AIHOT 侧 n 增长而收窄 ⇒ **判据会变严**，同一系统可能从 IN 翻成 OUT。"
+              "读到翻转先看 n_reference 有没有变大。")
+
+    if args.record:
+        # 身份块。**两行只有在这些输入都相同时才可比**，而它们没有一个在代码里——
+        # 一次 re-enrich 改判类别、或 capture 分支多了一天，读数就变，而"我们改好了"与
+        # "输入换了"在缺身份的行里完全同形。同一文件的 `load_extra_labels` 早就把这条标准写死了
+        # （「sha256 + 条数是唯一能把两份读数区分开的东西」），本记录行第一版却只对 labels 施加它——
+        # 三个输入里最小的那个。第三轮 review gate 报出。
+        try:
+            capture_sha = _git("rev-parse", CAPTURES_REF).decode().strip()[:12]
+        except SystemExit:
+            capture_sha = None
+        items_n = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        max_eval = conn.execute("SELECT MAX(id) FROM item_evaluations").fetchone()[0]
+        # **代码身份**。这一轮就是它的反证：夹住深度那处改动不动任何被记录的常量，却让同一
+        # `--depth aihot` 从 169 个槽位变成 122——两行身份块会逐字段相同而数字不同。首轮那条
+        # 记录只能靠**删除**来避免污染趋势，因为行内没有任何字段能把它标成"前夹子版本"。
+        head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, check=False)
+        dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain",
+                                "--untracked-files=no"], capture_output=True, check=False)
+        row = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "identity": {
+                "db": args.db,
+                "db_items": items_n,
+                "db_max_eval_id": max_eval,
+                "captures_ref": CAPTURES_REF,
+                "captures_sha": capture_sha,
+                "code_head": head.stdout.decode().strip() or None,
+                "code_dirty": bool(dirty.stdout.strip()),
+                "days": days,
+                "weights": DEFAULT_WEIGHTS.as_record(),
+                "threshold": sel.DEFAULT_THRESHOLD,
+                # 生效值逐日记；`limit_rule` 说明它是怎么来的。不记 `DEFAULT_LIMIT`——见上。
+                "limit_rule": "DEFAULT_LIMIT" if args.depth == "ours" else "AIHOT 当日精选条数",
+                "freshness_quota_rule": "round(limit * DEFAULT_FRESHNESS_QUOTA / DEFAULT_LIMIT)",
+                "day_params": day_params,
+                "freshness_floor": sel.DEFAULT_FRESHNESS_FLOOR,
+                # `DEFAULT_SOURCE_QUOTA` 是个对象、不可 JSON 序列化；`dataclasses.asdict` 对它
+                # 成立就用结构化形态，否则退到 repr。第一版直接塞对象，在**全部计算跑完之后**
+                # 才抛 TypeError——读数白跑一次，正是 review gate 指出的那类写盘时机问题。
+                "source_quota": (
+                    dataclasses.asdict(sel.DEFAULT_SOURCE_QUOTA)
+                    if dataclasses.is_dataclass(sel.DEFAULT_SOURCE_QUOTA)
+                    else repr(sel.DEFAULT_SOURCE_QUOTA)
+                ),
+                "labels": hand_identity["path"],
+                "labels_sha256": hand_identity.get("sha256"),
+                "labels_n": hand_identity.get("n"),
+                # **显式关闭**与**文件不存在**在上面三个字段上完全同形（`sha256=null, n=0`，
+                # path 只差一段中文文案），而"标注文件悄悄没了"会改覆盖率与 n_ours，是必须分开的
+                # 一种。我原以为 sha256+n 能兜住，复核轮实测它们在权威口径（`--labels off`）上
+                # 一个都用不上。
+                "labels_mode": (
+                    "off" if hand_identity["path"].startswith("off")
+                    else "file" if hand_identity.get("present") else "missing"
+                ),
+            },
+            "depth": args.depth,
+            "multipliers": overrides,
+            "gate": args.gate,
+            "page_slots": page_slots,
+            "labelled_slots": labelled_slots,
+            "pooled_tv": pooled,
+            "pooled_null_p": above,
+            # 顶层用 `inside_count` + `passed`，不用 `inside`：见 class_verdicts 的返回注释。
+            "inside_count": verdicts["inside_count"],
+            "total": verdicts["total"],
+            "passed": verdicts["passed"],
+            "verdict_null_p_all_inside": vnull.get("p_all_inside"),
+            "verdict_null_expected_inside": vnull.get("expected_inside"),
+            "n_ours": verdicts["n_ours"],
+            "n_reference": verdicts["n_reference"],
+            # 逐类整行照记，**含 reference_share / 两侧计数**：只留区间的话，"我们在向 AIHOT 的实际
+            # 占比靠近还是远离"这个最自然的下一问就答不了（`gap_pp` 只说离区间多远——model 那条
+            # 记 −4.6pp，而离 AIHOT 实际占比是 −12.1pp，2.6 倍之差）。
+            "rows": verdicts["rows"],
+        }
+        target = Path(args.record)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # 已有文件末尾没有换行时，append 会把新行拼到上一行尾，**两行一起变成不可解析**，
+        # 而脚本照样打印"已追加"。所以先补一个换行。
+        if target.exists() and target.stat().st_size:
+            with open(target, "rb") as probe:
+                probe.seek(-1, 2)
+                needs_newline = probe.read(1) != b"\n"
+            if needs_newline:
+                with open(target, "a", encoding="utf-8") as handle:
+                    handle.write("\n")
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with open(target, encoding="utf-8") as handle:
+            lines = sum(1 for _ in handle)
+        print(f"\n>>> 已追加一行到 {target}（现共 {lines} 行）")
 
 
 if __name__ == "__main__":

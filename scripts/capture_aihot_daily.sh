@@ -58,10 +58,50 @@ eval "$AIHOT_CAPTURE_CMD --start \"$START\" --end \"$END\""
 rc=$?
 
 # An already-captured window is the expected steady state on a re-run, not a failure.
-if [ $rc -ne 0 ] && grep -q "existing capture\|already" "$LOG"; then
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture SKIP: window already captured ==="
-  exit 0
+#
+# `target_exists` 是这个稳态**最常见**的形态，而它此前不在匹配里：工具实际打印的是
+# `ERROR target_exists: refusing to overwrite windows/...` 加 `existing files are never overwritten`,
+# 而这里匹配的是 `existing capture`（词组不同）与 `already`（根本没出现）。于是每一天 AIHOT
+# 还没推进 canonical 窗口时，这个良性稳态都以 rc=2 报成失败——2026-09-08 与 09-10 两次都是。
+#
+# 2026-09-10 的决定性读数：在 cron 时段之后近 9 小时手工重跑，它照样抓完整个 surface（33 分钟）
+# 才在**写入**那一步拒绝同一个窗口 ⇒ **不是时段问题**（那条假设已被这次实验证伪），是 AIHOT
+# 自己还没把 09-09→09-10 定为 canonical。**所以不要据此改 cron 时间。**
+#
+# 匹配 `target_exists` 这个机器 token 而不是它后面那句人话：token 由本仓自己的工具产出、是它的
+# 契约的一部分；散文文案随时会改。
+# 只放行**确实已经有那个窗口**的情形。光匹配 `target_exists` 会造出一个新沉默：日期算错而撞上
+# 某个已存在的窗口，也会静默 exit 0——而那是真缺陷。错误里带着窗口路径，核它在不在盘上即可分开
+# 「今天没有新窗口」与「它要写的窗口算错了」，代价是两行。
+# **不 `exit 0`，只置一个标记落穿**。第一版在这里直接 `exit 0`，于是 retention 与收尾的脏树检查
+# 一起被跳过——而这条分支是**最常见的那一天**（每天 AIHOT 没推进窗口时都走它）。两个后果各自
+# 独立成立，都由 reviewer 实测：① 本文件第 99 行起那整段论证明写 retention「Runs whether or not
+# today's capture succeeded…gating disk policy on network success is backwards」，2026-09-08 之后
+# 装过一次这样的 guard 又因误读撤掉，而我把它按回来了、还按在默认路径上；② 收尾脏检查被跳过时，
+# 树留脏而脚本报成功——**今天报成功、同时静默保证明天失败**，那正是本脚本与其测试存在的那个
+# 不变量（脏的工具 checkout 会让明天的 capture 拒绝运行，且那一天不可回补）。
+skipped=""
+# **全部**命中都必须在盘上，不是 `tail -1` 挑一条。今天生产者每次运行最多 raise 一次、且 `$LOG`
+# 是 per-run，故两者等价；但若它将来改成一次收集所有冲突，挑一条存在的会把另一条真缺陷吞掉。
+skip_windows="$(sed -n 's/.*target_exists: refusing to overwrite \(windows\/[^ ]*\).*/\1/p' "$LOG")"
+if [ $rc -ne 0 ] && [ -n "$skip_windows" ]; then
+  all_present=1
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    [ -e "benchmarks/aihot/$w" ] || all_present=0
+  done <<<"$skip_windows"
+  if [ "$all_present" = 1 ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture SKIP: $(echo "$skip_windows" | tr '\n' ' ')已在盘上，AIHOT 尚未推进 canonical 窗口 ==="
+    skipped=1
+  fi
 fi
+# 原先这里还有一条 `grep -q "existing capture\|already"`。**已删除，不是扩写**：
+# `existing capture` 在生产者里根本不存在（grep 0 命中），而 `already` 出现在两条 `target_exists`
+# 的 detail 里（`staged artifact already exists` / `capture target or staging target already exists`），
+# 那两条正是"要写的目标算错/撞上"这一类——它们过那条无任何盘上校验的分支时会静默 exit 0。
+# 也就是说：我为新分支写下的「光匹配 token 会造出新沉默」这句话，**逐字适用于它，而它更宽**
+# （对一份 33 分钟全 surface 日志做子串匹配）。真正的良性文本已由上面那条带校验的分支接管，
+# 留着它只提供误放行、不提供任何放行能力。9 份真实日志对它的命中数是 0/9。
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture EXIT rc=$rc ==="
 
 # Retention. One capture is ~30 MB of raw pages; the windows the evalset actually reads are
@@ -136,7 +176,9 @@ fi
 # Two checks, because `ignore=dirty` above means the parent's status no longer SEES the
 # submodule -- which is the point, and also the reason a single parent-side check would have
 # been blind to the likeliest place for junk to accumulate.
+worktree_dirty=0
 if [ -n "$(git status --porcelain)" ]; then
+  worktree_dirty=1
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === WARNING: worktree dirty at exit, tomorrow will fail ==="
   git status --short | sed 's/^/    /'
   [ $rc -eq 0 ] && rc=1
@@ -147,5 +189,10 @@ sub_dirt="$(git -C benchmarks/aihot status --porcelain)"
 if [ -n "$sub_dirt" ]; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === NOTE: uncommitted content in the dataset submodule ==="
   printf '%s\n' "$sub_dirt" | sed 's/^/    /'
+fi
+# 良性稳态归零，**但只在收尾检查没发现脏树时**：脏树会挡住明天的 capture、而那一天不可回补，
+# 所以它必须继续非零报出去，即便今天没有新窗口本身是正常的。两件事都要成立才算"今天没问题"。
+if [ -n "$skipped" ] && [ "$worktree_dirty" = 0 ]; then
+  rc=0
 fi
 exit $rc

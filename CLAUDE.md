@@ -12,6 +12,28 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
 - Use `uv run` for Python commands so tools run inside the project environment.
 - When running focused pytest commands that touch the database, set `AI_RADAR_DB` to a temporary path to avoid collisions with local services.
 
+## 对齐 AIHOT：达标线与迭代机制 (BINDING)
+
+本仓的长期目标之一是**在用户可见的指标上足够接近 AIHOT**。这条工作有一套已定的判据与回路，
+**接手它之前先读** [docs/references/aihot-approximation-metrics.md](docs/references/aihot-approximation-metrics.md)——
+达标线、两个指标家族、数据数量达标的样本量表、以及外层归因回路都在那里，此处只放不可省的三条：
+
+- **达标线**（用户 2026-09-10 裁定）= **逐类占比落进 AIHOT 该类的 95% CI**，不是整页 TV
+  （TV 的绝对值**指不出是哪一类**——相互抵消的偏差在它上面看不见）。权威口径是**生产深度**（用户看到的就是那 40 条，
+  且它的 n 是对齐深度的 2.6 倍、判据在这里才有分辨力）：
+  `uv run python scripts/eval/measure_curated_composition.py --depth ours --labels off --record`。
+  **看 `P(5/5)` 那一行再看 `k/5`**：判据自己的零假设，生产深度 0.949、对齐深度只有 0.602——
+  后者下 `3/5` 与「完美页面」区分不开（p=0.102），前者下 `3/5` 是真信号（p=0.002）。
+- **每完成一轮迭代，给那次读数补一个 `--record`**：它追加到 `scripts/eval/composition-history.jsonl`，
+  那是"随迭代逐步逼近"这条期望**唯一**的观测面。不 record，趋势就不存在——探索性对照别 record。
+- **归因先于干预**：动 prompt / 权重 / 系数之前，先在
+  [docs/issues/aihot-fit-eval.md](docs/issues/aihot-fit-eval.md) 写下带
+  `differential_prediction` 的假设（取数**之前**写），再取对照读数。本仓已有多次"先取数后解释"
+  导致结论自撤的记录，那一节列着。
+
+**CI 会随数据积累变窄，所以判据会变严**：同一个系统的某一类可能从 IN 变成 OUT。那不是回归，
+是分辨力提高——读到这种翻转先看 `n_reference` 有没有变大。
+
 ## Frontend Asset Cache Busting (BINDING)
 
 改完 `web/static/app.js` 或 `web/static/style.css`，**跑一次** `uv run python scripts/bump_frontend_assets.py`——它按内容摘要重算 `?v=` 版本串、改写全部 HTML 引用并更新 `web/asset-pins.json`。EdgeOne 对这两个精确路径强制节点缓存 7 天（[ADR-039](docs/adr/039-route-news-through-edgeone-dns-only-cname.md)「决策」节），漏 bump 就是**部署了但线上不生效**。
