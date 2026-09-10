@@ -1414,3 +1414,317 @@ p=0.024（勉强出噪声）**，只有对齐深度才是 0.128 → p=0.274（�
 那是跨仓写入，按 `docs-organization-protocol.md` §4.8 只报不提交。产物在
 `data/eval-fit/evalset-staging/thresholds.json`（gitignored），放置命令一行：
 `cp data/eval-fit/evalset-staging/thresholds.json benchmarks/aihot/evalsets/aihot-fit-v1/thresholds.json`
+
+## 迭代 #2：刻画 AIHOT 的 tip / model / industry 边界（2026-09-10）
+
+用户 2026-09-10 给出常设指令：按外层回路持续迭代到达标，并把进展与归因记在本档。达标线的当前
+gap 是 model −5.24pp、industry +2.40pp，已归因到同一上游——分类器精确率（model 53.5% / industry
+64.0%，错标合流向 tip）。本迭代按 `prompt-distribution-fitting.md` §1「参照物是研究对象」走，
+**先刻画决策函数，不先改 prompt**。
+
+### §0 清点（三样，动手前）
+
+| 要清点的 | 读数 |
+|---|---|
+| 成对 / 带标签的参照样本 | **有**：当前戳 `e04c9a502f8f` 双标注 **n=549**（跨全部戳 1614）。覆盖五类；由 `captures/daily` 的 AIHOT 标签与我方最新 enrich 行按归一化 URL 配对 |
+| 参照物能否反复调用 | **不能**。AIHOT 只有已发布的静态产出，无法就任意新输入向它取标签 ⇒ §2 的自一致率**未核实**，且不可得（不是"没测"，是没有通道） |
+| 参照物的定义可不可读 | **不可读**。查过三处（capture 仓结构、OpenAPI spec、渲染 HTML），只拿到类目**枚举**，没有判据正文 |
+
+⇒ 走 §1 的**路径 2（有成对数据 ⇒ 反推）**。
+
+### 反推出来的决策函数（以输入为自变量）
+
+刻画样本：我方=model/industry 而 AIHOT=tip 的各前 12 条，加两组一致的各前 8 条（约 40 条）。
+
+> **AIHOT 的 `model`** = *一个模型实体变得可用*——发布 / 开源 / 上线 / 开放访问。
+> **对模型能力的评价不算**：benchmark 成绩、排名、"surpass"、"competitive with"、能力指数
+> 一律归 `tip`。
+>
+> **AIHOT 的 `industry`** = *一笔已完成、可指认的商业或制度交易*——融资 / IPO / 收购 / 估值 /
+> 人事 / 有具名受害方的安全事件。
+> **报道、分析、统计、市场份额、计划、传闻、趋势、宣示不算**（"could"、"reportedly plans"、
+> "is increasingly"、"最新报告"、"published its North Stars"）一律归 `tip`。
+>
+> **AIHOT 的 `tip`** = 残差，实际装的是**关于 AI 的言论与观察**；另两类装的是**AI 世界里发生的
+> 实物变动**。
+
+**这与我方 prompt 现行判据的差别不在"事件性"这个词上**——`prompts_v2.py` 的 industry 已经写着
+「一件可指认的商业或制度事件确实发生了」。差别在**两个更细的界**：① 我方把"关于交易的报道/分析/
+计划"也算作事件发生；② 我方把"模型能力评价"算进 model，而 AIHOT 只收"模型可用性"。
+
+### 差异预测（写在取数之前）
+
+| 字段 | H-RULE-1 |
+|---|---|
+| `claim` | 上面那条规则就是 AIHOT 的决策函数 |
+| `differential_prediction` | 在**未参与刻画**的留出样本上按该规则盲预测，命中率应显著高于恒定答案基线（AIHOT 的多数类占比）。若规则刻画错了，命中率会掉到基线附近；若规则对，两个错标方向（model←能力评价、industry←报道计划）应当在留出样本里同样可见 |
+| `contrast` | 留出样本盲测：先只看标题预测，落盘后再揭标签 |
+| `status` | open |
+
+### H-RULE-1 被留出样本证伪，`status = contradicted`（2026-09-10）
+
+盲测 40 条留出样本（`random.Random(20260910).sample`，已排除刻画用过的 40 条；预测在揭标签前落盘）：
+
+| 读数 | 值 |
+|---|---|
+| 我刻画的规则 | **28/40 = 70.0%** |
+| **我方现行 prompt（同一 40 条）** | **33/40 = 82.5%** |
+| 恒定答案基线（AIHOT 多数类 `tip`，n=549） | 34.2% |
+
+⇒ **规则比已经在生产跑的 prompt 更差 12.5pp。不写进 prompt。**
+
+**成因是本 program 第 N 次同族错误——把非随机切片当总体读**：刻画样本全取自**分歧条目**，于是
+推出的规则在"本来就判对的大多数"上退化。12 条错里 **5 条是我把 AIHOT 的 `paper` 判成 `tip`**
+（"大型语言模型作为认知病毒"、"Pretraining progress is mostly coming from data"、"Self-improving
+agents have a basic problem…"），而生产 prompt 这几条**判对了**——它知道一些我的规则不知道的东西。
+
+**留出样本还给出一条关于稀疏性的读数**：`我方=model,AIHOT=tip` **0 条**、`industry→tip` **2 条**。
+那两个错标方向在随机样本里本就稀疏（占 549 的 4.4% / 7.5%）。所以"精确率 53.5%/64.0%"是**条件切片**
+上的读数（分母是"我方标该类的"），与"整体逐条一致率约 82%"并不矛盾——错误集中在那两类里。
+
+**这次与前几次同族错误的区别**：它在**改 prompt 之前**被抓住，代价是 40 条标题的阅读，而不是一次
+全量重算 + 一次上线撤回。`prompt-distribution-fitting.md` §1 那句「刻画出来先验它，别直接去改
+prompt」就是为这一刻写的。
+
+### 下一条假设：分歧是不是被排序放大的（取数前写下）
+
+| 字段 | H-RANK-1 |
+|---|---|
+| `claim` | 版面 model 欠配的主因不是分类边界，而是**排序把我方误标为 model 的那批抬得比真 AIHOT-model 更高**——于是 model 的加成花在了假货上 |
+| `differential_prediction` | 若成立：在双标注池里，`我方=model 且 AIHOT≠model`（假货）的 `weighted_score` 分布应当**不低于**`AIHOT=model`（真货）的，甚至更高。若不成立（真货分数更高、只是数量不够）：那么杠杆回到"池子里真 AIHOT-model 条目太少"，属流侧 |
+| `contrast` | 双标注池上按四格（真/假 × 我方标签）比 `weighted_score` 的中位与分位，零 LLM 调用 |
+| `status` | open |
+
+### H-RANK-1 的读数：排序对真假**不区分**，`status = contradicted`（预测的是"假货分数不低于真货"，实测是两者几乎相等）
+
+`weighted_score`（当前戳双标注池，T1.5 口径）：
+
+| 四格 | n | 中位 | p75 | p90 | 均值 |
+|---|---|---|---|---|---|
+| 我方=model 且 AIHOT=model（真） | 69 | 7.40 | 8.10 | 8.70 | 7.32 |
+| 我方=model 而 AIHOT≠model（假） | 60 | 7.38 | 7.90 | 8.65 | 7.25 |
+| AIHOT=model 而我方漏标 | 14 | 7.25 | 7.70 | 8.75 | 6.46 |
+| 我方=industry 且 AIHOT=industry | 87 | 7.00 | 7.50 | 8.20 | 6.80 |
+| 我方=industry 而 AIHOT≠industry | 49 | 7.10 | 7.80 | 8.25 | 6.92 |
+| 整池对照 | 549 | 7.05 | 7.60 | 8.30 | 6.70 |
+
+⇒ **排序不偏向假货，它对真假这个区分是盲的**。两类都比整池高约 0.35，也就是"我方标 model/industry"
+本身与高分相关，但真假之间没有可用的分数差。
+
+**它换来一个把缺口算平的式子**（AIHOT 的流就是这 549 条的来源）：
+
+| 量 | 我方 | AIHOT |
+|---|---|---|
+| 流里真 model 占比 | 15.1%（83/549，两侧同一批） | 15.1% |
+| 精选里 model 占比 | **18.38%** | **31.15%** |
+| **对真 model 的抬升** | **1.22×** | **2.06×** |
+
+我方对*自己标的* model 抬了约 6 倍（5.8%→35.0%），但其中 46.5% 不是 AIHOT 眼里的 model，
+**稀释之后对真 model 只抬了 1.22×**。缺口的算术形态就是这个 1.22 vs 2.06。
+
+### 三条杠杆已各自被证伪，第四条待查
+
+| 杠杆 | 处置 | 证伪读数 |
+|---|---|---|
+| ① 类别乘数 | **已否** | 两次上线两次撤回；控制分数后类别效应方向反转（score≥70 区里 model 精选率 25.0%，最低） |
+| ② 重刻画分类边界 | **已否（本轮）** | 盲测 28/40 vs 生产 prompt 33/40 |
+| ③ 排序偏向假货 | **已否（本轮）** | 真假分数中位 7.40 vs 7.38 |
+| ④ **model↔product 这条界** | **待查** | 60 条假货里 AIHOT 判 product 的有 **20 条**（tip 24 / paper 15 / industry 1）。这条界本轮完全没看过，而它占假货的三分之一 |
+
+**顺带一条把 ② 的窄版也否掉的读数**：我刻画时以为"对模型能力的评价"该归 tip，而盲测里恰好有两条
+反例（`Thank you @ArtificialAnlys for the independent evaluation… MiniCPM5-2B`、`Qwen-Drive 1.0
+tells you why it brakes`）——**AIHOT 把针对具名模型的能力评测也算 `model`**，我方 prompt 两条都判对了。
+所以"我们把能力评价错算进 model"这个猜想不成立，假货来自别处，最大的一块是 product。
+
+### 先记一条仪器缺陷：我自己的脚本把"0 条"报成了读数（2026-09-10）
+
+查 model↔product 那条界时，第一版脚本写的是 `if o=="model" and a=="product"`，而 `a` 是整条 AIHOT
+记录（dict）不是类别字符串 ⇒ **恒为假**，输出"0 条"，而且两侧都判 product 的也是"0 条"。它读起来
+像一个实质发现（"这条界没有分歧"），实际是仪器静默失败。抓住它靠的是它与先前那次读数
+（`product: 20`）冲突——**两个自己的读数对不上时不能挑一个信**。修好后计数与先前一致。
+
+### 迭代 #3：model ↔ product 这条界（2026-09-10）
+
+**这 549 条上的边际形状本身就有方向**：
+
+| | 我方 | AIHOT |
+|---|---|---|
+| 标 `model` | **129** | **83** |
+| 标 `product` | **75** | **99** |
+
+⇒ 我方的 model↔product 界整体**偏向 model 一侧**：20 条我方判 model 的 AIHOT 判 product，反向只有 6 条。
+这不是"精确率低"这种笼统描述，是一条有方向的具体界。
+
+**刻画（全部 20 条错标 + 两组一致对照各 6 条）**：
+
+> **AIHOT 的 `model` 只装通用基座模型**——GPT-6 Astra、WeMM-Embedding（嵌入模型）、Ling 系列、
+> K2 Horizon：可当作通用能力底座、按模型本身被谈论的东西。
+>
+> **凡"做某件具体事"的应用型 AI 系统，AIHOT 一律归 `product`，即便它技术上就是个模型**：
+> 图像（ChatGPT Images 2.5 / MAI-Image-2.6）、音乐（Lyria 3.5）、天气（WeatherNext 3）、
+> 基因（AlphaGenome Atlas / AlphaFold）、视频（Viggle-A / Hy4 / Agentic Video Understanding）、
+> 文档解析（Reducto r-1）、实时音频（Meta real-time audio model）。
+>
+> 我方 prompt 显然按「**是不是一个模型产物**」判，AIHOT 按「**通用基座 vs 应用系统**」判。
+
+| 字段 | H-MP-1 |
+|---|---|
+| `claim` | 上面这条「通用基座 vs 应用系统」就是 AIHOT 的 model/product 分界 |
+| `differential_prediction` | 在**未参与刻画**的、AIHOT 标签∈{model, product} 的留出样本上盲预测，命中率应显著高于两类的多数类占比（product 99 / model 83 ⇒ 基线 54.4%），且应当高于我方现行 prompt 在同一批上的命中。若刻画错了，命中会掉到基线附近；若刻画对但我方 prompt 已经知道它，两者会持平——那说明缺口不在这条界上 |
+| `contrast` | 盲测：只看标题预测，落盘后揭标签，同时算我方 prompt 在同一批上的命中 |
+| `status` | open |
+
+### H-MP-1 `status = supported`（2026-09-10 盲测留出样本）
+
+留出池：AIHOT 标签 ∈ {model, product}，排除全部刻画用过的条目；`random.Random(20260911)` 抽 30 条；
+预测（只看标题）在揭标签前落盘。**#9/#22/#23 是上一轮盲测出现过的同一条目、标签已泄漏，分开计分**：
+
+| | 规则 | 我方现行 prompt | 多数类基线 |
+|---|---|---|---|
+| 全部 30 条 | 25/30 = 83.3% | 23/30 = 76.7% | model 51.3% |
+| **剔除 3 条泄漏** | **23/27 = 85.2%** | **20/27 = 74.1%** | model 51.3% |
+
+⇒ 规则在这条界上比生产 prompt 高 **+11.1pp**，且两者都远高于多数类基线（所以不是"凑对了"）。
+与迭代 #2 那条被证伪的宽规则形成对照：**窄、且从双向错标里刻画、且留出验证——三者缺一它就退化。**
+
+**我方 prompt 在这 27 条上错的 7 条，方向清一色是"该 product 的判成了别的"**：
+`tip→product` 4 条（Artificial Analysis Index v4.2 ×2、Setting Grok Bot loose on procurement）、
+`industry→product` 1 条（AI 超声机器人手术）、`product→model` 1 条、`tip→model` 1 条。
+与边际形状一致：我方 product 欠标（75 vs 99）。
+
+### 顺带取到一条本以为取不到的读数：**参照物自己在这条界上不自一致**
+
+`prompt-distribution-fitting.md` §2 要求测参照物的自一致率，而我在 §0 记的是"不可得——AIHOT 只有
+静态产出、无法就任意输入取标签"。**重复故事免费给了它一个下界**：
+
+> 标题 `Introducing ChatGPT Images 2.5` 在**刻画集**里 AIHOT 标 `product`，
+> 在**留出集**里同一标题 AIHOT 标 `model`。
+
+同一个故事经不同信源进入，参照物给了不同标签。⇒ **逐条一致率有一个不可约的天花板**，而 model↔product
+这条界正是它最集中的地方（规则 5 条错里 4 条是图像模型）。这修正了 §0 那一格：自一致率**部分可得**，
+通道是重复故事而不是重复调用。**别把它当天花板写进验收**（§2 明写方向相反），但也别把这条界上剩下的
+分歧全算成我方的错。
+
+## ⚠️ 通道核实：分类器**到不了**达标线，本轮那条归因链指向的是另一个指标（2026-09-10）
+
+在为改动跑验证的间隙核了一件承重的事：达标线是**两侧都用 AIHOT 标签**算的
+（`measure_curated_composition.py`：`labels[our_id] = record["category"]`，record 是 AIHOT 那条；
+`mine = Counter(labels[c.item_id] for c in picked ...)`）。那么我方分类器通过什么通道影响它？
+
+**只有一条**：`select.ranking_key` 里的 `-candidate.weighted_score * category_multiplier(primary_category)`，
+而 `CATEGORY_MULTIPLIERS = {"paper": 0.95}` —— **只有 paper 一个条目**。
+
+⇒ **改善 model/product 分类不可能移动达标线。** 它移动的是 `category_agreement`（A 家族、8 条设闸
+之一，floor 0.6016），那本身值得改，但它不是当前 gap 的指标。
+
+**因此本轮的归因链要重新归类**：`35.0% × 53.5% ≈ 18.7% ≈ 18.38%` 这个算式**算术成立、因果读错了**——
+提高精确率只会把同一批被选中的条目重新贴标签，**不会改变哪些条目被选中**，而达标线读的是被选中条目
+的 AIHOT 标签。所以：
+
+| 指标 | 被什么移动 |
+|---|---|
+| **达标线（版面构成，两侧 AIHOT 标签）** | **哪些条目被选中**——即排序与流。分类只经 `CATEGORY_MULTIPLIERS`（现只有 paper） |
+| `category_agreement`（A 家族设闸） | 分类质量本身 |
+
+**model −5.24pp 是一个选择缺口，不是标注缺口。** 1.22× vs 2.06× 那个算式仍然成立，但它的成因要往
+排序/打分找：H-RANK-1 已测得分数对真假 model 不区分；类别乘数两次被证伪。剩下的通道是**分数本身**。
+
+### 下一条假设（取数前写下）
+
+| 字段 | H-SCORE-1 |
+|---|---|
+| `claim` | 达标线的缺口基本由**打分与 AIHOT 打分的差距**解释：AIHOT 自己的选择几乎就是按它的分数（它的 score→selected AUC 0.948），而我方分数与它的 Spearman 只有 0.6191、跨系统 AUC 0.776 |
+| `differential_prediction` | **oracle 替换实验**：在同一重放里把排序键的 `weighted_score` 换成 AIHOT 自己的 `score_0_100`，其余（阈值、配额、深度）不动。若本假设成立，达标线应当明显朝 5/5 移动；若仍停在 3/5，则缺口有相当一部分在**流**（池子里根本没有足够的真 AIHOT-model 条目），而不是排序 |
+| `contrast` | 同窗口同池子的配对重放，零 LLM 调用；oracle 只作诊断、不可上线（AIHOT 的分数是它给的，不是我方能算的） |
+| `status` | open |
+
+### 两条仪器缺陷，一并记账
+
+1. **我踩了自己仓里已写明的坑**：验证跑第一次 `ok=0 errors=300`、中位延迟 24ms——
+   `AI_RADAR_EGRESS_PROXY_PORT=7897` 从 shell 继承，而 clash 早已搬到 59527（实测 `lsof`：
+   59527 有 `verge-mih` 监听、7897 无人）。`capture_aihot_daily.sh` 为此专门 `unset` 过这个变量，
+   注释原话："That text reads like an outage, so the operator goes looking at the proxy rather than
+   at their own shell." **零调用花费**（请求根本没出去），改用 `env -u` 重跑。
+2. **`eval-fit run` 在 300/300 全失败时仍返回 exit 0**。`stage=enrich ok=0 errors=300` 只在 stdout 里；
+   任何按退出码判成败的调用方都会把它读成成功。记账不修（本轮不改评测台的退出码语义）。
+
+### H-SCORE-1 的 oracle 读数：两个缺口分属不同成因（2026-09-10）
+
+做法：把池子控住——只取 **AIHOT 发布过、且我方有 scoring 行**的条目（共同池 n=2016 / 10 个日窗），
+逐日按 AIHOT 当日精选数 K 取我方分数 top-K，与 AIHOT 实际精选逐类比。**同池、同深度、同标签来源，
+只换排序函数。**
+
+| 口径 | n | tip | model | product | industry | paper |
+|---|---|---|---|---|---|---|
+| 共同池（不做选择） | 2016 | 35.1% | 13.9% | 21.7% | 17.7% | 11.6% |
+| **我方分数 top-K** | 111 | 25.2% | **27.9%** | 7.2% | **25.2%** | 14.4% |
+| **AIHOT 实际精选** | 111 | 33.3% | **30.6%** | 11.7% | **15.3%** | 9.0% |
+
+| 类别 | Δ（我方 top-K − AIHOT 精选） |
+|---|---|
+| **industry** | **+9.9pp** |
+| tip | −8.1pp |
+| paper | +5.4pp |
+| product | −4.5pp |
+| **model** | **−2.7pp** |
+
+**结论：两个缺口第一次被分到不同成因上。**
+
+- **model 欠配（生产 −5.24pp）主因不是排序函数**：在 AIHOT 自己的条目上，我方排序把 model 挑到
+  27.9% vs 它的 30.6%，**几乎追平**。⇒ 生产里那 5.24pp 主要来自**流**——生产池含大量 AIHOT 从未
+  发布的条目，它们挤占名额、稀释 model。
+- **industry 超配是排序函数的问题**：在共同池上就有 **+9.9pp**，比生产里量到的 +2.40pp 还大
+  （生产里被别的类稀释了）。这与它在流里的占比无关——共同池 industry 只有 17.7%，我方却挑到 25.2%。
+
+**边界，别读宽**：① 本实验简化掉了阈值 / freshness quota / source quota / 去重，所以**绝对 TV 不能与
+生产读数比**——但两臂对称，**比较**成立（这与早前那次"简化模型上求系数"不同，那里是拿简化模型去
+**求解**）。② 共同池是 **AIHOT 的流**，不是我方生产池；本实验刻意如此，为的就是把池子这一维控住。
+③ `TV(共同池, AIHOT精选) = 0.167` vs `TV(我方top-K, AIHOT精选) = 0.153` ⇒ 我方排序相对"完全不选择"
+只改善 0.014，与早前"排序对构成做功很少"的读数一致。
+
+### prompt 改动已回退：它移动不了目标指标，副作用又判不动（2026-09-10）
+
+按 H-MP-1 那条**已验证**的规则改了 `enrich/prompts_v2.py` 两处（`model`/`product` 定义各一句 +
+`primary_category` 字段描述里一句决策点约束，按 `prompt-writing-guidelines.md` §8）。跑
+`eval-fit run --limit 300 --seed 7 --stages enrich`（只跑 enrich：改动只碰它，prefilter/score 的指标
+结构上不可能动 ⇒ 300 次调用而非 900）：
+
+| 指标 | 基线 `GATE-300-seed7` | 新 prompt `MP-300-seed7` | 判定 |
+|---|---|---|---|
+| `category_agreement` | 0.7168 [0.6608, 0.7692] n=286 | **0.7425** [0.6923, 0.7893] n=299 | 点估计 **+2.6pp**，CI 大幅重叠 ⇒ `improved=none` |
+| `tag_jaccard_mean` | 0.5213 [0.451, 0.5979] n=65 | **0.4440** [0.3806, 0.5065] n=67 | 点估计 **−7.7pp**，下界略破 floor 0.3827 |
+
+**回退，理由两条，第一条是决定性的**：
+
+1. **它移动不了目标指标。** 上面那条通道核实：达标线两侧都用 AIHOT 标签，我方分类只经
+   `CATEGORY_MULTIPLIERS`（现只有 paper）到达它。所以这次改动不在"用户可见指标"的因果链上——
+   按最低充分方案，它不属于当前目标所需的改动。
+2. **副作用判不动。** `tag_jaccard` 掉 7.7pp、n≈66、CI 重叠 ⇒ 分辨不了是真回归还是噪声；而它是
+   8 条设闸之一，且新 run 的下界确实压在 floor 之下。可能成因是 §4 点名的那条：同一约束写在两处
+   造成 calibration shift。要择出来得再跑一次（只留决策点那一句），**而那次也仍然移动不了目标指标**。
+
+**知识已入账、可复用**：那条边界（「通用能力底座 vs 做特定一件事的东西」，留出盲测 23/27 vs 生产
+prompt 20/27）留在本档。分类真正成为杠杆时（`DEFAULT_LIMIT` 下调、或引入更多类别系数）直接取用。
+
+**同时记一条比较口径的弱点**：基线跑了三个阶段、本次只跑 enrich，于是 `category_agreement` 的
+**成功测到集合**不同（n=286 vs 299）——`subset_sha256` 锚的是抽样集合、不是成功测到的集合
+（ISSUE-FIT-11 早已记过）。这次的对比因此比它看起来更弱。
+
+### 打分维度：industry 那 +9.9pp 来自哪（2026-09-10，零调用）
+
+共同池上按 AIHOT 类别分组的六维均值，以及按生产权重（density 0.40 / authority 0.10 /
+significance 0.50，其余为 0）算出的加权分：
+
+| AIHOT 类别 | n | density | authority | significance | **加权分均值** |
+|---|---|---|---|---|---|
+| paper | 233 | 6.28 | 6.93 | 6.49 | **6.451** |
+| model | 280 | 4.98 | 6.27 | 7.01 | **6.127** |
+| **industry** | 357 | **5.20** | 6.01 | **5.88** | **5.622** |
+| product | 438 | 4.68 | 6.00 | 4.95 | **4.948** |
+| **tip** | 708 | 4.53 | 4.84 | 5.05 | **4.824** |
+
+⇒ **industry 的超配是加权分直接造成的**：它比 tip 高 0.80、比 product 高 0.67，而这两类正是被我方
+top-K 欠取的（tip −8.1pp、product −4.5pp）。抬它的是 density 与 significance 两维。
+
+**这就把下一轮的对象定了**：不是分类器，是**打分器对 `tip` 与 `product` 类内容的估值**——AIHOT 精选
+里 tip 占 33.3%，而我方打分把它排在最低一档。
