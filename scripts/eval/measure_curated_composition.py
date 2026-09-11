@@ -165,6 +165,7 @@ def load_aihot() -> dict[str, dict]:
                     "url": (row.get("links") or {}).get("original") or "",
                     "category": SLUG_TO_BUCKET.get(row.get("category")),
                     "selected": bool(row.get("selected")),
+                    "score": row.get("score"),
                     # 上海日，与我方 `sel._shanghai_date` 同一口径。直接截 publishedAt[:10]
                     # 是 UTC 日，两侧会在 UTC 16:00 之后错开一天。
                     "published": sel._shanghai_date(row.get("publishedAt") or ""),
@@ -430,6 +431,15 @@ def main() -> None:
         help="ours=按生产的 40 条上限；aihot=按 AIHOT 当日实际条数（对齐深度，见 docstring 边界 3）",
     )
     parser.add_argument(
+        "--rank-by",
+        choices=("ours", "aihot-oracle"),
+        default="ours",
+        help="ours=生产排序键；aihot-oracle=用 AIHOT 自己的真分数排序（我方库里匹配得到的条目）。"
+        "oracle **不是候选方案**，它是这条轴的上界探针：它同时报条目重合与达标线，所以"
+        "「拟合 AIHOT 的选择会不会打坏构成」这个取舍在一次运行里就判得出来。"
+        "**别 --record 它**——它是探索性对照，不是一轮迭代。",
+    )
+    parser.add_argument(
         "--record",
         nargs="?",
         const=str(DEFAULT_HISTORY),
@@ -503,7 +513,25 @@ def main() -> None:
     def factor_of(candidate) -> float:
         return overrides.get(candidate.primary_category, 1.0)
 
+    # oracle 排序：AIHOT 自己给这条内容的分。我方库里匹配不到 AIHOT 记录的条目没有真分数，
+    # 给 -1 沉底——**这不是中立缺省**，它让 oracle 优先吃掉所有 AIHOT 见过的条目，正是我们想测的
+    # 上界。读数要按这个偏向理解，别把它当"公平比较"。
+    oracle_score: dict[str, float] = {}
+    if args.rank_by == "aihot-oracle":
+        for record in aihot.values():
+            if not record["url"]:
+                continue
+            our_id = index.get(normalize_url(record["url"])[0])
+            if our_id and record.get("score") is not None:
+                oracle_score[our_id] = float(record["score"])
+
     def rank(candidate) -> tuple[float, str, str]:
+        if args.rank_by == "aihot-oracle":
+            return (
+                -oracle_score.get(candidate.item_id, -1.0),
+                candidate.published_at,
+                candidate.item_id,
+            )
         return (
             -candidate.weighted_score * factor_of(candidate),
             candidate.published_at,
@@ -546,6 +574,8 @@ def main() -> None:
             + ("" if hand_identity["path"].startswith("off") else "  （文件不存在）")
             + "  -> 本次只用 AIHOT 标签"
         )
+    if args.rank_by != "ours":
+        print(f"排序键: {args.rank_by}（探索性对照，不要 --record）  oracle 有分的条目: {len(oracle_score)}")
     print(
         f"覆盖的系数: {overrides or '（无）'}   施加面: "
         f"{'排序键+两道闸（被否决的实现）' if args.gate else '仅排序键（生产）'}   "
