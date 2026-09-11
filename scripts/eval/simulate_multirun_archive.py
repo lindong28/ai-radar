@@ -75,6 +75,10 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--per-source", type=float, default=None, metavar="SHARE",
+                    help="覆盖 ADR-bc36 的 `per_source`（生产 0.075）。`0` 表示取消该上限。"
+                         "AIHOT 自己的最大单源占比实测 15.6%%。**它对构成指标实测无帮助**，"
+                         "但条目重合从没量过它——而重合正是源配额该咬的地方。")
     ap.add_argument("--causal-m", action="store_true",
                     help="混淆矩阵**只用严格早于当前窗口**的双标注条目估计（与 `hist` 的因果纪律同构）。"
                          "不加则用全量估一次、所有切点复用——那样跨 split 不给 M 留出数据，"
@@ -327,6 +331,24 @@ def main() -> None:
         print(f"目标空间：我方 enrich 在 AIHOT 精选条目上重数"
               f"（命中 {_t_hit}、我方无标签 {_t_miss}）")
 
+    quota_override = None
+    if args.per_source is not None:
+        quota_override = sel.SourceQuota(
+            kind_caps=dict(sel.DEFAULT_SOURCE_QUOTA.kind_caps),
+            per_source=(None if args.per_source <= 0 else args.per_source))
+        print(f"源配额：per_source {sel.DEFAULT_SOURCE_QUOTA.per_source} → "
+              f"{quota_override.per_source}（kind_caps 不动，ADR-bc36 是两条）")
+
+    # **条目重合读数**：模拟器至今只报构成。两者是不同的用户可见指标——
+    # 构成可以 5/5 而重合仍然只有 39%，一个达标不蕴含另一个。
+    prod_curated_urls = {
+        url_by_id[str(r[0])] for r in conn.execute(
+            "SELECT DISTINCT item_id FROM curated_items")
+        if str(r[0]) in url_by_id}
+    sel_urls = {_comp.normalize_url(r["url"])[0]
+                for r in aihot.values() if r["selected"] and r.get("url")
+                and r["published"] in set(days)}
+
     clock = {"now": "9999"}  # 由时点循环每轮写入；`mech_label` 读它
 
     def mech_label(c):
@@ -470,7 +492,8 @@ def main() -> None:
                         seen_b[b] += 1
                     capped.append(c)
                 pool = capped
-            picked = _comp.replay_day(pool, avail, args.limit, rank, gate_score)
+            picked = _comp.replay_day(pool, avail, args.limit, rank, gate_score,
+                                      source_quota=quota_override)
             if args.closed_loop and args.actuator == "quota+floor" and sum(hist.values()) >= 8:
                 # **下限**：封顶是上界，它压得住超配、造不出短缺。实测 model 在早期欠 4.9pp，
                 # 而那些条目够得着（AIHOT 的 model 精选我方库里 43 条、19 条过 6.5 闸），
@@ -615,6 +638,19 @@ def main() -> None:
         n_all = sum(by_src.values()) or 1
         print(f"    并集源集中度：{len(by_src)} 个源，最大单源 "
               + "、".join(f"{s}={100 * n / n_all:.1f}%" for s, n in top))
+
+    if sel_urls:
+        in_union = {url_by_id.get(c.item_id, "") for c in union.values()}
+        hit = len(sel_urls & in_union)
+        # **把「生产历史没选过」与「今天的代码也不会选」分开。** 两者极易混淆：
+        # `curated_items` 是全部历史（多代代码），而本模拟器跑的是今天这份代码。
+        # 构成那条线上同一个陷阱已经咬过一次。
+        never = {u for u in sel_urls if u not in prod_curated_urls}
+        print(f"\n>>> 生产历史从未精选过的 AIHOT 条目：{len(never)}/{len(sel_urls)}；"
+              f"其中**今天这份代码会选进并集的**：{len(never & in_union)} 条")
+        print(f"\n>>> 条目重合（末窗口并集 vs 窗口内 AIHOT 精选）："
+              f"{hit}/{len(sel_urls)} = {100 * hit / len(sel_urls):.1f}%"
+              f"   并集 {len(union)} 条")
 
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
