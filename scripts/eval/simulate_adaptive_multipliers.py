@@ -85,6 +85,15 @@ def main() -> None:
     ap.add_argument("--clip", type=float, default=1.6, help="乘数夹在 [1/clip, clip]")
     ap.add_argument("--warmup", type=int, default=2, help="前 N 个窗口用静态配置，只喂历史不评")
     ap.add_argument(
+        "--source-quota",
+        type=float,
+        default=None,
+        help="覆盖 `_fill` 的 per_source 上限（生产 0.075）。**目标值不是「取消」而是参照物自己的水平**："
+        "实测 AIHOT 自己最大单源占比均值 15.6%，我方 7.5% 反而是偏离——我们比它多样一倍。"
+        "而时效那条相反：AIHOT 当日条目占比 82.2%、我方静态 86.2% 本就接近，裸 quota 的 100% 是走远，"
+        "所以时效分段要**保留**。同一条「契约让位于目标」的裁定，两条契约判向相反方向。",
+    )
+    ap.add_argument(
         "--mode",
         choices=("multiplier", "quota", "quota-in-fill"),
         default="multiplier",
@@ -154,6 +163,15 @@ def main() -> None:
 
     decay = 0.5 ** (1.0 / max(args.half_life, 1e-9))
     target_shares = make_target_fn(args, by_day, labels, sel, shares, CATS)
+    # `SourceQuota` 是 dataclass 不是 dict——`dict(...)` 会抛 TypeError。用 replace 造副本，
+    # 既不改生产常量，也保住 kind_caps 那一半。
+    import dataclasses
+
+    source_quota = sel.DEFAULT_SOURCE_QUOTA
+    if args.source_quota is not None:
+        source_quota = dataclasses.replace(source_quota, per_source=args.source_quota)
+        print(f"source quota: per_source {sel.DEFAULT_SOURCE_QUOTA.per_source} "
+              f"-> {args.source_quota}（AIHOT 自己 0.156）")
 
     def run(adaptive: bool) -> list[dict]:
         """按时间顺序重放。adaptive=False 即当前生产（静态 CATEGORY_MULTIPLIERS）。"""
@@ -199,16 +217,70 @@ def main() -> None:
                 tgt = target_shares(day, ema_ref, ema_pool, weight, err_mean, err_pool, chosen)
                 tot = sum(tgt.values()) or 1.0
                 cap = {c: max(1, math.ceil(sel.DEFAULT_LIMIT * tgt[c] / tot)) for c in CATS}
-                seen: Counter = Counter()
-                capped = []
-                for cand in sorted(by_day[day], key=rank):
-                    lab = labels.get(cand.item_id)
-                    if lab:
-                        if seen[lab] >= cap.get(lab, sel.DEFAULT_LIMIT):
-                            continue
-                        seen[lab] += 1
-                    capped.append(cand)
-                picked = C.replay_day(capped, all_eligible, sel.DEFAULT_LIMIT, rank, gate_score)
+                def cap_list(items):
+                    seen: Counter = Counter()
+                    out = []
+                    for cand in sorted(items, key=rank):
+                        lab = labels.get(cand.item_id)
+                        if lab:
+                            if seen[lab] >= cap.get(lab, sel.DEFAULT_LIMIT):
+                                continue
+                            seen[lab] += 1
+                        out.append(cand)
+                    return out
+
+                # **两段都要封顶。** 先前只封了当日段，`_fill` 的尾部段仍从未封顶的
+                # `all_eligible` 里捞，于是被削掉的类又回来了——n_ours 由 210 掉到 167 却仍
+                # 只到 4/5，就是这个漏洞的形态：配额看着生效了，实际被尾部段抵消掉一半。
+                picked = C.replay_day(cap_list(by_day[day]), cap_list(all_eligible),
+                                      sel.DEFAULT_LIMIT, rank, gate_score,
+                                      source_quota=source_quota)
+                # **封顶只是上界，不保证达到目标**——`_fill` 可以把某类填得不足，而判据量的是占比，
+                # 少填与多填一样是失配。裸 quota 之所以到 5/5、封顶版只到 4/5，差的就是这个下界。
+                # 再平衡：欠额的类拉它排名最高的未选条目，超额的类丢排名最低的那条。
+                # **单源上限在这里逐条兑现**，所以时效分段与源上限都不被绕开。
+                # **最大余额法，不是截断**：`int()` 五类合计最多丢 4 个格位，而这些格位随后按排名
+                # 回填、系统性偏向高分类别（实测把 paper 从目标 8.8% 压到 3.8%、打出界）。
+                # **基数必须与 `have` 一致**：`have` 只数有标签的那部分（约 22/40），而先前 `want`
+                # 按 40 个格位算 ⇒ 每一类都被判成欠额、`over` 恒空、再平衡第一轮就 break，
+                # 整个保底机制从未生效。读数上它长得像"结构到顶了"，实际是没跑。
+                n_labelled = sum(1 for x in picked if x.item_id in labels) or sel.DEFAULT_LIMIT
+                exact = {c: n_labelled * tgt[c] / tot for c in CATS}
+                want = {c: int(exact[c]) for c in CATS}
+                import os
+                if os.environ.get("DEBUG_QUOTA"):
+                    print(f"    [dbg {day}] tgt={ {c: round(tgt[c],3) for c in CATS} } "
+                          f"exact={ {c: round(exact[c],1) for c in CATS} }")
+                for c in sorted(CATS, key=lambda c: exact[c] - want[c], reverse=True):
+                    if sum(want.values()) >= n_labelled:
+                        break
+                    want[c] += 1
+                blocked: set = set()
+                for _ in range(sel.DEFAULT_LIMIT):
+                    have = Counter(labels[x.item_id] for x in picked if x.item_id in labels)
+                    short = [c for c in CATS if have[c] < want[c] and c not in blocked]
+                    over = [c for c in CATS if have[c] > want[c]]
+                    if not short or not over:
+                        break
+                    c_in = min(short, key=lambda c: have[c] - want[c])
+                    c_out = max(over, key=lambda c: have[c] - want[c])
+                    ids = {x.item_id for x in picked}
+                    src_now = Counter(x.source_id for x in picked)
+                    add = next(
+                        (x for x in sorted(by_day[day], key=rank)
+                         if x.item_id not in ids and labels.get(x.item_id) == c_in
+                         and (src_now[x.source_id] + 1) / sel.DEFAULT_LIMIT
+                         <= source_quota.per_source + 1e-9),
+                        None,
+                    )
+                    if add is None:
+                        # 这一类今天补不到合规候选（池里没有、或会撞单源上限）。
+                        # **只把它标记掉、继续补别的类**——先前这里是 break，一类补不到就把
+                        # 整个再平衡停掉，其余类的欠额一并留着。
+                        blocked.add(c_in)
+                        continue
+                    drop = max((x for x in picked if labels.get(x.item_id) == c_out), key=rank)
+                    picked = [x for x in picked if x.item_id != drop.item_id] + [add]
             elif adaptive and args.mode == "quota" and weight > 0:
                 # 按类配额：把 40 个格位按目标占比分配，类内按排序键取前列；配不满的类把余额
                 # 交还给一个共同池，按排序键补齐。**它绕开了 `_fill` 的时效/源配额**——那是代价，
@@ -263,7 +335,8 @@ def main() -> None:
                     if cand.item_id not in used:
                         picked.append(cand); used.add(cand.item_id)
             else:
-                picked = C.replay_day(by_day[day], all_eligible, sel.DEFAULT_LIMIT, rank, gate_score)
+                picked = C.replay_day(by_day[day], all_eligible, sel.DEFAULT_LIMIT, rank, gate_score,
+                                      source_quota=source_quota)
             mine = Counter(labels[c.item_id] for c in picked if c.item_id in labels)
             verdict = C.class_verdicts(mine, reference_by_day[day])
             out.append(
@@ -339,8 +412,16 @@ def main() -> None:
             refs += pk[1]
         v = C.class_verdicts(ours, refs)
         tv = C.total_variation(ours, refs)
-        return (f"{v['inside_count']}/{v['total']} 类落进区间   TV {tv:.3f}   "
-                f"n_ours={v['n_ours']} n_ref={v['n_reference']}")
+        out = [f"{v['inside_count']}/{v['total']} 类落进区间   TV {tv:.3f}   "
+               f"n_ours={v['n_ours']} n_ref={v['n_reference']}"]
+        # **点名出界的是哪一类**：只报个数时，"还差一类"给不出下一步该动什么。
+        for row in v["rows"]:
+            if not row["inside"]:
+                out.append(f"      OUT {row['category']}: 我方 {100 * row['ours_share']:.1f}% "
+                           f"vs AIHOT {100 * row['reference_share']:.1f}% "
+                           f"[{100 * row['reference_ci'][0]:.1f},{100 * row['reference_ci'][1]:.1f}] "
+                           f"离区间 {row['gap_pp']:+.2f}pp")
+        return "\n".join(out)
 
     def summary(rows):
         ev = [r for r in rows if r["evaluated"] and r["inside"] is not None]

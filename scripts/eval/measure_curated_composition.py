@@ -401,7 +401,7 @@ def verdict_null(reference: Counter, n_ours: int, trials: int = 20000) -> dict:
 
 
 
-def replay_day(pool, all_eligible, limit, rank, gate_score, no_quota=False):
+def replay_day(pool, all_eligible, limit, rank, gate_score, no_quota=False, source_quota=None):
     """重放某一天的版面，返回被选中的候选。
 
     **这段逻辑此前整段锁在 `main()` 里**，于是"当天我们挑了哪几条"这个最基本的问题取不出来——
@@ -419,7 +419,8 @@ def replay_day(pool, all_eligible, limit, rank, gate_score, no_quota=False):
     fresh = sorted((c for c in pool if gate_score(c) >= sel.DEFAULT_FRESHNESS_FLOOR), key=rank)
     eligible = sorted(all_eligible, key=rank)
     freshness_quota = max(1, round(limit * sel.DEFAULT_FRESHNESS_QUOTA / sel.DEFAULT_LIMIT))
-    return sel._fill(fresh, eligible, limit, freshness_quota, sel.DEFAULT_SOURCE_QUOTA)[:limit]
+    return sel._fill(fresh, eligible, limit, freshness_quota,
+                     source_quota or sel.DEFAULT_SOURCE_QUOTA)[:limit]
 
 
 def main() -> None:
