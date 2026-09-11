@@ -75,6 +75,11 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--src-cap", type=float, default=None,
+                    help="**并集层面**的单源上限（占并集的比例）。生产的 `per_source=0.075` 是**每轮**的闸"
+                         "（3/40），而并集跨 48 轮累积 ⇒ **并集不受它约束**。实测池中带标签的候选里 "
+                         "`ithome` 133 条（49% 是 industry）、`x_rohanpaul_ai` 116 条（43% 是 paper），"
+                         "两源占 32%，正好灌满我们超配的那两类。")
     ap.add_argument("--threshold", type=float, default=None,
                     help="覆盖 `select.DEFAULT_THRESHOLD`（生产 6.5）。**降它是放大供给、不是放松排序**："
                          "实测窗口内 AIHOT 标为 model 的候选过闸率已有 52.6%（阈值不歧视 model），"
@@ -156,6 +161,7 @@ def main() -> None:
     # 更准的是 `fetched_at`，但它不在 `ScoredCandidate` 上，而两个 arm 同样近似 ⇒ 配对不受影响。
     union: dict = {}
     union_lab: Counter = Counter()
+    src_in_union: Counter = Counter()
     ours_pooled: Counter = Counter()
     reference_pooled: Counter = Counter()
     # 闭环状态：`hist` 只累计**严格早于当前时点**的窗口（不读当日的 AIHOT——生产里选稿那一刻
@@ -319,6 +325,17 @@ def main() -> None:
                     kept.append(c)
                 picked = kept
             for c in picked:
+                if args.src_cap is not None and c.item_id not in union:
+                    # 并集层面的单源上限。只拦**新进来的**条目，已在并集里的不动——
+                    # 并集单调增长，回头删会让"某条曾经在页面上"这件事不可复现。
+                    # **比例上限要带一个绝对下限**，否则并集为空时 (0+1)/1 = 1.0 > cap，
+                    # 第一条就被拒、整个并集饿死（实测 `tv` 直接变 None）。
+                    # 生产的 `per_source` 用 `max(1, round(...))` 正是同一个理由。
+                    n_now = len(union) + 1
+                    allow = max(3.0, args.src_cap * n_now)
+                    if src_in_union[c.source_id] + 1 > allow + 1e-9:
+                        continue
+                    src_in_union[c.source_id] += 1
                 union.setdefault(c.item_id, c)
         page = sorted(union.values(), key=lambda c: (c.published_at, c.item_id), reverse=True)[: args.page]
         labelled = Counter()
@@ -355,6 +372,17 @@ def main() -> None:
             print(f"{b:10}{100 * union_lab[b] / nu:>9.1f}%{100 * ours_pooled[b] / np_:>15.1f}%"
                   f"{100 * reference_pooled[b] / (sum(reference_pooled.values()) or 1):>8.1f}%")
         print("    读法：并集里够、页面里不够 ⇒ 差在**按发布时间取前 40**这条排序，不是供给。")
+        # **并集的源集中度：ADR-bc36 明确不约束的那个量。** 它的 `per_source ≤ 7.5%` 是
+        # **per-run** 的，而归档面是 48 轮的并集——一个源可以每轮都占满 7.5%，在并集里
+        # 仍然占 7.5%，也可以更高（它在别的轮里没被挤掉）。所以"并集有没有被源结构带偏"
+        # 这件事，生产侧任何读数都答不出来，只能在这里量。
+        by_src: Counter = Counter()
+        for c in union.values():
+            by_src[c.source_id] += 1
+        top = by_src.most_common(3)
+        n_all = sum(by_src.values()) or 1
+        print(f"    并集源集中度：{len(by_src)} 个源，最大单源 "
+              + "、".join(f"{s}={100 * n / n_all:.1f}%" for s, n in top))
 
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
