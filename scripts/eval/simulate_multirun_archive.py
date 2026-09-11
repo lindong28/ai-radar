@@ -59,7 +59,7 @@ def main() -> None:
                          "窗口算，不读当日），反馈 = **归档页此刻的实际构成**（用户真看到的那一面），"
                          "每个时点按 gap 调一次系数。固定系数是它在某份语料上的收敛点，"
                          "而池子构成一漂那个点就失准——闭环的价值就在能重新找到它。")
-    ap.add_argument("--actuator", choices=("rank", "admit", "quota"), default="rank",
+    ap.add_argument("--actuator", choices=("rank", "admit", "quota", "quota+floor"), default="rank",
                     help="闭环拧哪个旋钮。rank=逐类排序系数（低节奏有效）；"
                          "**admit=控制谁进得了跨轮并集**——高节奏下并集会吃掉过阈值候选的大半"
                          "（实测 per-day 12 时 713/1202 = 59%%，外推到生产 ~48/天接近全部），"
@@ -68,7 +68,9 @@ def main() -> None:
                          "条目补上——页内有标签由 275/400 掉到 164/400、当日占比塌到 47.5%，"
                          "构成只在剩下那一小撮里好看。"
                          "quota=**在选择内部按类封顶**，空出的格位交给 `_fill` 由别类与尾部回填，"
-                         "格位数与时效分段都不被绕开。")
+                         "格位数与时效分段都不被绕开。"
+                         "**quota+floor=再补下限**：封顶只压得住超配的类，**造不出短缺的类**；"
+                         "欠配的类从未选的合规候选里拉它排名最高的那条进来，换掉超配类排名最低的那条。")
     ap.add_argument("--gain", type=float, default=0.6,
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
@@ -158,6 +160,7 @@ def main() -> None:
                 hist += reference_by_day[rd]
                 merged_ref.add(rd)
         y, m, d = (int(x) for x in day.split("-"))
+        blocked_b: set = set()
         for k in range(args.per_day):
             hour = round(24 * (k + 1) / args.per_day)
             t = datetime(y, m, d, tzinfo=UTC) - SH + timedelta(hours=hour)
@@ -189,7 +192,7 @@ def main() -> None:
                     adjusted = live[b] * (tgt / act) ** args.gain
                     live[b] = min(args.clip, max(1 / args.clip, adjusted))
                     overrides[k] = live[b]
-            if args.closed_loop and args.actuator == "quota" and sum(hist.values()) >= 8:
+            if args.closed_loop and args.actuator.startswith("quota") and sum(hist.values()) >= 8:
                 # **封顶在选择之内**：给每类的当日候选按目标占比设上限，随后照常交 `replay_day`，
                 # 由 `_fill` 用别类与尾部把空出的格位填满 ⇒ 格位数不减、时效分段不被绕开。
                 # 这是 admit 那版「直接丢弃」的修正：丢弃会让页面被更旧的条目补上。
@@ -215,6 +218,67 @@ def main() -> None:
                     capped.append(c)
                 pool = capped
             picked = _comp.replay_day(pool, avail, args.limit, rank, gate_score)
+            if args.closed_loop and args.actuator == "quota+floor" and sum(hist.values()) >= 8:
+                # **下限**：封顶是上界，它压得住超配、造不出短缺。实测 model 在早期欠 4.9pp，
+                # 而那些条目够得着（AIHOT 的 model 精选我方库里 43 条、19 条过 6.5 闸），
+                # 只是排不进前 40 ⇒ 缺的正是这一半。
+                # 换入从 `avail` 取（不限当日），换出取超配类里排名最低的那条；
+                # 单源与 kind 上限按**换完之后**判（先算 drop 再判，顺序反了会把
+                # 「换掉一条 X、换入另一条 X」误判成超限——台账记过）。
+                for _ in range(args.limit):
+                    have = Counter()
+                    for c in picked:
+                        b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                        if b:
+                            have[b] += 1
+                    n_lab = sum(have.values()) or args.limit
+                    # **最大余额法，别用 int()**——上一处封顶刚因取整错过一次，这里重犯了一次：
+                    # 截断让每类 `want` 都偏低 ⇒ 更多类判成超配、更少类判成欠配，
+                    # floor 该补的没补、该留的被丢（实测 model 由 −4.90 恶化到 −7.39pp）。
+                    nh = sum(hist.values())
+                    ex = {b: n_lab * hist[b] / nh for b in CATS}
+                    want = {b: int(ex[b]) for b in CATS}
+                    for b in sorted(CATS, key=lambda b: ex[b] - int(ex[b]), reverse=True):
+                        if sum(want.values()) >= n_lab:
+                            break
+                        want[b] += 1
+                    short = [b for b in CATS if have[b] < want[b] and b not in blocked_b]
+                    over = [b for b in CATS if have[b] > want[b]]
+                    if not short or not over:
+                        break
+                    b_in = min(short, key=lambda b: have[b] - want[b])
+                    b_out = max(over, key=lambda b: have[b] - want[b])
+                    outs = [c for c in picked
+                            if label_by_url.get(url_by_id.get(c.item_id, "")) == b_out]
+                    if not outs:
+                        break
+                    drop = max(outs, key=rank)
+                    rest = [c for c in picked if c.item_id != drop.item_id]
+                    src_n = Counter(c.source_id for c in rest)
+                    kind_n = Counter(c.kind for c in rest)
+                    ids = {c.item_id for c in picked}
+
+                    def ok(c, _s=src_n, _k=kind_n):
+                        sq = sel.DEFAULT_SOURCE_QUOTA
+                        if sq.per_source is not None and \
+                                (_s[c.source_id] + 1) / args.limit > sq.per_source + 1e-9:
+                            return False
+                        cap = sq.kind_caps.get(c.kind)
+                        return cap is None or (_k[c.kind] + 1) / args.limit <= cap + 1e-9
+
+                    # **换入只从当日池取，不从 `avail`（全部合规候选）取。** 归档页按发布时间
+                    # 排序 ⇒ 硬塞进来的**旧**条目进不了第 1 页，却把本来进得去的较新条目挤掉；
+                    # 实测用 `avail` 时 model 反而由 −4.90 恶化到 −6.53pp、n_ours 由 169 掉到 155。
+                    add = next((c for c in sorted(pool, key=rank)
+                                if c.item_id not in ids
+                                and label_by_url.get(url_by_id.get(c.item_id, "")) == b_in
+                                and ok(c)), None)
+                    if add is None:
+                        # 这一类今天补不到合规候选，标记后继续补别的类——**不是 break**，
+                        # 否则一类补不到就把整个下限机制停掉（台账记过这个形态）。
+                        blocked_b.add(b_in)
+                        continue
+                    picked = rest + [add]
             if args.closed_loop and args.actuator == "admit" and sum(hist.values()) >= 8:
                 # **准入控制**：一条只在「收了它之后该类仍不超目标」时才进并集。
                 # 并集单调增长，所以这条规则天然把它按住在目标构成上。
