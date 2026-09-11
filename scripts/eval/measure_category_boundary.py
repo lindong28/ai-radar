@@ -68,8 +68,14 @@ def main() -> None:
             from airadar.curator import select as _sel
 
             cat = _sel._primary_category(output)
+        # **按完整 `ruleset_version` 分组，不要只取日期段。** 戳的形状是
+        # `<日期>.r2.<digest>`，digest 由 `ruleset.enrich_inputs_digest()` 从 prompt 输入算出
+        # ⇒ 同一天可以有多份不同的 prompt。实测 `2026-09-08` 这一天底下有三份
+        # （`r2` 1453 行 / `r2.31b2065e` 5340 行 / `r2.ef7e0c09` 80 行），
+        # 按日期分组会把它们混成一份"新戳"，而**基线身份因此不成立**——
+        # 配对比较里那半就不是你声称的那个对象了（`evaluation-integrity.md`）。
         if cat:
-            by_stamp[str(ruleset).split(".")[0]][str(item_id)] = OURS_TO_BUCKET.get(cat, cat)
+            by_stamp[str(ruleset)][str(item_id)] = OURS_TO_BUCKET.get(cat, cat)
 
     print(f"AIHOT 有类别的条目 {len(aihot)}；enrich 戳 {sorted(by_stamp)}")
 
