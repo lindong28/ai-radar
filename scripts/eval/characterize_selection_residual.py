@@ -135,6 +135,53 @@ def main() -> None:
             "标准差小即残差是稳定现象、不是某几天的异常，那才值得去拟合它。"
         )
 
+    slice_by_source(scored, args.bands)
+
+
+def slice_by_source(scored: list, bands: int) -> None:
+    """按信源切残差。类别与时段都切过了，源是最后一维，也是唯一要跨库 join 才拿得到的。
+
+    为什么要控制分数：不控制直接看各源的选中率，读到的多半是"这个源的内容本来就打分高"。
+    与类别那一节同一个理由，本仓 2026-09-10 已在不控制分数这件事上翻过一次车。
+    """
+
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{_comp.REPO / 'data' / 'radar.db'}?mode=ro", uri=True)
+    url_to_source = {}
+    for url, source_id in conn.execute("SELECT url, source_id FROM items"):
+        if url and source_id:
+            url_to_source.setdefault(_comp.normalize_url(str(url))[0], str(source_id))
+
+    cut = float(scored[int(len(scored) * 0.8)]["score"])
+    rows = []
+    for v in scored:
+        if float(v["score"]) < cut or not v["url"]:
+            continue
+        src = url_to_source.get(_comp.normalize_url(v["url"])[0])
+        if src:
+            rows.append((src, bool(v["selected"])))
+    if not rows:
+        print("\n>>> 按信源切：我方库里匹配不到任何高分条目的源，跳过")
+        return
+
+    agg: dict[str, list[int]] = {}
+    for src, sel in rows:
+        cell = agg.setdefault(src, [0, 0])
+        cell[1] += 1
+        cell[0] += 1 if sel else 0
+    base = sum(k for k, _ in agg.values()) / sum(t for _, t in agg.values())
+    print(f"\n>>> 高分条目（分数 >= {cut:.1f}）的选中率 × 信源  —— 整体基线 {100 * base:.1f}%")
+    print(f"    只列 n>=10 的源；**匹配得到 {len(rows)} 条**，其余高分条目我方库里没有或无 source_id")
+    print(f"{'source_id':24} {'高分':>5} {'精选':>5} {'选中率':>8}  95% CI")
+    for src, (k, tot) in sorted(agg.items(), key=lambda kv: -kv[1][0] / max(kv[1][1], 1)):
+        if tot < 10:
+            continue
+        lo, hi = wilson(k, tot)
+        mark = "  ↑" if lo > base else ("  ↓" if hi < base else "")
+        print(f"{src:24} {tot:>5} {k:>5} {100 * k / tot:>7.1f}%  [{100 * lo:5.1f},{100 * hi:5.1f}]{mark}")
+    print("    ↑/↓ = 该源的 95% CI 整个落在基线一侧，才算它有分数之外的偏好；没有标记的即判不动。")
+
 
 if __name__ == "__main__":
     main()
