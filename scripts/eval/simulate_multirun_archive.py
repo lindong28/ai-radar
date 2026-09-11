@@ -98,6 +98,11 @@ def main() -> None:
                     help="覆盖 ADR-bc36 的 `per_source`（生产 0.075）。`0` 表示取消该上限。"
                          "AIHOT 自己的最大单源占比实测 15.6%%。**它对构成指标实测无帮助**，"
                          "但条目重合从没量过它——而重合正是源配额该咬的地方。")
+    ap.add_argument("--fixed-m-until", default=None, metavar="DATE",
+                    help="**固定 M**：只用早于该日发布的双标注条目估一次混淆矩阵，**冻结**，"
+                         "此后所有窗口都用它。与 `--causal-m` 的滚动重估互斥——"
+                         "决策评审复核轮点名要这条：现有证据绑在滚动策略上，"
+                         "若生产用固定 M，缺一份「早期估一次、冻结后在后续窗口验证」的配对读数。")
     ap.add_argument("--causal-m", action="store_true",
                     help="混淆矩阵**只用严格早于当前窗口**的双标注条目估计（与 `hist` 的因果纪律同构）。"
                          "不加则用全量估一次、所有切点复用——那样跨 split 不给 M 留出数据，"
@@ -390,6 +395,16 @@ def main() -> None:
     sel_urls = {_comp.normalize_url(r["url"])[0]
                 for r in aihot.values() if r["selected"] and r.get("url")
                 and r["published"] in set(days)}
+    # **同一条新闻可以有两个 URL。** `buzzing_hn` 是中文转载聚合，AIHOT 常链它，
+    # 而我方去重（`dedup.py` 按 content_hash 或小写 URL）正确地留下了原始源那一份
+    # （openai_blog / anthropic_research / nvidia）。于是按 URL 匹配会把**页面上确实有的**
+    # 新闻算成漏选——实测 6/6 都能在池里找到同一条。⇒ 重合要按 **URL 或 content_hash** 匹配。
+    hash_by_item = {}
+    for i, h in conn.execute("SELECT id, content_hash FROM items WHERE content_hash IS NOT NULL"):
+        hash_by_item[str(i)] = str(h)
+    _rev_url = {u: i for i, u in url_by_id.items()}
+    sel_hashes = {hash_by_item[_rev_url[u]] for u in sel_urls
+                  if u in _rev_url and _rev_url[u] in hash_by_item}
 
     clock = {"now": "9999"}  # 由时点循环每轮写入；`mech_label` 读它
 
@@ -445,6 +460,15 @@ def main() -> None:
     hist: Counter = Counter()
     live = {c: overrides.get(BUCKET_TO_OURS.get(c, c), 1.0) for c in CATS}
     skipped_days: list[str] = []
+    m_log: list[tuple[str, int, str]] = []
+    frozen_conf = None
+    if args.fixed_m_until:
+        frozen_conf = Counter()
+        for rd, cc in conf_by_day.items():
+            if rd < args.fixed_m_until:
+                frozen_conf += cc
+        print(f"固定 M：只用发布早于 {args.fixed_m_until} 的双标注条目估一次并冻结"
+              f"（样本 {sum(frozen_conf.values())} 条）")
     print(f"\n{'上海日':12}{'并集':>7}{'页内有标签':>11}{'当日发布占比':>13}  逐类（AIHOT 标签）")
     for day in days:
         # **机制动作计数**：review gate 报出「机制跑了但没用」与「机制一次也没触发」
@@ -461,12 +485,18 @@ def main() -> None:
         hist = Counter(hist_raw)
         if args.target_space == "corrected" and args.labels != "oracle":
             conf_now = None
-            if args.causal_m:
+            if args.fixed_m_until:
+                conf_now = frozen_conf
+            elif args.causal_m:
                 conf_now = Counter()
                 for rd, cc in conf_by_day.items():
                     if rd < day:
                         conf_now += cc
             q = solve_to_ours(hist_raw, conf_now)
+            # **逐窗报 M 的状态**：复核轮点名——滚动重估 + 样本不足静默回退，
+            # 会把不同机制状态混进一个汇总读数，而输出里看不出是哪一种产生了改善。
+            n_m = sum((conf_now if conf_now is not None else conf_counts).values())
+            m_log.append((day, n_m, "反解成功" if q is not None else "**回退未校正**"))
             if q is not None:
                 nh = sum(hist_raw.values())
                 hist = Counter({c: q[c] * nh for c in CATS})
@@ -659,6 +689,10 @@ def main() -> None:
               + f"   │机制 覆盖{cov} 封顶丢{mech['封顶丢弃']} 调参{mech['调参']}")
         nb_cov = mech["池内有标签"] + mech["池内无标签"]
         covered = (not args.score_only_covered) or mech["池内有标签"] > 0
+        # **固定 M 是留出验证**：M 的估计样本来自早于 `--fixed-m-until` 的窗口，
+        # 那些窗口自己就不能进评分，否则是 in-sample。并集照常从第一天累积。
+        if args.fixed_m_until and day < args.fixed_m_until:
+            covered = False
         if covered:
             ours_pooled += labelled
             reference_pooled += reference_by_day[day]
@@ -693,7 +727,14 @@ def main() -> None:
 
     if sel_urls:
         in_union = {url_by_id.get(c.item_id, "") for c in union.values()}
-        hit = len(sel_urls & in_union)
+        union_hashes = {hash_by_item.get(c.item_id) for c in union.values()}
+        # 按 URL 命中的，加上「URL 没中但 content_hash 中了」的那些
+        hit_url = sel_urls & in_union
+        hit_hash = {u for u in sel_urls - hit_url
+                    if u in _rev_url and hash_by_item.get(_rev_url[u]) in union_hashes}
+        hit = len(hit_url) + len(hit_hash)
+        print(f"\n>>> 条目重合（按 URL 或 content_hash）：URL 命中 {len(hit_url)}"
+              f"，另有 {len(hit_hash)} 条 URL 不同但**同一条新闻**（转载/多源）")
         # **把「生产历史没选过」与「今天的代码也不会选」分开。** 两者极易混淆：
         # `curated_items` 是全部历史（多代代码），而本模拟器跑的是今天这份代码。
         # 构成那条线上同一个陷阱已经咬过一次。
@@ -723,6 +764,14 @@ def main() -> None:
         print(f"\n>>> 条目重合（末窗口并集 vs 窗口内 AIHOT 精选）："
               f"{hit}/{len(sel_urls)} = {100 * hit / len(sel_urls):.1f}%"
               f"   并集 {len(union)} 条")
+
+    if m_log:
+        print(f"\n>>> 混淆矩阵 M 逐窗状态（复核轮要求：样本量 / 是否反解成功 / 是否回退）")
+        for d, n, st in m_log:
+            print(f"    {d:12}M 样本 {n:>5} 条   {st}")
+        nf = sum(1 for _, _, st in m_log if "回退" in st)
+        print(f"    ⇒ {len(m_log)} 个窗口中 {nf} 个回退到未校正目标"
+              + ("（**改善不能全归给校正**）" if nf else "（全部用校正目标，无混合状态）"))
 
     if skipped_days:
         print(f"\n⚠️ --score-only-covered：{len(skipped_days)} 个窗口机制覆盖率为 0、不计入评分"
