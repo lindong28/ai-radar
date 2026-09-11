@@ -49,59 +49,98 @@ git config --local submodule.benchmarks/aihot.ignore dirty
 # Unset rather than pin: the code default is the single source for the port.
 unset AI_RADAR_EGRESS_PROXY_PORT
 
-echo "requesting $START .. $END"
-
-# Seam so the git-handling below can be exercised without spending a real AIHOT window.
-# tests/test_capture_aihot_daily.sh substitutes a stub; nothing else sets it.
-AIHOT_CAPTURE_CMD="${AIHOT_CAPTURE_CMD:-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture}"
-eval "$AIHOT_CAPTURE_CMD --start \"$START\" --end \"$END\""
-rc=$?
-
-# An already-captured window is the expected steady state on a re-run, not a failure.
+# Do not ASK for a pair that overlaps what is already published. The tool gives us no choice of
+# window -- aihot_dataset.py:3799 rejects any request that is not verbatim the canonical two
+# complete UTC days the server currently designates -- and that pair slides by one day, while
+# publishing is all-or-nothing: aihot_dataset.py:3879 builds publish_roots from the capture dir
+# plus BOTH windows and raises target_exists if ANY of them exists, rolling the whole staging
+# tree back. So on every day after a successful one, the pair's first day is yesterday's
+# published window and the request drops the NEW day with it.
 #
-# `target_exists` 是这个稳态**最常见**的形态，而它此前不在匹配里：工具实际打印的是
-# `ERROR target_exists: refusing to overwrite windows/...` 加 `existing files are never overwritten`,
-# 而这里匹配的是 `existing capture`（词组不同）与 `already`（根本没出现）。于是每一天 AIHOT
-# 还没推进 canonical 窗口时，这个良性稳态都以 rc=2 报成失败——2026-09-08 与 09-10 两次都是。
+# Measured 2026-09-10: both runs fetched the whole surface (33 min each) and published nothing;
+# windows/2026-09-09--09-10 exists nowhere, and the newest capture dir is still 09-09's.
 #
-# 2026-09-10 的决定性读数：在 cron 时段之后近 9 小时手工重跑，它照样抓完整个 surface（33 分钟）
-# 才在**写入**那一步拒绝同一个窗口 ⇒ **不是时段问题**（那条假设已被这次实验证伪），是 AIHOT
-# 自己还没把 09-09→09-10 定为 canonical。**所以不要据此改 cron 时间。**
-#
-# 匹配 `target_exists` 这个机器 token 而不是它后面那句人话：token 由本仓自己的工具产出、是它的
-# 契约的一部分；散文文案随时会改。
-# 只放行**确实已经有那个窗口**的情形。光匹配 `target_exists` 会造出一个新沉默：日期算错而撞上
-# 某个已存在的窗口，也会静默 exit 0——而那是真缺陷。错误里带着窗口路径，核它在不在盘上即可分开
-# 「今天没有新窗口」与「它要写的窗口算错了」，代价是两行。
-# **不 `exit 0`，只置一个标记落穿**。第一版在这里直接 `exit 0`，于是 retention 与收尾的脏树检查
-# 一起被跳过——而这条分支是**最常见的那一天**（每天 AIHOT 没推进窗口时都走它）。两个后果各自
-# 独立成立，都由 reviewer 实测：① 本文件第 99 行起那整段论证明写 retention「Runs whether or not
-# today's capture succeeded…gating disk policy on network success is backwards」，2026-09-08 之后
-# 装过一次这样的 guard 又因误读撤掉，而我把它按回来了、还按在默认路径上；② 收尾脏检查被跳过时，
-# 树留脏而脚本报成功——**今天报成功、同时静默保证明天失败**，那正是本脚本与其测试存在的那个
-# 不变量（脏的工具 checkout 会让明天的 capture 拒绝运行，且那一天不可回补）。
-skipped=""
-# **全部**命中都必须在盘上，不是 `tail -1` 挑一条。今天生产者每次运行最多 raise 一次、且 `$LOG`
-# 是 per-run，故两者等价；但若它将来改成一次收集所有冲突，挑一条存在的会把另一条真缺陷吞掉。
-skip_windows="$(sed -n 's/.*target_exists: refusing to overwrite \(windows\/[^ ]*\).*/\1/p' "$LOG")"
-if [ $rc -ne 0 ] && [ -n "$skip_windows" ]; then
-  all_present=1
-  while IFS= read -r w; do
-    [ -n "$w" ] || continue
-    [ -e "benchmarks/aihot/$w" ] || all_present=0
-  done <<<"$skip_windows"
-  if [ "$all_present" = 1 ]; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture SKIP: $(echo "$skip_windows" | tr '\n' ' ')已在盘上，AIHOT 尚未推进 canonical 窗口 ==="
-    skipped=1
-  fi
+# Skipping today loses nothing: tomorrow's pair starts exactly where our history ends, so that
+# day is captured as the pair's FIRST half. Accrual stays one window per day. Deriving the
+# decision from the last published window rather than an every-other-day cron also recovers the
+# PHASE after a missed run, and across 31-day month boundaries where an alternating schedule
+# desyncs. Phase only: a missed run still loses its window for good, because the pair the server
+# offers has moved on and there is no way to ask for an older one.
+# A directory NAME is not a publication, and this gate fails in the worst direction: anything it
+# mistakes for published history suppresses the request, silently, forever. `ls` + a name regex
+# cannot tell a validated window from an empty directory, a plain file, a half-removed tree, or a
+# date-SHAPED name that is not a date -- `junk--9999-99-99T000000Z` parses to a future instant and
+# would pin the gate shut for all time. So require a real directory, a real calendar date, and the
+# manifest the publish step writes; anything else is not history and does not hold back a request.
+last_end="$(python3 - <<'PY'
+import datetime, pathlib, re
+root = pathlib.Path("benchmarks/aihot/windows")
+# Canonical windows are whole UTC days, so the time is literally 000000 -- pin it rather than
+# accept \d{6}. `99:99:99` passes a digit-count check, sorts above every real instant, and one
+# such directory stops this job requesting anything ever again while exiting 0 each day. That is
+# the third face of the same hole (after the calendar date and the symlink); the shape to
+# remember is that EVERY unvalidated field here fails toward permanent silence.
+pat = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})T000000Z--(\d{4}-\d{2}-\d{2})T000000Z$"
+)
+best = ""
+for d in sorted(root.iterdir()) if root.is_dir() else []:
+    m = pat.match(d.name)
+    # `is_dir()`/`is_file()` FOLLOW symlinks, so those alone would let a link to any directory
+    # holding a manifest pass as published history. Both files are required: publish writes the
+    # manifest AND the items, and a tree with only one of them is not a window.
+    if not (m and d.is_dir() and not d.is_symlink()):
+        continue
+    if not all((d / f).is_file() and not (d / f).is_symlink() for f in ("manifest.json", "items.jsonl")):
+        continue
+    try:
+        start = datetime.date.fromisoformat(m.group(1))
+        end = datetime.date.fromisoformat(m.group(2))
+    except ValueError:
+        continue
+    # Fifth face: both dates can be real and still not name a canonical window.
+    # `2026-01-01T000000Z--2099-01-01T000000Z` is two valid days, sorts above everything, and
+    # would skip every request until 2099. A canonical window is exactly one day wide.
+    if end - start != datetime.timedelta(days=1):
+        continue
+    best = max(best, f"{m.group(2)}T00:00:00Z")
+print(best)
+PY
+)"
+requested=""
+if [ -n "$last_end" ] && [ "$last_end" \> "$START" ]; then
+  echo "no request: windows already cover through $last_end, so the canonical pair"
+  echo "            $START .. $END overlaps it and would drop its new day"
+  rc=0
+else
+  echo "requesting $START .. $END (published through ${last_end:-nothing})"
+  requested=1
+  # Seam so the git-handling below can be exercised without spending a real AIHOT window.
+  # tests/test_capture_aihot_daily.sh substitutes a stub; nothing else sets it.
+  AIHOT_CAPTURE_CMD="${AIHOT_CAPTURE_CMD:-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture}"
+  eval "$AIHOT_CAPTURE_CMD --start \"$START\" --end \"$END\""
+  rc=$?
 fi
-# 原先这里还有一条 `grep -q "existing capture\|already"`。**已删除，不是扩写**：
-# `existing capture` 在生产者里根本不存在（grep 0 命中），而 `already` 出现在两条 `target_exists`
-# 的 detail 里（`staged artifact already exists` / `capture target or staging target already exists`），
-# 那两条正是"要写的目标算错/撞上"这一类——它们过那条无任何盘上校验的分支时会静默 exit 0。
-# 也就是说：我为新分支写下的「光匹配 token 会造出新沉默」这句话，**逐字适用于它，而它更宽**
-# （对一份 33 分钟全 surface 日志做子串匹配）。真正的良性文本已由上面那条带校验的分支接管，
-# 留着它只提供误放行、不提供任何放行能力。9 份真实日志对它的命中数是 0/9。
+
+# `target_exists` is NOT the benign steady state the old branch treated it as, and that branch is
+# gone. Its premise was that the error means "AIHOT has not advanced its canonical window yet",
+# but aihot_dataset.py:3799 refuses a request that does not equal the server's current canonical
+# pair outright (`window_invalid`) -- so reaching the publish step at all proves the server DID
+# advance. The old branch turned that alarm into rc=0 plus a log line asserting the opposite. Its
+# 22 tests passed and both reverse mutations went red: they encoded the same wrong premise as the
+# code, so they could not see it.
+#
+# NOT a universal claim, and the earlier wording here ("always", "can only mean") was wrong.
+# There is one benign shape: two runs that both pass the gate before either publishes -- a manual
+# recovery overlapping the cron slot is the realistic case -- and the loser gets `target_exists`
+# ~33 minutes later on data its twin already stored. No lock guards that window. It is deliberately
+# not guarded: concurrency has not actually bitten (2026-09-11's manual recovery finished 00:57,
+# the cron slot is 01:37), and this repo's standing rule is to add machinery for observed failures,
+# not predicted ones. Cost if it does happen: one wasted fetch and one spurious non-zero.
+#
+# The overlap it was papering over is now prevented upstream, at the request. Reaching here now
+# means either a genuine defect -- a miscomputed date, a window published out of band -- or the
+# concurrent-publish race described above. It is not self-evident which; read the log.
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture EXIT rc=$rc ==="
 
 # Retention. One capture is ~30 MB of raw pages; the windows the evalset actually reads are
@@ -154,19 +193,41 @@ fi
 # objects are then gone machine-wide while the superproject keeps a pin pointing at nothing.
 # This is a dated program worktree -- exactly the kind that gets cleaned up. Pushing the
 # submodule is what makes the data durable; until then there is one copy, in a disposable place.
+#
+# Runs on no-request days too. Retention above deletes TRACKED capture directories, so a skip day
+# can produce real staged deletions; guarding this block on "we fetched something" left them as
+# submodule dirt that `ignore=dirty` then hides from the parent. Nothing new to store is already
+# handled below by the `diff --cached --quiet` arm.
+#
+# Every failure arm sets rc. Persisting is not bookkeeping: until these objects are in a second
+# place they exist only in this disposable gitdir, and a run that fetched an irrecoverable day and
+# then failed to commit it must not report success. (Measured 2026-09-11: the recovered windows
+# sat on a DETACHED submodule HEAD in this worktree's private gitdir -- no branch, one object
+# store. `git worktree remove` would have destroyed them.)
 if [ $rc -eq 0 ]; then
-  if git -C benchmarks/aihot add captures windows 2>&1 &&
-     ! git -C benchmarks/aihot diff --cached --quiet; then
-    if git -C benchmarks/aihot commit -q -m "data(aihot): $(basename "$(ls -dt benchmarks/aihot/captures/aihot-* 2>/dev/null | head -1)")"; then
-      echo "  submodule commit: $(git -C benchmarks/aihot rev-parse --short HEAD)"
-      git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot \
-        && echo "  pointer commit: $(git rev-parse --short HEAD)" \
-        || echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
-    else
-      echo "  WARNING: submodule commit failed; today's capture is uncommitted"
-    fi
+  if ! git -C benchmarks/aihot add captures windows 2>&1; then
+    echo "  WARNING: git add failed; nothing was committed"
+    rc=1
+  elif git -C benchmarks/aihot diff --cached --quiet; then
+    echo "  submodule: nothing staged"
   else
-    echo "  submodule: nothing staged (either nothing new, or git add failed above)"
+    if [ -n "$requested" ]; then
+      msg="data(aihot): $(basename "$(ls -dt benchmarks/aihot/captures/aihot-* 2>/dev/null | head -1)")"
+    else
+      msg="chore(aihot): retention on a no-request day"
+    fi
+    if git -C benchmarks/aihot commit -q -m "$msg"; then
+      echo "  submodule commit: $(git -C benchmarks/aihot rev-parse --short HEAD)"
+      if git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot; then
+        echo "  pointer commit: $(git rev-parse --short HEAD)"
+      else
+        echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
+        rc=1
+      fi
+    else
+      echo "  WARNING: submodule commit failed; this run's output is uncommitted"
+      rc=1
+    fi
   fi
 fi
 
@@ -189,10 +250,5 @@ sub_dirt="$(git -C benchmarks/aihot status --porcelain)"
 if [ -n "$sub_dirt" ]; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === NOTE: uncommitted content in the dataset submodule ==="
   printf '%s\n' "$sub_dirt" | sed 's/^/    /'
-fi
-# 良性稳态归零，**但只在收尾检查没发现脏树时**：脏树会挡住明天的 capture、而那一天不可回补，
-# 所以它必须继续非零报出去，即便今天没有新窗口本身是正常的。两件事都要成立才算"今天没问题"。
-if [ -n "$skipped" ] && [ "$worktree_dirty" = 0 ]; then
-  rc=0
 fi
 exit $rc

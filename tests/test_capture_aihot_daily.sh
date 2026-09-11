@@ -11,7 +11,10 @@
 # tracked capture -- put the deadlock straight back, and a single-state check on a state machine
 # cannot tell those two apart.
 set -uo pipefail
-SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/scripts/capture_aihot_daily.sh"
+# Overridable so a reverse mutation can be pointed at a modified copy. Without this, an
+# attempted mutation runs the real script and reports green -- indistinguishable from a
+# mutation the tests genuinely caught. Measured: both directions of the gate "passed".
+SCRIPT="${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/scripts/capture_aihot_daily.sh}"
 pass=0; fail=0
 check(){ if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "  ok   $1"; else fail=$((fail+1)); echo "  FAIL $1: expected '$3', got '$2'"; fi; }
 
@@ -79,37 +82,144 @@ check "names the actual file" "$( grep -c 'loose.tmp' "$r"/tool/logs/*.log )" "1
 check "but does not fail the run -- it no longer blocks tomorrow" "$rc" "0"
 rm -rf "$r"
 
-echo "8. AIHOT has not advanced its canonical window yet -- the tool refuses to overwrite a"
-echo "   window that IS already on disk. That is the steady state on most days, not a failure."
-echo "   Measured 2026-09-10: a manual re-run ~9h after the cron slot fetched the whole surface"
-echo "   (33 min) and refused the same window, so the timing hypothesis is dead."
-echo "   The two assertions after the exit code are the ones every other terminal-state case"
-echo "   here already had, and their absence is exactly why the first version of this branch"
-echo "   could skip retention and the exit-time dirty check unnoticed."
+echo "8. target_exists is a real failure whenever this job runs alone -- including, and this is"
+echo "   the case the old branch passed, when the window it names IS already on disk."
+echo "   A branch here used to pass exactly that case as a benign steady state, on the premise"
+echo "   that it meant \"AIHOT has not advanced its canonical window yet\". The premise is false:"
+echo "   aihot_dataset.py:3799 rejects a request that is not verbatim the server's current"
+echo "   canonical pair, so reaching the publish step proves the server DID advance -- the error"
+echo "   means we collided with our own history and dropped the pair's new day. (The one benign"
+echo "   shape is two runs racing each other to publish; no lock guards it, deliberately.)"
+echo "   That branch had 22 green tests and two red reverse mutations; they encoded the same"
+echo "   wrong premise as the code, so this case is the regression guard, not those."
 r=$(setup); rc=$(run "$r" 'bash -c "echo \"ERROR target_exists: refusing to overwrite windows/w1\"; echo \"Choose a new output path and retry; existing files are never overwritten.\"; exit 2" --')
-check "benign steady state exits 0"      "$rc" "0"
-check "names the window it skipped"      "$( grep -c 'SKIP: windows/w1' "$r"/tool/logs/*.log )" "1"
-check "retention still ran"              "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
-check "clean at exit"                    "$(dirt "$r")" "0"
+check "a window already on disk still fails" "$rc" "2"
+check "nothing is logged as a skip"          "$( grep -c 'SKIP' "$r"/tool/logs/*.log )" "0"
+check "retention still ran"                  "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+check "clean at exit"                        "$(dirt "$r")" "0"
 rm -rf "$r"
 
-echo "8b. a refusal naming a window that is NOT on disk is a real defect (a date-computation"
-echo "    bug colliding with something else) and must NOT be silently passed. The message is"
-echo "    the verbatim line from logs/aihot-capture-20260910-103623.log, so the extraction is"
-echo "    pinned against a real sample rather than a hand transcription."
-r=$(setup); rc=$(run "$r" 'bash -c "echo \"ERROR target_exists: refusing to overwrite windows/2026-09-08T000000Z--2026-09-09T000000Z\"; exit 2" --')
-check "unknown window still fails"   "$rc" "2"
-check "and is not logged as a skip"  "$( grep -c 'SKIP:' "$r"/tool/logs/*.log )" "0"
+# The overlap those refusals came from is now prevented at the request instead. Both directions
+# of that gate are pinned: 9 asserts it blocks, 10 asserts it does not block. One without the
+# other reads the same whether the predicate works or is simply always true.
+d(){ date -u -v"$1"d +%Y-%m-%dT000000Z 2>/dev/null || date -u -d "${1#-} days ago" +%Y-%m-%dT000000Z; }
+
+echo "9. the canonical pair overlaps what is published -> no request is made at all."
+echo "   Publishing is all-or-nothing (aihot_dataset.py:3879 raises if ANY publish root exists),"
+echo "   so asking anyway would fetch the whole surface for 33 minutes and store nothing."
+echo "   Nothing is lost: tomorrow's pair starts where our history ends. The corpus therefore"
+echo "   trails by at most one day, which is structural -- AIHOT only offers day T-1 paired with"
+echo "   T-2 -- not something this gate introduced."
+r=$(setup); w="$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"; mkdir -p "$w"
+echo x > "$w/items.jsonl"; echo '{}' > "$w/manifest.json"
+rc=$(run "$r" 'bash -c "exit 0" --')
+check "exits 0"                       "$rc" "0"
+check "says it made no request"       "$( grep -c 'no request: windows already cover through' "$r"/tool/logs/*.log )" "1"
+check "the capture tool was NOT run"  "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "0"
+check "retention still ran"           "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+# The message is not echoed to the log, so read it off the commit itself -- grepping the log
+# here silently passed as 0 and had to be traced by hand.
+check "retention deletions committed" "$( git -C "$r/tool/benchmarks/aihot" log -1 --format=%s )" "chore(aihot): retention on a no-request day"
+check "clean at exit"                 "$(dirt "$r")" "0"
 rm -rf "$r"
 
-echo "8c. a skip day that ALSO leaves the tree dirty must still fail: a dirty tool checkout"
-echo "    makes tomorrow's capture refuse to run, and tomorrow is not recoverable. \"No new"
-echo "    window today\" and \"nothing is wrong\" are two claims, not one."
-r=$(setup); rc=$(run "$r" 'bash -c "echo oops > oops.tmp; echo \"ERROR target_exists: refusing to overwrite windows/w1\"; exit 2" --')
-check "dirty tree overrides the skip"  "$rc" "2"
-check "and the dirt is reported"       "$( grep -c 'worktree dirty at exit' "$r"/tool/logs/*.log )" "1"
+echo "10. history ending exactly AT the pair's start does not overlap -- the request is made."
+echo "    This is the day the gate must not eat; without it, 9 would pass on a predicate that"
+echo "    simply always refuses and the job would never capture anything again."
+r=$(setup); w="$r/tool/benchmarks/aihot/windows/$(d -3)--$(d -2)"; mkdir -p "$w"
+echo x > "$w/items.jsonl"; echo '{}' > "$w/manifest.json"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "the request was made"   "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                "$rc" "0"
+check "clean at exit"          "$(dirt "$r")" "0"
 rm -rf "$r"
 
+# 11 and 12 are the same defect in two shapes: the gate fails in the worst direction, because
+# anything it mistakes for published history suppresses the request silently and forever. A name
+# is not a publication. Both were found by an independent reviewer, not by these tests.
+echo "11. a window directory with no manifest.json is NOT published history."
+echo "    The publish step writes the manifest; an empty or half-removed directory carries the"
+echo "    same name as a validated window, and counting it would eat that day for good."
+r=$(setup); mkdir -p "$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                       "$rc" "0"
+rm -rf "$r"
 
+echo "12. a date-SHAPED name that is not a date must not pin the gate shut."
+echo "    9999-99-99 sorts above every real window, so a single such directory would stop this"
+echo "    job requesting anything ever again -- and it would exit 0 every day while doing it."
+r=$(setup); bad="$r/tool/benchmarks/aihot/windows/2026-01-01T000000Z--9999-99-99T000000Z"
+mkdir -p "$bad"; echo x > "$bad/items.jsonl"; echo '{}' > "$bad/manifest.json"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                       "$rc" "0"
+rm -rf "$r"
+
+echo "14. a SYMLINK to a directory that holds a manifest is not published history."
+echo "    Path.is_dir() follows symlinks, so the manifest check alone would pass a link to any"
+echo "    directory. Found by the reviewer, not by cases 11-12."
+# BOTH files in the decoy, or this case is rejected for the missing items.jsonl instead and
+# proves nothing about the symlink predicate. Reviewer caught that the first version did not
+# isolate it -- so the mutation reading it produced was not evidence.
+r=$(setup); real="$r/decoy"; mkdir -p "$real"
+echo x > "$real/items.jsonl"; echo '{}' > "$real/manifest.json"
+ln -s "$real" "$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                       "$rc" "0"
+rm -rf "$r"
+
+echo "15. a bogus START date invalidates the name even when the END date is a real day."
+echo "    The gate only reads the end, so validating only that leaves a name no publish step"
+echo "    ever wrote counting as history."
+# Both files present, so this case isolates the START-date check: without items.jsonl it would
+# pass for the wrong reason and stay green if that check were deleted.
+r=$(setup); bad="$r/tool/benchmarks/aihot/windows/2026-99-99T000000Z--$(d -0)"
+mkdir -p "$bad"; echo x > "$bad/items.jsonl"; echo '{}' > "$bad/manifest.json"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                       "$rc" "0"
+rm -rf "$r"
+
+echo "16. a 99:99:99 TIME component must not pin the gate shut either."
+echo "    It passes a digit-count check and sorts above every real instant. Same hole as 12 and"
+echo "    14, third face: every unvalidated field in this name fails toward permanent silence."
+r=$(setup); bad="$r/tool/benchmarks/aihot/windows/2026-09-01T000000Z--2026-09-11T999999Z"
+mkdir -p "$bad"; echo x > "$bad/items.jsonl"; echo '{}' > "$bad/manifest.json"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                       "$rc" "0"
+rm -rf "$r"
+
+echo "17. a half-published window (manifest but no items) is not history."
+echo "    Publish writes both; a tree with one of them is a partial or half-removed write."
+r=$(setup); half="$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"
+mkdir -p "$half"; echo '{}' > "$half/manifest.json"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                       "$rc" "0"
+rm -rf "$r"
+
+echo "18. two real dates that are not ONE DAY apart do not name a canonical window."
+echo "    2026-01-01--2099-01-01 passes every other check and would skip every request until"
+echo "    2099. Fifth face of the same hole; found by the reviewer after cases 12/14/15/16/17."
+r=$(setup); wide="$r/tool/benchmarks/aihot/windows/2026-01-01T000000Z--2099-01-01T000000Z"
+mkdir -p "$wide"; echo x > "$wide/items.jsonl"; echo '{}' > "$wide/manifest.json"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
+check "exits 0"                       "$rc" "0"
+rm -rf "$r"
+
+echo "13. failing to persist must not report success. Until these objects reach a second place"
+echo "    they exist only in this worktree's private gitdir; a run that fetched an irrecoverable"
+echo "    day and then could not commit it is a failure, not a success."
+# benchmarks/aihot/.git is a gitlink FILE, so chmod on it locks nothing -- the objects live in
+# $r/tool/.git/modules/. An index.lock in the real gitdir is what actually makes git refuse.
+r=$(setup); : > "$r/tool/.git/modules/benchmarks/aihot/index.lock"
+rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+check "persist failure is non-zero"  "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
+check "and it says so"               "$( grep -cE 'WARNING: (git add failed|submodule commit failed)' "$r"/tool/logs/*.log )" "1"
+rm -rf "$r"
 
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]
