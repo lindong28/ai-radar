@@ -98,6 +98,12 @@ def main() -> None:
                     help="覆盖 ADR-bc36 的 `per_source`（生产 0.075）。`0` 表示取消该上限。"
                          "AIHOT 自己的最大单源占比实测 15.6%%。**它对构成指标实测无帮助**，"
                          "但条目重合从没量过它——而重合正是源配额该咬的地方。")
+    ap.add_argument("--aihot-rate-multipliers", action="store_true",
+                    help="**排序系数直接取自参照物自己的决策函数**：每类系数 = AIHOT 对该类的"
+                         "精选率 ÷ 它的全局精选率（实测 model 2.22× / industry 0.66× / 其余约 0.85×）。"
+                         "**零自由参数**——两个数都来自 AIHOT 的发布 vs 精选比率，不拟合我方读数。"
+                         "**严格因果**：每个窗口只用**更早**的参照日算，与 `hist` 同纪律；"
+                         "样本不足（该类发布 <20 条）时该类取 1.0。系数夹在 [0.5, 3.0]。")
     ap.add_argument("--fixed-m-until", default=None, metavar="DATE",
                     help="**固定 M**：只用早于该日发布的双标注条目估一次混淆矩阵，**冻结**，"
                          "此后所有窗口都用它。与 `--causal-m` 的滚动重估互斥——"
@@ -460,6 +466,7 @@ def main() -> None:
     hist: Counter = Counter()
     live = {c: overrides.get(BUCKET_TO_OURS.get(c, c), 1.0) for c in CATS}
     skipped_days: list[str] = []
+    rate_log: list = []
     m_log: list[tuple[str, int, str]] = []
     frozen_conf = None
     if args.fixed_m_until:
@@ -482,6 +489,28 @@ def main() -> None:
                 merged_ref.add(rd)
         # `corrected` 档：累积恒在 AIHOT 空间，在**使用点**反解到我方空间。
         # 放在天这一层是因为 `hist` 一天内不变。
+        if args.aihot_rate_multipliers:
+            # **参照物的决策函数，按严格更早的窗口估计。**
+            pub_c, sel_c = Counter(), Counter()
+            for r in aihot.values():
+                d0, cat = r.get("published"), r.get("category")
+                if not cat or not d0 or d0 >= day:
+                    continue
+                pub_c[cat] += 1
+                if r["selected"]:
+                    sel_c[cat] += 1
+            npub, nsel = sum(pub_c.values()), sum(sel_c.values())
+            if npub and nsel:
+                base = nsel / npub
+                for b in CATS:
+                    k2 = BUCKET_TO_OURS.get(b, b)
+                    if pub_c[b] >= 20 and base > 0:
+                        rel = (sel_c[b] / pub_c[b]) / base
+                        overrides[k2] = min(3.0, max(0.5, rel))
+                    else:
+                        overrides[k2] = 1.0
+                rate_log.append((day, npub, nsel,
+                                 {b: round(overrides[BUCKET_TO_OURS.get(b, b)], 2) for b in CATS}))
         hist = Counter(hist_raw)
         if args.target_space == "corrected" and args.labels != "oracle":
             conf_now = None
@@ -764,6 +793,11 @@ def main() -> None:
         print(f"\n>>> 条目重合（末窗口并集 vs 窗口内 AIHOT 精选）："
               f"{hit}/{len(sel_urls)} = {100 * hit / len(sel_urls):.1f}%"
               f"   并集 {len(union)} 条")
+
+    if rate_log:
+        print("\n>>> AIHOT 精选率导出的系数（严格因果：每窗只用更早的参照日）")
+        for d, npub, nsel, mm in rate_log:
+            print(f"    {d:12}参照 发布 {npub:>5} / 精选 {nsel:>4}   {mm}")
 
     if m_log:
         print(f"\n>>> 混淆矩阵 M 逐窗状态（复核轮要求：样本量 / 是否反解成功 / 是否回退）")
