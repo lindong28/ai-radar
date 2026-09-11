@@ -57,6 +57,23 @@ GATE_SENTENCE = (
 # Terminal Bench 之类第三方跑出来的基准成绩，而它们被判成了"模型发布"。
 ANCHOR = "每条内容必须选择且只能选择一个主类。"
 
+# v2 = v1 的闸 + 改掉规范里与 AIHOT 不一致的那一行。
+# 依据是 v1 留出读数里**被改错的那 11 条**：其中 7 条是 industry→tip，逐条看下来 6 条同一形状——
+# 「当事方就一件商业 / 法律 / 监管 / 安全事件所作的确认、回应、披露」。
+# 我方规范明写这类归兜底（「一家公司就某件事发表的看法、澄清或表态」「服务中断与安全事故的披露和复盘」），
+# 而 AIHOT 把它们算进 industry。⇒ **v1 的闸没判错，是规范那一行与参照物不一致**。
+# 全量基线上 AIHOT-industry→我方-tip 有 19 条，不止留出里这 6 条，所以值得改。
+V2_INCIDENT_OLD = "服务中断与安全事故的披露和复盘、"
+V2_INCIDENT_NEW = ""
+V2_STANCE_OLD = (
+    "一家公司就某件事发表的看法、澄清或表态也归这一类——它是在说，不是在做。"
+)
+V2_STANCE_NEW = (
+    "一家公司就某件事发表的看法、澄清或表态也归这一类——它是在说，不是在做；"
+    "**但当事方就一件商业、法律、监管或安全事件所作的确认、回应与披露随该事件归 industry**，"
+    "服务中断与安全事故本身同理——那是事件的一部分，不是对它的评论。"
+)
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -69,6 +86,9 @@ def main() -> None:
     ap.add_argument("--exclude-ids", default=None,
                     help="每行一个 item_id：刻画干预时读过的条目，一律排除出留出样本。")
     ap.add_argument("--out", default=None, help="把逐条结果写成 jsonl，便于事后复核")
+    ap.add_argument("--variant", choices=("v1", "v2"), default="v1",
+                    help="v1=只加前置闸；v2=闸 + 改掉规范里与 AIHOT 不一致的那一行。"
+                         "**同一个 seed 给同一批留出**，所以 v1/v2 是配对比较。")
     args = ap.parse_args()
 
     from airadar.enrich import prompts_v2, runner_v2
@@ -127,6 +147,12 @@ def main() -> None:
     patched = prompts_v2.SYSTEM_PROMPT.replace(ANCHOR, GATE_SENTENCE + ANCHOR, 1)
     if patched == prompts_v2.SYSTEM_PROMPT:
         raise SystemExit(f"锚点没命中，改动没生效：{ANCHOR!r}")
+    if args.variant == "v2":
+        for old, new in ((V2_INCIDENT_OLD, V2_INCIDENT_NEW), (V2_STANCE_OLD, V2_STANCE_NEW)):
+            if old not in patched:
+                raise SystemExit(f"v2 锚点没命中：{old!r}")
+            patched = patched.replace(old, new, 1)
+    print(f"变体 {args.variant}；system prompt {len(prompts_v2.SYSTEM_PROMPT)} → {len(patched)} 字符")
     prompts_v2.SYSTEM_PROMPT = patched
     provider = runner_v2._provider_from_env()
     print(f"provider={type(provider).__name__}  留出 n={len(holdout)}  workers={args.workers}")
