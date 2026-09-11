@@ -98,6 +98,11 @@ def main() -> None:
                     help="覆盖 ADR-bc36 的 `per_source`（生产 0.075）。`0` 表示取消该上限。"
                          "AIHOT 自己的最大单源占比实测 15.6%%。**它对构成指标实测无帮助**，"
                          "但条目重合从没量过它——而重合正是源配额该咬的地方。")
+    ap.add_argument("--weights", default=None, metavar="K=V,...",
+                    help="覆盖打分权重向量（维度名=权重，逗号分隔），例如 "
+                         "`relevance=0.2,authority=0.5,significance=0.3`；未列出的维度取 0。"
+                         "现行 `DEFAULT_WEIGHTS` 是**拟合 AIHOT 的 0-100 分数**（Spearman）得到的；"
+                         "若目标是匹配它的**选择**（条目重合），那是另一个目标函数。")
     ap.add_argument("--aihot-rate-multipliers", action="store_true",
                     help="**排序系数直接取自参照物自己的决策函数**：每类系数 = AIHOT 对该类的"
                          "精选率 ÷ 它的全局精选率（实测 model 2.22× / industry 0.66× / 其余约 0.85×）。"
@@ -205,7 +210,18 @@ def main() -> None:
         ratio = args.threshold / sel.DEFAULT_THRESHOLD
         sel.DEFAULT_FRESHNESS_FLOOR = sel.DEFAULT_FRESHNESS_FLOOR * ratio
         sel.DEFAULT_THRESHOLD = args.threshold
-    candidates = sel.deduplicate_candidates(sel._load_candidates(conn, DEFAULT_WEIGHTS))
+    weights = DEFAULT_WEIGHTS
+    if args.weights:
+        from airadar.curator.weights import Weights
+        kv = {}
+        for part in args.weights.split(","):
+            k, _, v = part.partition("=")
+            kv[k.strip()] = float(v)
+        weights = Weights(**{d: kv.get(d, 0.0) for d in
+                             ("relevance", "density", "recency", "authority",
+                              "engineering", "significance")})
+        print(f"打分权重：{DEFAULT_WEIGHTS.as_dict()} → {weights.as_dict()}")
+    candidates = sel.deduplicate_candidates(sel._load_candidates(conn, weights))
     url_by_id = {}
     for i, u in conn.execute("SELECT id, url FROM items WHERE url IS NOT NULL"):
         url_by_id[str(i)] = _comp.normalize_url(str(u))[0]
