@@ -440,6 +440,13 @@ def main() -> None:
         "**别 --record 它**——它是探索性对照，不是一轮迭代。",
     )
     parser.add_argument(
+        "--no-quota",
+        action="store_true",
+        help="绕开我方选择机制（threshold / freshness floor / _fill 的配额分段），当日池子里直接按"
+        "排序键取 top-N。**只作归因用**：与 --rank-by aihot-oracle 配对，它与带机制那次的差额就是"
+        "「我方机制吃掉了多少」，剩下的差额才是参照物的选择残差。**不得 --record**。",
+    )
+    parser.add_argument(
         "--record",
         nargs="?",
         const=str(DEFAULT_HISTORY),
@@ -574,8 +581,9 @@ def main() -> None:
             + ("" if hand_identity["path"].startswith("off") else "  （文件不存在）")
             + "  -> 本次只用 AIHOT 标签"
         )
-    if args.rank_by != "ours":
-        print(f"排序键: {args.rank_by}（探索性对照，不要 --record）  oracle 有分的条目: {len(oracle_score)}")
+    if args.rank_by != "ours" or args.no_quota:
+        print(f"排序键: {args.rank_by}   选择机制: {'绕开（no-quota）' if args.no_quota else '生产'}"
+              f"   （探索性对照，不要 --record）  oracle 有分的条目: {len(oracle_score)}")
     print(
         f"覆盖的系数: {overrides or '（无）'}   施加面: "
         f"{'排序键+两道闸（被否决的实现）' if args.gate else '仅排序键（生产）'}   "
@@ -609,7 +617,13 @@ def main() -> None:
         # 修法两步：按生产的同一比例缩放 freshness 配额（36/40 = 0.9，保持"九成来自当日"这个
         # 机制形状），再硬夹到 limit。只夹不缩放会让浅深度下 100% 来自 fresh 段，那是另一种失真。
         freshness_quota = max(1, round(limit * sel.DEFAULT_FRESHNESS_QUOTA / sel.DEFAULT_LIMIT))
-        picked = sel._fill(fresh, eligible, limit, freshness_quota, sel.DEFAULT_SOURCE_QUOTA)[:limit]
+        if args.no_quota:
+            # 当日池子按排序键取 top-N，不过任何闸、不分段、不限源。**这不是一个候选实现**——
+            # 它拿掉的那几样各自有理由（时效、单源垄断），这里只用来把"机制吃掉的"与"参照物的
+            # 选择残差"分开，因为带机制那次的读数把两者混成了一个数。
+            picked = sorted(pool, key=rank)[:limit]
+        else:
+            picked = sel._fill(fresh, eligible, limit, freshness_quota, sel.DEFAULT_SOURCE_QUOTA)[:limit]
         # 逐日记生效值，不是模块默认值：`--depth aihot` 下 limit 是逐日的、配额是新算的，
         # 身份块里放 `DEFAULT_LIMIT` 会是**对该次运行为假的字段**，而假字段比缺字段更坏
         # （它看起来已经答过了）。复核轮报出。
