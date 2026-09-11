@@ -400,6 +400,28 @@ def verdict_null(reference: Counter, n_ours: int, trials: int = 20000) -> dict:
     }
 
 
+
+def replay_day(pool, all_eligible, limit, rank, gate_score, no_quota=False):
+    """重放某一天的版面，返回被选中的候选。
+
+    **这段逻辑此前整段锁在 `main()` 里**，于是"当天我们挑了哪几条"这个最基本的问题取不出来——
+    条目重合、自适应乘数模拟都卡在这里。提出来是为了让它可被复用，**行为一字未改**：
+    提取后判据输出与提取前逐字相同（TV 0.129 / 3/5 / P(5/5)=0.933）。
+
+    与生产同形：`fresh` 只取被重放那一天（生产取「最新 fresh 日」），而尾部槽位的 `all_eligible`
+    跨**全部**过阈值候选。`_fill` 的 fresh 段不受 limit 夹（`select.py` 自陈），故配额要按生产的
+    同一比例缩放再硬夹——理由见调用处的长注释。
+    """
+
+    if no_quota:
+        # 当日池子按排序键取 top-N，不过任何闸、不分段、不限源。**不是候选实现**，只用于归因。
+        return sorted(pool, key=rank)[:limit]
+    fresh = sorted((c for c in pool if gate_score(c) >= sel.DEFAULT_FRESHNESS_FLOOR), key=rank)
+    eligible = sorted(all_eligible, key=rank)
+    freshness_quota = max(1, round(limit * sel.DEFAULT_FRESHNESS_QUOTA / sel.DEFAULT_LIMIT))
+    return sel._fill(fresh, eligible, limit, freshness_quota, sel.DEFAULT_SOURCE_QUOTA)[:limit]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", default=str(REPO / "data" / "radar.db"))
@@ -651,8 +673,6 @@ def main() -> None:
         pool = by_day[day]
         # 与生产同形：`fresh` 只取被重放那一天（生产取「最新 fresh 日」），而尾部槽位的
         # `filtered` 跨**全部**过阈值候选——早先版本这里只用当日候选，把尾部槽位限窄了。
-        fresh = sorted((c for c in pool if gate_score(c) >= sel.DEFAULT_FRESHNESS_FLOOR), key=rank)
-        eligible = sorted(all_eligible, key=rank)
         limit = (
             sum(reference_by_day[day][c] for c in CATEGORIES)
             if args.depth == "aihot"
@@ -667,13 +687,7 @@ def main() -> None:
         # 修法两步：按生产的同一比例缩放 freshness 配额（36/40 = 0.9，保持"九成来自当日"这个
         # 机制形状），再硬夹到 limit。只夹不缩放会让浅深度下 100% 来自 fresh 段，那是另一种失真。
         freshness_quota = max(1, round(limit * sel.DEFAULT_FRESHNESS_QUOTA / sel.DEFAULT_LIMIT))
-        if args.no_quota:
-            # 当日池子按排序键取 top-N，不过任何闸、不分段、不限源。**这不是一个候选实现**——
-            # 它拿掉的那几样各自有理由（时效、单源垄断），这里只用来把"机制吃掉的"与"参照物的
-            # 选择残差"分开，因为带机制那次的读数把两者混成了一个数。
-            picked = sorted(pool, key=rank)[:limit]
-        else:
-            picked = sel._fill(fresh, eligible, limit, freshness_quota, sel.DEFAULT_SOURCE_QUOTA)[:limit]
+        picked = replay_day(pool, all_eligible, limit, rank, gate_score, no_quota=args.no_quota)
         # 逐日记生效值，不是模块默认值：`--depth aihot` 下 limit 是逐日的、配额是新算的，
         # 身份块里放 `DEFAULT_LIMIT` 会是**对该次运行为假的字段**，而假字段比缺字段更坏
         # （它看起来已经答过了）。复核轮报出。
