@@ -182,7 +182,11 @@ TV 结构上给不出它（同一个 0.156 可以由任何一组相互抵消的�
 除了并发运行这一种良性形态外，它意味着请求撞上了我们自己已发布的历史，而那次运行**什么都没存下**
 （raw 与 window 都没有），于是 7 天宽限的时钟照走。
 
-**趋势序列**：`scripts/eval/composition-history.jsonl`（`--record` 追加一行）。用户预期这组读数
+**趋势序列**：`scripts/eval/composition-history.jsonl`（`--record` 追加一行）。
+**别把 `identity.code_dirty` 当清洁度信号**：只要另一个 session 还占着某个 tracked 文件
+（本机长期是 `src/airadar/curator/precompute.py`），它就恒为 `true`——两个已记录的点都是。
+它答的是"取数时树干不干净"，不是"这次读数可不可信"；要判后者看 `captures_sha` 与 `code_head`。
+用户预期这组读数
 **随迭代轮次逐步逼近 AIHOT 的 CI**，而那条趋势只有在读数跨 session 存活时才验证得了——
 所以它 git-tracked，且刻意不在 `data/` 下（那里是 runtime-owned，跟踪即破部署）。
 只在一次运行**代表一轮迭代**时传 `--record`：探索性对照（`--multiplier paper=1.0` 一类）不进序列。
