@@ -4971,3 +4971,35 @@ ADR-006 的归档模式下，**本轮 curate 丢掉一条不撤销它在更早 r
 `--label-time {final,replay}`、`--causal-m`、`--fixed-m-until`、`--score-only-covered`、
 `--enrich-stamp`、`--permute-labels`、`--per-source`、`--no-quota`、`--rank-by-aihot-score`、
 条目重合读数、M 逐窗状态、并集源集中度。**下一个候选可以直接在这套对照上跑。**
+
+---
+
+## A 家族（逐条拟合）本轮首读：八条闸全过，但三条不可能不过（2026-09-11）
+
+本轮从头到尾在 B 家族（版面构成）与 C 家族（条目重合），**A 家族一次没读过**。补读一次
+（`./run.sh eval-fit report --run data/eval-fit/runs/REG-NEW2D-20260907`，只读既有 run、零新 LLM 调用）：
+
+| 指标 | 值 | CI95 | n |
+|---|---|---|---|
+| ai_recall | **0.9153** | [0.8475, 0.9831] | 59 |
+| category_agreement | **0.6379** | [0.5172, 0.7586] | 58 |
+| score_spearman | 0.5352 | [0.3014, 0.7109] | 59 |
+| selected_auc / selected_auc_ranked | 0.886 | — | 59 |
+| summary_closeness_mean | 0.6118 | [0.55, 0.6809] | 55 |
+| summary_bigram_jaccard | 0.2479 | [0.21, 0.2854] | 55 |
+| **tag_jaccard_mean** | **None** | — | **0** |
+| **selected_p_at_k** | 0.5 | **[0.0, 1.0]** | **2** |
+| **reason_closeness_mean** | 0.575 | [0.4, 0.75] | **2** |
+
+`thresholds: below=none undetermined=none` ⇒ **八条闸全过**。
+
+⚠️ **但三条的样本量是 0 或 2**：`tag_jaccard_mean` 根本没有数据、`selected_p_at_k` 的 CI 是 `[0.0, 1.0]`、
+`reason_closeness_mean` 只有 2 条。**它们"通过"是因为它们不可能不通过。**
+这与本 session 反复撞到的是同一类仪器失明——**"全过"在"真的好"与"闸是空的"两种情况下输出相同**。
+（台账早前记过 `tag_jaccard` 的同一个空：enrich prompt 评测里它也是题集零交集、量不到。）
+
+**另一条限定**：该 run 日期 `20260907`，**早于**当前 enrich 戳 `2026-09-08.r2.31b2065e`
+⇒ `category_agreement 0.6379` 量的是**旧 prompt**，不是当前生产。
+
+**处置**：不在本轮改它——A 家族的闸不是本轮任务目标的判据（达标线在 B 家族）。
+但把这三条空闸记为**已知不可用**，免得下一轮把 `below=none` 读成"这三个维度已验证"。
