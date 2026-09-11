@@ -120,6 +120,21 @@ def main() -> None:
         "预测器（历史均值 vs 当日池校准）。**不是按看到的结果硬编码哪类用哪个**——那会把评测集"
         "用进模型；这里的选择只依据严格早于该窗口的误差记录，与预测本身同一条因果线。",
     )
+    ap.add_argument(
+        "--mech-labels",
+        choices=("aihot", "ours"),
+        default="aihot",
+        help="**机制**读谁的类别。aihot=AIHOT 的标签（只覆盖它见过的条目，池子小）；"
+        "ours=我方 enrich 的 `primary_category`（**生产里只有这个可用**，池子大得多）。"
+        "判据那一侧**始终**用 AIHOT 的标签，与 `--labels off` 同口径——所以换的是机制的输入，"
+        "不是评分的尺子。**上线前必须用 ours 重跑**：aihot 那一版机制看得见的候选比生产少一半以上。",
+    )
+    ap.add_argument(
+        "--mech-stamp",
+        default=None,
+        help="只让机制看 enrich 戳以此开头的条目。ADR-9e21 要求给 paper 以外的类别做类别级干预前"
+        "按戳分层——industry/tip 跨标注器极不稳（旧戳判 industry 的精确率 30.1% vs 新戳 68.2%）。",
+    )
     args = ap.parse_args()
 
     aihot = C.load_aihot()
@@ -148,6 +163,27 @@ def main() -> None:
             if oid:
                 ref_ids_by_day[record["published"]].add(oid)
 
+    # 机制用的标签（与判据那一侧分开）。判据恒用 AIHOT 标签 = `--labels off` 口径。
+    mech_labels = dict(labels)
+    if args.mech_labels == "ours":
+        import json as _json
+
+        mech_labels = {}
+        q = ("SELECT e.item_id, e.output_json, e.ruleset_version FROM item_evaluations e "
+             "WHERE e.stage='enrich' AND e.error IS NULL ORDER BY e.id")
+        for item_id, out, stamp in conn.execute(q):
+            if args.mech_stamp and not str(stamp or "").startswith(args.mech_stamp):
+                continue
+            try:
+                cat = (_json.loads(out) or {}).get("primary_category")
+            except Exception:
+                continue
+            if cat in CATS:
+                mech_labels[str(item_id)] = cat  # ORDER BY id ⇒ 后写的（更新的戳）胜出
+        print(f"机制标签: ours ⇒ {len(mech_labels)} 条带类别"
+              f"{f'（戳前缀 {args.mech_stamp}）' if args.mech_stamp else ''}"
+              f"；判据仍用 AIHOT 标签（{len(labels)} 条）")
+
     candidates = sel.deduplicate_candidates(sel._load_candidates(conn, DEFAULT_WEIGHTS))
     by_day: dict[str, list] = defaultdict(list)
     for cand in candidates:
@@ -162,7 +198,7 @@ def main() -> None:
     all_eligible = [c for c in candidates if c.weighted_score >= sel.DEFAULT_THRESHOLD]
 
     decay = 0.5 ** (1.0 / max(args.half_life, 1e-9))
-    target_shares = make_target_fn(args, by_day, labels, sel, shares, CATS)
+    target_shares = make_target_fn(args, by_day, mech_labels, sel, shares, CATS)
     # `SourceQuota` 是 dataclass 不是 dict——`dict(...)` 会抛 TypeError。用 replace 造副本，
     # 既不改生产常量，也保住 kind_caps 那一半。
     import dataclasses
@@ -200,7 +236,7 @@ def main() -> None:
 
             def rank(cand, _m=mult):
                 return (
-                    -cand.weighted_score * _m.get(labels.get(cand.item_id) or "", 1.0),
+                    -cand.weighted_score * _m.get(mech_labels.get(cand.item_id) or "", 1.0),
                     cand.published_at,
                     cand.item_id,
                 )
@@ -221,7 +257,7 @@ def main() -> None:
                     seen: Counter = Counter()
                     out = []
                     for cand in sorted(items, key=rank):
-                        lab = labels.get(cand.item_id)
+                        lab = mech_labels.get(cand.item_id)
                         if lab:
                             if seen[lab] >= cap.get(lab, sel.DEFAULT_LIMIT):
                                 continue
@@ -244,7 +280,7 @@ def main() -> None:
                 # **基数必须与 `have` 一致**：`have` 只数有标签的那部分（约 22/40），而先前 `want`
                 # 按 40 个格位算 ⇒ 每一类都被判成欠额、`over` 恒空、再平衡第一轮就 break，
                 # 整个保底机制从未生效。读数上它长得像"结构到顶了"，实际是没跑。
-                n_labelled = sum(1 for x in picked if x.item_id in labels) or sel.DEFAULT_LIMIT
+                n_labelled = sum(1 for x in picked if x.item_id in mech_labels) or sel.DEFAULT_LIMIT
                 exact = {c: n_labelled * tgt[c] / tot for c in CATS}
                 want = {c: int(exact[c]) for c in CATS}
                 import os
@@ -257,7 +293,7 @@ def main() -> None:
                     want[c] += 1
                 blocked: set = set()
                 for _ in range(sel.DEFAULT_LIMIT):
-                    have = Counter(labels[x.item_id] for x in picked if x.item_id in labels)
+                    have = Counter(mech_labels[x.item_id] for x in picked if x.item_id in mech_labels)
                     short = [c for c in CATS if have[c] < want[c] and c not in blocked]
                     over = [c for c in CATS if have[c] > want[c]]
                     if not short or not over:
@@ -268,7 +304,7 @@ def main() -> None:
                     src_now = Counter(x.source_id for x in picked)
                     add = next(
                         (x for x in sorted(by_day[day], key=rank)
-                         if x.item_id not in ids and labels.get(x.item_id) == c_in
+                         if x.item_id not in ids and mech_labels.get(x.item_id) == c_in
                          and (src_now[x.source_id] + 1) / sel.DEFAULT_LIMIT
                          <= source_quota.per_source + 1e-9),
                         None,
@@ -279,7 +315,7 @@ def main() -> None:
                         # 整个再平衡停掉，其余类的欠额一并留着。
                         blocked.add(c_in)
                         continue
-                    drop = max((x for x in picked if labels.get(x.item_id) == c_out), key=rank)
+                    drop = max((x for x in picked if mech_labels.get(x.item_id) == c_out), key=rank)
                     picked = [x for x in picked if x.item_id != drop.item_id] + [add]
             elif adaptive and args.mode == "quota" and weight > 0:
                 # 按类配额：把 40 个格位按目标占比分配，类内按排序键取前列；配不满的类把余额
