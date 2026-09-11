@@ -75,6 +75,9 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--no-quota", action="store_true",
+                    help="关掉 `_fill` 的全部配额结构（新鲜度段 + 源配额）。用来判 ④ 那格"
+                         "「过了闸仍进不了并集」是输在配额结构，还是单纯排不进前 40。")
     ap.add_argument("--per-source", type=float, default=None, metavar="SHARE",
                     help="覆盖 ADR-bc36 的 `per_source`（生产 0.075）。`0` 表示取消该上限。"
                          "AIHOT 自己的最大单源占比实测 15.6%%。**它对构成指标实测无帮助**，"
@@ -493,6 +496,7 @@ def main() -> None:
                     capped.append(c)
                 pool = capped
             picked = _comp.replay_day(pool, avail, args.limit, rank, gate_score,
+                                      no_quota=args.no_quota,
                                       source_quota=quota_override)
             if args.closed_loop and args.actuator == "quota+floor" and sum(hist.values()) >= 8:
                 # **下限**：封顶是上界，它压得住超配、造不出短缺。实测 model 在早期欠 4.9pp，
