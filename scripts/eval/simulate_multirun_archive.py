@@ -648,6 +648,26 @@ def main() -> None:
         never = {u for u in sel_urls if u not in prod_curated_urls}
         print(f"\n>>> 生产历史从未精选过的 AIHOT 条目：{len(never)}/{len(sel_urls)}；"
               f"其中**今天这份代码会选进并集的**：{len(never & in_union)} 条")
+        # **对着当前代码重算漏选拆分**：四格的修法互斥，而按生产历史算分母
+        # 会把已经修好的东西排进待办（本轮实测：34 条属于这一类）。
+        miss = sel_urls - in_union
+        pool_ids = {c.item_id for c in candidates}
+        gated = {c.item_id for c in candidates
+                 if c.weighted_score >= sel.DEFAULT_THRESHOLD}
+        b: Counter = Counter()
+        for u in miss:
+            iid = id_by_url.get(u)
+            if iid is None:
+                b["① 不在 items 表（信源够不着）"] += 1
+            elif iid not in pool_ids:
+                b["② 在 items 但不在候选池（上游过滤）"] += 1
+            elif iid not in gated:
+                b["③ 在池里但不过闸（打分）"] += 1
+            else:
+                b["④ 过了闸仍进不了并集（纯排序/配额/新鲜段）"] += 1
+        print(f"    当前代码仍漏的 {len(miss)} 条，逐格（互斥，修法不同）：")
+        for k in sorted(b):
+            print(f"      {k:<40}{b[k]:>4}  {100 * b[k] / max(len(miss), 1):>5.1f}%")
         print(f"\n>>> 条目重合（末窗口并集 vs 窗口内 AIHOT 精选）："
               f"{hit}/{len(sel_urls)} = {100 * hit / len(sel_urls):.1f}%"
               f"   并集 {len(union)} 条")
