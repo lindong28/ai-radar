@@ -59,6 +59,16 @@ def main() -> None:
                          "窗口算，不读当日），反馈 = **归档页此刻的实际构成**（用户真看到的那一面），"
                          "每个时点按 gap 调一次系数。固定系数是它在某份语料上的收敛点，"
                          "而池子构成一漂那个点就失准——闭环的价值就在能重新找到它。")
+    ap.add_argument("--actuator", choices=("rank", "admit", "quota"), default="rank",
+                    help="闭环拧哪个旋钮。rank=逐类排序系数（低节奏有效）；"
+                         "**admit=控制谁进得了跨轮并集**——高节奏下并集会吃掉过阈值候选的大半"
+                         "（实测 per-day 12 时 713/1202 = 59%%，外推到生产 ~48/天接近全部），"
+                         "此时归档页的构成主要由准入决定、排序的话语权被稀释。"
+                         "**admit 已实测否决**：它是直接丢弃，丢掉的格位由更旧、AIHOT 没见过的"
+                         "条目补上——页内有标签由 275/400 掉到 164/400、当日占比塌到 47.5%，"
+                         "构成只在剩下那一小撮里好看。"
+                         "quota=**在选择内部按类封顶**，空出的格位交给 `_fill` 由别类与尾部回填，"
+                         "格位数与时效分段都不被绕开。")
     ap.add_argument("--gain", type=float, default=0.6,
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
@@ -169,7 +179,46 @@ def main() -> None:
                     adjusted = live[b] * (tgt / act) ** args.gain
                     live[b] = min(args.clip, max(1 / args.clip, adjusted))
                     overrides[k] = live[b]
-            for c in _comp.replay_day(pool, avail, args.limit, rank, gate_score):
+            if args.closed_loop and args.actuator == "quota" and sum(hist.values()) >= 8:
+                # **封顶在选择之内**：给每类的当日候选按目标占比设上限，随后照常交 `replay_day`，
+                # 由 `_fill` 用别类与尾部把空出的格位填满 ⇒ 格位数不减、时效分段不被绕开。
+                # 这是 admit 那版「直接丢弃」的修正：丢弃会让页面被更旧的条目补上。
+                import math
+                n_hist = sum(hist.values())
+                capn = {b: max(1, math.ceil(args.limit * hist[b] / n_hist)) for b in CATS}
+                seen_b: Counter = Counter()
+                capped = []
+                for c in sorted(pool, key=rank):
+                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    if b:
+                        if seen_b[b] >= capn.get(b, args.limit):
+                            continue
+                        seen_b[b] += 1
+                    capped.append(c)
+                pool = capped
+            picked = _comp.replay_day(pool, avail, args.limit, rank, gate_score)
+            if args.closed_loop and args.actuator == "admit" and sum(hist.values()) >= 8:
+                # **准入控制**：一条只在「收了它之后该类仍不超目标」时才进并集。
+                # 并集单调增长，所以这条规则天然把它按住在目标构成上。
+                # 与排序系数的区别是作用点：排序决定谁排在前面，准入决定谁**进得来**——
+                # 高节奏下几乎人人都排得上，于是只有后者还咬得住。
+                n_hist = sum(hist.values())
+                cur = Counter()
+                for c in union.values():
+                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    if b:
+                        cur[b] += 1
+                kept = []
+                for c in picked:
+                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    if b:
+                        tot = sum(cur.values()) + 1
+                        if (cur[b] + 1) / tot > hist[b] / n_hist + 1e-9:
+                            continue
+                        cur[b] += 1
+                    kept.append(c)
+                picked = kept
+            for c in picked:
                 union.setdefault(c.item_id, c)
         page = sorted(union.values(), key=lambda c: (c.published_at, c.item_id), reverse=True)[: args.page]
         labelled = Counter()
