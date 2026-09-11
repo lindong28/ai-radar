@@ -701,6 +701,28 @@ def main() -> None:
             f"{day:12}{len(pool):7d}{coverage:>17}  {share(mine):24}  {share(reference_by_day[day]):24}"
             f"{'  n<8' if value is None else f'{value:8.3f}'}"
         )
+    # 参照物自己动了多少。**归因到我方之前必须先读这一行**：2026-09-11 实测 AIHOT 的 model 占比
+    # 一周内从 42.0% 掉到 17.9%（Wilson 区间不相交），比我方任何一类的偏差都大，于是 second-half
+    # 的「5/5」其实是它朝我方走过来、不是我方变好。此前两条看起来站得住的归因都是这样错的，
+    # 而这个量在量具里根本没有入口 —— 有它才问得出「动的是谁」。
+    if len(days) >= 4:
+        mid = len(days) // 2
+        early, late = Counter(), Counter()
+        for d in days[:mid]:
+            early += reference_by_day[d]
+        for d in days[mid:]:
+            late += reference_by_day[d]
+        drift = total_variation(early, late)
+        print(f"\n>>> 参照物自身漂移：前 {mid} 窗 vs 后 {len(days) - mid} 窗，AIHOT 构成 TV = "
+              f"{'n<8' if drift is None else f'{drift:.3f}'}")
+        for c in CATEGORIES:
+            e = 100 * early[c] / max(sum(early.values()), 1)
+            l = 100 * late[c] / max(sum(late.values()), 1)
+            flag = "  <- 摆动大于我方最大偏差" if abs(l - e) > 8.7 else ""
+            print(f"    {c:9} {e:5.1f}% -> {l:5.1f}%  ({l - e:+5.1f}pp){flag}")
+        print("    **这个数与我方无关。** 它大于我方逐类偏差时，达标线的 IN/OUT 主要由它决定，"
+              "而不由本次改动决定。")
+
     # 条目重合：达标线之外的那条轴。它拆成两段，**分开看才归得了因**——
     #   收录上限 = AIHOT 选的里有多少条在我方库里（够不到的，排序怎么改都拿不到）
     #   命中率   = 我方版面里有多少条 AIHOT 也选了（够得到之中我们挑没挑中）
