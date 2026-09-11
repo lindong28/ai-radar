@@ -456,6 +456,11 @@ def main() -> None:
         index.setdefault(normalize_url(str(url))[0], str(item_id))
     labels: dict[str, str] = {}
     reference_by_day: dict[str, Counter] = defaultdict(Counter)
+    # 条目重合这条轴此前**没有任何量具**：达标线只问「类别比例像不像」，两个能回答「装的是不是
+    # 同一批东西」的指标（selected_auc / selected_p_at_k）在 A 家族里明确不设闸，而这里的逐日重放
+    # 整段写在 main() 里、取不出来。加这三个数是为了把它变成可读的 gap，而不是再取一次代理指标。
+    reference_ids_by_day: dict[str, set[str]] = defaultdict(set)   # AIHOT 选了、且我方库里有
+    reference_total_by_day: Counter = Counter()                    # AIHOT 选了（不论我方有没有）
     for record in aihot.values():
         if not record["category"]:
             continue
@@ -465,6 +470,10 @@ def main() -> None:
             our_id = index.get(normalize_url(record["url"])[0])
             if our_id:
                 labels[our_id] = record["category"]
+                if record["selected"]:
+                    reference_ids_by_day[record["published"]].add(our_id)
+        if record["selected"]:
+            reference_total_by_day[record["published"]] += 1
     # 权威规则：AIHOT 自己发布的标签胜出，补充标注只填 AIHOT 没有的那些条目。参照物的划分就是
     # 定义，标注者是在模仿它——让人评覆盖它等于用摹本改原件。
     # 两者都有的条目不合并，但要数出来：那是这个标注者的校准读数。
@@ -546,6 +555,7 @@ def main() -> None:
         print(f"因系数跌破 threshold 而整个掉出候选池的条目: {dropped_by_gate}")
     print(f"{'日期':12}{'候选':>7}{'覆盖(标注/版面)':>17}{'我方':>26}{'AIHOT':>26}{'TV':>8}")
     ours_pooled, reference_pooled = Counter(), Counter()
+    overlap_rows: list[dict] = []
     day_sizes: list[int] = []
     day_params: list[dict] = []
     page_slots = labelled_slots = 0
@@ -575,6 +585,11 @@ def main() -> None:
         # （它看起来已经答过了）。复核轮报出。
         day_params.append({"day": day, "limit": limit, "freshness_quota": freshness_quota,
                            "picked": len(picked)})
+        reachable = reference_ids_by_day[day]
+        hit = sum(1 for c in picked if c.item_id in reachable)
+        overlap_rows.append({"day": day, "picked": len(picked), "hit": hit,
+                             "reference_selected": reference_total_by_day[day],
+                             "reachable": len(reachable)})
         mine = Counter(labels[c.item_id] for c in picked if c.item_id in labels)
         ours_pooled += mine
         reference_pooled += reference_by_day[day]
@@ -592,6 +607,26 @@ def main() -> None:
             f"{day:12}{len(pool):7d}{coverage:>17}  {share(mine):24}  {share(reference_by_day[day]):24}"
             f"{'  n<8' if value is None else f'{value:8.3f}'}"
         )
+    # 条目重合：达标线之外的那条轴。它拆成两段，**分开看才归得了因**——
+    #   收录上限 = AIHOT 选的里有多少条在我方库里（够不到的，排序怎么改都拿不到）
+    #   命中率   = 我方版面里有多少条 AIHOT 也选了（够得到之中我们挑没挑中）
+    # 合成一个数会把"没收到"和"没挑中"混成同一个坏消息，而两者的处置完全不同。
+    tot_picked = sum(r["picked"] for r in overlap_rows)
+    tot_hit = sum(r["hit"] for r in overlap_rows)
+    tot_ref = sum(r["reference_selected"] for r in overlap_rows)
+    tot_reach = sum(r["reachable"] for r in overlap_rows)
+    print(f"\n>>> 条目重合（达标线不看这条轴，但它是最用户可见的一条）")
+    print(f"    收录上限  AIHOT 精选 {tot_ref} 条，我方库里有 {tot_reach} 条 "
+          f"= {100 * tot_reach / max(tot_ref, 1):.1f}%   <- 够不到的部分排序改不动")
+    # 命中率单看会被读错：分母是我方 400 格、分子上界是 AIHOT 够得到的那 146 条，所以
+    # **完美选择器也只有 146/400**。不把这个上限印出来，15% 读起来像灾难，其实是 41% 的召回
+    # 配上 2.5 倍的深度差。这条是「判官读数的刻度」那类纪律在本指标上的实例。
+    ceiling = 100 * tot_reach / max(tot_picked, 1)
+    print(f"    命中率    我方版面 {tot_picked} 格，其中 AIHOT 也选了 {tot_hit} 条 "
+          f"= {100 * tot_hit / max(tot_picked, 1):.1f}%   <- 上限 {ceiling:.1f}%"
+          f"（深度差造成，非选择问题）")
+    print(f"    召回      够得到的 {tot_reach} 条里挑中 {tot_hit} 条 "
+          f"= {100 * tot_hit / max(tot_reach, 1):.1f}%   <- 这一格才是排序/选择的 gap")
     pooled = total_variation(ours_pooled, reference_pooled)
     print(
         f"\n{'POOLED':12}{'':7}{sum(ours_pooled.values()):12d}  "
@@ -745,6 +780,12 @@ def main() -> None:
             "gate": args.gate,
             "page_slots": page_slots,
             "labelled_slots": labelled_slots,
+            # 新增于 2026-09-11。既有键一个没动，所以旧行仍然可比；旧行缺这几个键即"当时没量"。
+            "overlap": {
+                "picked": tot_picked, "hit": tot_hit,
+                "reference_selected": tot_ref, "reachable": tot_reach,
+                "by_day": overlap_rows,
+            },
             "pooled_tv": pooled,
             "pooled_null_p": above,
             # 顶层用 `inside_count` + `passed`，不用 `inside`：见 class_verdicts 的返回注释。
