@@ -86,7 +86,15 @@ def main() -> None:
     ap.add_argument("--exclude-ids", default=None,
                     help="每行一个 item_id：刻画干预时读过的条目，一律排除出留出样本。")
     ap.add_argument("--out", default=None, help="把逐条结果写成 jsonl，便于事后复核")
-    ap.add_argument("--variant", choices=("v1", "v2"), default="v1",
+    ap.add_argument("--no-baseline-row", dest="need_baseline_row", action="store_false",
+                    help="留出不要求条目有库内基线行。跑 `--variant base` 现跑基线臂时用。")
+    ap.add_argument("--only-ids", default=None, help="只用这个文件里列出的 item_id 作候选池")
+    ap.add_argument("--truth", choices=("captures", "evalset"), default="captures",
+                    help="类别真值取哪一份 AIHOT 语料。captures=抓取快照（默认，与达标线同源）；"
+                         "evalset=题集 `reference.category_slug`（经 SLUG_TO_BUCKET 归一）。"
+                         "**要量 `tag_jaccard` 必须用 evalset**——AIHOT 的 tags 只在题集里，"
+                         "而题集与 captures 的条目几乎不相交（584 条带 tags 的里，captures 有类别的只 1 条）。")
+    ap.add_argument("--variant", choices=("base", "v1", "v2"), default="v1",
                     help="v1=只加前置闸；v2=闸 + 改掉规范里与 AIHOT 不一致的那一行。"
                          "**同一个 seed 给同一批留出**，所以 v1/v2 是配对比较。")
     args = ap.parse_args()
@@ -103,11 +111,13 @@ def main() -> None:
     print(f"基线身份已核：{live}")
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
-    ah = {
-        _comp.normalize_url(r["url"])[0]: r["category"]
-        for r in _comp.load_aihot().values()
-        if r.get("category") and r.get("url")
-    }
+    ah: dict[str, str] = {}
+    if args.truth == "captures":
+        ah = {
+            _comp.normalize_url(r["url"])[0]: r["category"]
+            for r in _comp.load_aihot().values()
+            if r.get("category") and r.get("url")
+        }
     base: dict[str, str] = {}
     base_full: dict[str, dict] = {}
     # AIHOT 自己的标签，用于 `tag_jaccard`——**它才是上次回退的那个读数**，
@@ -128,6 +138,11 @@ def main() -> None:
                 # 按 id 关联会让这条读数静静地算不出来，而脚本照常跑完——本轮已栽过一次。
                 if url and isinstance(tags, list):
                     aihot_tags[_comp.normalize_url(str(url))[0]] = tags
+                if args.truth == "evalset" and url:
+                    slug = (q.get("reference") or {}).get("category_slug")
+                    bucket = _comp.SLUG_TO_BUCKET.get(slug)
+                    if bucket:
+                        ah[_comp.normalize_url(str(url))[0]] = bucket
         print(f"AIHOT 标签可比的条目：{len(aihot_tags)} 条（题集 reference.tags，按 URL 关联）")
     for iid, out in conn.execute(
         "SELECT item_id, output_json FROM item_evaluations "
@@ -148,6 +163,9 @@ def main() -> None:
                 "title_zh", "summary_zh", "why_recommend", "tags",
                 "primary_category", "is_opinion")}
 
+    only = None
+    if args.only_ids:
+        only = {ln.strip() for ln in Path(args.only_ids).read_text().split() if ln.strip()}
     excluded = set()
     if args.exclude_ids:
         excluded = {ln.strip() for ln in Path(args.exclude_ids).read_text().split() if ln.strip()}
@@ -163,7 +181,9 @@ def main() -> None:
     for row in rows:
         iid = str(row[0])
         truth = ah.get(_comp.normalize_url(str(row[2]))[0])
-        if truth and iid in base and iid not in excluded:
+        if only is not None and iid not in only:
+            continue
+        if truth and (iid in base or args.need_baseline_row is False) and iid not in excluded:
             pool.append((row, truth))
     print(f"双标注且在基线戳内、且不在 train 的条目：{len(pool)} 条"
           f"（排除了 {len(excluded)} 条用于刻画的）")
@@ -174,9 +194,14 @@ def main() -> None:
 
     # tier 在本次评测里取不到（items 表不带它），统一给空串：它只进 user 模板的一个字段，
     # **两个 arm 同样缺**，所以配对比较不受影响；但绝对值不得与生产读数混用。
-    patched = prompts_v2.SYSTEM_PROMPT.replace(ANCHOR, GATE_SENTENCE + ANCHOR, 1)
-    if patched == prompts_v2.SYSTEM_PROMPT:
-        raise SystemExit(f"锚点没命中，改动没生效：{ANCHOR!r}")
+    # `base` 不打任何补丁，用来**现跑一臂基线**。需要它是因为：库里既有的 enrich 行只覆盖
+    # 当前戳下的条目，而带 AIHOT `tags` 的题集条目与那一批几乎不相交（584 条里只有 14 条）
+    # ⇒ 要量 `tag_jaccard` 就得两臂都现跑，不能拿存量行当基线。
+    patched = prompts_v2.SYSTEM_PROMPT
+    if args.variant != "base":
+        patched = prompts_v2.SYSTEM_PROMPT.replace(ANCHOR, GATE_SENTENCE + ANCHOR, 1)
+        if patched == prompts_v2.SYSTEM_PROMPT:
+            raise SystemExit(f"锚点没命中，改动没生效：{ANCHOR!r}")
     if args.variant == "v2":
         for old, new in ((V2_INCIDENT_OLD, V2_INCIDENT_NEW), (V2_STANCE_OLD, V2_STANCE_NEW)):
             if old not in patched:
@@ -216,24 +241,24 @@ def main() -> None:
         for _iid, _t, _n, err, _f in results[:3]:
             print(f"  调用失败样例: {err}")
         raise SystemExit(f"{len(results)} 条全部失败，没有可判读数")
-    b_hit = sum(1 for iid, truth, *_ in ok if base[iid] == truth)
+    b_hit = sum(1 for iid, truth, *_ in ok if base.get(iid) == truth)
     n_hit = sum(1 for _iid, truth, new, *_ in ok if new == truth)
     print(f"\n留出 n={len(ok)}（{errs} 条调用失败，未计入）")
     print(f"  基线 per-input 一致率 {100 * b_hit / len(ok):.1f}%  ({b_hit}/{len(ok)})")
     print(f"  本改动 per-input 一致率 {100 * n_hit / len(ok):.1f}%  ({n_hit}/{len(ok)})")
     # 配对：只有改变了判定的那些条目携带信息，符号检验就看这两个数。
-    b2n = sum(1 for iid, t, new, *_ in ok if base[iid] == t and new != t)
-    n2b = sum(1 for iid, t, new, *_ in ok if base[iid] != t and new == t)
+    b2n = sum(1 for iid, t, new, *_ in ok if base.get(iid) == t and new != t)
+    n2b = sum(1 for iid, t, new, *_ in ok if base.get(iid) != t and new == t)
     print(f"  配对：改对 {n2b} 条 / 改错 {b2n} 条（其余不变）")
 
     print(f"\n{'类别':10}{'基线净偏':>10}{'本改动净偏':>12}   （我方占比 − AIHOT 占比，同一批条目）")
     tb = Counter(truth for _i, truth, *_ in ok)
-    ob = Counter(base[iid] for iid, *_ in ok)
+    ob = Counter(base.get(iid) for iid, *_ in ok)
     on = Counter(new for _i, _t, new, *_ in ok)
     n = len(ok)
     for c in CATS:
         print(f"{c:10}{100 * (ob[c] - tb[c]) / n:>9.2f}pp{100 * (on[c] - tb[c]) / n:>11.2f}pp")
-    cell_b = sum(1 for iid, t, *_ in ok if t == "tip" and base[iid] == "industry")
+    cell_b = sum(1 for iid, t, *_ in ok if t == "tip" and base.get(iid) == "industry")
     cell_n = sum(1 for _i, t, new, *_ in ok if t == "tip" and new == "industry")
     # --- 副作用：一次调用产六个字段，动分类必然波及其余五个 ------------------------
     # 本仓上一次回退窄规则，**决定性读数是 `tag_jaccard −7.7pp`**，不是类别读数。
