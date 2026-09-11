@@ -143,10 +143,20 @@ def main() -> None:
     reference_pooled: Counter = Counter()
     # 闭环状态：`hist` 只累计**严格早于当前时点**的窗口（不读当日的 AIHOT——生产里选稿那一刻
     # 今天的 AIHOT 还没发，读它就是泄漏）。`live` 是当前系数，从生产值起步。
+    # **暖机用得上的历史不止被评的那几天。** `days` 只留「AIHOT 当日精选 >= 5」的窗口
+    # （那是**判据**的门槛，为的是逐日 CI 有意义），但控制器要的只是一个构成估计——
+    # 精选 1–4 条的天同样是严格更早的参照数据，丢掉它们纯属浪费，暖机因此白多熬几窗。
+    all_ref_days = sorted(reference_by_day)
+    merged_ref: set = set()
     hist: Counter = Counter()
     live = {c: overrides.get(BUCKET_TO_OURS.get(c, c), 1.0) for c in CATS}
     print(f"\n{'上海日':12}{'并集':>7}{'页内有标签':>11}{'当日发布占比':>13}  逐类（AIHOT 标签）")
     for day in days:
+        # 先把**所有**严格早于本窗口、且尚未并入的参照日补进历史（含精选 <5 的那些）。
+        for rd in all_ref_days:
+            if rd < day and rd not in merged_ref:
+                hist += reference_by_day[rd]
+                merged_ref.add(rd)
         y, m, d = (int(x) for x in day.split("-"))
         for k in range(args.per_day):
             hour = round(24 * (k + 1) / args.per_day)
@@ -183,9 +193,17 @@ def main() -> None:
                 # **封顶在选择之内**：给每类的当日候选按目标占比设上限，随后照常交 `replay_day`，
                 # 由 `_fill` 用别类与尾部把空出的格位填满 ⇒ 格位数不减、时效分段不被绕开。
                 # 这是 admit 那版「直接丢弃」的修正：丢弃会让页面被更旧的条目补上。
-                import math
+                # **最大余额法，不是 ceil 也不是截断。** 两头都错过：`ceil` 对小类系统性放水
+                # （paper 目标 8.8% ⇒ ceil(40×0.088)=4 ⇒ 实际上限 10%，高 1.2pp，实测它就是
+                # paper 在生产节奏下出界 +0.22pp 的来源）；而 `int()` 截断反向把 paper 压到 3.8%
+                # 打出界（台账记过）。最大余额让五类上限精确加总到 limit。
                 n_hist = sum(hist.values())
-                capn = {b: max(1, math.ceil(args.limit * hist[b] / n_hist)) for b in CATS}
+                exact = {b: args.limit * hist[b] / n_hist for b in CATS}
+                capn = {b: max(1, int(exact[b])) for b in CATS}
+                for b in sorted(CATS, key=lambda b: exact[b] - int(exact[b]), reverse=True):
+                    if sum(capn.values()) >= args.limit:
+                        break
+                    capn[b] += 1
                 seen_b: Counter = Counter()
                 capped = []
                 for c in sorted(pool, key=rank):
@@ -234,7 +252,9 @@ def main() -> None:
         reference_pooled += reference_by_day[day]
         # **顺序不能反**：本窗口的 AIHOT 直到这里才并进历史，之上的每一次调参都只看得到
         # 严格更早的窗口。反过来就是拿当天的真值去调当天的系数。
-        hist += reference_by_day[day]
+        if day not in merged_ref:
+            hist += reference_by_day[day]
+            merged_ref.add(day)
 
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
