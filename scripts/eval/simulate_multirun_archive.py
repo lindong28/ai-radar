@@ -66,8 +66,6 @@ def main() -> None:
     for spec in args.multiplier:
         k, _, v = spec.partition("=")
         overrides[k.strip()] = float(v)
-    if overrides != sel.CATEGORY_MULTIPLIERS:
-        print(f"类别系数：{sel.CATEGORY_MULTIPLIERS} → {overrides}")
 
     aihot = _comp.load_aihot()
     reference_by_day: dict[str, Counter] = {}
@@ -88,6 +86,26 @@ def main() -> None:
         url_by_id[str(i)] = _comp.normalize_url(str(u))[0]
     print(f"候选 {len(candidates)} 条；窗口 {len(days)} 个：{days[0]}..{days[-1]}；"
           f"每天 {args.per_day} 个时点")
+
+    # **系数要认两套词表。** 我方兜底桶在 `prompts_v2.py` 里叫 `tutorial`，AIHOT 的同一个桶叫 `tip`，
+    # 而判据、本脚本的输出、以及人写命令行时用的都是 `tip`。只查 `primary_category` 的话
+    # `--multiplier tip=X` **永不命中**，而读数一声不响地与不加系数逐位相同——
+    # 实测 tip=1.40/2.0/3.0 三次输出完全一样，那不是饱和，是没生效。
+    BUCKET_TO_OURS = {"tip": "tutorial"}
+    for k in list(overrides):
+        if k in BUCKET_TO_OURS:
+            overrides[BUCKET_TO_OURS[k]] = overrides.pop(k)
+    seen_cats = {c.primary_category for c in candidates}
+    unknown = [k for k in overrides if k not in seen_cats]
+    if unknown:
+        # 不命中就报错退出：一个打不中的系数与「这一类不响应」在读数上完全同形。
+        raise SystemExit(
+            f"这些系数在候选池里没有对应类别、打不中任何条目：{unknown}；"
+            f"池里实际有的是 {sorted(seen_cats)}"
+        )
+
+    if overrides != sel.CATEGORY_MULTIPLIERS:
+        print(f"类别系数：{sel.CATEGORY_MULTIPLIERS} → {overrides}")
 
     def factor(c):
         return overrides.get(c.primary_category, 1.0)
