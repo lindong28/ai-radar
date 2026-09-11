@@ -1,6 +1,6 @@
 # ADR-20260826-68e2：AI Radar 经 status 验证的域名 selector 隔离出网
 
-- Status: accepted
+- Status: accepted; **部分失效 2026-09-11** — 下面 Consequences 里「External interpret 在 selector compatibility 未证明时会被跳过」一条不再成立（收据机制已移除，见 ADR-20260829-c0e8 的 retired 说明）。本 ADR 的其余部分（域名 selector 隔离、调用点登记与分类）仍然有效。
 - Date: 2026-08-26
 - Decision provenance:
   - T2 approved packet SHA256: `6b19a9a55d38b25d30f3474d0a9afea7d5033a25e0046f511a5abeda7ffe945c`
@@ -101,7 +101,7 @@ ADR-057 的 `/img` 路径保持原样：它继续使用独立 Tencent SG 图片�
 - 父 Claude Code/Codex session 即使携带 GCP 六变量，已纳入闭包的 owned clients 与 managed subprocess 仍以 status-derived `agent_proxy` 为准。
 - 新网络调用点必须登记、分类并测试；没有登记的调用点不应静默扩大“受保护”主张。
 - 域名表、policy digest、selected route 与 outcome 继续由 T1 单一持有；AI Radar 只消费 identity 和实际 audit，不维护投影。
-- External interpret 在 selector compatibility 未证明时会被跳过，fetch/curate 继续遵循 ADR-007 的既有 fail-safe stage 语义。
+- ~~External interpret 在 selector compatibility 未证明时会被跳过~~（**2026-09-11 起不成立**：收据闸已移除；interpret 现在只在出口端口不通时 fail-closed，且是 raise 而非跳过）；fetch/curate 继续遵循 ADR-007 的既有 fail-safe stage 语义。
 
 ## Scope and Unverified Items
 

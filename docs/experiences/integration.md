@@ -74,3 +74,20 @@
 - Problem: 一轮 attestation 可以正确测试某个 `policy_sha256`，但操作者随后手工编辑收据前，生产 domain-routing 策略已经切换。这样生成的收据即使字段格式完全正确，落盘时也已经不代表本轮实际测试的策略；consumer fail-closed 只能拒绝它，不能修复 producer 的时间竞态。直接把收据 SHA 改成当前值可恢复生产，却把“证明跑过”退化成形式。
 - Solution: attestation 结束时同时固定 tested policy SHA 与实现闭包 SHA，只允许 `airadar.interpret.receipt_writer` 写收据。Writer 先拒绝闭包变化，再在任何备份或写盘前清空 selector cache，通过 interpret 共用的 `require_selector_policy()` 重新读取生产 status；live policy 不等于 tested policy 就保持原收据与备份集合不变、非零退出并要求整轮重跑。匹配时才创建时间戳备份并同目录原子替换。负例必须模拟“测试结束后换策略”，并同时观察退出码、收据字节与备份数；只证明检查命令报错不够，因为它没有覆盖实际 writer。
 - Applies when: 任何跨仓兼容收据或 attestation artifact 的有效性依赖会独立更新的生产身份时。收据内容应来自本轮实测身份，最后一次权威身份读取与写盘应收敛在同一受测入口；不要把面向人的 status stdout 反向解析成新的机器契约。
+
+## 2026-09-11 出网收据闸已移除——上面两条关于 `/wechat` 停更的排查指引不再适用
+
+用户裁定 `$AI_ASSISTANT_ROOT` 为可信的第一方代码，`ai-radar-egress-contract-v2.json` 收据与 `airadar.interpret.receipt_writer` 一并删除。`_preflight` 现在只检查两份脚本可执行 + `require_selector_policy()`（出口端口实发一次请求，失败是 **loud** 的 `EgressPreflightError`，不是静默跳过）。
+
+**直接后果——本文件上面共有四处因此失效，两处是会直接报错的可执行指令**（外部 review 清点，不是只有我最初写的"两条"）：
+
+| 位置 | 失效内容 |
+|---|---|
+| 2026-09-05「`/wechat` 停更…先查收据闸」条 | 判据 `skip interpret: selector compatibility is unproven` **不会再出现**，该 skip 分支已不存在 |
+| 2026-09-09「出网边界改写使全部现存收据失效」条 | 同上；其中的重签命令 `uv run python -m airadar.interpret.receipt_writer …` **模块已删，会报 `No module named`** |
+| 2026-09-05「attestation 与收据写盘必须同一入口」条 | 整条 Solution 规定"只允许 `receipt_writer` 写收据"，该模块已不存在 |
+| 2026-09-05「egress 前置的收窄点」条 | "改 `egress.py` 会改变 `egress_implementation_sha256`、使收据失效并需重新 attestation"——该摘要函数已删 |
+
+停更时改查：出口端口是否活着（现在会 raise `EgressPreflightError`、exit 1——但注意它目前是裸 traceback，不是本仓统一的 Impact/Next 格式）、`docker ps` 里 wechat2rss、以及 A5 告警。
+
+**放弃了什么**：收据是一个**变更检测器**——它按外部代码闭包摘要签发，summary-agent 一改就失效、强制重新 attestation。现在没有任何东西会发现那边开始绕过受管出口。这是已知且被接受的代价，触发它的读数是该闸两次造成静默停更：138 轮 / 215 篇，以及本次 2026-09-07..09-11、积压 **139 篇**（`runner._candidate_rows` 生产查询实测；A5 告警文案报的 83 是另一套口径，别混用）。

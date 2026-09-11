@@ -1,6 +1,6 @@
 # ai-assistant summary-agent integration
 
-> Reader: [Developer] — whoever implements an external summary-agent consumed by AI Radar's `interpret` stage or manual KB archive importer. This file is the cross-repository interface contract, including the AI Radar receipt writer interface; production enablement and general operator runbooks belong to [operations/wechat-ingestion.md](../operations/wechat-ingestion.md).
+> Reader: [Developer] — whoever implements an external summary-agent consumed by AI Radar's `interpret` stage or manual KB archive importer. This file is the cross-repository interface contract; production enablement and general operator runbooks belong to [operations/wechat-ingestion.md](../operations/wechat-ingestion.md).
 
 `./run.sh interpret` can call an external article-summary implementation that is compatible with the `ai-assistant` summary-agent scripts. Separately, `./run.sh admin wechat-kb import` can consume the versioned read-only catalog described below to copy missing WeChat archive articles into AI Radar. The live interpretation integration is optional and disabled by default; the archive importer is an explicit maintenance command and is never part of `pipeline.sh`.
 
@@ -28,79 +28,31 @@ $AI_ASSISTANT_ROOT/
         └── run.sh
 ```
 
-Both scripts run with `cwd=$AI_ASSISTANT_ROOT`. AI Radar removes `VIRTUAL_ENV` and overwrites all six standard proxy variables with the status-validated domain selector plus loopback `NO_PROXY`. This only controls subprocesses that honor the standard environment; an implementation that creates `trust_env=False`, a custom transport, native sockets or unmanaged descendants is outside the guarantee and must not claim compatibility without the receipt below.
+Both scripts run with `cwd=$AI_ASSISTANT_ROOT`. See [Egress boundary](#egress-boundary) below for how their network egress is routed and what that does and does not guarantee.
 
-## Selector compatibility receipt
+## Egress boundary
 
-Interpret remains disabled for an external root unless `$AI_ASSISTANT_ROOT/ai-radar-egress-contract-v2.json` exists and exactly matches this schema.
-`policy_sha256` is now derived from the exit port AI Radar will actually use, so **moving the exit
-invalidates every existing receipt** and interpret goes quiet — cleanly, exit 0, no alert — until the
-receipt is regenerated against the new value. That happened on 2026-09-09 when `policy_id` changed from
-`domain-routing-v2` to `local-egress-port-v1`; read the live value from `./run.sh egress-preflight`
-rather than copying one out of this document.
+AI Radar routes the summary-agent subprocess through its managed exit: `runner._subprocess_env` drops
+`VIRTUAL_ENV` and layers on `airadar.egress.managed_subprocess_env`, which overwrites all six standard proxy
+variables with the live selector plus loopback `NO_PROXY`. `interpret` refuses to start unless that exit is
+live — `require_selector_policy()` sends a real request through the configured port and raises
+`EgressPreflightError` (loud, non-zero) when it fails. Note it is `lru_cache`d: each `./run.sh interpret` is a
+fresh process so the probe does run every round, but an already-warm in-process caller gets the cached policy
+and no second probe.
 
-```json
-{
-  "schema_version": 2,
-  "policy_id": "local-egress-port-v1",
-  "policy_sha256": "<64 lowercase hex of the tested T1 policy>",
-  "egress_implementation_sha256": "<64 lowercase hex of the framed code/lock closure>",
-  "parent_gcp_env_selector_only_test": "passed",
-  "summarize_llm_selector_test": "passed",
-  "check_url_local_only_test": "passed",
-  "save_embedding_selector_test": "passed",
-  "save_unknown_tag_classification_selector_test": "passed"
-}
-```
+**This controls only subprocesses that honor the standard environment.** An implementation using
+`trust_env=False`, a custom transport, native sockets or unmanaged descendants routes around it, and AI Radar
+cannot detect that. Environment overwrite is a request, not an enforced sandbox.
 
-The machine authority for this v2 shape is `airadar.interpret.runner.expected_selector_compatibility_receipt`; a regression test parses this JSON example through the same builder so the reader contract cannot drift independently from the preflight consumer. The implementation digest is produced by `airadar.interpret.runner.egress_implementation_sha256` from repo-relative path plus file-byte framed records over these exact inputs:
+From 2026-09-11 that residual risk is **accepted by owner decision**: `$AI_ASSISTANT_ROOT` is first-party
+trusted code. The `ai-radar-egress-contract-v2.json` receipt that previously required a signed path-level
+attestation before every run — and the `airadar.interpret.receipt_writer` that produced it — are retired.
+No receipt is read, and a stale one on disk is ignored.
 
-- `agents/summary-agent/summarize.sh` and `agents/summary-agent/run.sh`
-- root `pyproject.toml` and root `uv.lock`
-- every non-test `.py` file under `agents/summary-agent/src/`
-- every `.py` file under `shared/`
-
-Missing fixed files, missing or empty code roots, symlinks/non-regular files, read failures, extra or missing receipt fields, invalid JSON, a non-`passed` test result, another policy identity, or a digest mismatch makes `interpret` exit 0 with `skip interpret: selector compatibility is unproven ...`; no external script is started. A new in-scope Python file changes the digest automatically. Runtime `docs/tags.md`, KB data and temporary outputs are deliberately excluded because they are mutable data, not executable implementation.
-
-The trusted operator may write the receipt only after every path-level attestation check below passes in an isolated mirror with temporary data/tmp/tags:
-
-| Check | Required observation |
-|---|---|
-| Mirror identity | The report records `closure_copy.source`, `closure_copy.mirror` and `closure_copy.match=true`; the two SHA-256 values equal the tested implementation SHA. A mismatch exits non-zero and no receipt writer is run. |
-| Parent proxy isolation | All six parent proxy variables are first set to an unusable endpoint; the production entrypoints run through a fake selector, and AI Radar's managed subprocess environment is the only route observed for summarize LLM, save embedding and the extra unknown-tag classification LLM request. |
-| Network fence | Isolated execution denies and reports non-loopback IP outbound attempts. The same run includes a non-loopback positive control that is denied and observed, plus a loopback negative control that succeeds with zero denial. |
-| Local lookup | `run.sh --check-url` completes against the local index with zero selector requests. |
-| Save-path identities | Known-tag and unknown-tag saves use separate inputs; their request payload identities and persisted embedding artifacts are observed independently. |
-| Receipt rejection matrix | Old v1, a changed closure file and a changed attestation field are rejected; the valid v2 receipt returns `ok`. |
-
-After those path-level tests pass, the operator writes the receipt through the tested AI Radar receipt writer rather than editing JSON by hand. The command must run under the same selector authority as the production interpret consumer: the same host, user, `HOME`, shell configuration and status command observation. If that identity cannot be established, do not write the receipt; run the writer in the target production consumer environment or keep interpret skipped.
-
-```bash
-uv run python -m airadar.interpret.receipt_writer \
-  --assistant-root "$AI_ASSISTANT_ROOT" \
-  --tested-policy-sha "$TESTED_POLICY_SHA256" \
-  --tested-implementation-sha "$TESTED_IMPLEMENTATION_SHA256"
-```
-
-The receipt consumer check used below is intentionally separate from `./run.sh egress-preflight`, which verifies selector status but does not consume the receipt:
-
-```bash
-PYTHONPATH=src uv run python -c 'import os; from pathlib import Path; from airadar.interpret.runner import _preflight; print(_preflight(Path(os.environ["AI_ASSISTANT_ROOT"])))'
-```
-
-The writer's ordered control flow is implementation recheck → fresh selector-policy read → optional backup → atomic receipt write:
-
-| Outcome | Observable result | File effects | Next action |
-|---|---|---|---|
-| Implementation SHA mismatch | Non-zero; reports attested and live implementation SHAs | Receipt unchanged; no backup | Rerun the full attestation against the current closure |
-| Selector preflight failure or policy SHA mismatch | Non-zero; reports the failed preflight or attested/live policy SHAs | Receipt unchanged; no backup | Restore selector health if needed, then rerun the full attestation against the live policy |
-| Timestamped backup path already exists | Non-zero; reports the conflicting path | Existing receipt and backup unchanged | Resolve the collision and rerun the writer with the same attested identities |
-| All gates pass | Zero; reports policy SHA, implementation SHA, receipt path and backup path or `none` | If a receipt exists, preserve it as `ai-radar-egress-contract-v2.json.bak-<timestamp>`; atomically write the authoritative v2 receipt | Run the receipt consumer check defined above and require `(True, 'ok')` |
-| Other filesystem error | Non-zero; completed receipt write is not confirmed | File state is unknown until the named receipt, backup and temporary-file readings below are collected | Require zero temporary files and either a consumer-accepted receipt or an explicit restore from a chosen backup followed by a new full attestation |
-
-Other filesystem errors return non-zero without confirming a completed receipt write. Before retrying, record whether the receipt exists plus its SHA-256 and parsed v2 fields, every `ai-radar-egress-contract-v2.json.bak-*` path plus SHA-256, and the count of `.ai-radar-egress-contract-v2.json.*.tmp` files. Require zero temporary files and either a receipt accepted by the consumer check or an explicit restore from a chosen backup followed by a new full attestation.
-
-AI Radar consumes this trusted operator attestation; it does not authenticate its author or turn the receipt into live-route proof. The guarantee covers only the listed code/lock snapshot and the listed v2 attestation fields. It does not cover the installed Python/uv/site-packages bytes, future imports outside the two code roots, plugins, Unix-domain sockets, custom non-IP transports or runtime monkeypatching. Update the external implementation or keep interpret skipped when these boundaries cannot be attested.
+What that trades away, stated plainly so a future reader does not have to reconstruct it: the receipt was a
+**change detector**. It keyed on a digest of the external code closure, so any edit to the summary-agent
+invalidated it and forced a fresh attestation. Nothing now notices if that code starts bypassing the managed
+exit. Reintroducing a gate here is an owner decision, not a maintenance task.
 
 ## Input article files
 
@@ -372,7 +324,7 @@ Run these from the AI Radar checkout after your scripts are in place. Nothing he
    |---|---|
    | `interpret processed=1 errors=0` | the contract held for that item |
    | `interpret processed=1 errors=1` | the scripts ran but something in the exchange failed; the message is in `wechat_interpretations.error` |
-   | `interpret skipped=true message=…` | never reached your scripts — inspect the message for the disabled flag, missing `AI_ASSISTANT_ROOT`/executables, or a missing/invalid/mismatched selector compatibility attestation |
+   | `interpret skipped=true message=…` | never reached your scripts — inspect the message for the disabled flag, or a missing `AI_ASSISTANT_ROOT`/non-executable script. A dead exit port does not land here — it raises `EgressPreflightError` and exits non-zero. |
 
 4. **When it fails, where AI Radar says so.** Contract violations do not raise; they land as data:
 

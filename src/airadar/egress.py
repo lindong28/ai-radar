@@ -96,10 +96,9 @@ def egress_proxy_port() -> int:
 def policy_for_port(port: int) -> SelectorPolicy:
     """Derive the policy record for one exit port.
 
-    `policy_sha256` still exists because the interpret receipt gate compares it
-    against the value captured when that repository last proved selector
-    compatibility.  It is now a digest of the exit this process will actually
-    use, so the pin keeps meaning "the egress contract has not moved under you".
+    `policy_sha256` is a digest of the exit this process will actually use. Its
+    consumer is now the `_audit()` record only -- the interpret receipt gate that
+    used to compare it against an attested value was removed on 2026-09-11.
     """
 
     agent_proxy = f"http://127.0.0.1:{port}"

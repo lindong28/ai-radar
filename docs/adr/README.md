@@ -70,10 +70,10 @@
 | [061-aihot-reports](./061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | AIHOT window 拆分共享 SSR response/binding，验收报告按 subject 类型冻结严格语义 | accepted; refines [060-aihot-manifest](./060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md) | 2026-08-20 |
 | [062-aihot-pairing](./062-carry-pairing-strategy-in-aihot-validation-reports.md) | AIHOT window 验收报告自持 primary/assistance/fallback pairing strategy | accepted; clarifies [061-aihot-reports](./061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | 2026-08-20 |
 | [063-aihot-dates](./063-require-ordered-public-response-dates-in-aihot-captures.md) | AIHOT capture 的 RSS/OpenAPI public response Date 按声明顺序非递减 | accepted; clarifies [060-aihot-manifest](./060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md) and [061-aihot-reports](./061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | 2026-08-20 |
-| [20260826-68e2](./20260826-68e2-route-ai-radar-through-domain-selector.md) | AI Radar 经 status 验证的域名 selector 隔离出网 | accepted | 2026-08-26 |
+| [20260826-68e2](./20260826-68e2-route-ai-radar-through-domain-selector.md) | AI Radar 经 status 验证的域名 selector 隔离出网 | accepted; **部分失效 2026-09-11** — interpret 收据跳过那条 consequence 已不成立，其余有效 | 2026-08-26 |
 | [20260828-f8d9](./20260828-f8d9-replay-frozen-wechat-interpretations-in-bounded-cohorts.md) | 先修零向量，再按有界 cohort 回放冻结的微信解读 | accepted | 2026-08-28 |
 | [20260828-c3a5](./20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 | accepted | 2026-08-28 |
-| [20260829-c0e8](./20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 | accepted; supersedes ADR-20260826-68e2 external-root receipt identity only | 2026-08-29 |
+| [20260829-c0e8](./20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 | accepted; **retired 2026-09-11** — 收据与 receipt_writer 已移除，AI_ASSISTANT_ROOT 由所有者裁定为可信第一方代码 | 2026-08-29 |
 | [20260829-a7f1](./20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 | accepted | 2026-08-29 |
 | [20260831-30ad](./20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并显式补录 ai-assistant KB 归档 | accepted | 2026-08-31 |
 | [20260831-8b7c](./20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，不放宽多词交集 | accepted | 2026-08-31 |
@@ -82,7 +82,7 @@
 | [20260901-a31f](./20260901-a31f-stage-wechat-whitespace-fallback-after-empty-results.md) | 微信搜索先走索引严格匹配，只在零结果时启用空白标准化兜底 | accepted | 2026-09-01 |
 | [20260903-bc36](./20260903-bc36-quota-curated-selection-by-source-form.md) | 精选按来源形态配额（X ≤20%、单源 ≤7.5%），同轮记无配额基线并支持定向回退 | accepted; partially supersedes ADR-010（配额独有行可定向删除） | 2026-09-03 |
 | [20260904-51d2](./20260904-51d2-a4-complete-fetch-signal-and-account-layer-page.md) | A4 只读完整 fetch 轮的信号；账户层失败（401/402）升为 page 并按来源组给处置 | accepted | 2026-09-04 |
-| [20260905-b00f](./20260905-b00f-write-egress-receipt-after-live-policy-recheck.md) | 出网收据只在写盘前复核生产策略后生成 | accepted; extends ADR-20260829-c0e8 receipt generation | 2026-09-05 |
+| [20260905-b00f](./20260905-b00f-write-egress-receipt-after-live-policy-recheck.md) | 出网收据只在写盘前复核生产策略后生成 | accepted; **retired 2026-09-11** — 随 ADR-20260829-c0e8 一同退役，receipt_writer 已删除 | 2026-09-05 |
 | [20260904-d708](./20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline，W1 复用共享告警状态机 | accepted; relates ADR-20260826-68e2 and ADR-059; supersedes ADR-009/021 boundedness only | 2026-09-04 |
 | [20260905-499e](./20260905-499e-aihot-reference-fit-eval-system.md) | 以 AIHOT 历史输出为参考输出建立内容链拟合评测体系（eval-fit 四槽位），达标线延后 | accepted；达标线未定，首轮为 n=20 小样本 | 2026-09-05 |
 | [20260906-7c31](./20260906-7c31-rank-on-weights-fitted-to-the-reference.md) | 网站排序改用拟合 AIHOT 分数的权重（density/authority/significance），取消来源分层乘数 | accepted; extends ADR-20260905-499e（该 ADR 曾把生产排序留在原地） | 2026-09-06 |

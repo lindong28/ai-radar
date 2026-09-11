@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import sqlite3
-import stat
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,7 +16,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .. import db
-from ..egress import EGRESS_POLICY_ID, managed_subprocess_env, require_selector_policy
+from ..egress import managed_subprocess_env, require_selector_policy
 from ..llm_usage import (
     LlmUsageRecord,
     record_llm_usage_best_effort,
@@ -43,31 +42,6 @@ MARKDOWN_CRITERIA_REASON_SOURCE = "markdown_value_judgment_line"
 CRITERIA_REASON_SOURCES = frozenset(
     {JSON_CRITERIA_REASON_SOURCE, MARKDOWN_CRITERIA_REASON_SOURCE}
 )
-EGRESS_CONTRACT_FILE = "ai-radar-egress-contract-v2.json"
-EGRESS_CONTRACT_KEYS = frozenset(
-    {
-        "schema_version",
-        "policy_id",
-        "policy_sha256",
-        "egress_implementation_sha256",
-        "parent_gcp_env_selector_only_test",
-        "summarize_llm_selector_test",
-        "check_url_local_only_test",
-        "save_embedding_selector_test",
-        "save_unknown_tag_classification_selector_test",
-    }
-)
-EGRESS_IMPLEMENTATION_FIXED_FILES = (
-    SUMMARY_AGENT_DIR / "summarize.sh",
-    SUMMARY_AGENT_DIR / "run.sh",
-    Path("pyproject.toml"),
-    Path("uv.lock"),
-)
-EGRESS_IMPLEMENTATION_CODE_ROOTS = (
-    (SUMMARY_AGENT_DIR / "src", True),
-    (Path("shared"), False),
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -103,77 +77,6 @@ def _summary_agent_scripts(root: Path) -> tuple[Path, Path]:
     return agent_dir / "summarize.sh", agent_dir / "run.sh"
 
 
-def _regular_file_bytes(path: Path) -> bytes:
-    file_stat = path.lstat()
-    if not stat.S_ISREG(file_stat.st_mode):
-        raise ValueError(f"not a regular file: {path}")
-    return path.read_bytes()
-
-
-def _is_test_python_path(path: Path, code_root: Path) -> bool:
-    relative = path.relative_to(code_root)
-    return (
-        any(part in {"tests", "__pycache__"} for part in relative.parts)
-        or relative.name.startswith("test_")
-        or relative.name.endswith("_test.py")
-    )
-
-
-def egress_implementation_sha256(root: Path) -> str:
-    """Digest the exact external code/lock closure covered by the v2 receipt."""
-
-    files: list[Path] = []
-    for relative in EGRESS_IMPLEMENTATION_FIXED_FILES:
-        path = root / relative
-        _regular_file_bytes(path)
-        files.append(path)
-    for relative, exclude_tests in EGRESS_IMPLEMENTATION_CODE_ROOTS:
-        code_root = root / relative
-        root_stat = code_root.lstat()
-        if not stat.S_ISDIR(root_stat.st_mode):
-            raise ValueError(f"not a directory: {code_root}")
-        code_files = [
-            path
-            for path in code_root.rglob("*.py")
-            if not exclude_tests or not _is_test_python_path(path, code_root)
-        ]
-        if not code_files:
-            raise ValueError(f"no implementation files: {code_root}")
-        for path in code_files:
-            _regular_file_bytes(path)
-        files.extend(code_files)
-
-    digest = hashlib.sha256()
-    for path in sorted(files, key=lambda candidate: candidate.relative_to(root).as_posix()):
-        relative_bytes = path.relative_to(root).as_posix().encode("utf-8")
-        content = _regular_file_bytes(path)
-        digest.update(len(relative_bytes).to_bytes(8, "big"))
-        digest.update(relative_bytes)
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
-    return digest.hexdigest()
-
-
-def expected_selector_compatibility_receipt(
-    *,
-    policy_sha256: str,
-    egress_implementation_sha256: str,
-) -> dict[str, object]:
-    """Return the single authoritative v2 receipt shape for producers and tests."""
-
-    return {
-        "schema_version": 2,
-        "policy_id": EGRESS_POLICY_ID,
-        "policy_sha256": policy_sha256,
-        "egress_implementation_sha256": egress_implementation_sha256,
-        "parent_gcp_env_selector_only_test": "passed",
-        "summarize_llm_selector_test": "passed",
-        "check_url_local_only_test": "passed",
-        "save_embedding_selector_test": "passed",
-        "save_unknown_tag_classification_selector_test": "passed",
-    }
-
-
 def _preflight(root: Path) -> tuple[bool, str]:
     summarize_script, run_script = _summary_agent_scripts(root)
     if not root.exists():
@@ -182,24 +85,9 @@ def _preflight(root: Path) -> tuple[bool, str]:
         return False, f"skip interpret: summarize.sh is missing or not executable: {summarize_script}"
     if not run_script.exists() or not os.access(run_script, os.X_OK):
         return False, f"skip interpret: run.sh is missing or not executable: {run_script}"
-    receipt_path = root / EGRESS_CONTRACT_FILE
-    try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False, "skip interpret: selector compatibility is unproven (receipt missing or invalid)"
-    if not isinstance(receipt, dict) or set(receipt) != EGRESS_CONTRACT_KEYS:
-        return False, "skip interpret: selector compatibility is unproven (receipt schema mismatch)"
-    policy = require_selector_policy()
-    try:
-        implementation_sha256 = egress_implementation_sha256(root)
-    except (OSError, ValueError):
-        return False, "skip interpret: selector compatibility is unproven (implementation closure invalid)"
-    expected_receipt = expected_selector_compatibility_receipt(
-        policy_sha256=policy.policy_sha256,
-        egress_implementation_sha256=implementation_sha256,
-    )
-    if receipt != expected_receipt:
-        return False, "skip interpret: selector compatibility is unproven (receipt does not match egress implementation)"
+    # The egress selector must be live before any article text leaves this process.
+    # This raises EgressPreflightError rather than skipping: a dead exit port is loud.
+    require_selector_policy()
     return True, "ok"
 
 

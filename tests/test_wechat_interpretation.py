@@ -404,11 +404,6 @@ def _seed_runner_db(tmp_path: Path, *, item_id: str = "item-1", title: str = "æµ
 
 
 def _assistant_root(tmp_path: Path) -> Path:
-    from airadar.interpret.runner import (
-        egress_implementation_sha256,
-        expected_selector_compatibility_receipt,
-    )
-
     root = tmp_path / "ai-assistant"
     script_dir = root / "agents" / "summary-agent"
     script_dir.mkdir(parents=True)
@@ -424,16 +419,6 @@ def _assistant_root(tmp_path: Path) -> Path:
     shared_dir = root / "shared"
     shared_dir.mkdir()
     (shared_dir / "project_env.py").write_text("def load_env(): return None\n", encoding="utf-8")
-    (root / "ai-radar-egress-contract-v2.json").write_text(
-        json.dumps(
-            expected_selector_compatibility_receipt(
-                policy_sha256="a" * 64,
-                egress_implementation_sha256=egress_implementation_sha256(root),
-            ),
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
     return root
 
 
@@ -2329,205 +2314,68 @@ def test_interpret_runner_enabled_with_valid_root_uses_preflight(
     assert summary.message == "sentinel preflight skip"
 
 
-def test_interpret_runner_skips_external_root_without_selector_compatibility_receipt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from airadar.interpret.runner import run_interpret
+def test_preflight_accepts_trusted_root_without_any_receipt(tmp_path: Path) -> None:
+    """The selector-compatibility receipt was retired on 2026-09-11; ai-assistant is trusted."""
 
-    _enable_interpret(monkeypatch)
-    assistant_root = _assistant_root(tmp_path)
-    (assistant_root / "ai-radar-egress-contract-v2.json").unlink()
-    db_path = _seed_runner_db(tmp_path)
-
-    with _connect(db_path) as conn:
-        summary = run_interpret(
-            conn,
-            backfill=True,
-            assistant_root=assistant_root,
-            tmp_root=tmp_path / "tmp",
-        )
-
-    assert summary.skipped is True
-    assert summary.processed == 0
-    assert "selector compatibility is unproven" in summary.message
-
-
-@pytest.mark.parametrize(
-    "case",
-    (
-        "extra_field",
-        "missing_field",
-        "old_v1_schema",
-        "wrong_policy_id",
-        "stale_pre_migration_domain_routing_v1_policy_id",
-        "wrong_policy_sha256",
-        "wrong_implementation_sha256",
-        "failed_parent_env_test",
-        "failed_summarize_test",
-        "failed_check_url_test",
-        "failed_save_embedding_test",
-        "failed_unknown_tag_test",
-    ),
-)
-def test_interpret_runner_rejects_unproven_selector_compatibility_receipts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    case: str,
-) -> None:
-    from airadar.interpret.runner import run_interpret
-
-    _enable_interpret(monkeypatch)
-    assistant_root = _assistant_root(tmp_path)
-    receipt_path = assistant_root / "ai-radar-egress-contract-v2.json"
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    if case == "extra_field":
-        receipt["unexpected"] = True
-    elif case == "missing_field":
-        receipt.pop("save_embedding_selector_test")
-    elif case == "old_v1_schema":
-        receipt = {
-            "schema_version": 1,
-            "attestation_kind": "trusted-operator-fake-selector",
-            "policy_id": "domain-routing-v1",
-            "policy_sha256": "a" * 64,
-            "parent_gcp_env_selector_only_test": "passed",
-            "managed_descendants_standard_proxy_env_test": "passed",
-            "summarize_sha256": "0" * 64,
-            "run_sha256": "0" * 64,
-        }
-    elif case == "wrong_policy_id":
-        receipt["policy_id"] = "domain-routing-v0"
-    elif case == "stale_pre_migration_domain_routing_v1_policy_id":
-        # A genuine pre-migration receipt attested against the old T1 policy
-        # (domain-routing-v1) must be rejected once the live policy is v2 â€”
-        # distinct from "wrong_policy_id" above, which uses a value that was
-        # never a real policy identity.
-        receipt["policy_id"] = "domain-routing-v1"
-    elif case == "wrong_policy_sha256":
-        receipt["policy_sha256"] = "b" * 64
-    elif case == "wrong_implementation_sha256":
-        receipt["egress_implementation_sha256"] = "0" * 64
-    elif case == "failed_parent_env_test":
-        receipt["parent_gcp_env_selector_only_test"] = "failed"
-    elif case == "failed_summarize_test":
-        receipt["summarize_llm_selector_test"] = "failed"
-    elif case == "failed_check_url_test":
-        receipt["check_url_local_only_test"] = "failed"
-    elif case == "failed_save_embedding_test":
-        receipt["save_embedding_selector_test"] = "failed"
-    elif case == "failed_unknown_tag_test":
-        receipt["save_unknown_tag_classification_selector_test"] = "failed"
-    receipt_path.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
-    db_path = _seed_runner_db(tmp_path)
-
-    with _connect(db_path) as conn:
-        summary = run_interpret(
-            conn,
-            backfill=True,
-            assistant_root=assistant_root,
-            tmp_root=tmp_path / "tmp",
-        )
-
-    assert summary.skipped is True
-    assert summary.processed == 0
-    assert "selector compatibility is unproven" in summary.message
-
-
-def test_selector_compatibility_documented_schema_matches_authoritative_builder() -> None:
-    from airadar.interpret.runner import expected_selector_compatibility_receipt
-
-    contract = (Path(__file__).resolve().parents[1] / "docs/references/ai-assistant-contract.md").read_text(
-        encoding="utf-8"
-    )
-    section = contract.split("## Selector compatibility receipt", 1)[1]
-    documented = json.loads(section.split("```json", 1)[1].split("```", 1)[0])
-    expected = expected_selector_compatibility_receipt(
-        policy_sha256=documented["policy_sha256"],
-        egress_implementation_sha256=documented["egress_implementation_sha256"],
-    )
-
-    assert documented == expected
-
-
-def test_egress_implementation_digest_tracks_code_and_new_python_files(tmp_path: Path) -> None:
-    from airadar.interpret.runner import egress_implementation_sha256
-
-    assistant_root = _assistant_root(tmp_path)
-    original = egress_implementation_sha256(assistant_root)
-
-    source = assistant_root / "shared" / "project_env.py"
-    source.write_text(source.read_text(encoding="utf-8") + "\nVALUE = 1\n", encoding="utf-8")
-    changed_source = egress_implementation_sha256(assistant_root)
-    assert changed_source != original
-
-    source.write_text("def load_env(): return None\n", encoding="utf-8")
-    (assistant_root / "shared" / "new_transport.py").write_text("VALUE = 2\n", encoding="utf-8")
-    assert egress_implementation_sha256(assistant_root) != original
-
-
-def test_egress_implementation_digest_excludes_dynamic_tags_and_summary_agent_tests(tmp_path: Path) -> None:
-    from airadar.interpret.runner import egress_implementation_sha256
-
-    assistant_root = _assistant_root(tmp_path)
-    original = egress_implementation_sha256(assistant_root)
-
-    tags = assistant_root / "agents" / "summary-agent" / "docs" / "tags.md"
-    tags.parent.mkdir()
-    tags.write_text("# Runtime tags\n", encoding="utf-8")
-    tests_dir = assistant_root / "agents" / "summary-agent" / "src" / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "test_transport.py").write_text("assert True\n", encoding="utf-8")
-
-    assert egress_implementation_sha256(assistant_root) == original
-
-
-def test_egress_implementation_digest_includes_shared_tests(tmp_path: Path) -> None:
-    from airadar.interpret.runner import egress_implementation_sha256
-
-    assistant_root = _assistant_root(tmp_path)
-    original = egress_implementation_sha256(assistant_root)
-    tests_dir = assistant_root / "shared" / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "test_transport.py").write_text("assert True\n", encoding="utf-8")
-
-    assert egress_implementation_sha256(assistant_root) != original
-
-
-@pytest.mark.parametrize(
-    "missing",
-    (
-        "pyproject.toml",
-        "agents/summary-agent/src/summarizer.py",
-        "shared/project_env.py",
-    ),
-)
-def test_interpret_runner_rejects_incomplete_egress_implementation_closure(
-    tmp_path: Path,
-    missing: str,
-) -> None:
     from airadar.interpret.runner import _preflight
 
     assistant_root = _assistant_root(tmp_path)
-    (assistant_root / missing).unlink()
+    assert not (assistant_root / "ai-radar-egress-contract-v2.json").exists()
+
+    assert _preflight(assistant_root) == (True, "ok")
+
+
+def test_preflight_keeps_egress_failure_loud_instead_of_skipping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead exit port must raise, never degrade into a silent `(False, ...)` skip.
+
+    This is the one invariant the 2026-09-11 receipt removal had to preserve: the gate
+    that went away was the *signed attestation*, not the managed exit itself. Without
+    this test, deleting the `require_selector_policy()` call from `_preflight` passes
+    the whole suite -- the autouse `_isolated_selector_policy` fixture stubs it with a
+    lambda that never raises.
+    """
+
+    from airadar.egress import EgressPreflightError
+    from airadar.interpret import runner
+
+    assistant_root = _assistant_root(tmp_path)
+
+    def dead_exit_port() -> SelectorPolicy:
+        raise EgressPreflightError("no request got through the egress proxy 127.0.0.1:59999")
+
+    monkeypatch.setattr(runner, "require_selector_policy", dead_exit_port)
+
+    with pytest.raises(EgressPreflightError):
+        runner._preflight(assistant_root)
+
+
+@pytest.mark.parametrize("script", ("summarize.sh", "run.sh"))
+def test_preflight_rejects_missing_summary_agent_script(tmp_path: Path, script: str) -> None:
+    from airadar.interpret.runner import _preflight
+
+    assistant_root = _assistant_root(tmp_path)
+    (assistant_root / "agents" / "summary-agent" / script).unlink()
 
     ready, message = _preflight(assistant_root)
 
     assert ready is False
-    assert "implementation closure" in message
+    assert script in message
 
 
-def test_interpret_runner_rejects_receipt_after_implementation_changes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("script", ("summarize.sh", "run.sh"))
+def test_preflight_rejects_non_executable_summary_agent_script(tmp_path: Path, script: str) -> None:
     from airadar.interpret.runner import _preflight
 
     assistant_root = _assistant_root(tmp_path)
-    source = assistant_root / "agents" / "summary-agent" / "src" / "summarizer.py"
-    source.write_text(source.read_text(encoding="utf-8") + "\nVALUE = 1\n", encoding="utf-8")
+    (assistant_root / "agents" / "summary-agent" / script).chmod(0o644)
 
     ready, message = _preflight(assistant_root)
 
     assert ready is False
-    assert "does not match egress implementation" in message
+    assert "not executable" in message
 
 
 def test_interpret_runner_preflight_skip_for_missing_assistant_root(

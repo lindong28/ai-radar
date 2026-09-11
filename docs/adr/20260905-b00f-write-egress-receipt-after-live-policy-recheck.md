@@ -1,6 +1,6 @@
 # ADR-20260905-b00f：出网收据只在写盘前复核生产策略后生成
 
-- Status: accepted
+- Status: accepted; **retired 2026-09-11** — 本 ADR 的对象 `airadar.interpret.receipt_writer` 已随 ADR-20260829-c0e8 的收据机制一并删除。
 - Date: 2026-09-05
 - Extends: ADR-20260829-c0e8 的 `Receipt generation requires path-level attestation`
 

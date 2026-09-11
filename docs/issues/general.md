@@ -380,6 +380,8 @@ ADR-005 在 Consequences 里写下的契约是「缓存正确性依赖 `_timelin
 
 ### interpret 把 `check-proxy-status` 的整体健康当前置，任一无关远端抖动即让整轮 FAIL
 
+> **状态注记（2026-09-11）**：本条描述的机制**已被两次改动架空，内容仅存历史价值**。① 2026-09-09（`9741bdf`）把出网判据从 `check-proxy-status` 的十二字段整体健康换成「经单一本地端口实发一次请求」，所以下文「闭合方向」里解析 `--format=kv` 的 `stored_mode`/`policy_projection` 那套已无对象；② 2026-09-11 移除出网收据闸，下文提到的 `airadar.interpret.receipt_writer` 已删除。行号 `runner.py:192` 现为 `:90`。**下面「另一个未覆盖面」那段（egress 中断零告警）仍然成立**，且与 [alerting.md](alerting.md) 的 `ISSUE-ALERT-20260911-7c41` 同族。
+
 - **与已归档竞态条目的关系**：那条 `policy_sha256` 竞态已 resolved 并整条移入 [`archive/closed.md`](archive/closed.md)（由 `airadar.interpret.receipt_writer` 关闭）。本条是它暴露出的**另一个**面，独立存在：即使收据永远正确，本条的整体健康前置仍会让 interpret 整轮失败。
 
 - **现象**：收据 `policy_sha256` 修好、闸已放行之后，interpret 仍间歇整轮失败——`2026-09-05 11:11:03 === interpret FAIL (exit 1) ===`，异常为 `airadar.egress.EgressPreflightError: status command returned 1`（`egress.py:135`，经 `interpret/runner.py:192` 的 `require_selector_policy()`）。同形态在 09-04 18:00 / 20:45 / 22:15 三轮已各发生一次，当时被收据不匹配的跳过掩盖。

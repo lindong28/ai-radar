@@ -1,6 +1,6 @@
 # ADR-20260829-c0e8：将 AI Assistant 出网收据绑定到实现闭包与生产路径
 
-- Status: accepted
+- Status: accepted; **retired 2026-09-11** — the v2 receipt and `receipt_writer` are removed. Owner ruled `$AI_ASSISTANT_ROOT` first-party trusted code after the gate cost two silent `/wechat` outages (138 rounds / 215 articles, then 2026-09-07..09-11 with 139 articles queued). The managed-exit env overwrite this ADR also relies on is unchanged; only the signed attestation is gone. See `docs/references/ai-assistant-contract.md` → Egress boundary.
 - Date: 2026-08-29
 - Supersedes: ADR-20260826-68e2 的 `External AI_ASSISTANT_ROOT boundary` 中 v1 收据身份范围；其余 selector、调用点闭包与审计决策保持不变
 
