@@ -440,6 +440,15 @@ def main() -> None:
         "**别 --record 它**——它是探索性对照，不是一轮迭代。",
     )
     parser.add_argument(
+        "--days",
+        choices=("all", "odd", "even", "first-half", "second-half"),
+        default="all",
+        help="把过门槛的日窗切成两半，只跑其中一半。**这是本仓最缺的那件资产**："
+        "量具纪律写着「改善要跨 split 同向才算效应，POOLED 的改善不算」，而在此之前没有任何入口"
+        "切得出 split，于是每一次干预都只有一个 POOLED 读数、判不成效应。"
+        "odd/even 按日窗序号交错（时间趋势两边均摊），first/second-half 按时间切（能看出漂移）。",
+    )
+    parser.add_argument(
         "--no-quota",
         action="store_true",
         help="绕开我方选择机制（threshold / freshness floor / _fill 的配额分段），当日池子里直接按"
@@ -457,6 +466,10 @@ def main() -> None:
         "否则「随迭代逼近」这条趋势会被同一时点的不同参数搅成噪声。",
     )
     args = parser.parse_args()
+    # 纪律靠闸、不靠 help 文本：三种探索性形态混进趋势序列后无法从行里分辨（identity 块没有
+    # 记录它们），而趋势序列是"随迭代逐步逼近"这条期望唯一的观测面。
+    if args.record and (args.days != "all" or args.rank_by != "ours" or args.no_quota):
+        parser.error("--record 只接受全量生产口径：--days all、--rank-by ours、不带 --no-quota")
 
     overrides = dict(sel.CATEGORY_MULTIPLIERS)
     for spec in args.multiplier:
@@ -514,6 +527,18 @@ def main() -> None:
         for day in by_day
         if sum(reference_by_day[day][c] for c in CATEGORIES) >= 5 and len(by_day[day]) >= 200
     )
+    if args.days != "all":
+        full = list(days)
+        half = len(full) // 2
+        days = {
+            "odd": full[0::2],
+            "even": full[1::2],
+            "first-half": full[:half],
+            "second-half": full[half:],
+        }[args.days]
+        print(f"split: --days {args.days} ⇒ {len(days)}/{len(full)} 个日窗: {', '.join(days)}")
+        print("    **split 读数不得 --record**：趋势序列的每一行必须是同一个口径的全量，"
+              "混进半量行会让「随迭代逼近」那条曲线变成口径噪声。")
     if not days:
         raise SystemExit("没有可比日窗：需要 AIHOT 当日精选 >=5 条、我方当日候选 >=200 条。")
 
