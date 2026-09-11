@@ -54,6 +54,15 @@ def main() -> None:
     ap.add_argument("--multiplier", action="append", default=[], metavar="CATEGORY=FACTOR",
                     help="覆盖 `select.CATEGORY_MULTIPLIERS` 里的一项，可重复。"
                          "**这是本脚本存在的理由**：它让替代排序在归档面上可比。")
+    ap.add_argument("--closed-loop", action="store_true",
+                    help="闭环模式：**不用固定系数**。目标 = AIHOT 的历史均值构成（只用严格早于当前时点的"
+                         "窗口算，不读当日），反馈 = **归档页此刻的实际构成**（用户真看到的那一面），"
+                         "每个时点按 gap 调一次系数。固定系数是它在某份语料上的收敛点，"
+                         "而池子构成一漂那个点就失准——闭环的价值就在能重新找到它。")
+    ap.add_argument("--gain", type=float, default=0.6,
+                    help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
+                         "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
+    ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
     ap.add_argument("--until", default=None,
                     help="只读到这一天为止的归档面。**归档是累积的，所以时间劈只能这么切**——"
                          "把窗口对半砍成两段各自重放会让后半段丢掉前半段的并集，那不是它真实的样子。")
@@ -122,6 +131,10 @@ def main() -> None:
     union: dict = {}
     ours_pooled: Counter = Counter()
     reference_pooled: Counter = Counter()
+    # 闭环状态：`hist` 只累计**严格早于当前时点**的窗口（不读当日的 AIHOT——生产里选稿那一刻
+    # 今天的 AIHOT 还没发，读它就是泄漏）。`live` 是当前系数，从生产值起步。
+    hist: Counter = Counter()
+    live = {c: overrides.get(BUCKET_TO_OURS.get(c, c), 1.0) for c in CATS}
     print(f"\n{'上海日':12}{'并集':>7}{'页内有标签':>11}{'当日发布占比':>13}  逐类（AIHOT 标签）")
     for day in days:
         y, m, d = (int(x) for x in day.split("-"))
@@ -134,6 +147,28 @@ def main() -> None:
                 continue
             tday = sel._shanghai_date(iso)
             pool = [c for c in avail if sel._shanghai_date(c.published_at) == tday]
+            if args.closed_loop and sum(hist.values()) >= 8:
+                # 反馈取**归档页此刻的构成**，不是这一轮选了什么——后者是上游量，
+                # 而用户看到的是前者；本 session 已实测两者的失败类不同。
+                seen = sorted(union.values(), key=lambda c: (c.published_at, c.item_id),
+                              reverse=True)[: args.page]
+                cur = Counter()
+                for c in seen:
+                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    if b:
+                        cur[b] += 1
+                n_cur, n_hist = sum(cur.values()) or 1, sum(hist.values())
+                for b in CATS:
+                    tgt = hist[b] / n_hist
+                    act = cur[b] / n_cur
+                    if tgt <= 0 or act <= 0:
+                        continue
+                    k = BUCKET_TO_OURS.get(b, b)
+                    # **别用 m**：外层 `y, m, d` 的 m 是月份，覆盖它会让下一天的
+                    # `datetime(y, m, d)` 拿到浮点数而报 TypeError（实测踩过）。
+                    adjusted = live[b] * (tgt / act) ** args.gain
+                    live[b] = min(args.clip, max(1 / args.clip, adjusted))
+                    overrides[k] = live[b]
             for c in _comp.replay_day(pool, avail, args.limit, rank, gate_score):
                 union.setdefault(c.item_id, c)
         page = sorted(union.values(), key=lambda c: (c.published_at, c.item_id), reverse=True)[: args.page]
@@ -148,6 +183,9 @@ def main() -> None:
               + " ".join(f"{c[:3]}:{labelled[c]}" for c in CATS if labelled[c]))
         ours_pooled += labelled
         reference_pooled += reference_by_day[day]
+        # **顺序不能反**：本窗口的 AIHOT 直到这里才并进历史，之上的每一次调参都只看得到
+        # 严格更早的窗口。反过来就是拿当天的真值去调当天的系数。
+        hist += reference_by_day[day]
 
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
