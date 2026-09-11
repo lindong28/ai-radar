@@ -141,6 +141,14 @@ def main() -> None:
         "实测 both 把它从静态的 86.2% 推到 69.1%（AIHOT 自己 82.2%），是四个面里退得最狠的一个。",
     )
     ap.add_argument(
+        "--label-offset",
+        action="store_true",
+        help="把目标从 AIHOT 标签空间换算到**我方标签空间**再施加。机制只看得到我方 enrich 的类别，"
+        "而达标线按 AIHOT 的标签算，两者不恒等（AIHOT 的 tip 桶里 21.1% 被我方叫 industry）"
+        "⇒ 机制在自己的标签空间上完美收敛时，AIHOT 标签空间上仍有系统性偏移。"
+        "补偿项 = 同一批版面在两套标签下占比差的历史均值，只用严格早于本窗口的记录。",
+    )
+    ap.add_argument(
         "--mech-stamp",
         default=None,
         help="只让机制看 enrich 戳以此开头的条目。ADR-9e21 要求给 paper 以外的类别做类别级干预前"
@@ -228,6 +236,11 @@ def main() -> None:
         ema_pool: dict[str, float] = {c: 0.0 for c in CATS}
         err_mean: dict[str, float] = {c: 0.0 for c in CATS}
         err_pool: dict[str, float] = {c: 0.0 for c in CATS}
+        # H-labelspace：机制只看得到我方 enrich 的类别，判据按 AIHOT 的标签算，而两个标签空间
+        # **不是恒等**（AIHOT 的 tip 桶里 21.1% 被我方叫 industry）。于是机制在自己的标签空间
+        # 上完美收敛时，AIHOT 标签空间上仍有系统性偏移。这里累计同一批版面在两套标签下的占比差，
+        # 取严格早于本窗口的历史均值作补偿项——只用我方自己的两套标签，不读当日 AIHOT。
+        ema_gap: dict[str, float] = {c: 0.0 for c in CATS}
         chosen: dict[str, str] = {c: "mean" for c in CATS}
         weight = 0.0
         out = []
@@ -262,6 +275,10 @@ def main() -> None:
                 import math
 
                 tgt = target_shares(day, ema_ref, ema_pool, weight, err_mean, err_pool, chosen)
+                if args.label_offset and weight > 0:
+                    # 目标是"我方标签空间下取什么值，才能让 AIHOT 标签空间下等于 AIHOT"。
+                    # 负值夹到 0：占比不可能为负，而补偿项是估出来的、会过冲。
+                    tgt = {c: max(0.0, tgt[c] + ema_gap[c] / weight) for c in CATS}
                 tot = sum(tgt.values()) or 1.0
                 cap = {c: max(1, math.ceil(sel.DEFAULT_LIMIT * tgt[c] / tot)) for c in CATS}
                 def cap_list(items):
@@ -317,12 +334,29 @@ def main() -> None:
                     c_in = min(short, key=lambda c: have[c] - want[c])
                     c_out = max(over, key=lambda c: have[c] - want[c])
                     ids = {x.item_id for x in picked}
-                    src_now = Counter(x.source_id for x in picked)
+                    # **ADR-bc36 的配额是两条，不是一条。** 先前只兑现了 `per_source`，
+                    # `kind_caps={"x":0.20}` 漏掉了——而「最大单源占比」这个读数看不见它，
+                    # 它量的是另一个维度：换入的若都是 X 推文，单源仍可以 7.5%、X 却过 20%。
+                    #
+                    # **判的是换完之后合不合规，不是"再加一条"合不合规。** 一次再平衡是
+                    # 换入 + 换出，`drop` 只由 `c_out` 决定、与 `add` 无关，所以先算它、再按
+                    # 扣掉它之后的计数判。顺序反了会把「换掉一条 X、换入另一条 X」（净数不变）
+                    # 误判成超限——而实测静态版面的 X 占比**恒等于上限 20.0%**，于是那个误判
+                    # 不是边角情形，它会把整类换入无谓地封死。
+                    drop = max((x for x in picked if mech_labels.get(x.item_id) == c_out), key=rank)
+                    rest = [x for x in picked if x.item_id != drop.item_id]
+                    src_now = Counter(x.source_id for x in rest)
+                    kind_now = Counter(x.kind for x in rest)
+
+                    def ok(x, _s=src_now, _k=kind_now):
+                        if (_s[x.source_id] + 1) / sel.DEFAULT_LIMIT > source_quota.per_source + 1e-9:
+                            return False
+                        cap = source_quota.kind_caps.get(x.kind)
+                        return cap is None or (_k[x.kind] + 1) / sel.DEFAULT_LIMIT <= cap + 1e-9
+
                     add = next(
                         (x for x in sorted(by_day[day], key=rank)
-                         if x.item_id not in ids and mech_labels.get(x.item_id) == c_in
-                         and (src_now[x.source_id] + 1) / sel.DEFAULT_LIMIT
-                         <= source_quota.per_source + 1e-9),
+                         if x.item_id not in ids and mech_labels.get(x.item_id) == c_in and ok(x)),
                         None,
                     )
                     if add is None:
@@ -331,8 +365,7 @@ def main() -> None:
                         # 整个再平衡停掉，其余类的欠额一并留着。
                         blocked.add(c_in)
                         continue
-                    drop = max((x for x in picked if mech_labels.get(x.item_id) == c_out), key=rank)
-                    picked = [x for x in picked if x.item_id != drop.item_id] + [add]
+                    picked = rest + [add]
             elif adaptive and args.mode == "quota" and weight > 0:
                 # 按类配额：把 40 个格位按目标占比分配，类内按排序键取前列；配不满的类把余额
                 # 交还给一个共同池，按排序键补齐。**它绕开了 `_fill` 的时效/源配额**——那是代价，
@@ -406,12 +439,22 @@ def main() -> None:
                     "hit": sum(1 for x in picked if x.item_id in ref_ids_by_day[day]),
                     "n": len(picked),
                     "src": max(Counter(x.source_id for x in picked).values()) / max(len(picked), 1),
+                    # ADR-bc36 的第二条配额。**单独量**：它与最大单源占比是两个维度，
+                    # 一个守住不代表另一个守住（换入的全是 X 时单源可以很低而 X 过 20%）。
+                    "xshare": sum(1 for x in picked if x.kind == "x") / max(len(picked), 1),
                     "fresh": sum(1 for x in picked if sel._shanghai_date(x.published_at) == day)
                     / max(len(picked), 1),
                 }
             )
             # 反馈：本窗口的读数进入历史，供**之后**的窗口用。顺序不能反。
             ref_s, our_s = shares(reference_by_day[day]), shares(mine)
+            # **必须取两套标签都有的交集**，否则量到的不是标签空间的错位。
+            # 第一版写成各取各的子集（AIHOT 标了 216/320、enrich 标了另一批），两个分母是
+            # 不同的条目集合，差值里混进了"谁标了哪些条目"——实测它把 industry 的补偿号搞反，
+            # 出界由 +0.92pp 放大到 +3.49pp。注释当时写着"同一批条目"，而代码没做到。
+            both = [x for x in picked if x.item_id in mech_labels and x.item_id in labels]
+            mech_s = shares(Counter(mech_labels[x.item_id] for x in both))
+            aihot_s_on_both = shares(Counter(labels[x.item_id] for x in both))
             d = 1.0 if args.target == "mean" else decay
             weight = weight * d + 1.0
             pool_s = shares(Counter(
@@ -427,6 +470,7 @@ def main() -> None:
                     ratio = (hist_ref_prev / hist_pool_prev) if hist_pool_prev > 0 else 1.0
                     err_mean[c] += abs(hist_ref_prev - ref_s[c])
                     err_pool[c] += abs(pool_s[c] - ref_s[c])
+                ema_gap[c] = ema_gap[c] * d + (mech_s[c] - aihot_s_on_both[c])
                 ema_ref[c] = ema_ref[c] * d + ref_s[c]
                 ema_ours[c] = ema_ours[c] * d + our_s[c]
                 ema_pool[c] = ema_pool[c] * d + pool_s[c]
@@ -528,6 +572,8 @@ def main() -> None:
         hit = sum(r["hit"] for r in ev); n = sum(r["n"] for r in ev)
         return (f"条目重合 {hit}/{n} = {100 * hit / max(n, 1):.1f}%   "
                 f"最大单源占比 均值 {100 * sum(r['src'] for r in ev) / len(ev):.1f}%   "
+                f"X 占比 均值 {100 * sum(r['xshare'] for r in ev) / len(ev):.1f}% "
+                f"峰值 {100 * max(r['xshare'] for r in ev):.1f}%（ADR-bc36 上限 20%）   "
                 f"当日条目占比 均值 {100 * sum(r['fresh'] for r in ev) / len(ev):.1f}%")
 
     print(f"\n代价（配额绕开了 _fill 的时效与单源上限）")
