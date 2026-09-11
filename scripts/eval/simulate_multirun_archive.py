@@ -75,6 +75,12 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="覆盖 `select.DEFAULT_THRESHOLD`（生产 6.5）。**降它是放大供给、不是放松排序**："
+                         "实测窗口内 AIHOT 标为 model 的候选过闸率已有 52.6%（阈值不歧视 model），"
+                         "但至 09-05 的并集需要 131 条 model 而池里只有 122 条——差 9 条。"
+                         "降阈值同时会多放进 tip/product，**要靠 `--actuator quota` 的封顶压住**，"
+                         "两者是成对的，单独降阈值对 model 反而不利。")
     ap.add_argument("--until", default=None,
                     help="只读到这一天为止的归档面。**归档是累积的，所以时间劈只能这么切**——"
                          "把窗口对半砍成两段各自重放会让后半段丢掉前半段的并集，那不是它真实的样子。")
@@ -101,6 +107,14 @@ def main() -> None:
         days = [d for d in days if d <= args.until]
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    if args.threshold is not None:
+        # 两道绝对闸一起降：`_fill` 的 fresh 段按 freshness_floor 收，尾部段按 threshold 收，
+        # 只降一个会让供给只在一段上放大、另一段照旧，读数就不是「降阈值」的效应。
+        print(f"阈值：{sel.DEFAULT_THRESHOLD} → {args.threshold}"
+              f"（freshness_floor {sel.DEFAULT_FRESHNESS_FLOOR} 同比例降）")
+        ratio = args.threshold / sel.DEFAULT_THRESHOLD
+        sel.DEFAULT_FRESHNESS_FLOOR = sel.DEFAULT_FRESHNESS_FLOOR * ratio
+        sel.DEFAULT_THRESHOLD = args.threshold
     candidates = sel.deduplicate_candidates(sel._load_candidates(conn, DEFAULT_WEIGHTS))
     url_by_id = {}
     for i, u in conn.execute("SELECT id, url FROM items WHERE url IS NOT NULL"):
@@ -141,6 +155,7 @@ def main() -> None:
     # 时点按上海时刻均分一天。可用性用 `published_at <= t` 近似——**没发布就选不到**；
     # 更准的是 `fetched_at`，但它不在 `ScoredCandidate` 上，而两个 arm 同样近似 ⇒ 配对不受影响。
     union: dict = {}
+    union_lab: Counter = Counter()
     ours_pooled: Counter = Counter()
     reference_pooled: Counter = Counter()
     # 闭环状态：`hist` 只累计**严格早于当前时点**的窗口（不读当日的 AIHOT——生产里选稿那一刻
@@ -160,8 +175,11 @@ def main() -> None:
                 hist += reference_by_day[rd]
                 merged_ref.add(rd)
         y, m, d = (int(x) for x in day.split("-"))
-        blocked_b: set = set()
         for k in range(args.per_day):
+            # **`blocked_b` 每轮重置，不是每天。** 放在天这一层时，第 1 轮找不到该类候选就把
+            # 当天余下 47 轮全部封死——而每一轮的已选集合不同、可换入的候选也不同。
+            # 台账警告过「一类补不到就停掉整个下限机制」，我换了个尺度又犯了一次。
+            blocked_b: set = set()
             hour = round(24 * (k + 1) / args.per_day)
             t = datetime(y, m, d, tzinfo=UTC) - SH + timedelta(hours=hour)
             iso = t.isoformat().replace("+00:00", "Z")
@@ -308,6 +326,14 @@ def main() -> None:
             cat = label_by_url.get(url_by_id.get(c.item_id, ""))
             if cat:
                 labelled[cat] += 1
+        # **并集与第 1 页的构成要分开量。** 归档页按发布时间取前 40 ⇒ 即使并集里某类很充足，
+        # 第 1 页也只看得见最新那 40 条。两者差多少，就是「排序口径」而非「供给」欠的那一截——
+        # 这条读数是用来把它俩分开的，别只看页面。
+        union_lab = Counter()
+        for c in union.values():
+            b = label_by_url.get(url_by_id.get(c.item_id, ""))
+            if b:
+                union_lab[b] += 1
         same = sum(1 for c in page if sel._shanghai_date(c.published_at) == day)
         print(f"{day:12}{len(union):>7}{sum(labelled.values()):>11}"
               f"{100 * same / max(len(page), 1):>12.1f}%  "
@@ -319,6 +345,16 @@ def main() -> None:
         if day not in merged_ref:
             hist += reference_by_day[day]
             merged_ref.add(day)
+
+    if union_lab:
+        nu = sum(union_lab.values())
+        np_ = sum(ours_pooled.values()) or 1
+        print(f"\n>>> 并集 vs 第 1 页（末窗口并集 n={nu}）——把「供给」与「排序口径」分开")
+        print(f"{'类别':10}{'并集占比':>10}{'页面占比(合并)':>16}{'AIHOT':>9}")
+        for b in CATS:
+            print(f"{b:10}{100 * union_lab[b] / nu:>9.1f}%{100 * ours_pooled[b] / np_:>15.1f}%"
+                  f"{100 * reference_pooled[b] / (sum(reference_pooled.values()) or 1):>8.1f}%")
+        print("    读法：并集里够、页面里不够 ⇒ 差在**按发布时间取前 40**这条排序，不是供给。")
 
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
