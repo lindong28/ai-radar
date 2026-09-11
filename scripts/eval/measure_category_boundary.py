@@ -30,6 +30,11 @@ _comp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_comp)
 
 CATS = list(_comp.CATEGORIES)
+# 我方分类器词表 → AIHOT 桶名。**不映射的话这张矩阵自己就带着它要诊断的那个盲点**：
+# `tutorial` 落在列外，我方 `tip` 列全是 0，读起来像"我方从不产出这一类"，
+# 而真相是它叫另一个名字。第一版正是这样，靠"最贵错位格"那一段（按 `m` 的键遍历、
+# 不按 CATS）才露出 `tutorial` 来。口径本身是对齐的，差的只是显示名。
+OURS_TO_BUCKET = {"tutorial": "tip"}
 
 
 def main() -> None:
@@ -64,7 +69,7 @@ def main() -> None:
 
             cat = _sel._primary_category(output)
         if cat:
-            by_stamp[str(ruleset).split(".")[0]][str(item_id)] = cat
+            by_stamp[str(ruleset).split(".")[0]][str(item_id)] = OURS_TO_BUCKET.get(cat, cat)
 
     print(f"AIHOT 有类别的条目 {len(aihot)}；enrich 戳 {sorted(by_stamp)}")
 
