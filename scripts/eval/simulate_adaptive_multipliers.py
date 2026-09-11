@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import random
 import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -128,6 +129,16 @@ def main() -> None:
         "ours=我方 enrich 的 `primary_category`（**生产里只有这个可用**，池子大得多）。"
         "判据那一侧**始终**用 AIHOT 的标签，与 `--labels off` 同口径——所以换的是机制的输入，"
         "不是评分的尺子。**上线前必须用 ours 重跑**：aihot 那一版机制看得见的候选比生产少一半以上。",
+    )
+    ap.add_argument(
+        "--cap",
+        choices=("both", "off"),
+        default="both",
+        help="`quota-in-fill` 里要不要给候选按目标占比**封顶**。both=封（上界+下界都在）；"
+        "off=**只留再平衡这个下界**。分出这一档是因为封顶与再平衡对时效的作用方向相反："
+        "再平衡的换入只从当日池取，故只会让当日占比持平或上升；而封顶削掉当日合规候选后，"
+        "`_fill` 的尾部段会从 `all_eligible` 捞旧条目补满 40 格，当日占比必然下降。"
+        "实测 both 把它从静态的 86.2% 推到 69.1%（AIHOT 自己 82.2%），是四个面里退得最狠的一个。",
     )
     ap.add_argument(
         "--mech-stamp",
@@ -268,7 +279,12 @@ def main() -> None:
                 # **两段都要封顶。** 先前只封了当日段，`_fill` 的尾部段仍从未封顶的
                 # `all_eligible` 里捞，于是被削掉的类又回来了——n_ours 由 210 掉到 167 却仍
                 # 只到 4/5，就是这个漏洞的形态：配额看着生效了，实际被尾部段抵消掉一半。
-                picked = C.replay_day(cap_list(by_day[day]), cap_list(all_eligible),
+                # `--cap off` 把上界整个拿掉，只留下面那段再平衡做下界。**这不是"少做一步"**：
+                # 封顶是唯一能把当日占比推下去的部件（再平衡的换入只从当日池取），所以关掉它
+                # 换来的是时效，付出的是超配那一侧没人收——超配只能靠再平衡的 drop 一条条挤。
+                shortlist = cap_list(by_day[day]) if args.cap == "both" else by_day[day]
+                tail = cap_list(all_eligible) if args.cap == "both" else all_eligible
+                picked = C.replay_day(shortlist, tail,
                                       sel.DEFAULT_LIMIT, rank, gate_score,
                                       source_quota=source_quota)
                 # **封顶只是上界，不保证达到目标**——`_fill` 可以把某类填得不足，而判据量的是占比，
@@ -448,8 +464,12 @@ def main() -> None:
             refs += pk[1]
         v = C.class_verdicts(ours, refs)
         tv = C.total_variation(ours, refs)
+        # 与逐窗口那一面同一条纪律：`k/5` 的绝对值没有零假设就读不动。合并口径 n 大得多，
+        # 所以它是目前唯一判得动的面——但仍要把 P(5/5) 打出来，否则"真达标"与"n 就这么大"同形。
+        nd = C.verdict_null(refs, v["n_ours"])
+        pn = f"   P(5/5)={nd['p_all_inside']:.3f}" if nd else ""
         out = [f"{v['inside_count']}/{v['total']} 类落进区间   TV {tv:.3f}   "
-               f"n_ours={v['n_ours']} n_ref={v['n_reference']}"]
+               f"n_ours={v['n_ours']} n_ref={v['n_reference']}{pn}"]
         # **点名出界的是哪一类**：只报个数时，"还差一类"给不出下一步该动什么。
         for row in v["rows"]:
             if not row["inside"]:
@@ -467,9 +487,42 @@ def main() -> None:
         mean = sum(r["inside"] for r in ev) / len(ev)
         return f"{full}/{len(ev)} 个窗口 5/5   平均落进 {mean:.2f}/5"
 
+    # **逐窗口这一面此前没有零假设。** 合并口径早就补过了（`verdict_null`），而被当成最终判据的
+    # 逐窗口均值一直只看绝对值——于是"真有差距"与"窗口 n_ref 只有 10–34、CI 宽得谁都进得去"
+    # 在输出上同形。这里按逐窗口重算一次：一张**构成完全等于 AIHOT** 的页面在这批窗口上
+    # 期望拿到多少。它同时是天花板与分辨力刻度。
+    # **点估计不够，要散布。** 天花板给的是"完美页面平均拿多少"，判 4.29 与 4.00 分不分得开
+    # 还要知道这个均值本身抖多大——7 个窗口的均值是 7 次抽样的平均，散布由各窗口的 null
+    # 分布卷积而来。这里直接按各窗口的 null 分布重抽 7 元组、取均值，得到它的 5–95 分位。
+    def null_band(rows):
+        dists = []
+        for r in rows:
+            if not (r["evaluated"] and r["inside"] is not None):
+                continue
+            nd = C.verdict_null(r["counts"][1], sum(r["counts"][0].values()))
+            if nd:
+                dists.append(nd["distribution"])
+        if not dists:
+            return None
+        mean = sum(sum(k * p for k, p in d.items()) for d in dists) / len(dists)
+        rng = random.Random(20260911)
+        ks = list(range(6))
+        draws = sorted(
+            sum(rng.choices(ks, weights=[d[k] for k in ks])[0] for d in dists) / len(dists)
+            for _ in range(20000)
+        )
+        return mean, draws[1000], draws[19000]
+
     print(f"\n逐窗口（用户裁定的单位）")
     print(f"  静态   {summary(static)}")
     print(f"  自适应 {summary(adaptive)}")
+    nb = null_band(adaptive)
+    if nb is not None:
+        nm, lo, hi = nb
+        print(f"  零假设 完全符合 AIHOT 构成的页面在这批窗口上期望 {nm:.2f}/5，"
+              f"90% 落在 [{lo:.2f}, {hi:.2f}]")
+        print(f"         ⇒ **天花板不是 5.00**，而且这个均值自己就抖 ±{(hi - lo) / 2:.2f}；"
+              f"落进这个区间的读数与「完美」分不开")
     def cost(rows):
         ev = [r for r in rows if r["evaluated"]]
         hit = sum(r["hit"] for r in ev); n = sum(r["n"] for r in ev)
@@ -483,6 +536,19 @@ def main() -> None:
     print(f"\n合并同一批窗口（大 n，分辨力高，但会平均掉参照物的摆动）")
     print(f"  静态   {pooled(static, [r['counts'] for r in static])}")
     print(f"  自适应 {pooled(adaptive, [r['counts'] for r in adaptive])}")
+
+    # **时间劈是本仓杀掉候选方案的那把刀**：同日那个 industry 乘数在合并口径上看着成立，
+    # 一分前后半就散了。改善要跨 split 同向才算效应（CLAUDE.md 量具纪律第 ④ 条），所以合并
+    # 这一面必须再劈一次——它也是唯一还判得动的面，劈完仍同向才谈得上上线。
+    ev_idx = [i for i, r in enumerate(static) if r["evaluated"]]
+    half = len(ev_idx) // 2
+    print("\n时间劈（改善要跨 split 同向才算效应，不是 POOLED 好看就算）")
+    for name, idx in (("前半", ev_idx[:half]), ("后半", ev_idx[half:])):
+        sub_s = [static[i] for i in idx]
+        sub_a = [adaptive[i] for i in idx]
+        print(f"  {name} {static[idx[0]]['day']}–{static[idx[-1]]['day']}")
+        print(f"    静态   {pooled(sub_s, [r['counts'] for r in sub_s])}")
+        print(f"    自适应 {pooled(sub_a, [r['counts'] for r in sub_a])}")
     print("\n**读的是逐窗口达标率，不是 POOLED**：POOLED 会把参照物的摆动平均掉，"
           "而那正是这个结构要跟上的东西。")
 
