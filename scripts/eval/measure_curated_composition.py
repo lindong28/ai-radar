@@ -440,6 +440,17 @@ def main() -> None:
         "**别 --record 它**——它是探索性对照，不是一轮迭代。",
     )
     parser.add_argument(
+        "--enrich-stamp",
+        default=None,
+        metavar="PREFIX",
+        help="只保留 enrich 戳以 PREFIX 开头的候选。**ADR-9e21 明写给 paper 以外的类别加系数前必须"
+        "按戳分层量一次**，理由是 industry/tip 的跨标注器一致性极不稳——而乘数是按**我方**类别"
+        "施加的，判据两侧却都用 AIHOT 标签，所以标签漂移在判据上看不见。实测（08-31 起，冻结快照）："
+        "旧戳 2026-05-13.r2 把 680 条判 industry 而 AIHOT 只认 218 条（精确 30.1%），"
+        "新戳 2026-09-08.r2.31b2065e 是 211 vs 168（精确 68.2%）。混合窗口的读数是这两者的加权平均，"
+        "而权重随重跑 enrich 变化 ⇒ 不分层就判不出效应稳不稳。**探索性，不得 --record。**",
+    )
+    parser.add_argument(
         "--days",
         choices=("all", "odd", "even", "first-half", "second-half"),
         default="all",
@@ -468,8 +479,10 @@ def main() -> None:
     args = parser.parse_args()
     # 纪律靠闸、不靠 help 文本：三种探索性形态混进趋势序列后无法从行里分辨（identity 块没有
     # 记录它们），而趋势序列是"随迭代逐步逼近"这条期望唯一的观测面。
-    if args.record and (args.days != "all" or args.rank_by != "ours" or args.no_quota):
-        parser.error("--record 只接受全量生产口径：--days all、--rank-by ours、不带 --no-quota")
+    if args.record and (
+        args.days != "all" or args.rank_by != "ours" or args.no_quota or args.enrich_stamp
+    ):
+        parser.error("--record 只接受全量生产口径：--days all、--rank-by ours、不带 --no-quota / --enrich-stamp")
 
     overrides = dict(sel.CATEGORY_MULTIPLIERS)
     for spec in args.multiplier:
@@ -515,6 +528,18 @@ def main() -> None:
     labels.update(hand_only)
 
     candidates = sel.deduplicate_candidates(sel._load_candidates(conn, DEFAULT_WEIGHTS))
+    if args.enrich_stamp:
+        keep = {
+            item_id
+            for (item_id,) in conn.execute(
+                "SELECT item_id FROM item_evaluations WHERE stage='enrich' AND error IS NULL "
+                "AND ruleset_version LIKE ? || '%'",
+                (args.enrich_stamp,),
+            )
+        }
+        before = len(candidates)
+        candidates = [c for c in candidates if c.item_id in keep]
+        print(f"enrich-stamp 过滤: {args.enrich_stamp!r} ⇒ 候选 {before} -> {len(candidates)}")
     all_eligible: list = []  # 见下方 gate_score 定义之后填充
 
     by_day: dict[str, list] = defaultdict(list)

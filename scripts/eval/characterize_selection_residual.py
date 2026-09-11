@@ -12,7 +12,11 @@
 
 用法：
     uv run python scripts/eval/characterize_selection_residual.py
-    uv run python scripts/eval/characterize_selection_residual.py --by category
+    uv run python scripts/eval/characterize_selection_residual.py --bands 5
+    uv run python scripts/eval/characterize_selection_residual.py --cut 70   # 绝对切点对照
+
+（先前这里写着一个不存在的 `--by category`，由独立决策评审报出。**这类假参数比缺文档更坏**：
+读的人会照着敲、失败后以为是环境问题。）
 """
 
 from __future__ import annotations
@@ -41,6 +45,14 @@ def wilson(k: int, n: int) -> tuple[float, float]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bands", type=int, default=10, help="分数分箱数（默认 10 = 十分位）")
+    ap.add_argument(
+        "--cut",
+        type=float,
+        default=None,
+        help="额外按一个**绝对**分数切点输出逐类选中率。台账里一条被用来关闭整条轴的旧结论用的是"
+        "score>=70，而它此前由内联片段算出、脚本里没有入口——于是那条读数无法重跑、也无法追溯错因。"
+        "本参数就是补上那个入口。绝对切点只用于与旧读数对齐；新读数一律用分位（见 --bands）。",
+    )
     args = ap.parse_args()
 
     items = [v for v in _comp.load_aihot().values() if v.get("score") is not None]
@@ -134,6 +146,19 @@ def main() -> None:
             f"    逐日选中率 均值 {100 * mean:.1f}%  标准差 {100 * sd:.1f}pp —— "
             "标准差小即残差是稳定现象、不是某几天的异常，那才值得去拟合它。"
         )
+
+    if args.cut is not None:
+        hi = [v for v in scored if float(v["score"]) >= args.cut and v["category"]]
+        print(f"\n>>> 绝对切点 score >= {args.cut:g} 的逐类选中率（n={len(hi)}）")
+        print(f"{'类别':10} {'精选/总数':>12} {'选中率':>8}  95% CI")
+        for cat in sorted({v["category"] for v in hi}):
+            sub = [v for v in hi if v["category"] == cat]
+            k = sum(1 for v in sub if v["selected"])
+            lo, up = wilson(k, len(sub))
+            print(
+                f"{cat:10} {f'{k}/{len(sub)}':>12} {100 * k / len(sub):>7.1f}%  "
+                f"[{100 * lo:5.1f},{100 * up:5.1f}]"
+            )
 
     slice_by_source(scored, args.bands)
 
