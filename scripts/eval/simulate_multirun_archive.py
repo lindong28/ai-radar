@@ -75,6 +75,22 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--enrich-stamp", default=None, metavar="PREFIX",
+                    help="机制只认该 enrich 戳（前缀匹配 `ruleset_version`）产出的类别。"
+                         "ADR-9e21 §一要求任何类别级干预**按戳分层重量一次**，而本池混用三代戳。"
+                         "用来判效应是不是某一代戳带来的。")
+    ap.add_argument("--score-only-covered", action="store_true",
+                    help="**保留累积并集，但只在「机制标签覆盖率 > 0」的窗口上评分。** "
+                         "决策评审 blocker 1：全窗 `--label-time replay` 的悲观里含 08-31/09-01 "
+                         "两窗覆盖率为 0（产类别的 enrich `.r2` 09-02 才开始扫），"
+                         "那个条件**不会再现**却被永久算进读数；而 `--since` 砍头会造出一个"
+                         "从未存在过的并集。本开关两头都避开：并集照常从第一天累积，只是"
+                         "那些窗口的页面不进 `ours_pooled` / `reference_pooled`。")
+    ap.add_argument("--rank-by-aihot-score", action="store_true",
+                    help="**上界探针，不是候选方案**：把排序键换成 AIHOT 自己的分数"
+                         "（按量具纪律 ③ 走**同池百分位**映射到我方分数尺度，不比绝对分）；"
+                         "AIHOT 没打过分的条目保留我方分数。用来判打分轴对**条目重合**的天花板"
+                         "——指标档里那条『打分轴已否』是对**构成**的读数，对重合从没量过。")
     ap.add_argument("--no-quota", action="store_true",
                     help="关掉 `_fill` 的全部配额结构（新鲜度段 + 源配额）。用来判 ④ 那格"
                          "「过了闸仍进不了并集」是输在配额结构，还是单纯排不进前 40。")
@@ -205,12 +221,33 @@ def main() -> None:
     if overrides != sel.CATEGORY_MULTIPLIERS:
         print(f"类别系数：{sel.CATEGORY_MULTIPLIERS} → {overrides}")
 
+    # 上界探针：AIHOT 分数 → 同池百分位 → 我方分数尺度上的等百分位值。
+    # **绝对分不可比**（两套打分器量纲不同，量具纪律 ③ 就是为此）。
+    aihot_rank_score: dict[str, float] = {}
+    if args.rank_by_aihot_score:
+        a_scores = sorted(r["score"] for r in aihot.values() if r.get("score") is not None)
+        o_scores = sorted(c.weighted_score for c in candidates)
+        import bisect
+        _rev = {u: i for i, u in url_by_id.items()}   # id_by_url 此处尚未定义
+        for r in aihot.values():
+            if r.get("score") is None or not r.get("url"):
+                continue
+            iid = _rev.get(_comp.normalize_url(r["url"])[0])
+            if iid is None:
+                continue
+            pct = bisect.bisect_left(a_scores, r["score"]) / max(len(a_scores) - 1, 1)
+            aihot_rank_score[iid] = o_scores[
+                min(int(pct * (len(o_scores) - 1)), len(o_scores) - 1)]
+        print(f"上界探针：{len(aihot_rank_score)} 条用 AIHOT 分数的同池百分位替换排序分"
+              f"（AIHOT 分数 n={len(a_scores)}，我方池 n={len(o_scores)}）")
+
     def factor(c):
         return overrides.get(c.primary_category, 1.0)
 
     def rank(c):
         # 与 `select.ranking_key` 同形：系数**只进排序键**，不进绝对闸（ADR-3f8b）。
-        return (-c.weighted_score * factor(c), c.published_at, c.item_id)
+        sc = aihot_rank_score.get(c.item_id, c.weighted_score)
+        return (-sc * factor(c), c.published_at, c.item_id)
 
     OURS_TO_BUCKET = {v: k for k, v in BUCKET_TO_OURS.items()}
 
@@ -222,10 +259,12 @@ def main() -> None:
     # 而早期窗口又比生产更盲，两个方向叠加。
     # 仓内已有正确量的定义：ADR-9e21 §二 的 `enrich_watermark`；这里等价地按 `evaluated_at` 截断。
     enrich_hist: dict[str, list[tuple[str, str]]] = {}
-    for item_id, ev_at, out in conn.execute(
-        "SELECT item_id, evaluated_at, output_json FROM item_evaluations "
+    for item_id, ev_at, out, rsv in conn.execute(
+        "SELECT item_id, evaluated_at, output_json, ruleset_version FROM item_evaluations "
         "WHERE stage='enrich' AND error IS NULL ORDER BY id"
     ):
+        if args.enrich_stamp and not str(rsv or "").startswith(args.enrich_stamp):
+            continue
         cat = sel._primary_category(out)
         if cat and ev_at:
             enrich_hist.setdefault(str(item_id), []).append((str(ev_at), cat))
@@ -405,6 +444,7 @@ def main() -> None:
     hist_raw: Counter = Counter()
     hist: Counter = Counter()
     live = {c: overrides.get(BUCKET_TO_OURS.get(c, c), 1.0) for c in CATS}
+    skipped_days: list[str] = []
     print(f"\n{'上海日':12}{'并集':>7}{'页内有标签':>11}{'当日发布占比':>13}  逐类（AIHOT 标签）")
     for day in days:
         # **机制动作计数**：review gate 报出「机制跑了但没用」与「机制一次也没触发」
@@ -445,6 +485,10 @@ def main() -> None:
                 continue
             tday = sel._shanghai_date(iso)
             pool = [c for c in avail if sel._shanghai_date(c.published_at) == tday]
+            # **覆盖率要在这里数，不能数在 quota 块里**：基线不跑 quota，数在那里会让
+            # `--score-only-covered` 把基线的每一天都判成"未覆盖"、整个跳过，配对就不成立了。
+            for _c in pool:
+                mech["池内有标签" if mech_label(_c) else "池内无标签"] += 1
             if args.closed_loop and sum(hist.values()) >= 8:
                 # 反馈取**归档页此刻的构成**，不是这一轮选了什么——后者是上游量，
                 # 而用户看到的是前者；本 session 已实测两者的失败类不同。
@@ -487,7 +531,6 @@ def main() -> None:
                 capped = []
                 for c in sorted(pool, key=rank):
                     b = mech_label(c)
-                    mech["池内有标签" if b else "池内无标签"] += 1
                     if b:
                         if seen_b[b] >= capn.get(b, args.limit):
                             mech["封顶丢弃"] += 1
@@ -614,8 +657,13 @@ def main() -> None:
               f"{100 * same / max(len(page), 1):>12.1f}%  "
               + " ".join(f"{c[:3]}:{labelled[c]}" for c in CATS if labelled[c])
               + f"   │机制 覆盖{cov} 封顶丢{mech['封顶丢弃']} 调参{mech['调参']}")
-        ours_pooled += labelled
-        reference_pooled += reference_by_day[day]
+        nb_cov = mech["池内有标签"] + mech["池内无标签"]
+        covered = (not args.score_only_covered) or mech["池内有标签"] > 0
+        if covered:
+            ours_pooled += labelled
+            reference_pooled += reference_by_day[day]
+        else:
+            skipped_days.append(day)
         # **顺序不能反**：本窗口的 AIHOT 直到这里才并进历史，之上的每一次调参都只看得到
         # 严格更早的窗口。反过来就是拿当天的真值去调当天的系数。
         if day not in merged_ref:
@@ -675,6 +723,10 @@ def main() -> None:
         print(f"\n>>> 条目重合（末窗口并集 vs 窗口内 AIHOT 精选）："
               f"{hit}/{len(sel_urls)} = {100 * hit / len(sel_urls):.1f}%"
               f"   并集 {len(union)} 条")
+
+    if skipped_days:
+        print(f"\n⚠️ --score-only-covered：{len(skipped_days)} 个窗口机制覆盖率为 0、不计入评分"
+              f"（{', '.join(skipped_days)}）；**并集仍从第一天累积**，只是这些天的页面不进 pooled。")
 
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
