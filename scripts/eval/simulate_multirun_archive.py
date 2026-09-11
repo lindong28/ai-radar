@@ -75,6 +75,10 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--causal-m", action="store_true",
+                    help="混淆矩阵**只用严格早于当前窗口**的双标注条目估计（与 `hist` 的因果纪律同构）。"
+                         "不加则用全量估一次、所有切点复用——那样跨 split 不给 M 留出数据，"
+                         "四个切点全是 in-sample（决策评审 2026-09-11 报出）。样本不足时回退到未校正。")
     ap.add_argument("--permute-labels", type=int, default=None, metavar="SEED",
                     help="**零控制**：把机制标签在条目之间随机置换（保持边际分布不变）后重跑。"
                          "混淆矩阵随之在置换后的标签上重估，于是整条链自洽。"
@@ -137,6 +141,10 @@ def main() -> None:
             if r.get("url"):
                 ref_urls_by_day.setdefault(r["published"], []).append(
                     _comp.normalize_url(r["url"])[0])
+    pub_by_url: dict[str, str] = {}
+    for r in aihot.values():
+        if r.get("url") and r.get("published"):
+            pub_by_url[_comp.normalize_url(r["url"])[0]] = r["published"]
     days = sorted(d for d, c in reference_by_day.items() if sum(c.values()) >= 5)
     if args.until:
         days = [d for d in days if d <= args.until]
@@ -257,11 +265,16 @@ def main() -> None:
     # 全窗 TV：aihot 0.131 / ours 0.168 / 基线 0.175。
     # M 由**双标注过闸候选**估计（n=681，det 0.207，逆解无负数），不是 oracle：
     # 它只用 capture 和我方对同一批条目的 enrich，离线可得。
+    # **按 AIHOT 发布日分桶**：决策评审报出，全量估一次 M 再在所有切点复用 ⇒ 跨 split 根本
+    # 没给 M 留出数据，四个切点全是 in-sample。同一类错误台账里记过一次（v2 enrich 过拟合）。
+    # `--causal-m` 让每个窗口只用**严格更早**的双标注条目估 M，与 `hist` 的因果纪律同构。
+    conf_by_day: dict[str, Counter] = {}
     conf_counts: Counter = Counter()
     for c in candidates:
         if c.weighted_score < sel.DEFAULT_THRESHOLD:
             continue
-        a = label_by_url.get(url_by_id.get(c.item_id, ""))
+        u = url_by_id.get(c.item_id, "")
+        a = label_by_url.get(u)
         # **读 `final_cat` 而不是 `c.primary_category`**：两者在正常档等价，但零控制置换的是
         # `enrich_hist` ⇒ 只有走 `final_cat` 才让混淆矩阵也跟着置换。不然零控制只置换了一半，
         # 矩阵仍带着真信号，对照就失效了（而它失效的样子与生效完全一样）。
@@ -269,16 +282,20 @@ def main() -> None:
         o = OURS_TO_BUCKET.get(o0, o0) if o0 else None
         if a in CATS and o in CATS:
             conf_counts[(a, o)] += 1
+            pd = pub_by_url.get(u)
+            if pd:
+                conf_by_day.setdefault(pd, Counter())[(a, o)] += 1
 
-    def solve_to_ours(t_counter):
+    def solve_to_ours(t_counter, conf=None):
         """把 AIHOT 空间的目标计数反解成我方空间的占比。解不出就返回 None（调用方回退）。"""
+        conf = conf_counts if conf is None else conf
         nt = sum(t_counter.values())
-        if not nt or sum(conf_counts.values()) < 100:
+        if not nt or sum(conf.values()) < 100:
             return None
-        colN = [sum(conf_counts[(a, CATS[j])] for a in CATS) for j in range(5)]
+        colN = [sum(conf[(a, CATS[j])] for a in CATS) for j in range(5)]
         if min(colN) < 10:          # 某列样本太少 ⇒ 那一列的条件概率不可信，不求逆
             return None
-        A = [[conf_counts[(CATS[i], CATS[j])] / colN[j] for j in range(5)]
+        A = [[conf[(CATS[i], CATS[j])] / colN[j] for j in range(5)]
              + [t_counter[CATS[i]] / nt] for i in range(5)]
         for i in range(5):          # 高斯-约当，带部分主元
             pv = max(range(i, 5), key=lambda r: abs(A[r][i]))
@@ -378,7 +395,13 @@ def main() -> None:
         # 放在天这一层是因为 `hist` 一天内不变。
         hist = Counter(hist_raw)
         if args.target_space == "corrected" and args.labels != "oracle":
-            q = solve_to_ours(hist_raw)
+            conf_now = None
+            if args.causal_m:
+                conf_now = Counter()
+                for rd, cc in conf_by_day.items():
+                    if rd < day:
+                        conf_now += cc
+            q = solve_to_ours(hist_raw, conf_now)
             if q is not None:
                 nh = sum(hist_raw.values())
                 hist = Counter({c: q[c] * nh for c in CATS})
