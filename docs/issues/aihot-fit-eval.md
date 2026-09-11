@@ -3112,3 +3112,41 @@ AIHOT-product→我方 model 2.87pp。⇒ **我方的 `industry` 与 `model` 两
 
 **但它现在不是达标的必要条件**：机制在这个标注器上已经达标（两个时间半区都 5/5）。
 它是余量来源，按最低充分排在下一轮。
+
+### 上线前置：两个「未验证项」查实了，一个否掉提案、一个是 blocker 形状（2026-09-11）
+
+写决策评审 packet 时把它们列成未验证项，派发之后自己查完了。
+
+**① 生产侧拿不到当期的 AIHOT 语料 ⇒ 否掉「curate 时现算」这个提案**
+
+- `tencent/main`（生产部署分支，[ADR-042](../adr/042-isolate-production-deploy-commit-from-local-main.md)
+  规定 commit 在那里复放）**确实带** submodule 指针，但钉在 `1a59b9a`，而 captures 当前是 `e31efff`。
+- `measure_curated_composition.py` 的 `CAPTURES_REF = "origin/captures/daily"` 是 submodule **内部的
+  远端跟踪 ref**；生产侧 `git submodule update --init` 拿到的是**钉住的那个 commit、detached HEAD**，
+  该分支未必存在。
+
+⇒ 运行期现算会读到一份**陈旧且可能不存在**的语料，而失败形态是安静的（没有语料 ⇒ 不再平衡 ⇒
+看起来就是今天的生产行为）。**目标向量得走部署路径，不能走 submodule。**
+好在历史均值随窗口累积**越来越稳**，滞后可容忍——这条对 EMA 一类不成立，对本方案成立。
+
+**② 再平衡会让 ADR-bc36 已上线的审计通道说假话**
+
+`select.py:652-694` 在 `_fill` 之后记一个反事实：
+
+```python
+baseline = _fill(fresh, filtered, limit, freshness_quota, None)  # 同轮、仅关掉源配额
+"baseline": SOURCE_QUOTA_BASELINE            # 常量 = "same_run_without_source_quota"
+"baseline_selected": candidate.item_id in baseline_ids
+"quota_only_count": sum(不在 baseline 里的选中条数)
+```
+
+把再平衡加在 `selected = _fill(...)` **之后**，三处同时坏掉：
+
+1. `SOURCE_QUOTA_BASELINE` 这个常量**变成假话**——真实反事实成了「既无配额也无再平衡」。
+2. 再平衡换入的条目被记成 `quota_only`，**归因给配额策略**，而它们与配额无关。
+3. `admin curate rollback-quota` 按 `quota_only_count` 校验、删除 `baseline_selected=false` 的行
+   ⇒ **「回退配额」会连带悄悄回退再平衡**，且剩下的页面也不是无配额基线。
+
+ADR-bc36 第 4 条明写它「先按冻结的 v1 形状整体校验……任一不合即该 run 零写入并报错」——
+所以这不是能悄悄兼容过去的事，**`policy` 要升版**（现为 `source-quota-v1`），
+反事实要重定义成「无配额且无再平衡」。**这是上线的前置条件，不是可挂账项。**
