@@ -75,6 +75,24 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--permute-labels", type=int, default=None, metavar="SEED",
+                    help="**零控制**：把机制标签在条目之间随机置换（保持边际分布不变）后重跑。"
+                         "混淆矩阵随之在置换后的标签上重估，于是整条链自洽。"
+                         "若读数与真标签档无差，说明机制根本没在用标签里的信息——"
+                         "「机制有效」与「任何标签都行」在没有这条对照时输出同形。")
+    ap.add_argument("--target-space", choices=("ours", "aihot", "corrected"), default="ours",
+                    help="机制**比**的目标用谁的标注器数。`ours` = 我方 enrich 在 AIHOT 精选条目上"
+                         "重数（离线可得，非 oracle）；`aihot` = AIHOT 自己的标签。"
+                         "与 --labels 是**两个正交维度**：只换其一会让 `tgt/act` 的分子分母"
+                         "来自两个标注器（review gate 的 blocker 1）。`--labels oracle` 时本项强制为 aihot。")
+    ap.add_argument("--label-time", choices=("replay", "final"), default="replay",
+                    help="机制**读**条目标签的时点。`replay` = 只看回放时点之前已产出的 enrich 行"
+                         "（生产真实可得）；`final` = 快照时刻的最终标签（**会把数小时后才产生的"
+                         "标签提前交给机制**，review gate 的 blocker 2）。仅 --labels ours 有效。")
+    ap.add_argument("--labels", choices=("ours", "oracle"), default="ours",
+                    help="**机制**读谁的类别。`ours` = 我方 enrich（生产唯一可得）；"
+                         "`oracle` = AIHOT 自己的标签，**生产不可得**，只作上界对照。"
+                         "计分器恒用 AIHOT 标签，与本开关无关——那是判据本身。")
     ap.add_argument("--src-cap", type=float, default=None,
                     help="**并集层面**的单源上限（占并集的比例）。生产的 `per_source=0.075` 是**每轮**的闸"
                          "（3/40），而并集跨 48 轮累积 ⇒ **并集不受它约束**。实测池中带标签的候选里 "
@@ -86,6 +104,12 @@ def main() -> None:
                          "但至 09-05 的并集需要 131 条 model 而池里只有 122 条——差 9 条。"
                          "降阈值同时会多放进 tip/product，**要靠 `--actuator quota` 的封顶压住**，"
                          "两者是成对的，单独降阈值对 model 反而不利。")
+    ap.add_argument("--since", default=None,
+                    help="只从该日（含）起算。⚠️ **它的读数与全窗不可直接比**："
+                         "`--until` 是砍尾（保留累积），本项是砍头，会造出一个从未存在过的并集；"
+                         "且 `sum(hist)>=8` 的暖机闸在首窗就满足，控制器会在并集几乎为空时"
+                         "做第一次调参，而 `live` 的系数逐窗持续，那次噪声留在被评区间内。"
+                         "只用于定位，不用于结论。")
     ap.add_argument("--until", default=None,
                     help="只读到这一天为止的归档面。**归档是累积的，所以时间劈只能这么切**——"
                          "把窗口对半砍成两段各自重放会让后半段丢掉前半段的并集，那不是它真实的样子。")
@@ -102,14 +126,33 @@ def main() -> None:
     aihot = _comp.load_aihot()
     reference_by_day: dict[str, Counter] = {}
     label_by_url: dict[str, str] = {}
+    # **AIHOT 精选条目的 URL，按发布日分组。** 机制的目标要用**机制自己的标注器**重新数一遍
+    # （见 `target_by_day` 的构建），否则 `tgt/act` 的分子分母来自两个标注器。
+    ref_urls_by_day: dict[str, list[str]] = {}
     for r in aihot.values():
         if r.get("category") and r.get("url"):
             label_by_url[_comp.normalize_url(r["url"])[0]] = r["category"]
         if r["selected"] and r["published"] and r.get("category"):
             reference_by_day.setdefault(r["published"], Counter())[r["category"]] += 1
+            if r.get("url"):
+                ref_urls_by_day.setdefault(r["published"], []).append(
+                    _comp.normalize_url(r["url"])[0])
     days = sorted(d for d, c in reference_by_day.items() if sum(c.values()) >= 5)
     if args.until:
         days = [d for d in days if d <= args.until]
+    if args.since:
+        # **归档面是累积的，所以早期窗口永远留在并集里。** 于是 enrich 覆盖率低的那几天
+        # （实测 08-31 6.9%、09-01 14.3%、09-02 40.2%，09-05 起才是 100%）会一直拖着读数，
+        # 而机制在那些天**看不见类别**、封顶无从施加。`--since` 把起点挪到覆盖率起来之后，
+        # 用来把「机制无效」与「机制被蒙住眼睛」分开——它**不是**用来挑好看的窗口的，
+        # 报它必须同时报覆盖率理由与全窗读数。
+        if len(args.since) != 10 or args.since.count("-") != 2:
+            raise SystemExit(f"--since 要 YYYY-MM-DD（字符串比较），给的是 {args.since!r}；"
+                             f"格式不对会静默不过滤")
+        days = [d for d in days if d >= args.since]
+        print("⚠️ --since 砍头：并集从此日重建，**与全窗读数不可直接比**（见该参数 help）")
+    if not days:
+        raise SystemExit("--since / --until 过滤后没有窗口了")
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     if args.threshold is not None:
@@ -154,6 +197,149 @@ def main() -> None:
         # 与 `select.ranking_key` 同形：系数**只进排序键**，不进绝对闸（ADR-3f8b）。
         return (-c.weighted_score * factor(c), c.published_at, c.item_id)
 
+    OURS_TO_BUCKET = {v: k for k, v in BUCKET_TO_OURS.items()}
+
+    # **机制标签必须按回放时点取，不能取"最终标签"。** review gate 报出的 blocker：
+    # `select._load_candidates` 那条子查询是 `ORDER BY en.id DESC LIMIT 1`、**无时间约束**，
+    # 于是 `c.primary_category` 是快照时刻的最终标签。实测窗口内只有 62.9% 的条目在发布后 6h 内
+    # 被 enrich、9.0% 晚于 72h，每天有 28%–39% 的 enrich 行晚于当天最后一个回放时点
+    # ⇒ 用最终标签等于把数小时后才产生的标签提前交给机制（近期窗口开天眼），
+    # 而早期窗口又比生产更盲，两个方向叠加。
+    # 仓内已有正确量的定义：ADR-9e21 §二 的 `enrich_watermark`；这里等价地按 `evaluated_at` 截断。
+    enrich_hist: dict[str, list[tuple[str, str]]] = {}
+    for item_id, ev_at, out in conn.execute(
+        "SELECT item_id, evaluated_at, output_json FROM item_evaluations "
+        "WHERE stage='enrich' AND error IS NULL ORDER BY id"
+    ):
+        cat = sel._primary_category(out)
+        if cat and ev_at:
+            enrich_hist.setdefault(str(item_id), []).append((str(ev_at), cat))
+    print(f"机制标签时间轴：{len(enrich_hist)} 条目有 enrich 历史"
+          f"（共 {sum(len(v) for v in enrich_hist.values())} 行）")
+
+    # **目标也要换到机制的标签空间。** review gate 的 blocker 1：只换机制**读**的标签、
+    # 不换它**比**的目标，`tgt/act` 的分子分母就来自两个标注器。实测两者在同一批 571 条
+    # 双标注过闸候选上的边际差是 tip −14.01pp / industry +12.78pp / model +7.88pp
+    # ⇒ 一张在 AIHOT 口径下恰好达标的页面，机制会读成「industry 超 12.8、tip 欠 14」，
+    # 照这个**假 gap** 去拧。model 那一格的偏差（+7.88）与要修的缺口（−9.30）同量级且反向,
+    # 于是机制在 `ours` 下**根本看不见 model 缺口**。
+    # 修法：目标 = **我方标注器在 AIHOT 精选条目上数出来的构成**。它离线可得
+    # （capture + 我方对同一批条目的 enrich），因此不是 oracle；用最终标签即可——
+    # 目标是离线算的，没有时点压力，这与机制**读**条目标签必须截断是两回事。
+    id_by_url = {u: i for i, u in url_by_id.items()}
+    if args.permute_labels is not None:
+        # 保边际置换：把 item_id → enrich 历史 的对应关系整体打乱。
+        # 打乱的是**对应关系**不是类别取值，所以每个类别的总条数一个不变。
+        import random as _rnd
+        keys = sorted(enrich_hist)
+        vals = [enrich_hist[k] for k in keys]
+        _rnd.Random(args.permute_labels).shuffle(vals)
+        enrich_hist = dict(zip(keys, vals, strict=True))
+        print(f"⚠️ 零控制：机制标签已按 seed={args.permute_labels} 置换（边际不变）")
+    final_cat = {i: rows[-1][1] for i, rows in enrich_hist.items() if rows}
+    target_by_day: dict[str, Counter] = {}
+    _t_hit = _t_miss = 0
+    for rday, urls in ref_urls_by_day.items():
+        cnt = target_by_day.setdefault(rday, Counter())
+        for u in urls:
+            cat = final_cat.get(id_by_url.get(u, ""))
+            b = OURS_TO_BUCKET.get(cat, cat) if cat else None
+            if b in CATS:
+                cnt[b] += 1
+                _t_hit += 1
+            else:
+                _t_miss += 1
+    # **`corrected` = 用混淆矩阵把 AIHOT 目标**反解**到我方标签空间。**
+    # 为什么 `ours`（正向）是错的：我们要的是「页面**用 AIHOT 标签量出来**等于目标」，
+    # 即 `M q = t`（M[i][j] = P(AIHOT=i | ours=j)）⇒ `q = M⁻¹t`。
+    # 而 `target_space=ours` 数的是 `P(ours | AIHOT 精选)`，那是**正向**映射 `Mᵀt`——
+    # 它和 `M⁻¹t` 落在 `t` 的两侧，所以不校正（q=t）反而在中间、读数居中。实测三档
+    # 全窗 TV：aihot 0.131 / ours 0.168 / 基线 0.175。
+    # M 由**双标注过闸候选**估计（n=681，det 0.207，逆解无负数），不是 oracle：
+    # 它只用 capture 和我方对同一批条目的 enrich，离线可得。
+    conf_counts: Counter = Counter()
+    for c in candidates:
+        if c.weighted_score < sel.DEFAULT_THRESHOLD:
+            continue
+        a = label_by_url.get(url_by_id.get(c.item_id, ""))
+        # **读 `final_cat` 而不是 `c.primary_category`**：两者在正常档等价，但零控制置换的是
+        # `enrich_hist` ⇒ 只有走 `final_cat` 才让混淆矩阵也跟着置换。不然零控制只置换了一半，
+        # 矩阵仍带着真信号，对照就失效了（而它失效的样子与生效完全一样）。
+        o0 = final_cat.get(str(c.item_id))
+        o = OURS_TO_BUCKET.get(o0, o0) if o0 else None
+        if a in CATS and o in CATS:
+            conf_counts[(a, o)] += 1
+
+    def solve_to_ours(t_counter):
+        """把 AIHOT 空间的目标计数反解成我方空间的占比。解不出就返回 None（调用方回退）。"""
+        nt = sum(t_counter.values())
+        if not nt or sum(conf_counts.values()) < 100:
+            return None
+        colN = [sum(conf_counts[(a, CATS[j])] for a in CATS) for j in range(5)]
+        if min(colN) < 10:          # 某列样本太少 ⇒ 那一列的条件概率不可信，不求逆
+            return None
+        A = [[conf_counts[(CATS[i], CATS[j])] / colN[j] for j in range(5)]
+             + [t_counter[CATS[i]] / nt] for i in range(5)]
+        for i in range(5):          # 高斯-约当，带部分主元
+            pv = max(range(i, 5), key=lambda r: abs(A[r][i]))
+            if abs(A[pv][i]) < 1e-9:
+                return None
+            A[i], A[pv] = A[pv], A[i]
+            for r in range(5):
+                if r != i:
+                    f = A[r][i] / A[i][i]
+                    for cc in range(i, 6):
+                        A[r][cc] -= f * A[i][cc]
+        q = [A[i][5] / A[i][i] for i in range(5)]
+        # 负数即外推出了数据支持的范围；夹到一个小正数再归一，别让它把某类彻底封死。
+        q = [max(x, 0.01) for x in q]
+        tot = sum(q)
+        return {CATS[i]: q[i] / tot for i in range(5)}
+
+    if args.labels == "oracle" or args.target_space in ("aihot", "corrected"):
+        target_by_day = reference_by_day
+        why = ("--labels oracle" if args.labels == "oracle"
+               else f"--target-space {args.target_space}")
+        extra = ""
+        if args.target_space == "corrected" and args.labels != "oracle":
+            probe = solve_to_ours(sum(reference_by_day.values(), Counter()))
+            extra = ("；反解不可用、将回退 aihot" if probe is None
+                     else "；每窗在使用点反解到我方空间")
+        print(f"目标空间：AIHOT 标签累积（{why}{extra}）")
+    else:
+        print(f"目标空间：我方 enrich 在 AIHOT 精选条目上重数"
+              f"（命中 {_t_hit}、我方无标签 {_t_miss}）")
+
+    clock = {"now": "9999"}  # 由时点循环每轮写入；`mech_label` 读它
+
+    def mech_label(c):
+        """**机制**看到的类别——与计分器看到的严格分开，且**按回放时点截断**。
+
+        本 session 踩过的最贵一次：闭环的反馈与 quota 封顶都直接读 `label_by_url`
+        （AIHOT 自己的标签），而计分器读的也是它 ⇒ 执行器与记分员共用同一份答案。
+        更糟的是 `if b:` 那道守卫——**AIHOT 没发过的条目拿不到标签、于是完全绕过封顶**。
+        那样得到的 5/5 在生产里无法复现：生产拿不到 AIHOT 对我方条目的标签。
+
+        默认 `ours` 取我方 enrich 在 `clock["now"]` 之前**已经产出**的最新一行；
+        `oracle` 保留为上界探针，**不是候选方案**。
+        """
+        if args.labels == "oracle":
+            return label_by_url.get(url_by_id.get(c.item_id, ""))
+        if args.label_time == "final":
+            cat = final_cat.get(str(c.item_id))
+        else:
+            cat = None
+            for ev_at, k in enrich_hist.get(str(c.item_id), ()):
+                if ev_at <= clock["now"]:
+                    cat = k
+                else:
+                    break
+        if cat is None:
+            return None
+        b = OURS_TO_BUCKET.get(cat, cat)
+        return b if b in CATS else None
+
+
     def gate_score(c):
         return c.weighted_score
 
@@ -171,15 +357,31 @@ def main() -> None:
     # 精选 1–4 条的天同样是严格更早的参照数据，丢掉它们纯属浪费，暖机因此白多熬几窗。
     all_ref_days = sorted(reference_by_day)
     merged_ref: set = set()
+    # **累加器与使用值必须分开**：`hist_raw` 逐窗累积（恒在 AIHOT 空间），
+    # `hist` 是本窗口交给机制的那一份。写成同一个变量时，`corrected` 档会把校正结果
+    # 当成下一窗的累加基数，误差逐窗复利——写这一段时就踩了一次。
+    hist_raw: Counter = Counter()
     hist: Counter = Counter()
     live = {c: overrides.get(BUCKET_TO_OURS.get(c, c), 1.0) for c in CATS}
     print(f"\n{'上海日':12}{'并集':>7}{'页内有标签':>11}{'当日发布占比':>13}  逐类（AIHOT 标签）")
     for day in days:
+        # **机制动作计数**：review gate 报出「机制跑了但没用」与「机制一次也没触发」
+        # 在输出上同形——封顶对无标签条目直接放行，于是它的强度正比于机制覆盖率，
+        # 而此前没有任何一列报告那个覆盖率（逐日那列和 `union_lab` 用的都是 AIHOT 标签）。
+        mech: Counter = Counter()
         # 先把**所有**严格早于本窗口、且尚未并入的参照日补进历史（含精选 <5 的那些）。
         for rd in all_ref_days:
             if rd < day and rd not in merged_ref:
-                hist += reference_by_day[rd]
+                hist_raw += target_by_day.get(rd, Counter())
                 merged_ref.add(rd)
+        # `corrected` 档：累积恒在 AIHOT 空间，在**使用点**反解到我方空间。
+        # 放在天这一层是因为 `hist` 一天内不变。
+        hist = Counter(hist_raw)
+        if args.target_space == "corrected" and args.labels != "oracle":
+            q = solve_to_ours(hist_raw)
+            if q is not None:
+                nh = sum(hist_raw.values())
+                hist = Counter({c: q[c] * nh for c in CATS})
         y, m, d = (int(x) for x in day.split("-"))
         for k in range(args.per_day):
             # **`blocked_b` 每轮重置，不是每天。** 放在天这一层时，第 1 轮找不到该类候选就把
@@ -189,6 +391,7 @@ def main() -> None:
             hour = round(24 * (k + 1) / args.per_day)
             t = datetime(y, m, d, tzinfo=UTC) - SH + timedelta(hours=hour)
             iso = t.isoformat().replace("+00:00", "Z")
+            clock["now"] = iso  # `mech_label` 按它截断；不设就等于用最终标签（blocker 2）
             avail = [c for c in candidates if c.published_at and c.published_at <= iso]
             if not avail:
                 continue
@@ -201,7 +404,7 @@ def main() -> None:
                               reverse=True)[: args.page]
                 cur = Counter()
                 for c in seen:
-                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    b = mech_label(c)
                     if b:
                         cur[b] += 1
                 n_cur, n_hist = sum(cur.values()) or 1, sum(hist.values())
@@ -216,6 +419,7 @@ def main() -> None:
                     adjusted = live[b] * (tgt / act) ** args.gain
                     live[b] = min(args.clip, max(1 / args.clip, adjusted))
                     overrides[k] = live[b]
+                    mech["调参"] += 1
             if args.closed_loop and args.actuator.startswith("quota") and sum(hist.values()) >= 8:
                 # **封顶在选择之内**：给每类的当日候选按目标占比设上限，随后照常交 `replay_day`，
                 # 由 `_fill` 用别类与尾部把空出的格位填满 ⇒ 格位数不减、时效分段不被绕开。
@@ -234,9 +438,11 @@ def main() -> None:
                 seen_b: Counter = Counter()
                 capped = []
                 for c in sorted(pool, key=rank):
-                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    b = mech_label(c)
+                    mech["池内有标签" if b else "池内无标签"] += 1
                     if b:
                         if seen_b[b] >= capn.get(b, args.limit):
+                            mech["封顶丢弃"] += 1
                             continue
                         seen_b[b] += 1
                     capped.append(c)
@@ -252,7 +458,7 @@ def main() -> None:
                 for _ in range(args.limit):
                     have = Counter()
                     for c in picked:
-                        b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                        b = mech_label(c)
                         if b:
                             have[b] += 1
                     n_lab = sum(have.values()) or args.limit
@@ -273,7 +479,7 @@ def main() -> None:
                     b_in = min(short, key=lambda b: have[b] - want[b])
                     b_out = max(over, key=lambda b: have[b] - want[b])
                     outs = [c for c in picked
-                            if label_by_url.get(url_by_id.get(c.item_id, "")) == b_out]
+                            if mech_label(c) == b_out]
                     if not outs:
                         break
                     drop = max(outs, key=rank)
@@ -295,7 +501,7 @@ def main() -> None:
                     # 实测用 `avail` 时 model 反而由 −4.90 恶化到 −6.53pp、n_ours 由 169 掉到 155。
                     add = next((c for c in sorted(pool, key=rank)
                                 if c.item_id not in ids
-                                and label_by_url.get(url_by_id.get(c.item_id, "")) == b_in
+                                and mech_label(c) == b_in
                                 and ok(c)), None)
                     if add is None:
                         # 这一类今天补不到合规候选，标记后继续补别的类——**不是 break**，
@@ -311,12 +517,12 @@ def main() -> None:
                 n_hist = sum(hist.values())
                 cur = Counter()
                 for c in union.values():
-                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    b = mech_label(c)
                     if b:
                         cur[b] += 1
                 kept = []
                 for c in picked:
-                    b = label_by_url.get(url_by_id.get(c.item_id, ""))
+                    b = mech_label(c)
                     if b:
                         tot = sum(cur.values()) + 1
                         if (cur[b] + 1) / tot > hist[b] / n_hist + 1e-9:
@@ -352,15 +558,18 @@ def main() -> None:
             if b:
                 union_lab[b] += 1
         same = sum(1 for c in page if sel._shanghai_date(c.published_at) == day)
+        nb = mech["池内有标签"] + mech["池内无标签"]
+        cov = f"{100 * mech['池内有标签'] / nb:.0f}%" if nb else "—"
         print(f"{day:12}{len(union):>7}{sum(labelled.values()):>11}"
               f"{100 * same / max(len(page), 1):>12.1f}%  "
-              + " ".join(f"{c[:3]}:{labelled[c]}" for c in CATS if labelled[c]))
+              + " ".join(f"{c[:3]}:{labelled[c]}" for c in CATS if labelled[c])
+              + f"   │机制 覆盖{cov} 封顶丢{mech['封顶丢弃']} 调参{mech['调参']}")
         ours_pooled += labelled
         reference_pooled += reference_by_day[day]
         # **顺序不能反**：本窗口的 AIHOT 直到这里才并进历史，之上的每一次调参都只看得到
         # 严格更早的窗口。反过来就是拿当天的真值去调当天的系数。
         if day not in merged_ref:
-            hist += reference_by_day[day]
+            hist_raw += target_by_day.get(day, Counter())
             merged_ref.add(day)
 
     if union_lab:
