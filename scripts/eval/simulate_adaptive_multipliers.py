@@ -45,6 +45,11 @@ from airadar.curator import select as sel  # noqa: E402
 from airadar.curator.weights import DEFAULT_WEIGHTS  # noqa: E402
 
 CATS = C.CATEGORIES
+# 我方分类器词表 → AIHOT 桶名。只有兜底桶差一个词：`enrich/prompts_v2.py` 把它叫 `tutorial`
+# （「不属于上面四类的其余一切」，字段文档明写「tutorial 是兜底类不是教程」），AIHOT 叫 `tip`。
+# **不要顺手去改生产的 `PRIMARY_CATEGORY_SLUGS`**——那是用户可见 URL，本映射只在量具侧。
+# 口径本身是对齐的（台账 2026-09-10「分类口径本来就是对齐的」那节），差的只是显示名。
+OURS_TO_BUCKET = {"tutorial": "tip"}
 
 
 def shares(counter: Counter) -> dict[str, float]:
@@ -197,6 +202,12 @@ def main() -> None:
                 cat = (_json.loads(out) or {}).get("primary_category")
             except Exception:
                 continue
+            # **我方分类器的词表与 AIHOT 的桶名差一个词。** 兜底桶在 `enrich/prompts_v2.py` 里
+            # 叫 `tutorial`（字段文档明写「tutorial 是兜底类不是教程」），AIHOT 的同一个桶叫
+            # `tip`。不映射时 `cat in CATS` 直接把它整类丢掉 ⇒ 机制对**最大的那一类全盲**：
+            # `have[tip]` 恒为 0（每天判成欠配、找不到候选、进 blocked），而所有 tutorial 条目
+            # 既不进 `have` 也不会被丢或被补。实测双标注语料里它占 12.0%–30.3%。
+            cat = OURS_TO_BUCKET.get(cat, cat) if isinstance(cat, str) else None
             if cat in CATS:
                 mech_labels[str(item_id)] = cat  # ORDER BY id ⇒ 后写的（更新的戳）胜出
         print(f"机制标签: ours ⇒ {len(mech_labels)} 条带类别"
