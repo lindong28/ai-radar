@@ -109,6 +109,26 @@ def main() -> None:
         if r.get("category") and r.get("url")
     }
     base: dict[str, str] = {}
+    base_full: dict[str, dict] = {}
+    # AIHOT 自己的标签，用于 `tag_jaccard`——**它才是上次回退的那个读数**，
+    # 只比"改动前后我方标签的漂移"量不出对错。题集的 `reference.tags` 是 AIHOT 发布的。
+    aihot_tags: dict[str, list] = {}
+    qpath = REPO / "benchmarks" / "aihot" / "evalsets" / "aihot-fit-v1" / "questions.jsonl"
+    if qpath.exists():
+        with qpath.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    q = json.loads(line)
+                except Exception:
+                    continue
+                tags = (q.get("reference") or {}).get("tags")
+                url = (q.get("input") or {}).get("url")
+                # **按 URL 关联，不按 item_id**：题集用的是它自己那套 id，与本库的
+                # `items.id` 零交集（实测 635 条题集 tags 对本轮留出交集 = 0）。
+                # 按 id 关联会让这条读数静静地算不出来，而脚本照常跑完——本轮已栽过一次。
+                if url and isinstance(tags, list):
+                    aihot_tags[_comp.normalize_url(str(url))[0]] = tags
+        print(f"AIHOT 标签可比的条目：{len(aihot_tags)} 条（题集 reference.tags，按 URL 关联）")
     for iid, out in conn.execute(
         "SELECT item_id, output_json FROM item_evaluations "
         "WHERE stage='enrich' AND error IS NULL AND ruleset_version=? ORDER BY id",
@@ -120,6 +140,13 @@ def main() -> None:
             continue
         if isinstance(cat, str) and cat:
             base[str(iid)] = OURS_TO_BUCKET.get(cat, cat)
+            try:
+                d = json.loads(out) or {}
+            except Exception:
+                d = {}
+            base_full[str(iid)] = {k: d.get(k) for k in (
+                "title_zh", "summary_zh", "why_recommend", "tags",
+                "primary_category", "is_opinion")}
 
     excluded = set()
     if args.exclude_ids:
@@ -130,6 +157,9 @@ def main() -> None:
         "FROM items WHERE url IS NOT NULL"
     ).fetchall()
     pool = []
+    url_by_id: dict[str, str] = {}
+    for row in rows:
+        url_by_id[str(row[0])] = _comp.normalize_url(str(row[2]))[0]
     for row in rows:
         iid = str(row[0])
         truth = ah.get(_comp.normalize_url(str(row[2]))[0])
@@ -160,9 +190,15 @@ def main() -> None:
     def one(pair):
         row, truth = pair
         item = runner_v2._to_provider_item(row)
-        enriched, _out, err, _ms = runner_v2._evaluate_item(provider, item)
+        enriched, out, err, _ms = runner_v2._evaluate_item(provider, item)
         got = getattr(enriched, "primary_category", None) if enriched else None
-        return str(row[0]), truth, (OURS_TO_BUCKET.get(got, got) if got else None), err
+        # **留全部六个字段，不只是类别。** 一次 enrich 调用同时产 title_zh / summary_zh /
+        # why_recommend / tags / primary_category / is_opinion，而 `why_recommend` 的写法
+        # **按类别分支**（prompts_v2.py:29）⇒ 动分类边界必然波及它。本仓上一次回退窄规则，
+        # 正是因为 `tag_jaccard −7.7pp` 而不是类别读数。只留类别的台子看不见那一类回归。
+        full = {k: out.get(k) for k in
+                ("title_zh", "summary_zh", "why_recommend", "tags", "primary_category", "is_opinion")}
+        return str(row[0]), truth, (OURS_TO_BUCKET.get(got, got) if got else None), err, full
 
     results = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool_ex:
@@ -177,28 +213,61 @@ def main() -> None:
     if not ok:
         # 全军覆没时把错误原文打出来再退出。先前这里直接除零，于是**真正的失败原因
         # 被一个 ZeroDivisionError 盖住**——那是这类脚本最坏的收尾。
-        for _iid, _t, _n, err in results[:3]:
+        for _iid, _t, _n, err, _f in results[:3]:
             print(f"  调用失败样例: {err}")
         raise SystemExit(f"{len(results)} 条全部失败，没有可判读数")
-    b_hit = sum(1 for iid, truth, _new, _e in ok if base[iid] == truth)
-    n_hit = sum(1 for _iid, truth, new, _e in ok if new == truth)
+    b_hit = sum(1 for iid, truth, *_ in ok if base[iid] == truth)
+    n_hit = sum(1 for _iid, truth, new, *_ in ok if new == truth)
     print(f"\n留出 n={len(ok)}（{errs} 条调用失败，未计入）")
     print(f"  基线 per-input 一致率 {100 * b_hit / len(ok):.1f}%  ({b_hit}/{len(ok)})")
     print(f"  本改动 per-input 一致率 {100 * n_hit / len(ok):.1f}%  ({n_hit}/{len(ok)})")
     # 配对：只有改变了判定的那些条目携带信息，符号检验就看这两个数。
-    b2n = sum(1 for iid, t, new, _e in ok if base[iid] == t and new != t)
-    n2b = sum(1 for iid, t, new, _e in ok if base[iid] != t and new == t)
+    b2n = sum(1 for iid, t, new, *_ in ok if base[iid] == t and new != t)
+    n2b = sum(1 for iid, t, new, *_ in ok if base[iid] != t and new == t)
     print(f"  配对：改对 {n2b} 条 / 改错 {b2n} 条（其余不变）")
 
     print(f"\n{'类别':10}{'基线净偏':>10}{'本改动净偏':>12}   （我方占比 − AIHOT 占比，同一批条目）")
-    tb = Counter(truth for _i, truth, _n, _e in ok)
-    ob = Counter(base[iid] for iid, _t, _n, _e in ok)
-    on = Counter(new for _i, _t, new, _e in ok)
+    tb = Counter(truth for _i, truth, *_ in ok)
+    ob = Counter(base[iid] for iid, *_ in ok)
+    on = Counter(new for _i, _t, new, *_ in ok)
     n = len(ok)
     for c in CATS:
         print(f"{c:10}{100 * (ob[c] - tb[c]) / n:>9.2f}pp{100 * (on[c] - tb[c]) / n:>11.2f}pp")
-    cell_b = sum(1 for iid, t, _n, _e in ok if t == "tip" and base[iid] == "industry")
-    cell_n = sum(1 for _i, t, new, _e in ok if t == "tip" and new == "industry")
+    cell_b = sum(1 for iid, t, *_ in ok if t == "tip" and base[iid] == "industry")
+    cell_n = sum(1 for _i, t, new, *_ in ok if t == "tip" and new == "industry")
+    # --- 副作用：一次调用产六个字段，动分类必然波及其余五个 ------------------------
+    # 本仓上一次回退窄规则，**决定性读数是 `tag_jaccard −7.7pp`**，不是类别读数。
+    # 只量类别的台子对那一类回归结构上是盲的，所以这里逐字段比一遍。
+    def jac(a, b):
+        sa, sb = set(a or []), set(b or [])
+        return len(sa & sb) / len(sa | sb) if (sa | sb) else None
+
+    pairs = [(url_by_id.get(iid, ""), full) for iid, _t, _n, _e, full in ok
+             if url_by_id.get(iid, "") in aihot_tags and full]
+    if not pairs:
+        # **空集要出声。** 先前这里是 `if pairs:`，无交集时整节不打印，而
+        # 「这个读数没算」与「这个读数没问题」在输出上完全一样。
+        print("\n>>> 副作用：**tag_jaccard 未核实**——本轮留出与题集 tags 无交集，别读成没有回归")
+    if pairs:
+        jb = [jac(base_full.get(i, {}).get("tags"), aihot_tags[i]) for i, _f in pairs]
+        jn = [jac(f.get("tags"), aihot_tags[i]) for i, f in pairs]
+        jb = [x for x in jb if x is not None]
+        jn = [x for x in jn if x is not None]
+        print(f"\n>>> 副作用（全字段），可比 {len(pairs)} 条")
+        if jb and jn:
+            print(f"  tag_jaccard（对 AIHOT）  基线 {sum(jb) / len(jb):.3f}"
+                  f"   本改动 {sum(jn) / len(jn):.3f}"
+                  f"   Δ {100 * (sum(jn) / len(jn) - sum(jb) / len(jb)):+.1f}pp"
+                  f"   ← **上次回退就是栽在这个读数上**")
+    same_op = [(base_full.get(i, {}).get("is_opinion"), f.get("is_opinion"))
+               for i, _t, _n, _e, f in ok if f]
+    agree_op = sum(1 for a, b in same_op if a == b)
+    print(f"  is_opinion 与基线一致 {agree_op}/{len(same_op)}")
+    for field, lo, hi in (("why_recommend", 35, 90), ("summary_zh", 0, 10**9)):
+        bad = sum(1 for _i, _t, _n, _e, f in ok
+                  if f and not (lo <= len(f.get(field) or "") <= hi))
+        print(f"  {field} 越界 {bad}/{len(ok)}（schema 边界 {lo}-{hi}）")
+
     print(f"\n目标格 AIHOT-tip → 我方 industry：基线 {cell_b} 条 = {100 * cell_b / n:.2f}pp"
           f"   本改动 {cell_n} 条 = {100 * cell_n / n:.2f}pp")
     print("**一致率是硬否决项**：目标格降了而一致率掉了即判不成立——"
@@ -206,10 +275,11 @@ def main() -> None:
 
     if args.out:
         with Path(args.out).open("w", encoding="utf-8") as fh:
-            for iid, truth, new, err in results:
+            for iid, truth, new, err, full in results:
                 fh.write(json.dumps(
                     {"item_id": iid, "aihot": truth, "baseline": base.get(iid),
-                     "revised": new, "error": err}, ensure_ascii=False) + "\n")
+                     "revised": new, "error": err, "full": full,
+                     "baseline_full": base_full.get(iid)}, ensure_ascii=False) + "\n")
         print(f"逐条结果写入 {args.out}")
 
 
