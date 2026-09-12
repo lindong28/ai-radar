@@ -83,6 +83,29 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
   **正确载体是 user-scope 的 `~/.claude/skills/decision-review/SKILL.md`**（该缺口对所有项目成立，不只本仓）；
   本仓先在 `CLAUDE.md` 的 AIHOT 节落一条项目级上限止血，user-scope 那条另行提。
 
+## [open] H16 — 共用工作树时，`create-commit` 的 default staging 会静默吞掉另一个 session 的改动；写入者登记挡不住它
+
+- Type: agent-behavior / concurrency
+- Discovered: 2026-09-12，`d626d068` 与它的 `/branch` fork `732f30bd` 共用 `/Users/lindong/research/ai-radar`。
+- Symptom: fork 在 `docs/issues/aihot-fit-eval.md` 上做了一处订正（撤回一个算错的零假设）。
+  约 40 分钟后 fork 准备提交时发现该文件 **`git diff` 为空**——内容已被 parent 的 commit `9313d38`
+  （message 讲的是另一件事：source-cap 的证据收窄）**连带提交**。内容完整无损，但**归属错了**：
+  一次订正落在一条与它无关的 commit message 下面，`git log --grep` 找不到它。
+- Root cause: **两个机制各自正确，合起来漏**。① `create-commit` 第 2 步的 default staging 是
+  「已 tracked 文件的**所有**修改」——它按文件挑，不按"谁改的"挑；② `agent-writers` 登记本可拦下它
+  （协议第 5 步要求判重叠、判到就停下交用户），但**登记是在 commit 那一刻读一次的**，
+  而 fork 的登记是在 parent 那次读之后才写的 ⇒ **后注册的写入者对已经读过登记的 session 不可见**。
+  两条加起来：**先读登记的那一方会静默吞掉后注册那一方的 WIP，而双方都没有任何报错**。
+- Impact: 本次只错了归属（内容完整）。**但同一机制的另一半更贵**：若 parent 当时对该文件做的是
+  **全文件改写**（read-modify-write）而不是追加，fork 的改动会被**直接覆盖**，
+  且 `git diff` 同样为空——**"被吞了"与"我根本没改成"在读数上完全同形**。
+- Workaround used: fork 发现后核实 HEAD 里内容完整（三行关键读数逐行在），随后**立刻**把自己
+  其余三个文件单独提交（`8114ced`），不再让它们悬在共享工作树里。
+- Follow-up（**正确载体是 user-scope，不是本仓**）：登记的读取时点是 `create-commit` 第 1 步与
+  `concurrent-plan-isolation.md` 第 5 步定的，两者都在 `~/.claude/`。可能的修法（未验证，仅记方向）：
+  在 `git add` **之前**而不是流程开头再读一次登记；或把判据从"读登记"换成"`git diff` 里有没有
+  我自己没写过的 hunk"——后者不依赖对方守不守协议。**本仓不改，只记这条读数。**
+
 ## [open] H12 — review-gate 高档 Codex transport 以 sandbox-bypass 运行，plan 文档 reviewer 越界 mutate 共享系统状态（kill 进程）
 
 - Type: agent-behavior / review-gate transport 权限面 × 并发隔离
