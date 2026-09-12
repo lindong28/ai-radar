@@ -221,7 +221,9 @@ def _miss_is_permanent(note: str) -> bool:
 def _cap_per_source(rows: list, share: float) -> list:
     """把单源占比压到 `share` 以下，按 `published_at` 降序保留每源最新的那些。
 
-    **这是取样上限，不是生产机制**——它只让这批样本有能力看见要测的那个缺口。
+    **这是类别均衡探针用的上限，不是生产机制**，而且它让样本**不再代表生产会做什么**
+    ——短正文人群天然以 `paper` 为主（该类 86.0% 的条目正文 <300 字），那是真实结构、不是偏差。
+    所以默认关闭；只在刻意要一个类别均衡的探针时才开。
     做法是解一次自洽的上限：砍掉超配源之后总数变小，上限也跟着变小，故迭代到稳定。
     """
     from collections import Counter
@@ -296,14 +298,15 @@ def main() -> None:
     ap.add_argument("--max-body", type=int, default=300, help="正文短于多少字才回抓（默认 300）")
     ap.add_argument("--min-gain", type=float, default=2.0, help="新正文至少是原来的几倍才替换（默认 2）")
     ap.add_argument("--min-ai-rate", type=float, default=0.30, help="信源历史 prefilter AI 率下限（默认 0.30）")
-    ap.add_argument("--max-per-source", type=float, default=0.25,
-                    help="单个信源在本批样本里的占比上限（默认 0.25）。"
-                         "**这是取样上限、不是生产机制**：不设它时 `hf_daily_papers` 占 43.6%–47.9%"
-                         "（跨 3/7/14 天几乎不动，放宽窗口无效——它是每日论文源，"
-                         "短摘要正是触发回抓的形态）。而它是 `paper` 类源，"
-                         "而权威归档面上 `paper` 已出界 +4.38pp、最大缺口是 `model −9.30pp` "
-                         "⇒ 不设上限时这批样本**结构上只能把 paper 推更远**，"
-                         "测不到它被建出来要测的那个缺口。设 0 关闭。")
+    ap.add_argument("--max-per-source", type=float, default=0.0,
+                    help="单个信源在本批样本里的占比上限。**默认 0（关闭），这是有意的**："
+                         "短正文人群天然以 `paper` 为主——实测该类 86.0%% 的条目正文不足 300 字"
+                         "（次位 model 45.4%%、product 只有 29.3%%），因为 `hf_daily_papers` 一类"
+                         "每日论文源给的就是摘要。**那不是取样偏差，那就是生产回抓会作用的真实人群**，"
+                         "所以估生产效应必须用它。设 >0 只适合做**类别均衡的探针**"
+                         "（本脚本一度把 0.25 当默认，那是错的：它让样本不再代表生产会做什么）。"
+                         "顺带一条不需要跑就成立的推论：该人群 37.6%% 是 paper，而权威归档面上 "
+                         "`paper` 已出界 +4.38pp ⇒ **回抓作为生产机制自带把构成推更差的偏置**。")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("--limit", type=int, help="只跑前 N 条（冒烟用）")
