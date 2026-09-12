@@ -200,6 +200,45 @@ def _apply_score_overlay(
     return out
 
 
+def _require_pause_from_format(value: str | None) -> None:
+    """`--pause-from` 的格式校验，提出来是为了能被测试持住（2026-09-12 review-gate 的 B1）。
+
+    比较是**字符串比较**，所以格式错的失败形态有两个方向、**都静默**：
+    `09-05` 使 `"2026-08-31" < "09-05"` 恒假 ⇒ 整源被丢、本旗标退化成 `--exclude-source`
+    （实测两者输出逐字节相同）；非 `2026-` 开头的串使条件恒真 ⇒ 一条不丢、变成 no-op。
+    """
+    import re as _re
+
+    if value is not None and not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise SystemExit(
+            f"--pause-from 要 YYYY-MM-DD（字符串比较），给的是 {value!r}；"
+            "格式不对会静默地把本旗标变成 --exclude-source 或变成 no-op。"
+        )
+
+
+def _require_multipliers_reachable(
+    overrides: dict[str, float], emitted_buckets: set[str], bucket_to_ours: dict[str, str]
+) -> None:
+    """系数要打得中 `mech_label` **实际发得出**的类（2026-09-12 review-gate 的 A1）。
+
+    上游那道守卫校验的是 `c.primary_category`（快照最终标签），而 `factor` 改走 `mech_label`
+    之后读的是 enrich 历史、bucket 空间、且被 `b in CATS` 过滤 ⇒ 两个集合不再是同一个。
+    实测失守：`--enrich-stamp zzz-nope --multiplier model=3.0` 退出码 0、输出与不带系数时
+    逐字节相同（`机制标签时间轴：0 条目有 enrich 历史`），系数是完整 no-op 而旧守卫放行。
+
+    `1.0` 的系数不算——它本来就不改变任何东西，打不中也无所谓。
+    """
+    reachable = {bucket_to_ours.get(b, b) for b in emitted_buckets}
+    dead = sorted(k for k, v in overrides.items() if v != 1.0 and k not in reachable)
+    if dead:
+        raise SystemExit(
+            f"这些系数打不中任何条目——`mech_label` 在本次配置下发不出它们：{dead}；"
+            f"实际发得出的是 {sorted(reachable)}。"
+            f"（常见成因：`--enrich-stamp` 把该类的 enrich 行全过滤掉了，"
+            f"或该类在本窗口内根本没有 enrich 产出。）"
+        )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=str(REPO / "data" / "radar.db"))
@@ -319,6 +358,28 @@ def main() -> None:
                          "但至 09-05 的并集需要 131 条 model 而池里只有 122 条——差 9 条。"
                          "降阈值同时会多放进 tip/product，**要靠 `--actuator quota` 的封顶压住**，"
                          "两者是成对的，单独降阈值对 model 反而不利。")
+    ap.add_argument("--pause-source", action="append", default=[], metavar="SOURCE_ID",
+                    help="按 ADR-f427 的 `paused=true` 语义停源：**只去掉停用日及之后发布的条目**，"
+                         "存量照旧留在候选池。与 `--exclude-source`（整源移出池子）**不是同一个机制**——"
+                         "`_load_candidates` 不看 `paused`，而尾部段没有时间上限。可重复。"
+                         "⚠️ **已知偏差**（2026-09-12 review-gate 的 A4，未修）：本项按 "
+                         "`published_at` 切，而 ADR-f427 的 `paused` 停的是**抓取** ⇒ 应按 "
+                         "`fetched_at` 切。实测 `hf_daily_papers` 上两者相差 23 条（占保留存量 "
+                         "9.1%%），**偏差单向、一律偏向「暂停留下的存量更多」**；池级 46.2%% 的"
+                         "已打分候选 published-day != fetched-day，该源高达 79.8%%。")
+    ap.add_argument("--pause-from", default=None, metavar="YYYY-MM-DD",
+                    help="`--pause-source` 的停用日（上海日）。默认取窗口第一天，即"
+                         "「整个评测窗都处于停用状态」这一最强假设。")
+    ap.add_argument("--freshness-floor", type=float, default=None,
+                    help="覆盖 `select.DEFAULT_FRESHNESS_FLOOR`（生产 4.0）。**这是归档面上真正的准入闸**："
+                         "`_fill` 的 fresh 段占 40 格里的 36 格、只按它收，`--threshold`(6.5) 只管尾部那 4 格"
+                         "（`select.py:151-158`）。实测我方在配对池上的精选率 20.0%%、AIHOT 6.4%%，"
+                         "差 3.1 倍 ⇒ 每日并集 90-200 条、归档页构成因此≈池子构成。"
+                         "**它不是缩小并集最有力的旋钮**（2026-09-12 订正，原文写的"
+                         "「唯一」是错的）：实测 `--freshness-floor 6.0` 把并集压到 338，"
+                         "而 `--src-cap 0.03` 压到 151。两者作用面不同——本项按分数收，"
+                         "`--src-cap` 按单源占比收。代价：并集变小后归档第 1 页会往更早的日子伸，"
+                         "「页面 40 格中当日发布」的比例会掉（用户可见的时效性下降）。")
     ap.add_argument("--since", default=None,
                     help="只从该日（含）起算。⚠️ **它的读数与全窗不可直接比**："
                          "`--until` 是砍尾（保留累积），本项是砍头，会造出一个从未存在过的并集；"
@@ -383,6 +444,11 @@ def main() -> None:
         ratio = args.threshold / sel.DEFAULT_THRESHOLD
         sel.DEFAULT_FRESHNESS_FLOOR = sel.DEFAULT_FRESHNESS_FLOOR * ratio
         sel.DEFAULT_THRESHOLD = args.threshold
+    if args.freshness_floor is not None:
+        # 放在 `--threshold` 之后：两者都给时本项胜出（它是更具体的那一个）。
+        print(f"freshness_floor：{sel.DEFAULT_FRESHNESS_FLOOR} → {args.freshness_floor}"
+              f"（threshold 保持 {sel.DEFAULT_THRESHOLD}）")
+        sel.DEFAULT_FRESHNESS_FLOOR = args.freshness_floor
     weights = DEFAULT_WEIGHTS
     if args.weights:
         from airadar.curator.weights import Weights
@@ -415,10 +481,57 @@ def main() -> None:
             n = per_source.get(sid, 0)
             flag = "" if n else "   ⚠️ 池中 0 条——id 打错了，或它已被 _load_candidates 排除"
             print(f"    {sid:<28} 池中 {n:>6} 条{flag}")
+    # `paused` / `cut` 在 `if` 之外定义：覆盖层那一段（B2 的再过滤）也要用它们，
+    # 放在块内会让静态检查判 possibly-unbound，而运行期虽然安全、读的人分辨不出。
+    paused = frozenset(args.pause_source)
+    cut = args.pause_from or (days[0] if days else "")
+    if args.pause_source:
+        # **忠实建模 `paused=true`，它与 `--exclude-source` 不是一回事**（2026-09-11 决策评审判据 2）。
+        # `_load_candidates` 只过滤 `s.enabled=1`、**不看 `paused`**（`select.py:434`），
+        # 而 `filtered` 尾部段**没有时间上限**（`select.py:636`）⇒ 停抓取之后，
+        # 该源的**存量**条目照样留在候选池、照样能靠 `threshold` 进每一轮的尾部 4 格。
+        # 所以"停源"只去掉**停用日及之后发布的**条目。把两者记成同一个 arm 是我自己犯的错，
+        # 而它们**可能给出不同读数**——本开关就是用来分辨的。
+        # **格式校验不可省**（2026-09-12 review-gate 的 B1）：比较是字符串比较，
+        # 格式错时**两个方向都静默**——`09-05` 使 `"2026-08-31" < "09-05"` 恒假 ⇒
+        # 整源被丢、本旗标退化成 `--exclude-source`（实测输出逐字节相同）；
+        # 非 `2026-` 开头的串使条件恒真 ⇒ 一条不丢、变成 no-op。`--since` 已有同款校验。
+        _require_pause_from_format(args.pause_from)
+        before = len(raw_candidates)
+        # **逐源命中数**（A5）：没有它，「id 打错」「截断日在窗口之后」「存量恰好全在截断日之前」
+        # 三种情况都打印 `候选 N → N`，彼此不可分辨——与 `--exclude-source` 被修过的是同一个形态。
+        per_src = Counter(c.source_id for c in raw_candidates)
+        dropped = Counter(
+            c.source_id for c in raw_candidates
+            if c.source_id in paused and sel._shanghai_date(c.published_at) >= cut
+        )
+        raw_candidates = [
+            c for c in raw_candidates
+            if c.source_id not in paused or sel._shanghai_date(c.published_at) < cut
+        ]
+        print(f"暂停信源（只去掉 {cut} 及之后发布的）：候选 {before} → {len(raw_candidates)}")
+        for sid in sorted(paused):
+            n, d = per_src.get(sid, 0), dropped.get(sid, 0)
+            flag = ("   ⚠️ 池中 0 条——id 打错了，或它已被 _load_candidates 排除" if not n
+                    else "   ⚠️ 一条都没丢——截断日可能晚于该源全部条目" if not d else "")
+            print(f"    {sid:<28} 池中 {n:>6} 条，丢弃 {d:>6} 条（保留存量 {n - d}）{flag}")
     if args.score_overlay:
         raw_candidates = _apply_score_overlay(
             conn, raw_candidates, weights, args.score_overlay, exclude_sources=excluded
         )
+        if args.pause_source:
+            # **覆盖层会把被暂停源的新条目放回来**（2026-09-12 review-gate 的 B2）：
+            # `_apply_score_overlay` 的 `added` 分支只认 `exclude_sources`，不认本旗标的
+            # 日期边界。实测：某覆盖层下 `--pause-source` 移除 302 条后，叠加覆盖层又回来
+            # 110 条（36%），全是截断日之后发布的；同一覆盖层配 `--exclude-source` 则是 0 条。
+            # 读数偏向「停源代价很小」且**无任何报错**。故在覆盖层之后再过一遍同一条判据。
+            back = len(raw_candidates)
+            raw_candidates = [
+                c for c in raw_candidates
+                if c.source_id not in paused or sel._shanghai_date(c.published_at) < cut
+            ]
+            if back != len(raw_candidates):
+                print(f"    覆盖层放回了被暂停源的 {back - len(raw_candidates)} 条，已再次移除")
     candidates = sel.deduplicate_candidates(raw_candidates)
     url_by_id = {}
     for i, u in conn.execute("SELECT id, url FROM items WHERE url IS NOT NULL"):
@@ -469,7 +582,28 @@ def main() -> None:
               f"（AIHOT 分数 n={len(a_scores)}，我方池 n={len(o_scores)}）")
 
     def factor(c):
-        return overrides.get(c.primary_category, 1.0)
+        """排序乘数读的类别，**必须走 `mech_label`**（2026-09-11 修）。
+
+        原来这里读 `c.primary_category`，那是 `_load_candidates` 的子查询
+        `ORDER BY en.id DESC LIMIT 1`（无时间约束）取到的**快照时刻最终标签**——
+        正是本文件 `mech_label` docstring 与它上方注释点名的那条 blocker：
+        **把数小时后才产生的标签提前交给机制**。修 blocker 时建的 `--label-time replay`
+        只接进了 `enrich_hist` 那条路（闭环 / 封顶 / 目标空间），
+        **固定系数这条排序路没接上**，于是 `--multiplier` 与 `--aihot-rate-multipliers`
+        两条一直在开天眼跑。
+
+        连带修好**零控制**：`--permute-labels` 置换的是 `enrich_hist`，
+        接上之后它才够得着乘数路径。修之前三个不同 seed 给出逐位相同的输出
+        （实测），即那条对照对本机制结构上无效——而"对照跑了且通过"与
+        "对照根本没作用到"在输出上同形。
+
+        `mech_label` 返回 bucket 空间，`overrides` 是我方类别名，故要反映射一次。
+        标签在回放时点尚不存在 ⇒ 系数取 1.0，这正是生产的真实形态。
+        """
+        b = mech_label(c)
+        if b is None:
+            return 1.0
+        return overrides.get(BUCKET_TO_OURS.get(b, b), 1.0)
 
     def rank(c):
         # 与 `select.ranking_key` 同形：系数**只进排序键**，不进绝对闸（ADR-3f8b）。
@@ -518,6 +652,19 @@ def main() -> None:
         enrich_hist = dict(zip(keys, vals, strict=True))
         print(f"⚠️ 零控制：机制标签已按 seed={args.permute_labels} 置换（边际不变）")
     final_cat = {i: rows[-1][1] for i, rows in enrich_hist.items() if rows}
+
+    # **第二道守卫：系数要打得中 `mech_label` 实际发得出的类**（2026-09-12，review-gate 的 A1）。
+    # 上面那道守卫校验的是 `c.primary_category`（快照最终标签），而 `factor` 改走 `mech_label`
+    # 之后读的是 enrich 历史、bucket 空间、且被 `b in CATS` 过滤 ⇒ 两个集合不再是同一个。
+    # 实测失守：`--enrich-stamp zzz-nope --multiplier model=3.0` 退出码 0、输出与不带系数时
+    # 逐字节相同（`机制标签时间轴：0 条目有 enrich 历史`），系数是完整 no-op 而旧守卫放行。
+    _emitted = (
+        {b for b in label_by_url.values() if b in CATS} if args.labels == "oracle"
+        else {b for b in (OURS_TO_BUCKET.get(cat, cat)
+                          for rows in enrich_hist.values() for _ev, cat in rows)
+              if b in CATS}
+    )
+    _require_multipliers_reachable(overrides, _emitted, BUCKET_TO_OURS)
     target_by_day: dict[str, Counter] = {}
     _t_hit = _t_miss = 0
     for rday, urls in ref_urls_by_day.items():
@@ -666,6 +813,12 @@ def main() -> None:
     union: dict = {}
     union_lab: Counter = Counter()
     src_in_union: Counter = Counter()
+    aihot_score_by_url: dict[str, float] = {
+        _comp.normalize_url(r["url"])[0]: float(r["score"])
+        for r in aihot.values()
+        if r.get("url") and r.get("score") is not None
+    }
+    page_aihot_scores: list[float] = []
     ours_pooled: Counter = Counter()
     reference_pooled: Counter = Counter()
     # 闭环状态：`hist` 只累计**严格早于当前时点**的窗口（不读当日的 AIHOT——生产里选稿那一刻
@@ -755,9 +908,21 @@ def main() -> None:
             t = datetime(y, m, d, tzinfo=UTC) - SH + timedelta(hours=hour)
             iso = t.isoformat().replace("+00:00", "Z")
             clock["now"] = iso  # `mech_label` 按它截断；不设就等于用最终标签（blocker 2）
+            # **尾部段必须过绝对阈值闸**（2026-09-12 修，review-gate 的 T4 报出）。
+            # 生产 `select.py:636` 的 `filtered` 是 `weighted_score >= threshold`，
+            # 姊妹量具 `measure_curated_composition.py:632` 也过同一道；**本模拟器此前不过**
+            # ⇒ 类别乘数在这里能当**准入闸**用，正是 ADR-3f8b 否决、也是 `rank` 那条注释
+            # 断言"不会发生"的形态。实测代价：`--multiplier model=2.169`（本轮要上线的取值）
+            # 有 **11 条 <6.5 的条目**从尾部段漏进来，而基线与 model=1.15 都是 0
+            # ——它们正落在把判定从 3/5 推到 4/5 的那个 arm 里。
+            # 闸读 `gate_score`（未乘系数的分），与生产一致：系数只进排序键，不进绝对闸。
+            # ⚠️ **闸只能加在尾部段上，不能加在 `pool` 上**：生产的 fresh 段闸在
+            # `freshness_floor=4.0`（`select.py:637`），尾部段才闸在 `threshold=6.5`。
+            # 把 `avail` 整个闸在 6.5 会连带把 fresh 段也抬上去，那是另一个机制。
             avail = [c for c in candidates if c.published_at and c.published_at <= iso]
             if not avail:
                 continue
+            tail_eligible = [c for c in avail if gate_score(c) >= sel.DEFAULT_THRESHOLD]
             tday = sel._shanghai_date(iso)
             pool = [c for c in avail if sel._shanghai_date(c.published_at) == tday]
             # **覆盖率要在这里数，不能数在 quota 块里**：基线不跑 quota，数在那里会让
@@ -813,7 +978,7 @@ def main() -> None:
                         seen_b[b] += 1
                     capped.append(c)
                 pool = capped
-            picked = _comp.replay_day(pool, avail, args.limit, rank, gate_score,
+            picked = _comp.replay_day(pool, tail_eligible, args.limit, rank, gate_score,
                                       no_quota=args.no_quota,
                                       source_quota=quota_override)
             if args.closed_loop and args.actuator == "quota+floor" and sum(hist.values()) >= 8:
@@ -941,6 +1106,20 @@ def main() -> None:
         if covered:
             ours_pooled += labelled
             reference_pooled += reference_by_day[day]
+            # 页面条目在 **AIHOT 自己分数**上的位置。
+            # ⚠️ **本读数不是循环性质疑的反证面——那个立论已被证伪**（2026-09-12 review-gate 的 A2）。
+            # 我原来的理由是「AIHOT 的 `score_0_100` 与类别正交，拧类别系数换不来它」。
+            # 实测（`load_aihot()`，n=2663 同时有 score 与 category）：逐类均分
+            # model 58.21 / industry 55.47 / paper 51.33 / product 47.75 / tip 44.96，
+            # 极差 13.3 分，**η² = 0.0797、F(4,2658) = 57.6** ⇒ 分数与类别**强相关**。
+            # 而且它确实随系数动（`--multiplier model=3.0` 使中位 62.0→61.0）。
+            # ⇒ 它只是一条**描述性**读数（"页面条目在参照物眼里大概值多少分"），
+            # **不得当作独立佐证**；下一个操作者把它拧上去不说明任何事。
+            # 只统计 AIHOT 打过分的条目；`n` 是**页面格位×天**，不是去重条目数（T2）。
+            for c in page:
+                s = aihot_score_by_url.get(url_by_id.get(c.item_id, ""))
+                if s is not None:
+                    page_aihot_scores.append(s)
         else:
             skipped_days.append(day)
         # **顺序不能反**：本窗口的 AIHOT 直到这里才并进历史，之上的每一次调参都只看得到
@@ -1027,6 +1206,20 @@ def main() -> None:
         print(f"\n⚠️ --score-only-covered：{len(skipped_days)} 个窗口机制覆盖率为 0、不计入评分"
               f"（{', '.join(skipped_days)}）；**并集仍从第一天累积**，只是这些天的页面不进 pooled。")
 
+    if page_aihot_scores:
+        import statistics as _st
+        v = sorted(page_aihot_scores)
+        print(f"\n>>> 描述性读数：页面条目在 AIHOT 自己分数上的位置"
+              f"（n={len(v)} 个**页面格位×天**，不是去重条目数；只含它打过分的条目）")
+        print(f"    中位 {_st.median(v):.1f} · 均值 {_st.mean(v):.1f} · "
+              f"p25 {v[len(v) // 4]:.1f} · p75 {v[len(v) * 3 // 4]:.1f} · "
+              f"≥60 占比 {sum(1 for x in v if x >= 60) / len(v) * 100:.1f}%")
+        print("    ⚠️ **不要把它当循环性质疑的反证面**：AIHOT 的分数与类别**强相关**"
+              "（逐类均分 model 58.2 … tip 45.0，η²=0.0797、F(4,2658)=57.6），"
+              "拧类别系数**换得来**它。它只描述『页面条目在参照物眼里大概值多少分』。")
+    else:
+        print("\n>>> 描述性读数：页面条目在 AIHOT 自己分数上的位置 —— **无覆盖**"
+              "（页面上没有一条是 AIHOT 打过分的），本次不产出该读数。")
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
     print(f"\n>>> 归档面达标线（合并，TV {tv:.3f}）")
