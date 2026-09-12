@@ -5221,3 +5221,168 @@ AIHOT **逐窗口**（非累积）相对精选率：
 
 **保留的资产**：`--weights` 留在量具里——以后任何权重改动都能先在这两个权威指标上过一遍，
 不必再靠 Spearman / AUC 这类代理数。
+
+---
+
+## 上游两格（①②）的归因订正：不是选题范围，是正文抽取（2026-09-11）
+
+**用户 2026-09-11 解除了作用域限制**（「我允许你修改 AI RADAR 全链路上的每个阶段的处理逻辑，
+包括但不限于数据预处理逻辑、选题范围」），此前记作「不在 curator 作用域内」的 ①② 两格因此进入射程。
+**逐条读完 28 条之后，台账里记的归因是错的。**
+
+### 订正前后
+
+台账原文：「②16 条……12 条是 `is_ai_related=False` 且 confidence 0.95——AIHOT 收非 AI 的科技/数学/
+苹果新闻，**要闭合它等于放宽 prefilter 收非 AI 科技新闻，那是产品决策**」。
+
+**那个判断是抽样得出的**（看了 confidence 分布 + 两三个标题），没有逐条读正文。逐条读完：
+
+| URL | 我方 `content_text` 全文 | 长度 |
+|---|---|---|
+| `cognition.com/blog/factoring-rsa-260` | `Factoring RSA 260 ( cognition.com ) 09-10 ↑ 100 HN Points` | **75 字** |
+| `apple.com/…/iphone-duo` | `Apple Unveils iPhone Duo ( www.apple.com ) 02:17 ↑ 166 HN Points` | 82 字 |
+| `cursor.com/blog/projects` | `Sep 10, 2026 · product Introducing Projects Alexi & Fredrika 5m` | 85 字 |
+| `platform.claude.com/…/release-notes` | `September 1, 2026 ` | **19 字** |
+| `techcrunch.com/…/openai-fought-dirty…` | 一句与标题无关的 RSS description | 125 字 |
+| `x.com/i/web/status/2097369738968195513` | `https://t.co/BAGbeyTkga` | **23 字** |
+
+**14 条无一拿到过文章正文**，最长 191 字，全部是列表页的那一行。而 prefilter 的 prompt 明写：
+
+> 正文空、只有一个裸链接、或标题不含任何主张时，答 false——没有可判的对象，**且不要从来源或 URL 反推主题**。
+
+⇒ **prefilter 在严格执行指令。缺陷在它上游。** 放宽 prefilter 的选题范围不但修不了这 14 条
+（它看到的仍然是 `( cognition.com ) ↑ 100 HN Points`），还会放进大量真正非 AI 的 HN stub。
+
+### 机制根因（已定位到行）
+
+`src/airadar/fetcher/rss.py:43` —— `content_text` 只取 `entry.summary / description / content`，
+**`entry.link` 指向的那篇文章从来没有被抓过**。对全文 RSS 无碍；对**链接聚合源**
+（`buzzing_hn` = HN 榜单）与**摘要源**，正文就是那一行列表。
+
+### 与「正文抽取杠杆小」那条旧结论的关系——不矛盾，它问的是另一个问题
+
+2026-09-09 记过「正文抽取上界 0.0645 且方向相反 ⇒ 杠杆小」。**那条读数仍然成立，但它量的是
+「补正文能不能把*构成*拉近 AIHOT」**（答：不能，且方向相反）。**它从来没量过「补正文能不能
+改变*准入*」**——而这 14 条正是死在准入上。同一份档案里 09-09 还写着：
+
+> 这与「正文抽取杠杆小」不矛盾，两者说的是不同的事……「补正文能提高**准入准确性**」——
+> 而我先前明确把后者标为「没量」。
+
+**"没量"这个标记挂了两天没人取下来**，期间「正文抽取杠杆小」被当成了通用结论引用。
+**可迁移的一条：一个方向被否定时，要记下它是在哪个因变量上被否定的**，否则那次否定会外溢到
+从未被测过的因变量上。
+
+### 预登记（本读数取得之前写下）
+
+**假设 H**：② 那 14 条被拒的原因是**正文缺失**，不是选题范围。
+
+**differential_prediction**：把这 14 条的真实文章正文抓回来，**用当前这版一字未改的 prefilter
+prompt** 重判——
+
+- **H 成立** ⇒ **≥8/14 翻成 `is_ai_related=true`**，且翻不过来的应集中在真正非 AI 的那几条
+  （Apple iPhone ×2、Shopify 原生应用）。
+- **H 不成立（即真是选题范围）** ⇒ **≤4/14 翻**：给了全文它照样判非 AI，
+  那才说明差的是口径。
+
+**这个预测有区分度**：两种结局给出不同读数，而不是"改了会变好"这种对任何改动都成立的话。
+
+**已知的仪器边界**：这 14 条是**从 AIHOT 精选里**挑的，所以只测得了**假阴性**，
+测不了「放开抽取会放进多少噪声」——后者要在全量池子上量，是下一步。
+
+### 预登记实验的读数：11/13 翻转，判据是 ≥8/14（2026-09-11）
+
+**出网那个"blocker"是我自己的仪器造出来的，先记这一条。** 第一次跑全 14 条报
+`EgressPreflightError: ... 127.0.0.1:7897`，我据此判「clash 没在跑、卡在用户那里」。**两处都错**：
+
+- 探活用的 `(echo > /dev/tcp/127.0.0.1/$p)` 在 **zsh 里根本没有 `/dev/tcp`**，重定向失败，
+  于是两个端口都被报成「关着」——**失败形态与"端口真的关着"完全同形**。
+  实测 `lsof -nP -p <mihomo pid>`：`verge-mihomo` 正监听 `127.0.0.1:59527`，
+  配置文件里 `mixed-port: 59527`，与 `egress.py:39` 的 `DEFAULT_EGRESS_PROXY_PORT` 一致。
+- 真正的原因是**我这个 shell 的环境里有一条陈旧的 `AI_RADAR_EGRESS_PROXY_PORT=7897`**
+  （来自用户 profile，`.env` 里已无该键）。生产走 launchd + 代码默认值，**未受影响**。
+  ⇒ 顺带一条给手工跑的人：`AI_RADAR_EGRESS_PROXY_PORT=59527` 显式覆盖，否则 profile 会把你带到死端口。
+
+**读数（`AI_RADAR_EGRESS_PROXY_PORT=59527`，prefilter prompt 一字未改）**：
+
+| | 值 |
+|---|---|
+| 翻成 `is_ai_related=true` | **11/13** |
+| 仍判 `false` | **2/13** |
+| 未测 | 1（`cims.nyu.edu/...statement.pdf`，trafilatura 不处理 PDF） |
+
+⇒ **预登记判据 ≥8/14 命中，H（正文缺失）成立。**
+
+**而且 2 条没翻的恰好是预登记时点名的那两条**：`Apple Unveils iPhone Duo`、
+`iPhone 18 Pro and iPhone 18 Pro Max`。给了全篇新闻稿（26483 / 24154 字）之后
+prefilter 仍判 false——**它判对了**，那是折叠屏手机的发布与定价。
+
+⇒ **「AIHOT 收非 AI 科技新闻」这件事是真的，但它只占 2/14，不是台账记的 12/14。**
+选题范围这条确实存在，量级比记录的小一个数量级；其余 11 条是纯粹的正文缺失。
+
+几条典型翻转（`旧字数 → 新字数`）：
+
+| 源 | 长度 | 抓回开头 |
+|---|---|---|
+| `x_gdb` | 49 → 795 | `Paul Christiano, founder of the Alignment Research Center, is joining the OpenAI Foundation Board…` |
+| `x_claudedevs` | 23 → 14387 | `Tuning prompt caching, instructions, and effort can reduce Claude's cost…` |
+| `techcrunch_ai` | 125 → 5609 | `NYU mathematics professor Tristan Buckmaster announced three proofs…` |
+| `buzzing_hn`（RSA 260） | 75 → 54137 | `Factoring RSA-260 Over the past few weeks, the Cognition research team…` |
+
+### 三条我自己怀疑过、核完都不成立的
+
+1. **「两条 X 都恰好 543 字 ⇒ 样板页」——不成立。** 打印抓回内容开头后看清：
+   `x_emostaque` 与 `x_ericmitchellai` **链向同一篇** OpenAI 的 Navier-Stokes 公告，
+   内容相同所以长度相同。同长度撞车是个有用的样板页嫌疑信号，但它需要看内容才能定性。
+2. **「X 抓不到 ⇒ ③ 格可达上界只有 26 条」——偏保守。** `x.com/i/web/status/<id>` 实际返回
+   推文全文与链接卡片内容（`x_gdb` 49→795 字即此）。上界比我估的高。
+3. **仪器缺陷（我自己引入的）**：第一版用 `url LIKE '%shopify.engineering%'` 定位库里那一行，
+   **匹配到了错误的行**（标题是「加纳禁止出口未经精炼金锭」），而 prefilter 的 prompt 吃标题
+   ⇒ 那一格读数被污染。改用 `normalize_url` 精确定位后重跑。
+   **可迁移的一条：拿子串去 LIKE 一张 11.5 万行的表，认错行不报错。**
+
+### 假阳性方向：此前零覆盖，现在有读数了
+
+上面所有样本都取自 AIHOT 精选 ⇒ 只测得假阴性。补一次**随机**抽样（不看 AIHOT）：
+近 4 天、正文 <300 字、已 prefilter 判过的条目 n=10763，`seed=20260911` 抽 40 条回抓重判。
+
+| 读数 | 值 |
+|---|---|
+| 抓取成功 | **27/40 = 67.5%**（失败 7×HTTP 401、4×HTTP 403、2 无增益——全部走 fail-safe） |
+| 判定不变 | 25 |
+| **`false→true`** | **2** |
+| `true→false` | **0** |
+| 抽取撞车（同长度 ≥2 条） | **无** |
+
+分母要用对：抽样 40 条里原判 false 的是 **33** 条，其中抓到正文的约 22 条
+⇒ **翻转率约 2/22 ≈ 9%**。总体近 4 天判 false 的短正文条目 8710 条（2178/天），
+可抓 67.5% ⇒ **每天约多放进 132 条**。
+
+**那 2 条翻转是对的，不是噪声**：一条 `x_emollick` 讲 AI 生存风险政策，
+一条 `x_ayi_ainotes` 评测 Fable 5.1 / Opus 5。HN 上大量真正非 AI 的内容
+（加纳金矿、Shopify 原生应用）**仍被正确拒掉**——这也是翻转率只有 9% 的原因。
+
+### 对两个权威指标的离线估计（上界，非预测）
+
+| 格 | 条数 | 读数 |
+|---|---|---|
+| ③ AIHOT 精选、在池、不过 6.5 闸 | **42** | 其中正文<300 字 **35 条（83.3%）** |
+| 给短正文条目 +2.02（实测配对增量） | | **29/35 跨过 6.5 闸** |
+
+**必须把这个数读成上界，不是预测**：
+- **过闸 ≠ 进页面**。并集由**每轮前 40** 堆成。此前「降阈值 6.5→6.0→5.5」实测条目重合**逐位不变**。
+- **但两次干预不同构**：降阈值只放宽资格、不动分数；回抓让分数**实际上升 2 分**，改的是**名次**。
+  「降阈值证伪」不能外推成「回抓也没用」——那正是本轮开头订正的那种外溢。
+- ADR-bc36 的 `per_source ≤7.5%` 可能把 buzzing_hn 的增量吃掉。**未量。**
+
+### ① 格（信源覆盖）：14 条，6 个域，与本轮的正文决策无关
+
+| 条数 | 域 | 该域我方已抓到 |
+|---|---|---|
+| 6 | `x.com`（Meituan_LongCat / satyanadella / sherwinwu ×2 / markchen90 / SiliconFlowAI） | 52 条（账号没订阅） |
+| 3 | `dev.to`（googleai） | **0** |
+| 2 | `runwayml.com` | **0** |
+| 1 | `rdi.berkeley.edu` | **0** |
+| 1 | `apple.com` | 2 条 |
+| 1 | `mp.weixin.qq.com` | 5 条 |
+
+我方已订阅 198 个源。**这是一个独立决策**（加源），不与正文回抓混在一起判。
