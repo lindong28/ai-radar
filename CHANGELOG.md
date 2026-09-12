@@ -2,6 +2,11 @@
 
 ## 2026-09-11（`/wechat` 恢复更新：移除出网收据闸）
 
+- Eval runs now record their LLM usage in the project ledger instead of a
+  separate eval database, so `/admin/usage`, `cost-report` and the A6 cost-spike
+  alert count eval spend as project spend. The ARK circuit-breaker state stays
+  redirected to an eval-local file, since production reads it on every call and a
+  429 from an eval run would otherwise stop production for 7200 seconds.
 - **`/wechat` 停更已恢复。** 最后一次成功解读停在 2026-09-07 01:43Z，页面上最新文章是 9 月 6 日。根因不在抓取层——文章一直正常入库，卡在解读那一步：9 月 9 日出网契约从"按域名路由"改成"走单一本地端口"，使 interpret 的出网收据永久失效，该阶段此后每轮**静默跳过**（干净退出 0，pipeline 照打 `interpret OK`）。**积压 139 篇**（生产候选查询实测；A5 告警文案里的 83 是它自己的口径，两者不同），按每轮 30 篇分批补完。
 - **收据闸已按所有者裁定移除**，`ai-radar-egress-contract-v2.json` 与 `airadar.interpret.receipt_writer` 一并删除：`$AI_ASSISTANT_ROOT` 认定为可信的第一方代码。
 - **出口控制本身不变**：解读子进程照旧被强制走受管出口（覆写六个代理变量 + loopback `NO_PROXY`），且出口端口不通时 interpret 会**报错退出**而不是静默跳过。移除的只是"每次运行前校验一份签名证明"这一层。

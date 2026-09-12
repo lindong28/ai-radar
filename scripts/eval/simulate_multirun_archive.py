@@ -42,6 +42,145 @@ CATS = list(_comp.CATEGORIES)
 SH = timedelta(hours=8)
 
 
+def _refuse_overlay_with_quota(args) -> None:
+    """覆盖层 + 配额封顶 = 静默偏向「封顶生效了」那一侧。拒绝执行，不静默 no-op。
+
+    `mech_label` 读的是从**生产** `item_evaluations` 建的 `enrich_hist`，**从不看覆盖层**；
+    覆盖层新增的候选在生产里被 prefilter 拒过、没有 enrich 行 ⇒ `mech_label` 恒 `None`，
+    而 `_fill` 里那道 `b = mech_label(c); if b:` 守卫直接放行 ⇒ 它们**整类绕过封顶**。
+
+    为什么不「修好」而是拒绝：重判出的标签**没有合法的 `evaluated_at`**（它产生于今天，
+    而回放时点在过去），硬塞进 `enrich_hist` 就是 oracle 泄漏——本仓量具纪律 ⑤ 记过一次，
+    读数从 `3/5 · 0.131` 变成 `5/5 · 0.090` 全是假的。所以正确动作是**让它响**。
+
+    这道闸由 `tests/test_simulate_overlay_quota_guard.py` 持住。
+    """
+    if args.score_overlay and args.closed_loop and args.actuator.startswith("quota"):
+        raise SystemExit(
+            "拒绝执行：`--score-overlay` 与 `--closed-loop --actuator quota*` 不可同时用。\n"
+            "覆盖层新增的候选没有机制标签，会整类绕过封顶 ⇒ 读数会偏向「封顶生效了」那一侧。\n"
+            "要测封顶请不带覆盖层跑；要测覆盖层请用 `--actuator rank` 或去掉 `--closed-loop`。"
+        )
+
+
+def _apply_score_overlay(
+    conn: sqlite3.Connection,
+    candidates: list,
+    weights,
+    overlay_path: str,
+    exclude_sources: frozenset[str] = frozenset(),
+) -> list:
+    """把「正文回抓后重判」的结果叠到候选池上，三个方向一次都覆盖。
+
+    覆盖层由 `build_body_overlay.py` + `rejudge_body_overlay.py` 产出，**不碰生产库**。
+
+    | 覆盖层说 | 池里原状 | 动作 | 覆盖的格 |
+    |---|---|---|---|
+    | 判 AI，有新分 | 在池里 | 换 `weighted_score` 与 `primary_category` | ③ 在池不过闸 |
+    | 判 AI，有新分 | 不在池里 | **新造一条候选** | ② 被 prefilter 拒 |
+    | 判非 AI | 在池里 | **移出候选** | 假阳性方向（机制会拒掉它） |
+
+    换分之后下游的绝对闸、排序键、`per_source` 与 `kind_caps` 配额全自动看到新值——
+    所以这个接缝放在 `_load_candidates` 之后、其余一切之前。
+    """
+    import json as _json
+    from dataclasses import replace as _replace
+
+    from airadar.curator import select as _sel
+    from airadar.curator.score import ScoredCandidate
+    from airadar.curator.score import weighted_score as _ws
+
+    ov = sqlite3.connect(f"file:{overlay_path}?mode=ro", uri=True)
+    ov.row_factory = sqlite3.Row
+    rejudged: dict[str, sqlite3.Row] = {
+        r["item_id"]: r for r in ov.execute(
+            "SELECT item_id, is_ai_related, numeric_json, enrich_output_json "
+            "FROM rejudged WHERE error IS NULL"
+        )
+    }
+    if not rejudged:
+        print(f"⚠️ 覆盖层 {overlay_path} 里没有可用的重判行，候选池未改动")
+        return candidates
+
+    # `conn` 的 row_factory 未设（本脚本别处按 tuple 读它），所以这里显式按列序取。
+    meta: dict[str, dict] = {}
+    for iid, chash, iurl, pub, tier, sid, kind in conn.execute(
+        "SELECT i.id, i.content_hash, i.url, i.published_at, s.tier, s.id,"
+        "       COALESCE(s.kind,'feed') "
+        "FROM items i JOIN sources s ON s.id = i.source_id"
+    ):
+        meta[str(iid)] = {"content_hash": chash, "url": iurl, "published_at": pub,
+                          "tier": tier or "T2", "sid": sid, "kind": kind}
+
+    def _score_of(row: sqlite3.Row, tier: str) -> float | None:
+        """None = 这一行不足以重算分数，调用方保留原值（不是当成 0）。"""
+        if not row["numeric_json"]:
+            return None
+        try:
+            numeric = _json.loads(row["numeric_json"])
+        except ValueError:
+            return None
+        # `weighted_score` 对缺失的 CORE_DIMENSIONS 会抛，先自己挡住，别让一条坏行弄挂整次回放。
+        if any(numeric.get(d) is None for d in ("relevance", "density", "recency",
+                                                "authority", "significance")):
+            return None
+        try:
+            return _ws(numeric, weights, tier)
+        except Exception:  # noqa: BLE001
+            return None
+
+    out: list = []
+    swapped = dropped = 0
+    for c in candidates:
+        row = rejudged.get(c.item_id)
+        if row is None:
+            out.append(c)
+            continue
+        if not row["is_ai_related"]:
+            dropped += 1
+            continue
+        m = meta.get(c.item_id)
+        new = _score_of(row, m["tier"] if m else "T2")
+        if new is None:
+            out.append(c)
+            continue
+        cat = _sel._primary_category(row["enrich_output_json"]) or c.primary_category
+        out.append(_replace(c, weighted_score=new, primary_category=cat))
+        swapped += 1
+
+    in_pool = {c.item_id for c in candidates}
+    added = 0
+    for item_id, row in rejudged.items():
+        if item_id in in_pool or not row["is_ai_related"]:
+            continue
+        m = meta.get(item_id)
+        if m is None:
+            continue
+        # **必须认同一份排除名单**（2026-09-11 复核轮的 New-3）：排除只作用在 `raw_candidates` 上，
+        # 而本循环遍历全部 `rejudged` 行 ⇒ 不设防时 `--exclude-source buzzing_hn --score-overlay X`
+        # 会把 buzzing_hn 的条目从覆盖层**再放回来**，而两个 flag 正是为叠用而加的。
+        if m["sid"] in exclude_sources:
+            continue
+        new = _score_of(row, m["tier"])
+        if new is None:
+            continue
+        out.append(ScoredCandidate(
+            # `eval_id` 只用于生产的可追溯记录，回放里不读；负数让它一眼认得出是合成的。
+            eval_id=-1, item_id=item_id, content_hash=m["content_hash"], url=m["url"],
+            published_at=m["published_at"], weighted_score=new,
+            reason={"overlay": "body-refetch"}, source_id=m["sid"], kind=m["kind"],
+            primary_category=_sel._primary_category(row["enrich_output_json"]),
+        ))
+        added += 1
+
+    # 这三个数都是 **dedup 之前**的（调用方随后去重一次）——标出来，
+    # 否则「新增候选 N」会被读成「进池 N 条」，而那个数字是人要读的（复核轮的 New-7）。
+    print(f"覆盖层 {overlay_path}（以下均为 dedup 前）：换分 {swapped} 条 · 新增候选 {added} 条 · "
+          f"移出 {dropped} 条（重判为非 AI）⇒ 候选 {len(candidates)} → {len(out)}")
+    # **不在这里 dedup**：调用方拿到的是 pre-dedup 池，它 dedup 一次就够（见调用点的注释）。
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=str(REPO / "data" / "radar.db"))
@@ -65,7 +204,7 @@ def main() -> None:
                          "（实测 per-day 12 时 713/1202 = 59%%，外推到生产 ~48/天接近全部），"
                          "此时归档页的构成主要由准入决定、排序的话语权被稀释。"
                          "**admit 已实测否决**：它是直接丢弃，丢掉的格位由更旧、AIHOT 没见过的"
-                         "条目补上——页内有标签由 275/400 掉到 164/400、当日占比塌到 47.5%，"
+                         "条目补上——页内有标签由 275/400 掉到 164/400、当日占比塌到 47.5%%，"
                          "构成只在剩下那一小撮里好看。"
                          "quota=**在选择内部按类封顶**，空出的格位交给 `_fill` 由别类与尾部回填，"
                          "格位数与时效分段都不被绕开。"
@@ -75,6 +214,20 @@ def main() -> None:
                     help="闭环增益：m *= (target/actual)**gain。>1 会过冲振荡，本仓实测过一次"
                          "（`alpha=1.0` 的比例控制器逐窗口 5/5 掉到 0/7）。")
     ap.add_argument("--clip", type=float, default=2.5, help="系数夹在 [1/clip, clip]")
+    ap.add_argument("--exclude-source", action="append", default=[], metavar="SOURCE_ID",
+                    help="把该信源整个排除在候选池外，可重复。**用来测「提精确度」这条杠杆**："
+                         "实测窗口内我方入库 32594 条、AIHOT 发过的只占 10.8%%，而 `buzzing_hn` "
+                         "一家占我方 73.7%% 且精确度 0.7%%。砍它省 74%% 池子、保 95.5%% 召回，"
+                         "但**丢掉 22/164 条 AIHOT 精选**（条目重合上限 164→142）——是取舍不是免费。")
+    ap.add_argument("--score-overlay", default=None, metavar="PATH",
+                    help="叠加一份「正文回抓后重判」的覆盖层（`build_body_overlay.py` + "
+                         "`rejudge_body_overlay.py` 产出的侧文件）。**本脚本只读**；"
+                         "产出那份覆盖层的第二个脚本会写 `llm_usage.db` 与 `ark-breaker.json`"
+                         "（provider 的副作用，已在该脚本内改道），别把「不碰生产库」读到整条流程上。"
+                         "它一次覆盖三个方向：③ 在池不过闸的换分、② 被 prefilter 拒的新增候选、"
+                         "以及重判为非 AI 的移出候选（假阳性方向）。"
+                         "**覆盖层只覆盖它自己那个窗口**——窗口外的条目一律用生产读数，"
+                         "所以读数是「机制只在这几天生效」的下界，不是全窗效应。")
     ap.add_argument("--enrich-stamp", default=None, metavar="PREFIX",
                     help="机制只认该 enrich 戳（前缀匹配 `ruleset_version`）产出的类别。"
                          "ADR-9e21 §一要求任何类别级干预**按戳分层重量一次**，而本池混用三代戳。"
@@ -139,11 +292,11 @@ def main() -> None:
     ap.add_argument("--src-cap", type=float, default=None,
                     help="**并集层面**的单源上限（占并集的比例）。生产的 `per_source=0.075` 是**每轮**的闸"
                          "（3/40），而并集跨 48 轮累积 ⇒ **并集不受它约束**。实测池中带标签的候选里 "
-                         "`ithome` 133 条（49% 是 industry）、`x_rohanpaul_ai` 116 条（43% 是 paper），"
-                         "两源占 32%，正好灌满我们超配的那两类。")
+                         "`ithome` 133 条（49%% 是 industry）、`x_rohanpaul_ai` 116 条（43%% 是 paper），"
+                         "两源占 32%%，正好灌满我们超配的那两类。")
     ap.add_argument("--threshold", type=float, default=None,
                     help="覆盖 `select.DEFAULT_THRESHOLD`（生产 6.5）。**降它是放大供给、不是放松排序**："
-                         "实测窗口内 AIHOT 标为 model 的候选过闸率已有 52.6%（阈值不歧视 model），"
+                         "实测窗口内 AIHOT 标为 model 的候选过闸率已有 52.6%%（阈值不歧视 model），"
                          "但至 09-05 的并集需要 131 条 model 而池里只有 122 条——差 9 条。"
                          "降阈值同时会多放进 tip/product，**要靠 `--actuator quota` 的封顶压住**，"
                          "两者是成对的，单独降阈值对 model 反而不利。")
@@ -157,6 +310,7 @@ def main() -> None:
                     help="只读到这一天为止的归档面。**归档是累积的，所以时间劈只能这么切**——"
                          "把窗口对半砍成两段各自重放会让后半段丢掉前半段的并集，那不是它真实的样子。")
     args = ap.parse_args()
+    _refuse_overlay_with_quota(args)
 
     from airadar.curator import select as sel
     from airadar.curator.weights import DEFAULT_WEIGHTS
@@ -189,7 +343,7 @@ def main() -> None:
         days = [d for d in days if d <= args.until]
     if args.since:
         # **归档面是累积的，所以早期窗口永远留在并集里。** 于是 enrich 覆盖率低的那几天
-        # （实测 08-31 6.9%、09-01 14.3%、09-02 40.2%，09-05 起才是 100%）会一直拖着读数，
+        # （实测 08-31 6.9%、09-01 14.3%、09-02 40.2%%，09-05 起才是 100%）会一直拖着读数，
         # 而机制在那些天**看不见类别**、封顶无从施加。`--since` 把起点挪到覆盖率起来之后，
         # 用来把「机制无效」与「机制被蒙住眼睛」分开——它**不是**用来挑好看的窗口的，
         # 报它必须同时报覆盖率理由与全窗读数。
@@ -221,7 +375,32 @@ def main() -> None:
                              ("relevance", "density", "recency", "authority",
                               "engineering", "significance")})
         print(f"打分权重：{DEFAULT_WEIGHTS.as_dict()} → {weights.as_dict()}")
-    candidates = sel.deduplicate_candidates(sel._load_candidates(conn, weights))
+    # **覆盖层要接在 dedup 之前**（2026-09-11 review-gate 的 H9）：`dedup` 按
+    # `content_hash` 或小写 URL 取排名第一，而覆盖层会改分、也会移出条目。先 dedup 再叠加时
+    # ① 被 dedup 丢掉的那条不在池里、也不在覆盖层里 ⇒ 主条目被移出后整条新闻消失，
+    #   而生产里本该由重复条目顶上；② `in_pool` 取的是去重后的池 ⇒ 被 dedup 丢掉的重复条目
+    #   会被误算进「② 被 prefilter 拒的新增候选」，而那个数字是人要读的。
+    raw_candidates = sel._load_candidates(conn, weights)
+    excluded = frozenset(args.exclude_source)
+    if excluded:
+        # **逐个源报命中数**（2026-09-11 复核轮的 New-4）：只打印「候选 N → M」时，
+        # 「打错 id」与「真排除」不可分辨。实测代价：我把 `--exclude-source buzzing_hn
+        # wx_mp2rss x_pixverse` 记成三源 arm，而 `wx_mp2rss` 是 `kind='wechat'`（`_load_candidates`
+        # 本来就排它）、`x_pixverse` 对并集贡献 0 ⇒ 那次实际是**单源 arm**，输出与只排
+        # buzzing_hn 逐字节相同，而我没看出来。
+        per_source = Counter(c.source_id for c in raw_candidates)
+        before = len(raw_candidates)
+        raw_candidates = [c for c in raw_candidates if c.source_id not in excluded]
+        print(f"排除信源：候选 {before} → {len(raw_candidates)}")
+        for sid in sorted(excluded):
+            n = per_source.get(sid, 0)
+            flag = "" if n else "   ⚠️ 池中 0 条——id 打错了，或它已被 _load_candidates 排除"
+            print(f"    {sid:<28} 池中 {n:>6} 条{flag}")
+    if args.score_overlay:
+        raw_candidates = _apply_score_overlay(
+            conn, raw_candidates, weights, args.score_overlay, exclude_sources=excluded
+        )
+    candidates = sel.deduplicate_candidates(raw_candidates)
     url_by_id = {}
     for i, u in conn.execute("SELECT id, url FROM items WHERE url IS NOT NULL"):
         url_by_id[str(i)] = _comp.normalize_url(str(u))[0]
@@ -409,7 +588,7 @@ def main() -> None:
               f"{quota_override.per_source}（kind_caps 不动，ADR-bc36 是两条）")
 
     # **条目重合读数**：模拟器至今只报构成。两者是不同的用户可见指标——
-    # 构成可以 5/5 而重合仍然只有 39%，一个达标不蕴含另一个。
+    # 构成可以 5/5 而重合仍然只有 39%%，一个达标不蕴含另一个。
     prod_curated_urls = {
         url_by_id[str(r[0])] for r in conn.execute(
             "SELECT DISTINCT item_id FROM curated_items")
@@ -592,7 +771,7 @@ def main() -> None:
                 # 由 `_fill` 用别类与尾部把空出的格位填满 ⇒ 格位数不减、时效分段不被绕开。
                 # 这是 admit 那版「直接丢弃」的修正：丢弃会让页面被更旧的条目补上。
                 # **最大余额法，不是 ceil 也不是截断。** 两头都错过：`ceil` 对小类系统性放水
-                # （paper 目标 8.8% ⇒ ceil(40×0.088)=4 ⇒ 实际上限 10%，高 1.2pp，实测它就是
+                # （paper 目标 8.8% ⇒ ceil(40×0.088)=4 ⇒ 实际上限 10%%，高 1.2pp，实测它就是
                 # paper 在生产节奏下出界 +0.22pp 的来源）；而 `int()` 截断反向把 paper 压到 3.8%
                 # 打出界（台账记过）。最大余额让五类上限精确加总到 limit。
                 n_hist = sum(hist.values())
@@ -759,8 +938,8 @@ def main() -> None:
                   f"{100 * reference_pooled[b] / (sum(reference_pooled.values()) or 1):>8.1f}%")
         print("    读法：并集里够、页面里不够 ⇒ 差在**按发布时间取前 40**这条排序，不是供给。")
         # **并集的源集中度：ADR-bc36 明确不约束的那个量。** 它的 `per_source ≤ 7.5%` 是
-        # **per-run** 的，而归档面是 48 轮的并集——一个源可以每轮都占满 7.5%，在并集里
-        # 仍然占 7.5%，也可以更高（它在别的轮里没被挤掉）。所以"并集有没有被源结构带偏"
+        # **per-run** 的，而归档面是 48 轮的并集——一个源可以每轮都占满 7.5%%，在并集里
+        # 仍然占 7.5%%，也可以更高（它在别的轮里没被挤掉）。所以"并集有没有被源结构带偏"
         # 这件事，生产侧任何读数都答不出来，只能在这里量。
         by_src: Counter = Counter()
         for c in union.values():

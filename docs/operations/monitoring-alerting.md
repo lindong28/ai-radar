@@ -120,6 +120,15 @@ D3 每轮按 provider/model 检查 unpriced、stale、due-review 与 active tari
 
 ### LLM 成本报表与对账
 
+**评测调用计入 `llm_usage`，所以 A6 也会被评测打响**（用户 2026-09-11 裁定：「不用区分评测和生产，
+我只关心来自这个项目的总体 LLM usage」）。此前 `airadar.eval.aihot_fit.common.isolate_side_effects()`
+把评测的 usage 行改道到 `data/eval-fit/llm-usage-eval.db`，现在**不再改道**——评测 token 是本项目的
+真实支出，计入总账是有意的。运维含义两条：① 一次大评测（实测一轮约 3199 次调用 / 3.68M token）
+足以越过 A6 的 `max(¥20, 3×中位数)` notice 档，收到 A6 时先看当天有没有跑评测；
+② `/admin/usage` 与 `cost-report` 的单篇成本、按 stage 归因在评测日会偏高，**且没有字段能把两者分开**
+（评测走的是同一批生产 stage 名与 model）。ARK 熔断器状态**仍然隔离**（`AI_RADAR_ARK_BREAKER_STATE`）——
+它不是账，是生产每次调用都读的状态。
+
 周报入口为 `./run.sh admin cost-report [--window-days N] [--send|--dry-run]`。默认取上一上海自然周；指定 N 后取 rolling N 天。`cost-report` cron 在周一 09:17 经 `run-or-alert` 发送。日序列用 durable `items.fetched_at` 与成功 processing rows 核对逐 stage 暴露：fetch>0 要有 prefilter success；成功且判为 AI 的 prefilter candidate>0 时分别要有 score/enrich success；wechat fetch>0 要有 interpret success。任何 stage 的 error row 只证明尝试过，不算成功；所以即使同日已有别的 stage 或 usage 行，partial stall 仍会关闭环比。pipeline 日志只补轮次、fetch inserted，以及 retained 日内明确出现的计量写入失败；旧日志缺失本身不关闭已由 durable 数据确认的比较，但文案会保留漏记风险。异常日在正文顶部单列。nominal 同时给目录价估算金额与占比；总额与单篇解读前窗比较都按当前费率、cache 全未命中重算，绝对金额仍使用窗口内真实 cache 事实。单次已知成本只除以 priced+nominal 已记录调用，不把 unpriced 当作 ¥0。调用次数、token 合计与同一计价口径的金额合计只统计 `llm_usage` 记录行，因此是全部付费调用对应总量的下界；任何未写入该表的付费调用均不在内（例如失败链路或未接入计量的调用点）。均值、占比和环比只描述已记录 cohort，相对全部付费调用真值的偏差方向未知。unpriced 不进入金额，stale/due-review 要先复核，所有金额均不表示账单实付。规范 owner 是 [ADR-023](../adr/023-define-recorded-row-measurement-scope.md)；ARK tariff/订阅权威性与付费 attempt 漏行仍由 [ISSUE-004](../issues/cost-observability.md#issue-004--ark-挂牌价来源非权威而它占已知成本的-876) 和 [ISSUE-021](../issues/cost-observability.md#issue-021--interpret-usage-只记录下游成功样本漏掉已计费的失败响应) 跟踪。
 
 成本对账入口为 `./run.sh admin cost-audit [--format=kv|json]`。退出 0 表示 tariff arithmetic、anchor 与 deprecated-residue gates 全部通过；退出 1 表示至少一项失败，human 输出会提示改跑 `./run.sh admin cost-audit --format=kv` 定位每个 `FAIL` / `UNVERIFIED` / `CLEANUP_REQUIRED`。默认 human、KV 与 JSON 都携带与 `/api/v1/admin/usage` 相同的 `measurement_scope`；`CONSISTENT` / `PASS` 与退出 0 都不评价计量完整性或 tariff 权威，known cost 与记录行数也只按该作用域解释。
