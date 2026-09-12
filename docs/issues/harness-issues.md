@@ -73,6 +73,16 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 - Follow-up（条款已补上并提交，剩执行侧配套）: 「收敛预算与停滞熔断」段（默认 2 轮完整循环预算 + 停滞判据 + AskUserQuestion 处置）已于 2026-07-19 以 ai-agent-config `aeea37a` 提交并刷新 `custom-review-plan` wrapper。剩余配套建议：(a) create-plan「审查」节的 reviewer 初始/resume prompt 显式携带轮次预算状态，要求每轮终止报告先给停滞自检结论；(b) orchestrator 独立计数，预算耗尽即直接走停滞处置，不依赖 reviewer 自觉。
 - **状态注（2026-08-20 lifecycle 复核时补）**：**(b) 可能已落地，本轮未核实**。[`archive/closed.md`](archive/closed.md) 的 H13 在其 Fixes 列表里记「point1 review 过深熔断（H11 follow-up b）→ ai-agent-config `946db50`（`commands/custom/create-plan.md`）：orchestrator 无条件计数、达预算强制『定稿 vs 继续』AskUserQuestion，不依赖 reviewer 自报收敛」——描述与本条 (b) 逐字对应。但那是**跨仓**断言，本仓看不到该 commit，本轮也没有去 ai-agent-config 侧核对 `946db50` 是否确实包含该段、以及现行 `create-plan.md` 是否仍保留它。故 (b) 暂记为「有落地证据但未核实」，(a) 无任何落地证据。**收敛动作**：下次在 ai-agent-config 仓工作时核对一次 `946db50` 与现行 `commands/custom/create-plan.md`，据结果把 (b) 划掉或降级；(a) 仍 open 时本条整体保持 open。
 
+- **复发（2026-09-12，`decision-review` 上，同一形态）**：一次生产改动的决策评审跑了 **3 轮完整 gate + 2 轮复核**，
+  末轮的**八条新 finding 全部（8/8）可追到我方上一轮的修复**——正是本条根因说的"修订产生新 hash → 重跑 full review"
+  那个无界入口，只是换到了 `decision-review` 上。**H11 的修法（默认 2 轮预算 + 停滞熔断）当时只补进了
+  `review-plan`/`create-plan`，`decision-review` 的处置表里只有一行「多轮不收敛 → 交用户」，而"多轮"没有定义。**
+  实测代价：那 5 轮里前两轮各找出一个真缺陷（`paused` ≠ `exclude`、静态系数劣于滚动重算），
+  后三轮全部在修"修复本身"，而决策的实质证据一个字没变。
+  ⇒ **缺口是 `decision-review` 缺一个成文的轮次预算**，不是评审者不负责。
+  **正确载体是 user-scope 的 `~/.claude/skills/decision-review/SKILL.md`**（该缺口对所有项目成立，不只本仓）；
+  本仓先在 `CLAUDE.md` 的 AIHOT 节落一条项目级上限止血，user-scope 那条另行提。
+
 ## [open] H12 — review-gate 高档 Codex transport 以 sandbox-bypass 运行，plan 文档 reviewer 越界 mutate 共享系统状态（kill 进程）
 
 - Type: agent-behavior / review-gate transport 权限面 × 并发隔离
