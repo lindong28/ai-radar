@@ -362,6 +362,11 @@ def main() -> None:
                     help="**读取侧**单源限流：归档第 1 页里同一信源最多占 N 格（生产 40 格）。"
                          "与 `--src-cap`（并集层面）正交：本项不改变哪些条目进并集，只改页面怎么取，"
                          "所以它是既有历史的纯函数、可在真实归档上精确离线复算，且可即时回退。")
+    ap.add_argument("--kind-cap", action="append", default=[], metavar="KIND=SHARE",
+                    help="覆盖 ADR-bc36 的 `kind_caps`（生产 `x=0.20`，即每轮 40 格里最多 8 格给 X）。"
+                         "**为什么它值得单独测**：AIHOT 的 `model` 精选里 **51%%（22/43）来自 X 账号**，"
+                         "是五类里最高的；而 `model` 正是权威面上缺口最大的那一类（−9.3pp）。"
+                         "`0` 表示取消该 kind 的上限。可重复。")
     ap.add_argument("--pause-source", action="append", default=[], metavar="SOURCE_ID",
                     help="按 ADR-f427 的 `paused=true` 语义停源：**只去掉停用日及之后发布的条目**，"
                          "存量照旧留在候选池。与 `--exclude-source`（整源移出池子）**不是同一个机制**——"
@@ -453,6 +458,18 @@ def main() -> None:
         print(f"freshness_floor：{sel.DEFAULT_FRESHNESS_FLOOR} → {args.freshness_floor}"
               f"（threshold 保持 {sel.DEFAULT_THRESHOLD}）")
         sel.DEFAULT_FRESHNESS_FLOOR = args.freshness_floor
+    if args.kind_cap:
+        caps = dict(sel.DEFAULT_SOURCE_QUOTA.kind_caps)
+        for spec in args.kind_cap:
+            k, _, v = spec.partition("=")
+            share = float(v)
+            if share <= 0:
+                caps.pop(k.strip(), None)
+            else:
+                caps[k.strip()] = share
+        sel.DEFAULT_SOURCE_QUOTA = sel.SourceQuota(
+            kind_caps=caps, per_source=sel.DEFAULT_SOURCE_QUOTA.per_source)
+        print(f"kind_caps：{args.kind_cap} → {caps}")
     weights = DEFAULT_WEIGHTS
     if args.weights:
         from airadar.curator.weights import Weights

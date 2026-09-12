@@ -58,6 +58,7 @@ _comp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_comp)
 
 # 生产的 where 直接 import，不重抄。
+from airadar.web.routes.categories import deduped_item_clause as _dedup  # noqa: E402
 from airadar.web.routes.curated_archive import _archive_where  # noqa: E402
 
 CATS = list(_comp.CATEGORIES)
@@ -162,8 +163,9 @@ def main() -> None:
             base + "WHERE c.run_id < ? GROUP BY i.id HAVING MAX(i.published_at) > "
                    "(SELECT MAX(i2.published_at) FROM items i2 "
                    " JOIN sources s2 ON s2.id=i2.source_id JOIN curated_items c2 ON c2.item_id=i2.id "
-                   " WHERE c2.run_id < ? AND NOT (s2.enabled=1 AND "
-                   "       COALESCE(s2.kind,'feed')!='wechat')))", (cut, cut)).fetchone()[0] + 1
+                   f" WHERE c2.run_id < ? AND NOT (s2.enabled=1 AND "
+                   f"       COALESCE(s2.kind,'feed')!='wechat' AND {_dedup('i2')})))",
+            (cut, cut)).fetchone()[0] + 1
         print(f"\n>>> 生产 where 与 `archive_page()` 宽口径的差（截至 {days[-1]}）")
         print(f"    归档全集 {n_loose} → 生产口径 {n_strict}，**排除 {n_loose - n_strict} 条**"
               f"（{(n_loose - n_strict) / max(n_loose, 1) * 100:.1f}%）")
