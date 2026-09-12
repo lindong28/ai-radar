@@ -362,6 +362,11 @@ def main() -> None:
                     help="**读取侧**单源限流：归档第 1 页里同一信源最多占 N 格（生产 40 格）。"
                          "与 `--src-cap`（并集层面）正交：本项不改变哪些条目进并集，只改页面怎么取，"
                          "所以它是既有历史的纯函数、可在真实归档上精确离线复算，且可即时回退。")
+    ap.add_argument("--kind-cap", action="append", default=[], metavar="KIND=SHARE",
+                    help="覆盖 ADR-bc36 的 `kind_caps`（生产 `x=0.20`，即每轮 40 格里最多 8 格给 X）。"
+                         "**为什么它值得单独测**：AIHOT 的 `model` 精选里 **51%%（22/43）来自 X 账号**，"
+                         "是五类里最高的；而 `model` 正是权威面上缺口最大的那一类（−9.3pp）。"
+                         "`0` 表示取消该 kind 的上限。可重复。")
     ap.add_argument("--pause-source", action="append", default=[], metavar="SOURCE_ID",
                     help="按 ADR-f427 的 `paused=true` 语义停源：**只去掉停用日及之后发布的条目**，"
                          "存量照旧留在候选池。与 `--exclude-source`（整源移出池子）**不是同一个机制**——"
@@ -453,6 +458,18 @@ def main() -> None:
         print(f"freshness_floor：{sel.DEFAULT_FRESHNESS_FLOOR} → {args.freshness_floor}"
               f"（threshold 保持 {sel.DEFAULT_THRESHOLD}）")
         sel.DEFAULT_FRESHNESS_FLOOR = args.freshness_floor
+    if args.kind_cap:
+        caps = dict(sel.DEFAULT_SOURCE_QUOTA.kind_caps)
+        for spec in args.kind_cap:
+            k, _, v = spec.partition("=")
+            share = float(v)
+            if share <= 0:
+                caps.pop(k.strip(), None)
+            else:
+                caps[k.strip()] = share
+        sel.DEFAULT_SOURCE_QUOTA = sel.SourceQuota(
+            kind_caps=caps, per_source=sel.DEFAULT_SOURCE_QUOTA.per_source)
+        print(f"kind_caps：{args.kind_cap} → {caps}")
     weights = DEFAULT_WEIGHTS
     if args.weights:
         from airadar.curator.weights import Weights
@@ -823,6 +840,7 @@ def main() -> None:
         if r.get("url") and r.get("score") is not None
     }
     page_aihot_scores: list[float] = []
+    page_kinds: Counter = Counter()
     ours_pooled: Counter = Counter()
     reference_pooled: Counter = Counter()
     # 闭环状态：`hist` 只累计**严格早于当前时点**的窗口（不读当日的 AIHOT——生产里选稿那一刻
@@ -1141,6 +1159,10 @@ def main() -> None:
                 s = aihot_score_by_url.get(url_by_id.get(c.item_id, ""))
                 if s is not None:
                     page_aihot_scores.append(s)
+                # **页面的来源形态构成**——ADR-bc36 的那条轴。它设 `x<=0.20` 的依据是
+                # 「AIHOT 精选集里 x.com 占 19.7%」；本窗口重算它已是 35.6%（58/163 @09-10）。
+                # 放宽 kind_caps 时必须同时读这个数，否则「构成变好」可能是拿来源形态背离换的。
+                page_kinds[c.kind] += 1
         else:
             skipped_days.append(day)
         # **顺序不能反**：本窗口的 AIHOT 直到这里才并进历史，之上的每一次调参都只看得到
@@ -1241,6 +1263,16 @@ def main() -> None:
     else:
         print("\n>>> 描述性读数：页面条目在 AIHOT 自己分数上的位置 —— **无覆盖**"
               "（页面上没有一条是 AIHOT 打过分的），本次不产出该读数。")
+    if page_kinds:
+        nk = sum(page_kinds.values())
+        a_sel = [r for r in aihot.values() if r["selected"] and r.get("url")]
+        a_x = sum(1 for r in a_sel
+                  if "x.com/" in r["url"] or "twitter.com/" in r["url"])
+        print("\n>>> 页面的来源形态（ADR-bc36 的轴）：" + " · ".join(
+            f"{k} {100 * v / nk:.1f}%" for k, v in page_kinds.most_common()))
+        print(f"    对照 AIHOT 自己的精选里 x.com/twitter 链接占 "
+              f"{100 * a_x / max(len(a_sel), 1):.1f}%（{a_x}/{len(a_sel)}）"
+              f"——ADR-bc36 设 `x<=0.20` 时它是 19.7%。")
     tv = _comp.total_variation(ours_pooled, reference_pooled)
     v = _comp.class_verdicts(ours_pooled, reference_pooled)
     print(f"\n>>> 归档面达标线（合并，TV {tv:.3f}）")
