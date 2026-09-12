@@ -358,6 +358,10 @@ def main() -> None:
                          "但至 09-05 的并集需要 131 条 model 而池里只有 122 条——差 9 条。"
                          "降阈值同时会多放进 tip/product，**要靠 `--actuator quota` 的封顶压住**，"
                          "两者是成对的，单独降阈值对 model 反而不利。")
+    ap.add_argument("--page-src-cap", type=int, default=None, metavar="N",
+                    help="**读取侧**单源限流：归档第 1 页里同一信源最多占 N 格（生产 40 格）。"
+                         "与 `--src-cap`（并集层面）正交：本项不改变哪些条目进并集，只改页面怎么取，"
+                         "所以它是既有历史的纯函数、可在真实归档上精确离线复算，且可即时回退。")
     ap.add_argument("--pause-source", action="append", default=[], metavar="SOURCE_ID",
                     help="按 ADR-f427 的 `paused=true` 语义停源：**只去掉停用日及之后发布的条目**，"
                          "存量照旧留在候选池。与 `--exclude-source`（整源移出池子）**不是同一个机制**——"
@@ -1076,7 +1080,24 @@ def main() -> None:
                         continue
                     src_in_union[c.source_id] += 1
                 union.setdefault(c.item_id, c)
-        page = sorted(union.values(), key=lambda c: (c.published_at, c.item_id), reverse=True)[: args.page]
+        _ranked = sorted(union.values(), key=lambda c: (c.published_at, c.item_id), reverse=True)
+        if args.page_src_cap:
+            # **读取侧单源限流**：同一信源在这 40 格里最多占 N 格，空出的格位由后面的条目补上。
+            # 与 `--src-cap`（并集层面）不是同一件事：这条只改**页面怎么从既有并集里取 40 条**，
+            # 因而它是 `curated_items` 的纯函数、**在真实历史上可精确离线复算**（见
+            # `docs/issues/aihot-fit-eval.md` 的「读取侧限流」一节），也因而可即时回退、不写归档。
+            _per: Counter = Counter()
+            _out = []
+            for _c in _ranked:
+                if len(_out) >= args.page:
+                    break
+                if _per[_c.source_id] >= args.page_src_cap:
+                    continue
+                _out.append(_c)
+                _per[_c.source_id] += 1
+            page = _out
+        else:
+            page = _ranked[: args.page]
         labelled = Counter()
         for c in page:
             cat = label_by_url.get(url_by_id.get(c.item_id, ""))

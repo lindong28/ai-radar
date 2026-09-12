@@ -16,12 +16,18 @@
 重抄就是第二真相，两份会各自漂移（本仓已为此撤回过读数）。
 下面的 `--compare-loose` 会把两个口径的差直接打出来，用来量那个近似有多大。
 
-**限流语义只取可实现的那一种**：按 **(source_id, 上海日)** 计数，不是「每页 N 格」。
-理由是 `_archive_items` 用 SQL `LIMIT ? OFFSET ?`，而「每页 N 格」是**有状态**的——
-第 2 页得知道第 1 页消耗了什么，`_count_archive_items` 的总数也会与实际页数不符。
-按 (源, 日) 计数是对有序流的**无状态全局过滤**（SQL 里一个 `ROW_NUMBER() OVER (PARTITION BY …)`），
-分页、总数、第 2 页全部一致。
-⚠️ 两者在「页面只跨一天」时等价、跨天时不等价：**页上最多 2×cap**（实测 cap=4 时页内最大单源是 4–5）。
+**限流按 (source_id, 上海日) 计数，不是「每页 N 格」**：`_archive_items` 用 SQL `LIMIT ? OFFSET ?`，
+而「每页 N 格」是**有状态**的——第 2 页得知道第 1 页消耗了什么，总数也会与实际页数不符。
+
+⚠️ **本量具算的是「第 1 页长什么样」，落地形态另有一层，别把两者混了**（2026-09-12 决策评审报出）：
+把它实现成 `WHERE rn <= cap` 的**全局过滤**会让每源每日第 cap+1 条以后**在所有分页中不可达**，
+直接违反 ADR-006「归档须包含所有曾被选入精选的条目」与 ux-contract:277。
+可实现的是**改排序不过滤**：`ORDER BY (rn - 1) / cap, published_at DESC, fetched_at DESC, id DESC`
+——桶 0 是每源每日前 cap 条、桶 1 是下一批，**一条不丢、总数不变**，
+而第 1 页与本量具的输出**逐条相同**（实测 6/6 天）。
+
+⚠️ **页内单源上限不是 2×cap**：页面可跨**任意多个**上海日 ⇒ 理论上限是 `cap × 页面跨越的日数`。
+`4–5` 只是本窗口第 1 页的观测值，不是算法保证。
 
 只读（`mode=ro`，**不带 `immutable=1`**——有写者时它抛 `database is malformed`）、零 LLM 调用、
 标签一律用 AIHOT 自己的（量具纪律 ⑤：机制读的标签与计分器读的必须分开；本机制**根本不读标签**）。
@@ -140,6 +146,39 @@ def main() -> None:
     ref: Counter = Counter()
     for d in days:
         ref += ref_by_day[d]
+
+    if args.compare_loose:
+        # **把差直接算出来打印，不让读者自己比两张表**（2026-09-12 复核报出：
+        # 原来只并排输出 strict/loose 两张汇总表，而「每次都把这个差打出来」是更强的主张）。
+        from airadar.web.routes.curated_archive import _archive_where as _w
+        where, wparams, _ = _w(None, None)
+        cut = f"{days[-1].replace('-', '')}T160000Z"
+        base = ("SELECT COUNT(*) FROM (SELECT i.id FROM items i JOIN sources s ON s.id=i.source_id "
+                "JOIN curated_items c ON c.item_id=i.id ")
+        n_loose = conn.execute(base + "WHERE c.run_id < ? GROUP BY i.id)", (cut,)).fetchone()[0]
+        n_strict = conn.execute(base + f"{where} AND c.run_id < ? GROUP BY i.id)",
+                                (*wparams, cut)).fetchone()[0]
+        rank = conn.execute(
+            base + "WHERE c.run_id < ? GROUP BY i.id HAVING MAX(i.published_at) > "
+                   "(SELECT MAX(i2.published_at) FROM items i2 "
+                   " JOIN sources s2 ON s2.id=i2.source_id JOIN curated_items c2 ON c2.item_id=i2.id "
+                   " WHERE c2.run_id < ? AND NOT (s2.enabled=1 AND "
+                   "       COALESCE(s2.kind,'feed')!='wechat')))", (cut, cut)).fetchone()[0] + 1
+        print(f"\n>>> 生产 where 与 `archive_page()` 宽口径的差（截至 {days[-1]}）")
+        print(f"    归档全集 {n_loose} → 生产口径 {n_strict}，**排除 {n_loose - n_strict} 条**"
+              f"（{(n_loose - n_strict) / max(n_loose, 1) * 100:.1f}%）")
+        print(f"    **被排除者里最新那条的全局名次：第 {rank} 位**"
+              f" ⇒ 页面只取前 {PAGE} 条，{'两口径在第 1 页上等价' if rank > PAGE else '**两口径在第 1 页上已分开**'}")
+        print("    ⚠️ 这是**本窗口的事实、不是恒等式**：某个高产源被停用的当天，"
+              "被排除者就是新条目，名次会落进前 40。")
+        first = []
+        for d in days:
+            lo = [u for u, _s, _p in ranked(conn, d, loose=True)]
+            st = [u for u, _s, _p in ranked(conn, d, loose=False)]
+            first.append((d, next((i + 1 for i, (a, b) in enumerate(zip(lo, st)) if a != b), None)))
+        bad = [d for d, i in first if i is not None and i <= PAGE]
+        print(f"    逐日前 {DEPTH} 条的第一处分歧位次：{[(d, i) for d, i in first]}"
+              f"{'  ⚠️ 有天数落进前 40：' + str(bad) if bad else ''}")
 
     for loose in ([False, True] if args.compare_loose else [False]):
         tag = "宽口径（= archive_page，不带生产 where）" if loose else "生产口径（enabled + 非微信 + 去重）"
