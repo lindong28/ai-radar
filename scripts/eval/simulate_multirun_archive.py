@@ -89,12 +89,13 @@ def _apply_score_overlay(
     from airadar.curator import select as _sel
     from airadar.curator.score import ScoredCandidate
     from airadar.curator.score import weighted_score as _ws
+    from airadar.curator.weights import CORE_DIMENSIONS
 
     ov = sqlite3.connect(f"file:{overlay_path}?mode=ro", uri=True)
     ov.row_factory = sqlite3.Row
     rejudged: dict[str, sqlite3.Row] = {
         r["item_id"]: r for r in ov.execute(
-            "SELECT item_id, is_ai_related, numeric_json, enrich_output_json "
+            "SELECT item_id, is_ai_related, confidence, numeric_json, enrich_output_json "
             "FROM rejudged WHERE error IS NULL"
         )
     }
@@ -103,11 +104,15 @@ def _apply_score_overlay(
         return candidates
 
     # `conn` 的 row_factory 未设（本脚本别处按 tuple 读它），所以这里显式按列序取。
+    # **结构性排除要与 `_load_candidates` 同一套**（复核轮的 M12）：它有 `s.enabled=1` 与
+    # `COALESCE(s.kind,'feed') != 'wechat'`。少了这两条，added 分支能注入生产**结构上排除**的条目
+    # ——当前 3 天窗口内 0 条命中，但库里有 2 个 enabled 的 wechat 源，是潜在的。
     meta: dict[str, dict] = {}
     for iid, chash, iurl, pub, tier, sid, kind in conn.execute(
         "SELECT i.id, i.content_hash, i.url, i.published_at, s.tier, s.id,"
         "       COALESCE(s.kind,'feed') "
-        "FROM items i JOIN sources s ON s.id = i.source_id"
+        "FROM items i JOIN sources s ON s.id = i.source_id "
+        "WHERE s.enabled=1 AND COALESCE(s.kind,'feed') != 'wechat'"
     ):
         meta[str(iid)] = {"content_hash": chash, "url": iurl, "published_at": pub,
                           "tier": tier or "T2", "sid": sid, "kind": kind}
@@ -120,23 +125,36 @@ def _apply_score_overlay(
             numeric = _json.loads(row["numeric_json"])
         except ValueError:
             return None
-        # `weighted_score` 对缺失的 CORE_DIMENSIONS 会抛，先自己挡住，别让一条坏行弄挂整次回放。
-        if any(numeric.get(d) is None for d in ("relevance", "density", "recency",
-                                                "authority", "significance")):
+        # 守卫必须与 `weights.CORE_DIMENSIONS` **同一份**（复核轮的 M11）：手写那份两个方向都错——
+        # 它列了 `significance`（`weighted_score` 对它缺失会按设计 rescale、不抛）⇒ 白挡；
+        # 又漏了 `engineering`（缺了真会 `KeyError`）⇒ 放过后被裸 except 吞掉、静默保留生产分。
+        # 两种错的可观察结果相同：那一条静默不换分。`ScoringResult.significance` 默认就是 None，
+        # 所以换成不产它的 provider 时，手写清单会让整条分数轴静默归零效应。
+        if any(numeric.get(d) is None for d in CORE_DIMENSIONS):
             return None
         try:
             return _ws(numeric, weights, tier)
         except Exception:  # noqa: BLE001
             return None
 
+    # **三个分支的举证门槛要对称**（复核轮的 H8）：换分与新增都 fail-open（重判行不够用就回到
+    # 生产读数、朝"无效应"落），而移出**原本 fail-closed**——只要 `is_ai_related==0` 就踢出候选，
+    # 不做任何有效性校验 ⇒ 一条坏到不足以重算分数的行，照样足以产生效应。
+    # 故给移出加一道与另两支同量级的门槛：低置信度的拒绝不生效，并把跳过数打出来。
+    DROP_MIN_CONFIDENCE = 0.8
     out: list = []
-    swapped = dropped = 0
+    swapped = dropped = drop_skipped = 0
     for c in candidates:
         row = rejudged.get(c.item_id)
         if row is None:
             out.append(c)
             continue
         if not row["is_ai_related"]:
+            conf = row["confidence"]
+            if not isinstance(conf, (int, float)) or conf < DROP_MIN_CONFIDENCE:
+                drop_skipped += 1
+                out.append(c)
+                continue
             dropped += 1
             continue
         m = meta.get(c.item_id)
@@ -176,7 +194,8 @@ def _apply_score_overlay(
     # 这三个数都是 **dedup 之前**的（调用方随后去重一次）——标出来，
     # 否则「新增候选 N」会被读成「进池 N 条」，而那个数字是人要读的（复核轮的 New-7）。
     print(f"覆盖层 {overlay_path}（以下均为 dedup 前）：换分 {swapped} 条 · 新增候选 {added} 条 · "
-          f"移出 {dropped} 条（重判为非 AI）⇒ 候选 {len(candidates)} → {len(out)}")
+          f"移出 {dropped} 条（重判为非 AI，置信度 ≥{DROP_MIN_CONFIDENCE}）· "
+          f"移出被跳过 {drop_skipped} 条（置信度不足）⇒ 候选 {len(candidates)} → {len(out)}")
     # **不在这里 dedup**：调用方拿到的是 pre-dedup 池，它 dedup 一次就够（见调用点的注释）。
     return out
 
@@ -415,7 +434,9 @@ def main() -> None:
     for k in list(overrides):
         if k in BUCKET_TO_OURS:
             overrides[BUCKET_TO_OURS[k]] = overrides.pop(k)
-    seen_cats = {c.primary_category for c in candidates}
+    # `or ""`：`primary_category` 声明是 str，但覆盖层的 added 分支直接写函数返回值，
+    # 没有类型屏障；池里一旦出现 None，下面的 `sorted()` 会 TypeError（复核轮的 L19）。
+    seen_cats = {c.primary_category or "" for c in candidates}
     unknown = [k for k in overrides if k not in seen_cats]
     if unknown:
         # 不命中就报错退出：一个打不中的系数与「这一类不响应」在读数上完全同形。

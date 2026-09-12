@@ -34,6 +34,7 @@ import sqlite3
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -74,6 +75,8 @@ def assert_public_http(url: str) -> None:
     1. 一个**由代理解析**到内网地址的域名（`127.0.0.1.nip.io` 一类），这道闸挡不住——
        它要在代理 / egress 层用主机名单解决，不在本脚本的作用域内。
     2. DNS rebinding 有 TOCTOU 窗口：本函数判一次、httpx 再解析一次。要钉住得自己解析并连 IP。
+    3. **判据随 Python 版本变**（复核轮的 L18）：`ipaddress` 对 `::ffff:*` 的 `is_private`、
+       对 `100.64/10` 的归类都改过。本机实测在 **3.13**；换解释器要重跑那组对照。
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -106,7 +109,26 @@ def fetch_article(url: str, timeout: float) -> tuple[str, str]:
                 timeout=timeout,
                 follow_redirects=False,  # 逐跳自己判，否则跳板可绕过上面的校验
             ) as client:
-                resp = client.get(current, headers={"User-Agent": "Mozilla/5.0 (compatible; ai-radar-eval)"})
+                # **流式读 + 边读边截**（复核轮的 M13）：第一版在 `len(resp.content)` 之后才判
+                # `MAX_BYTES`，那时整份 body 已经下载并解压进内存了，闸什么都没护住
+                # ——实测有一条抽出 93019 字（原文 57 字），原始字节更大，而并发无上界。
+                with client.stream(
+                    "GET", current,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; ai-radar-eval)"},
+                ) as resp:
+                    if resp.status_code == 200:
+                        chunks: list[bytes] = []
+                        size = 0
+                        for chunk in resp.iter_bytes():
+                            size += len(chunk)
+                            if size > MAX_BYTES:
+                                return "", f"过大 >{MAX_BYTES}B"
+                            chunks.append(chunk)
+                        resp_text = b"".join(chunks).decode(
+                            resp.encoding or "utf-8", errors="replace")
+                    else:
+                        resp_text = ""
+                        resp.read()
             if resp.status_code in (301, 302, 303, 307, 308):
                 nxt = resp.headers.get("location")
                 if not nxt:
@@ -118,9 +140,7 @@ def fetch_article(url: str, timeout: float) -> tuple[str, str]:
             ctype = resp.headers.get("content-type", "").lower()
             if "html" not in ctype and "xml" not in ctype:
                 return "", f"content-type {ctype.split(';')[0] or '?'}"
-            if len(resp.content) > MAX_BYTES:
-                return "", f"过大 {len(resp.content)}B"
-            body = clean_content(resp.text)
+            body = clean_content(resp_text)
             # **空正文要有自己的 note**（2026-09-11 复核轮的 New-6）：返回 `("", "ok")` 时
             # `_miss_is_permanent("ok")` 为 False ⇒ 每次续跑都重抓、永不收敛，
             # 而这正是 H6 要修的那一类。抽取为空是关于该页面的事实，永久。
@@ -135,12 +155,15 @@ def fetch_article(url: str, timeout: float) -> tuple[str, str]:
 def eligible_sources(conn: sqlite3.Connection, min_rate: float, lookback_days: int) -> set[str]:
     keep: set[str] = set()
     for row in conn.execute(
-        "SELECT i.source_id s, "
-        "       SUM(CASE WHEN e.output_json LIKE '%\"is_ai_related\":true%' THEN 1 ELSE 0 END)*1.0/COUNT(*) r, "
-        "       COUNT(*) n "
-        "FROM items i JOIN item_evaluations e ON e.item_id=i.id AND e.stage='prefilter' "
-        f"WHERE e.error IS NULL AND i.published_at >= datetime('now','-{lookback_days} days') "
-        "GROUP BY i.source_id"
+        # **分母要按条目去重**（复核轮的 L17）：`COUNT(*)` 数的是 prefilter 行，
+        # 被重跑过的条目会重复计入 ⇒ 这个「AI 率」不是条目级的率。取每条目**最新**那一行。
+        "SELECT source_id s, SUM(is_ai)*1.0/COUNT(*) r, COUNT(*) n FROM ("
+        "  SELECT i.source_id AS source_id, i.id AS iid,"
+        "         (e.output_json LIKE '%\"is_ai_related\":true%') AS is_ai,"
+        "         ROW_NUMBER() OVER (PARTITION BY i.id ORDER BY e.id DESC) AS rn "
+        "  FROM items i JOIN item_evaluations e ON e.item_id=i.id AND e.stage='prefilter' "
+        f"  WHERE e.error IS NULL AND i.published_at >= datetime('now','-{lookback_days} days')"
+        ") WHERE rn=1 GROUP BY source_id"
     ):
         # 样本太少判不出率，放行——它们量也小，不构成灌量风险。
         if row["n"] < 10 or row["r"] >= min_rate:
@@ -211,6 +234,26 @@ def open_overlay(path: Path) -> sqlite3.Connection:
     return out
 
 
+
+def _print_db_identity(path: str) -> None:
+    """打印所读库的身份，让「三段读了三个不同时刻」看得见（复核轮的 H10）。
+
+    生产库此刻仍在写，而 build → rejudge → simulate 是三次独立进程、三个快照
+    ⇒ 测出来的 Δ 里混着「机制生效」与「池子长大了」。本机 scratchpad 里有 `radar-frozen.db`，
+    三段都指它即可消除；但**默认值仍是生产库**，所以这里至少把身份摆出来——
+    比较两份输出时，快照不一致一眼看得出。
+    """
+    import os
+    from datetime import UTC
+    from datetime import datetime as _dt
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        print(f"库身份：{path}（stat 失败 {type(exc).__name__}）")
+        return
+    mtime = _dt.fromtimestamp(st.st_mtime, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"库身份：{path}  mtime={mtime}  {st.st_size / 2**30:.2f} GiB")
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=str(REPO / "data" / "radar.db"),
@@ -228,19 +271,28 @@ def main() -> None:
     ap.add_argument("--limit", type=int, help="只跑前 N 条（冒烟用）")
     args = ap.parse_args()
 
+    _print_db_identity(args.db)
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=120000")
 
     keep = eligible_sources(conn, args.min_ai_rate, lookback_days=14)
+    # **窗口边界要与库里的格式同形**（复核轮的 M16）：`published_at` 存的是
+    # `'2026-09-09T01:06:56Z'`，而 `datetime('now','-3 days')` 给的是 `'2026-09-09 01:06:56'`
+    # ——字符串比较下 `'T'(0x54) > ' '(0x20)` ⇒ 边界日被整天纳入，窗口不是精确 N 天。
+    # 顺带挡住未来日期（库里实测有 `2026-09-14T00:00:00Z`），它会被无条件收进任何窗口。
+    cutoff = (datetime.now(UTC) - timedelta(days=args.days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    upper = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = [
         r for r in conn.execute(
             "SELECT id, source_id, url, content_text FROM items "
-            f"WHERE published_at >= datetime('now','-{args.days} days') "
-            f"  AND length(trim(content_text)) < {args.max_body}"
+            "WHERE published_at >= ? AND published_at <= ? "
+            f"  AND length(trim(content_text)) < {args.max_body}",
+            (cutoff, upper),
         )
         if r["source_id"] in keep
     ]
+    print(f"窗口 [{cutoff}, {upper}]（按 published_at，已挡未来日期）")
     out = open_overlay(Path(args.out))
     # **只有"永久"的 miss 才算已完成**（2026-09-11 review-gate 的 H6）。第一版把整张
     # `fetch_miss` 并入 `done`，于是瞬时错误、以及**被闸误拦**的条目被永久粘住、再跑也不重试。

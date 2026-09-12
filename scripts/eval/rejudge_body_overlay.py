@@ -100,6 +100,26 @@ def ensure_schema(out: sqlite3.Connection) -> None:
     out.commit()
 
 
+
+def _print_db_identity(path: str) -> None:
+    """打印所读库的身份，让「三段读了三个不同时刻」看得见（复核轮的 H10）。
+
+    生产库此刻仍在写，而 build → rejudge → simulate 是三次独立进程、三个快照
+    ⇒ 测出来的 Δ 里混着「机制生效」与「池子长大了」。本机 scratchpad 里有 `radar-frozen.db`，
+    三段都指它即可消除；但**默认值仍是生产库**，所以这里至少把身份摆出来——
+    比较两份输出时，快照不一致一眼看得出。
+    """
+    import os
+    from datetime import UTC
+    from datetime import datetime as _dt
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        print(f"库身份：{path}（stat 失败 {type(exc).__name__}）")
+        return
+    mtime = _dt.fromtimestamp(st.st_mtime, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"库身份：{path}  mtime={mtime}  {st.st_size / 2**30:.2f} GiB")
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=str(REPO / "data" / "radar.db"))
@@ -112,6 +132,7 @@ def main() -> None:
     for key, value in _isolate_side_effects(args.overlay).items():
         print(f"隔离：{key} = {value}")
 
+    _print_db_identity(args.db)
     src = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     src.row_factory = sqlite3.Row
     src.execute("PRAGMA busy_timeout=120000")
