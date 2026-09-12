@@ -218,6 +218,36 @@ def _miss_is_permanent(note: str) -> bool:
     return False
 
 
+def _cap_per_source(rows: list, share: float) -> list:
+    """把单源占比压到 `share` 以下，按 `published_at` 降序保留每源最新的那些。
+
+    **这是取样上限，不是生产机制**——它只让这批样本有能力看见要测的那个缺口。
+    做法是解一次自洽的上限：砍掉超配源之后总数变小，上限也跟着变小，故迭代到稳定。
+    """
+    from collections import Counter
+
+    kept = list(rows)
+    for _ in range(20):
+        counts = Counter(r["source_id"] for r in kept)
+        cap = max(1, int(len(kept) * share))
+        over = {s for s, n in counts.items() if n > cap}
+        if not over:
+            break
+        out, taken = [], Counter()
+        for r in sorted(kept, key=lambda r: r["published_at"], reverse=True):
+            sid = r["source_id"]
+            if sid in over and taken[sid] >= cap:
+                continue
+            taken[sid] += 1
+            out.append(r)
+        kept = out
+    counts = Counter(r["source_id"] for r in kept)
+    top = counts.most_common(1)[0] if counts else ("-", 0)
+    print(f"单源上限 {share:.0%}：样本 {len(rows)} → {len(kept)} 条，"
+          f"最大源现占 {top[1] / max(len(kept), 1) * 100:.1f}% ({top[0]})")
+    return kept
+
+
 def open_overlay(path: Path) -> sqlite3.Connection:
     out = sqlite3.connect(path)
     out.execute(
@@ -266,6 +296,14 @@ def main() -> None:
     ap.add_argument("--max-body", type=int, default=300, help="正文短于多少字才回抓（默认 300）")
     ap.add_argument("--min-gain", type=float, default=2.0, help="新正文至少是原来的几倍才替换（默认 2）")
     ap.add_argument("--min-ai-rate", type=float, default=0.30, help="信源历史 prefilter AI 率下限（默认 0.30）")
+    ap.add_argument("--max-per-source", type=float, default=0.25,
+                    help="单个信源在本批样本里的占比上限（默认 0.25）。"
+                         "**这是取样上限、不是生产机制**：不设它时 `hf_daily_papers` 占 43.6%–47.9%"
+                         "（跨 3/7/14 天几乎不动，放宽窗口无效——它是每日论文源，"
+                         "短摘要正是触发回抓的形态）。而它是 `paper` 类源，"
+                         "而权威归档面上 `paper` 已出界 +4.38pp、最大缺口是 `model −9.30pp` "
+                         "⇒ 不设上限时这批样本**结构上只能把 paper 推更远**，"
+                         "测不到它被建出来要测的那个缺口。设 0 关闭。")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("--limit", type=int, help="只跑前 N 条（冒烟用）")
@@ -285,7 +323,7 @@ def main() -> None:
     upper = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = [
         r for r in conn.execute(
-            "SELECT id, source_id, url, content_text FROM items "
+            "SELECT id, source_id, url, content_text, published_at FROM items "
             "WHERE published_at >= ? AND published_at <= ? "
             f"  AND length(trim(content_text)) < {args.max_body}",
             (cutoff, upper),
@@ -293,6 +331,8 @@ def main() -> None:
         if r["source_id"] in keep
     ]
     print(f"窗口 [{cutoff}, {upper}]（按 published_at，已挡未来日期）")
+    if args.max_per_source > 0 and rows:
+        rows = _cap_per_source(rows, args.max_per_source)
     out = open_overlay(Path(args.out))
     # **只有"永久"的 miss 才算已完成**（2026-09-11 review-gate 的 H6）。第一版把整张
     # `fetch_miss` 并入 `done`，于是瞬时错误、以及**被闸误拦**的条目被永久粘住、再跑也不重试。
