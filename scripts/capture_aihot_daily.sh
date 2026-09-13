@@ -268,10 +268,37 @@ if [ $rc -eq 0 ]; then
       # ADR-20260913-c7d4 supersedes only the AUTHORISATION half of that sentence (this one ref
       # is authorised standing, by user decision on 2026-09-13); the ordering half stands.
       #
-      # `BatchMode=yes` is not optional on this host: ssh here uses an encrypted key with
-      # `UseKeychain yes`, and a locked Keychain makes ssh raise a **GUI** passphrase dialog --
-      # not stdin, so ConnectTimeout does not reach it and cron cannot dismiss it. The job would
-      # hang holding its daily slot with an empty log. BatchMode turns that into a clean failure.
+      # `BatchMode=yes` keeps ssh from raising an interactive passphrase prompt this job could
+      # never answer; the wall-clock bound below covers the rest. It is NOT what makes auth work.
+      #
+      # What makes auth work is the ssh-agent, and cron does not have it. Measured 2026-09-14,
+      # same environment both arms, the ONLY difference being SSH_AUTH_SOCK:
+      #   without it -> `git@github.com: Permission denied (publickey)`
+      #   with it    -> the ref reads back fine
+      # `~/.ssh/id_rsa` carries a passphrase, and [ADR-013](../docs/adr/013-db-sync-cron-agent-socket-auth.md)
+      # already settled this exact problem for the sibling DB-sync cron: discover the logged-in
+      # user's agent via launchd. That ADR explicitly REJECTED leaning on `UseKeychain yes`
+      # ("passphrase 是否已入 keychain 未确认"), so an earlier revision of this comment, which
+      # assumed the Keychain authenticates here, was wrong.
+      #
+      # Deliberately simpler than the sibling: it fingerprint-matches a specific sync key, this
+      # takes the first agent holding any key. One wrong pick degrades to the push failure this
+      # block already handles and alerts on -- whereas duplicating the fingerprint derivation
+      # would add a second copy of logic that has to track `ssh -G`.
+      #
+      # Inherited limitation, same as ADR-013's Option A: no logged-in session means no agent
+      # means this fails. It fails loudly (rc=1 -> Feishu), which is the documented trade.
+      if [ -z "${SSH_AUTH_SOCK:-}" ] || ! ssh-add -l >/dev/null 2>&1; then
+        for sock in /var/run/com.apple.launchd.*/Listeners; do
+          [ -S "$sock" ] || continue
+          if SSH_AUTH_SOCK="$sock" ssh-add -l >/dev/null 2>&1; then
+            export SSH_AUTH_SOCK="$sock"
+            echo "  ssh-agent: discovered $sock"
+            break
+          fi
+        done
+      fi
+      [ -n "${SSH_AUTH_SOCK:-}" ] || echo "  WARNING: no ssh-agent with a key found; the push below will fail"
       push_remote="${AIHOT_CAPTURE_PUSH_REMOTE-origin}"
       push_ref="${AIHOT_CAPTURE_PUSH_REF:-refs/heads/captures/daily}"
       # Set UNCONDITIONALLY, not `${GIT_SSH_COMMAND:-...}`: an inherited value -- from a manual
@@ -354,15 +381,36 @@ if [ $rc -eq 0 ]; then
     elif [ -n "$(git -C benchmarks/aihot branch -r --contains HEAD 2>/dev/null)" ]; then
       echo "  submodule durable: $sub_head is on a remote-tracking ref"
     else
-      echo "  WARNING: submodule commit $sub_head is NOT on any remote-tracking ref."
-      echo "           It exists only in this worktree's private gitdir; \`git worktree remove\`"
-      echo "           destroys it, no other checkout can fetch it, and every consumer of"
-      echo "           benchmarks/aihot keeps reading the last pushed capture with no signal."
-      echo "           ADR-060 keeps this push a per-push human action. To make it durable:"
-      echo "             git -C benchmarks/aihot push origin HEAD:refs/heads/captures/daily"
-      echo "           (Stale remote-tracking refs can trigger this after a real push; a"
-      echo "            \`git -C benchmarks/aihot fetch\` then re-run clears a false alarm.)"
-      rc=1
+      # Local remote-tracking refs are a CACHE, not the remote. Pushing from a different checkout
+      # of the same submodule leaves this one's copy behind, and the check then alarms every day
+      # about data that is in fact durable. Measured 2026-09-14: this worktree's
+      # `origin/captures/daily` still read 137a468 while the remote had 623728b, pushed the day
+      # before from the main checkout -- a guaranteed daily false alarm with no way for the
+      # reader to tell it from the real thing. So before alarming, ask the remote itself.
+      dur_remote="${AIHOT_CAPTURE_PUSH_REMOTE-origin}"
+      dur_ref="${AIHOT_CAPTURE_PUSH_REF:-refs/heads/captures/daily}"
+      dur_sha=""
+      if [ -n "$dur_remote" ]; then
+        dur_sha="$(bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C benchmarks/aihot ls-remote "$dur_remote" "$dur_ref" 2>/dev/null | awk 'NR==1{print $1}')"
+      fi
+      if [ -n "$dur_sha" ] && git -C benchmarks/aihot merge-base --is-ancestor HEAD "$dur_sha" 2>/dev/null; then
+        echo "  submodule durable: $sub_head is reachable from $dur_remote/$dur_ref on the remote"
+        echo "           (local remote-tracking ref was stale; not an alarm)"
+      else
+        echo "  WARNING: submodule commit $sub_head is on no remote-tracking ref, and the remote"
+        echo "           does not have it either (read back: ${dur_sha:-<unreadable>})."
+        echo "           It exists only in this worktree's private gitdir; \`git worktree remove\`"
+        echo "           destroys it, no other checkout can fetch it, and every consumer of"
+        echo "           benchmarks/aihot keeps reading the last pushed capture with no signal."
+        echo "           This run's own push either was skipped or failed -- see above. To recover:"
+        # `${dur_remote:-origin}`, not `$dur_remote`: with pushing deliberately off the variable is
+        # empty, and printing it bare hands the reader `git push  HEAD:...` -- a command that fails
+        # with an unhelpful error. The recovery line has to be runnable in every arm that prints it.
+        echo "             git -C benchmarks/aihot push ${dur_remote:-origin} HEAD:$dur_ref"
+        echo "           If that says 'Permission denied (publickey)', it is the missing ssh-agent,"
+        echo "           not a key problem: log in so launchd holds an agent (see ADR-013)."
+        rc=1
+      fi
     fi
 fi
 

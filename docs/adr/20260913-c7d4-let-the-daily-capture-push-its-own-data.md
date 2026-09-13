@@ -114,3 +114,36 @@ user-scope 的「Git Push 需显式许可」逐次取得许可。
 
 **所以本档对这条的最终表述是**：`BatchMode=yes` 的作用**未验证**，且**不依赖它**——
 防挂起由外层超时与子进程终结承担，那两条有读数、有变异覆盖。
+
+## 🔴 2026-09-14 更正：认证靠的是 ssh-agent，不是 Keychain；已按 ADR-013 补上发现
+
+上面整段把 `BatchMode` 与 Keychain 当成这条路径的认证问题，**方向错了**。
+用户重启后要我核 cron 还能不能跑，形态比对给出决定性读数——**同一环境，唯一变量是 `SSH_AUTH_SOCK`**：
+
+| 臂 | 结果 |
+|---|---|
+| `env -i` + `BatchMode=yes`，**无 agent**（cron 的真实形态） | `git@github.com: Permission denied (publickey)` |
+| 完全相同，**只多 `SSH_AUTH_SOCK`** | ✅ 读回 `623728b` |
+
+[ADR-013](./013-db-sync-cron-agent-socket-auth.md)（accepted，2026-08-09）**早就为兄弟 DB-sync cron
+解决过同一问题**：cron 无 `SSH_AUTH_SOCK`，`~/.ssh/id_rsa` 带 passphrase，只有登录用户的 agent 认得过，
+所以它逐个探测 `/var/run/com.apple.launchd.*/Listeners`。
+**它当年还明确否决了 Option B「靠 `UseKeychain yes` 从 keychain 取 passphrase」**，
+理由正是「passphrase 是否已入 keychain 未确认」——即本 ADR 先前那段假设，当年就被判为未确认。
+
+⇒ **已在 push 之前补上同样的 agent 发现**（比兄弟简化：不做指纹匹配，取第一个持 key 的 agent；
+选错退化为本块已有的 push 失败并告警，而复制一份指纹推导要跟着 `ssh -G` 走）。
+`env -i` 下实测：发现到 socket、随后 `ls-remote` 读回 `623728b`。
+**继承 ADR-013 Option A 的限制**：没有登录会话就没有 agent，此时它**响亮地**失败（rc=1 → 飞书）。
+
+**`BatchMode=yes` 保留**，但降级为「防交互提示」，不再声称它解决认证；
+防挂起仍由外层超时 + 子进程终结承担（那两条有读数、有变异覆盖）。
+
+## 🔴 同日第二条：陈旧的 remote-tracking ref 会天天误报
+
+耐久检查读的是 `git branch -r --contains HEAD`，那是**本地缓存、不是远端**。
+实测：capture worktree 的 `origin/captures/daily` 仍是 `137a468`，而远端早已是前一天从**主 checkout**
+推上去的 `623728b` ⇒ 该检查会**每天**对着一份其实已耐久的数据报警，而读者分不出真假。
+
+⇒ 已改为：本地 ref 不含 HEAD 时，**先向远端 `ls-remote` 确认**（走同一个 `bounded` 超时）再决定报不报警。
+新增用例 21 复现该状态；反向变异（拆掉这一步）→ **62/3 红**。

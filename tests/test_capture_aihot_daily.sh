@@ -240,6 +240,10 @@ rc=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 AIHOT_CAPTURE_PUSH_REMOTE= run "$r" "$stub
 after=$( cd "$r/tool" && git rev-parse HEAD )
 check "push off: non-zero"         "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
 check "push off: names recovery"   "$( cat "$r"/tool/logs/*.log | grep -c 'push origin HEAD:refs/heads/captures/daily' )" "1"
+# The recovery line must be RUNNABLE in this arm too. With pushing off the remote variable is
+# empty, and an earlier revision printed `git push  HEAD:...` -- a command the 2am reader would
+# copy and get an unhelpful error from. Assert no double space where the remote belongs.
+check "push off: recovery has a remote" "$( cat "$r"/tool/logs/*.log | grep -c 'push  HEAD:' )" "0"
 # The assertion this case was MISSING, and an independent reviewer found the bug it hid: the
 # guard read `[ -n "$pushed" ]`, which `pushed=skipped` satisfies, so a run with pushing turned
 # off still pinned the gitlink at a SHA no remote had. rc was non-zero anyway -- from the
@@ -319,6 +323,22 @@ child=$(cat "$pidfile" 2>/dev/null)
 sleep 1
 check "bounded: spawns a child"     "$( [ -n "$child" ] && echo yes || echo no )" "yes"
 check "bounded: child terminated"   "$( kill -0 "$child" 2>/dev/null && echo alive || echo gone )" "gone"
+rm -rf "$r"
+
+echo "21. a STALE local remote-tracking ref must not be read as 'not durable'. Measured in"
+echo "    production 2026-09-14: the capture worktree's origin/captures/daily still read"
+echo "    137a468 while the remote had 623728b, pushed the day before from another checkout"
+echo "    of the same submodule. Local remote-tracking refs are a cache, not the remote, so"
+echo "    the check alarmed every day about data that was in fact durable -- and the reader"
+echo "    had no way to tell that from the real thing."
+r=$(setup)
+rc1=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" "$stub")           # pushes; ref now current
+base=$( cd "$r/data" && git rev-parse HEAD )
+( cd "$r/tool/benchmarks/aihot" && git update-ref refs/remotes/origin/captures/daily "$base" )  # go stale
+rc2=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" 'true --')         # nothing staged, stale ref
+check "stale ref: still exits 0"   "$rc2" "0"
+check "stale ref: says stale"      "$( cat "$r"/tool/logs/*.log | grep -c 'local remote-tracking ref was stale' )" "1"
+check "stale ref: no false alarm"  "$( cat "$r"/tool/logs/*.log | grep -c 'is on no remote-tracking ref, and the remote' )" "0"
 rm -rf "$r"
 
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]
