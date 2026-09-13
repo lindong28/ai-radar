@@ -841,7 +841,7 @@
       "name": "xAI News",
       "slug": "xai_news",
       "tier": "T1",
-      "paused": false
+      "paused": true
     },
     {
       "aihot_aliases": [

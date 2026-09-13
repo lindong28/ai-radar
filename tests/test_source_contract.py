@@ -53,8 +53,14 @@ def test_contract_wechat_optional_boundary_is_explicit() -> None:
         assert wechat["fetch_url"] == f"${{{wechat['required_env']}}}"
         assert wechat["wechat_only"] is True
         assert wechat["public_url_override"] == "https://mp.weixin.qq.com/"
+    # The paused set is pinned by name, not by a predicate: pausing a source is
+    # a decision per ADR-20260904-f427, so a new member has to be added here
+    # deliberately rather than slipping in. wx_mp2rss: expired subscription.
+    # xai_news: x.ai hard-blocks us at Cloudflare from every egress we have
+    # (see docs/adr/20260913-e21a, "xai_news" note).
+    paused_slugs = {"wx_mp2rss", "xai_news"}
     assert {row["slug"]: row["paused"] for row in payload["sources"]} == {
-        row["slug"]: row["slug"] == "wx_mp2rss" for row in payload["sources"]
+        row["slug"]: row["slug"] in paused_slugs for row in payload["sources"]
     }
 
 

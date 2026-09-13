@@ -18,17 +18,28 @@ def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _not_after_now(dt: datetime) -> str:
+    """A feed's pubDate is unbounded input. The archive surface orders by
+    published_at (ADR-006), so an entry dated in the future pins itself to the
+    top until real time catches up. Observed on openai.com/news/rss.xml,
+    2026-09-13. See docs/adr/20260913-e21a.
+    """
+    now = datetime.now(UTC).replace(microsecond=0)
+    normalized = dt.astimezone(UTC).replace(microsecond=0)
+    return min(normalized, now).isoformat().replace("+00:00", "Z")
+
+
 def _published_at(entry: Any) -> str:
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if isinstance(parsed, struct_time):
-        return datetime(*parsed[:6], tzinfo=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        return _not_after_now(datetime(*parsed[:6], tzinfo=UTC))
     value = entry.get("published") or entry.get("updated")
     if value:
         try:
             dt = parsedate_to_datetime(value)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=UTC)
-            return dt.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            return _not_after_now(dt)
         except (TypeError, ValueError):
             pass
     return utc_now()

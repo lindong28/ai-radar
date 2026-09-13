@@ -169,6 +169,7 @@
 
 | [20260904-d708-fail-pipeline-before-wechat-browser-degradation.md](adr/20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline；W1 复用共享告警状态机，成功态只证明可执行文件路径存在 |
 | [20260910-9e21-pin-the-category-snapshot-with-one-integer.md](adr/20260910-9e21-pin-the-category-snapshot-with-one-integer.md) | 类别快照用一个整数（`enrich_watermark`）固定；不按 enrich 戳收窄类别系数施加面；评测台追加 `selected_auc_ranked` 而不替换既有指标 |
+| [20260913-e21a-clamp-rss-pubdate-to-fetch-time.md](adr/20260913-e21a-clamp-rss-pubdate-to-fetch-time.md) | RSS 入库把未来 pubDate 钳到当前时刻，只在 RSS 路径上（`web.py:_date()` 同形缺口有意不修，0 实测越界）；`published_at` 语义变为「不晚于我方**解析**到它的时刻」（文件名里的 fetch-time 是误称），与 [006-curated-archive](adr/006-curated-archive-mode.md) 的排序契约有交界面 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

@@ -279,6 +279,60 @@ def test_curate_per_source_cap_refills_from_other_sources(tmp_path: Path) -> Non
     assert run.output_curated_ids == ["a-1", "b-1", "c-1", "d-1"]
 
 
+def test_one_future_dated_candidate_empties_the_freshness_quota(tmp_path: Path) -> None:
+    """Regression guard for the 2026-09-13 incident (docs/adr/20260913-e21a).
+
+    `latest_fresh_date` is a `max()` over the freshness pool, and `fresh` keeps
+    only that one Shanghai date. A single candidate dated a day ahead of the
+    others therefore owns the pool by itself, the freshness slots go unused, and
+    `_fill` tops the page up from all of history instead. On the live site that
+    showed up as the homepage quietly serving months-old items for ~27 hours --
+    no error, no alert.
+
+    The contrast is the point: the only difference between the two arms is
+    whether that one candidate's `published_at` is in the future. The right arm
+    is the value `rss.py` would store for the same entry after clamping, so the
+    pair says what that clamp is buying.
+
+    Coverage boundary -- this test inserts `published_at` directly and never
+    calls `rss.py`, so it does **not** go red if the clamp regresses; that is
+    covered by `tests/test_fetcher.py::test_parse_feed_clamps_a_future_pubdate_to_now`.
+    What this one pins is the `select.py` coupling itself: add a guard there and
+    the left arm fails, which is the intended way to notice.
+    """
+    now = datetime.now(UTC)
+    # One source per item: _setup_quota_db gives every row the same content_text,
+    # so same-source rows would collapse in dedup before selection ran.
+    recent = [(f"today-{i}", f"recent-src-{i}", "feed", 9.0 - i * 0.1, now - timedelta(hours=i + 1)) for i in range(4)]
+    ancient = [(f"old-{i}", f"old-src-{i}", "feed", 9.9 - i * 0.1, now - timedelta(days=200 + i)) for i in range(3)]
+
+    def selected_with(arm: str, outlier_published_at: datetime) -> list[str]:
+        # Arm-labelled directory, not one derived from the timestamp: the two arms
+        # must stay isolated even when the dates they pass happen to be equal,
+        # or a mutation of either date collides into an IntegrityError and the
+        # test fails for a reason that has nothing to do with what it asserts.
+        conn = _setup_quota_db(
+            tmp_path / arm,
+            [*recent, *ancient, ("outlier", "outlier-src", "feed", 9.5, outlier_published_at)],
+        )
+        # quota == limit so every slot is a freshness slot: any all-history item
+        # on the page then means the freshness pool could not fill it.
+        return curate(conn, ruleset_version="test.r1", limit=4, freshness_quota=4).output_curated_ids
+
+    # Left arm: dated a day ahead, so it is the whole freshness pool.
+    collapsed = selected_with("future", now + timedelta(days=1))
+    # Right arm: the value rss.py would have stored for the same entry.
+    clamped = selected_with("clamped", now)
+
+    assert [item for item in collapsed if item.startswith("old-")], (
+        "a lone future-dated candidate should have emptied the freshness quota "
+        f"and pulled in all-history items, got {collapsed}"
+    )
+    assert not [item for item in clamped if item.startswith("old-")], (
+        f"with the stamp clamped to now the page should stay recent, got {clamped}"
+    )
+
+
 def test_curate_fresh_and_filtered_share_quota_counts(tmp_path: Path) -> None:
     fresh_at = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
     conn = _setup_quota_db(

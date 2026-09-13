@@ -13,7 +13,7 @@ from airadar.db import migrate
 from airadar.fetcher import http_client, runner
 from airadar.fetcher.dedup import FetchedItem, content_hash, upsert_item
 from airadar.fetcher.http_client import FeedResponse, fetch_feed
-from airadar.fetcher.rss import parse_feed
+from airadar.fetcher.rss import _published_at, parse_feed
 from airadar.fetcher.runner import default_sources_path, fetch_all
 from airadar.sources.loader import SourceConfig
 from airadar.sources.sync import sync_to_db
@@ -406,6 +406,59 @@ def test_parse_feed_extracts_entry_fields() -> None:
     assert entries[0].author == "Ada"
     assert entries[0].published_at == "2026-05-08T01:02:03Z"
     assert "LLM benchmark" in entries[0].content_text
+
+
+FUTURE_RSS_BYTES = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example</title>
+    <item>
+      <title>Dated in the future by the publisher</title>
+      <link>https://example.com/future-dated</link>
+      <pubDate>Mon, 14 Sep 2099 00:00:00 GMT</pubDate>
+      <description><![CDATA[An upstream feed that dates its own entry ahead of now.]]></description>
+    </item>
+  </channel>
+</rss>
+"""
+
+
+def test_parse_feed_clamps_a_future_pubdate_to_now() -> None:
+    """A feed that dates an entry in the future would pin it to the top of the
+    published_at-ordered archive surface until real time caught up. Observed on
+    openai.com/news/rss.xml, 2026-09-13. See docs/adr/20260913-e21a.
+    """
+    source = SourceConfig(
+        slug="example", name="Example", url="https://example.com/feed.xml", tier="T2", enabled=True, meta={}
+    )
+    before = datetime.now(UTC).replace(microsecond=0)
+
+    entries = parse_feed(source, FUTURE_RSS_BYTES)
+
+    after = datetime.now(UTC).replace(microsecond=0)
+    assert len(entries) == 1
+    published_at = datetime.fromisoformat(entries[0].published_at.replace("Z", "+00:00"))
+    assert before <= published_at <= after
+
+
+def test_published_at_clamps_the_rfc822_fallback_path_too() -> None:
+    """The struct_time branch and the parsedate_to_datetime fallback are separate
+    returns; clamping only the first would leave feeds feedparser cannot
+    pre-parse unbounded.
+    """
+    before = datetime.now(UTC).replace(microsecond=0)
+
+    value = _published_at({"published": "Mon, 14 Sep 2099 00:00:00 GMT"})
+
+    after = datetime.now(UTC).replace(microsecond=0)
+    assert before <= datetime.fromisoformat(value.replace("Z", "+00:00")) <= after
+
+
+def test_published_at_leaves_a_past_pubdate_untouched() -> None:
+    """Negative control: the clamp must not move timestamps that are already in
+    the past, which is every normal entry.
+    """
+    assert _published_at({"published": "Fri, 08 May 2026 01:02:03 GMT"}) == "2026-05-08T01:02:03Z"
 
 
 def test_fetch_feed_uses_explicit_direct_client_for_loopback_urls(monkeypatch) -> None:  # noqa: ANN001
