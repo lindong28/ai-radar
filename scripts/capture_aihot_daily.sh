@@ -288,8 +288,14 @@ if [ $rc -eq 0 ]; then
       #
       # Inherited limitation, same as ADR-013's Option A: no logged-in session means no agent
       # means this fails. It fails loudly (rc=1 -> Feishu), which is the documented trade.
+      #
+      # The glob is overridable for ONE reason: to be testable. Its real value lives under
+      # /var/run, where a test cannot create a socket without root -- so with the path fixed, the
+      # single piece of this block that decides whether auth works had no automated coverage at
+      # all, which is how it stayed missing until cron had already been unable to push.
+      agent_glob="${AIHOT_CAPTURE_AGENT_SOCK_GLOB:-/var/run/com.apple.launchd.*/Listeners}"
       if [ -z "${SSH_AUTH_SOCK:-}" ] || ! ssh-add -l >/dev/null 2>&1; then
-        for sock in /var/run/com.apple.launchd.*/Listeners; do
+        for sock in $agent_glob; do  # unquoted on purpose: this is a glob, not a path
           [ -S "$sock" ] || continue
           if SSH_AUTH_SOCK="$sock" ssh-add -l >/dev/null 2>&1; then
             export SSH_AUTH_SOCK="$sock"

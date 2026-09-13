@@ -357,4 +357,26 @@ check "blackhole: bound fired"     "$( [ "$elapsed" -lt 15 ] && echo bounded || 
 check "blackhole: no gitlink"      "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
 rm -rf "$r"
 
+echo "23. ssh-agent discovery -- the one piece of the push path that decides whether auth works"
+echo "    at all, and the reason cron could not push until 2026-09-14. It had no automated"
+echo "    coverage, and the first attempt concluded it could not have any: \`ssh-agent -a\` under"
+echo "    the scratchpad returned rc=1. The real cause was sockaddr_un's 104-byte path limit, not"
+echo "    anything about agents. On a short path a real agent stands in for launchd's, and the"
+echo "    glob is overridable for exactly this. Both arms: found, and the not-found warning."
+r=$(setup)
+a=$(mktemp -d /tmp/agt.XXXXXX)   # short on purpose; the scratchpad path overruns sockaddr_un
+ssh-agent -a "$a/Listeners" >/dev/null 2>&1
+ssh-keygen -q -t ed25519 -N '' -f "$a/k"
+SSH_AUTH_SOCK="$a/Listeners" ssh-add "$a/k" >/dev/null 2>&1
+# The glob deliberately matches the keys too, so the `-S` guard and the ssh-add probe both run.
+SSH_AUTH_SOCK= AIHOT_CAPTURE_AGENT_SOCK_GLOB="$a/*" AIHOT_CAPTURE_PUSH_REMOTE= run "$r" "$stub" >/dev/null
+check "agent: discovered the socket" "$( cat "$r"/tool/logs/*.log | grep -c "ssh-agent: discovered $a/Listeners" )" "1"
+check "agent: no warning"            "$( cat "$r"/tool/logs/*.log | grep -c 'no ssh-agent with a key found' )" "0"
+rm -rf "$r"; r=$(setup)
+# Negative arm: without it, an assertion that can never report "not found" proves nothing.
+SSH_AUTH_SOCK= AIHOT_CAPTURE_AGENT_SOCK_GLOB="$a/no-agent-here/*" AIHOT_CAPTURE_PUSH_REMOTE= run "$r" "$stub" >/dev/null
+check "agent: warns when none found" "$( cat "$r"/tool/logs/*.log | grep -c 'no ssh-agent with a key found' )" "1"
+SSH_AUTH_SOCK="$a/Listeners" ssh-agent -k >/dev/null 2>&1
+rm -rf "$r" "$a"
+
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]

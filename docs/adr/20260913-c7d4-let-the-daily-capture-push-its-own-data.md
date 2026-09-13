@@ -163,5 +163,25 @@ user-scope 的「Git Push 需显式许可」逐次取得许可。
 | 面 | 覆盖状态 |
 |---|---|
 | ssh 传输 + 外层超时真的开火 | ✅ case 22，带反向变异 |
-| **agent 发现** | ❌ 自动化零覆盖；只有 2026-09-14 一次 `env -i` 手工读数（发现到 socket、`ls-remote` 读回 `623728b`）。fixture 造不出 launchd socket |
+| **agent 发现** | ✅ case 23，带反向变异（见下一节；本行上一版写的 ❌ 已作废） |
 | **`BatchMode` 抑制交互提示** | ❌ 零覆盖，且**已裁决不验证**（见上一节）；防挂起不依赖它 |
+
+## 2026-09-14 第四条：「agent 发现无法自动化」是错的，104 字节而已
+
+上一节把 agent 发现记作「自动化零覆盖」，并给了理由「fixture 造不出 launchd socket」。
+**理由只对一半，结论整条错**：造不出的是 `/var/run/com.apple.launchd.*/` 下的 socket（要 root），
+而这条路径是不是唯一可行的手段，当时**一次也没查过**——判定依据只有一条
+`ssh-agent -a "$scratchpad/Listeners"` 返回 rc=1、socket 没建出来。
+
+真因是 macOS `sockaddr_un` 的 **104 字节**路径上限，scratchpad 路径 118 字符；
+换成 `/tmp/agt.XXXX`（13 字符）后 `ssh-agent -a` rc=0、`ssh-add` 加钥成功。
+**一个失败的 rc 不说明它为什么失败**，而把它读成「这条路走不通」，
+恰好删掉了后面所有该做的检查——这正是反向断言最典型的失效形态。
+
+⇒ 唯一真正挡路的是 glob 写死。已加 `AIHOT_CAPTURE_AGENT_SOCK_GLOB`（默认值即原字面量，
+生产行为逐字节不变），**case 23** 起一个真的 `ssh-agent` 冒充 launchd 的：
+glob 故意也匹配到密钥文件，于是 `-S` 守卫与 `ssh-add` 探测两条都走到。
+两个臂：发现到 socket 且无 WARNING；glob 指向空目录时 WARNING 必须响。
+
+**反向变异**（把发现循环短路成 `if false`）：`agent: discovered the socket` 与 `agent: no warning`
+双双变红（**69/2**），而否定臂照常 ok——它测的正是另一个方向。全套 **71 passed**。
