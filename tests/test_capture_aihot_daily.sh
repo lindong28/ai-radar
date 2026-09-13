@@ -341,4 +341,20 @@ check "stale ref: says stale"      "$( cat "$r"/tool/logs/*.log | grep -c 'local
 check "stale ref: no false alarm"  "$( cat "$r"/tool/logs/*.log | grep -c 'is on no remote-tracking ref, and the remote' )" "0"
 rm -rf "$r"
 
+echo "22. the outer wall-clock bound must actually fire on a NETWORK command. Until now its only"
+echo "    reading was \`sleep 30\` -- a leaf with no sockets -- so 'the timeout works' rested on a"
+echo "    shape nothing in production resembles. Here the remote is a non-routable blackhole:"
+echo "    ssh hangs for its full ConnectTimeout (measured: 15s), twice over (push, then the"
+echo "    durability read-back), so an unbounded run needs ~30s. With the bound at 3s it must"
+echo "    come back in a fraction of that, non-zero, and must not pin the gitlink."
+r=$(setup); before=$( cd "$r/tool" && git rev-parse HEAD )
+t0=$(date +%s)
+rc=$(AIHOT_CAPTURE_NET_TIMEOUT=3 AIHOT_CAPTURE_PUSH_REMOTE="ssh://nobody@10.255.255.1/x" run "$r" "$stub")
+t1=$(date +%s); elapsed=$((t1-t0))
+after=$( cd "$r/tool" && git rev-parse HEAD )
+check "blackhole: non-zero"        "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
+check "blackhole: bound fired"     "$( [ "$elapsed" -lt 15 ] && echo bounded || echo "unbounded(${elapsed}s)" )" "bounded"
+check "blackhole: no gitlink"      "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
+rm -rf "$r"
+
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]
