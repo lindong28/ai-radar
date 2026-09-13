@@ -223,6 +223,13 @@ def main() -> None:
         _comp.normalize_url(str(u or ""))[0]
         for (u,) in conn.execute("SELECT url FROM items WHERE url IS NOT NULL")
     }
+    # 逐类之外还要留总计：**条目重合是第二个用户可见指标**，而在 2026-09-12 之前本量具
+    # 只把它打到 stdout、不写进 `--record` 的行 ⇒ 趋势序列上它一个点都没有，
+    # 「是不是在稳定改进」只答得出构成那一半。
+    # `by_category` **一起记**（5 个三元组，比同行的 `rows` 小一个量级）：趋势要答的
+    # 下一问必然是「哪一类在改进」，而逐类召回从总计里反推不出来。它与 `rows` 不重复——
+    # `rows` 是归档页的构成份额，这里是「够得着 / 曾被精选」的计数，两个不同的量。
+    overlap = {"reference_selected": 0, "reachable": 0, "hit": 0, "by_category": {}}
     for cat in CATS:
         refs = [
             _comp.normalize_url(r["url"])[0]
@@ -234,11 +241,48 @@ def main() -> None:
             continue
         have = sum(1 for u in refs if u in have_urls)
         got = sum(1 for u in refs if u in curated_urls)
+        overlap["reference_selected"] += len(refs)
+        overlap["reachable"] += have
+        overlap["hit"] += got
+        overlap["by_category"][cat] = {"reference_selected": len(refs), "reachable": have, "hit": got}
         print(
             f"{cat:10}{len(refs):>11}{have:>11}{100 * have / len(refs):>8.1f}%"
             f"{got:>10}{100 * got / max(have, 1):>8.1f}%"
         )
     print("    收录率 = 信源够不够得着（排序改不动它）；召回 = 够得着的里面我方曾精选的比例。")
+    # 上面逐类只数 `cat in CATS` 的条目 ⇒ 参照物新增一个分类 slug 时，合计的分母会**静默变小**，
+    # 而它印出来仍像一个完整总计。这一行让那件事出声（当前实测 0 条）。
+    unmapped = sum(
+        1 for r in aihot.values()
+        if r["selected"] and r.get("url") and r["published"] in used and r.get("category") not in CATS
+    )
+    if unmapped:
+        print(f"    ⚠️ 另有 **{unmapped}** 条 AIHOT 精选的分类不在 CATS 里，"
+              "**不计入下面的合计** ⇒ 分母偏小、重合被高估。先补 CATS 映射再读这一段。")
+    if overlap["reference_selected"]:
+        print(
+            f"{'（合计）':10}{overlap['reference_selected']:>11}{overlap['reachable']:>11}"
+            f"{100 * overlap['reachable'] / overlap['reference_selected']:>8.1f}%"
+            f"{overlap['hit']:>10}{100 * overlap['hit'] / max(overlap['reachable'], 1):>8.1f}%"
+        )
+        # **不在这里合成一个「总差距」百分比**：`measure_curated_composition.py` 已经写下过
+        # 这条纪律——合成一个数会把「没收到」和「没挑中」混成同一个坏消息，而两者的处置
+        # 完全不同（信源 vs 排序）。上面那行已经把两段分开印了，读者要的处置方向在那里。
+        # 记录行里存的是三个**计数**，谁要算比值自己挑分母，不由本量具替他挑。
+        print(
+            f"    ⚠️ 这两列分母不同：收录率 = 够得着/AIHOT 精选（{overlap['reachable']}/"
+            f"{overlap['reference_selected']}），召回 = 曾被精选/够得着（{overlap['hit']}/"
+            f"{overlap['reachable']}）。**别把召回读成「我方覆盖了 AIHOT 的百分之几」**——"
+            "那要再乘收录率，而这两段的修法不同，合成之后就分不开了。"
+        )
+        # 「系统性更高」不写成无条件断言（复核轮的提示级 finding）：那个方向在**默认参数**下
+        # 有实测支撑（2026-09-11 的 per-day 4/8/12 扫描是 40.9 / 51.6 / 53.5%，都高于本次 35.8%），
+        # 但模拟器带 `--exclude-source` / `--multiplier` 等参数，原则上配得出更低的值。
+        print(
+            "    另：真实生产历史的重合与 `simulate_multirun_archive.py` 重放出来的那个数"
+            "**不是同一个量**——后者用今天的代码重放历史，默认参数下实测系统性更高"
+            "（换了它的参数就不一定，别跨脚本直接比数）。"
+        )
 
     # --- 第三刀：漏选的那些，是分数排不上去，还是被闸挡住 ------------------------
     # 三条出路的修法互斥：不在候选池 ⇒ 上游过滤；在池里但不过阈值 ⇒ 阈值/打分；
@@ -297,6 +341,9 @@ def main() -> None:
             "passed": verdicts["passed"],
             "n_ours": verdicts["n_ours"],
             "n_reference": verdicts["n_reference"],
+            # 新增于 2026-09-12。**既有 archive 行没有这个键**，缺它即「当时没记」，
+            # 不是「当时是 0」——两者在序列上必须分得开。
+            "overlap": overlap,
             "rows": verdicts["rows"],
             "verdict_null_p_all_inside": vnull.get("p_all_inside"),
             "verdict_null_expected_inside": vnull.get("expected_inside"),
