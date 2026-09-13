@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import statistics
 import threading
@@ -18,11 +19,14 @@ from .common import (
     REFERENCE_FIELD,
     is_stop_signal,
     isolate_side_effects,
+    json_dumps,
     load_questions,
     read_json,
     read_jsonl,
     redact,
     require_ark_only,
+    sha256_file,
+    sha256_text,
     utc_now,
     write_json,
     write_jsonl,
@@ -42,15 +46,36 @@ _CANDIDATE_FIELD = {"summary": "summary_zh", "reason": "why_recommend"}
 
 
 def judge_identity(model: str) -> dict[str, Any]:
+    provider_file = inspect.getsourcefile(chat_json)
     return {
         "schema_version": JUDGE_SCHEMA_VERSION,
+        "requested_model": model,
         "model": model,
         "temperature": JUDGE_TEMPERATURE,
         "max_tokens": JUDGE_MAX_TOKENS,
         "prompt_sha256": {dimension: judge_prompts.prompt_sha256(dimension) for dimension in DIMENSIONS},
         "ark_host": urlsplit(_ark_base_url()).hostname,
+        "provider_module_sha256": sha256_file(Path(provider_file)) if provider_file else None,
         "usage_recorded": False,
     }
+
+
+def _condition_identity(identity: dict[str, Any], readings: list[dict[str, Any]]) -> dict[str, Any]:
+    providers = sorted(
+        {
+            str(raw["provider"])
+            for row in readings
+            if isinstance((raw := row.get("raw")), dict) and raw.get("provider")
+        }
+    )
+    models = sorted(
+        {
+            str(raw["model"])
+            for row in readings
+            if isinstance((raw := row.get("raw")), dict) and raw.get("model")
+        }
+    )
+    return {**identity, "served_providers": providers, "served_models": models}
 
 
 def judge_once(
@@ -239,7 +264,8 @@ def run_judge(
 
     calibration: dict[str, Any] | None = None
     if calibrate:
-        control_results = judge.run(_calibration_tasks(questions, rows, calibrate))
+        control_tasks = _calibration_tasks(questions, rows, calibrate)
+        control_results = judge.run(control_tasks)
         means = _control_means(control_results)
         verdicts: dict[str, Any] = {}
         for dimension in DIMENSIONS:
@@ -264,7 +290,15 @@ def run_judge(
             if not verdicts or any(verdict["scale_ok"] is None for verdict in verdicts.values())
             else all(verdict["scale_ok"] for verdict in verdicts.values()),
             "readings": control_results,
-            "identity": identity,
+            "identity": _condition_identity(identity, control_results),
+            "calibration_identity": {
+                "implementation_sha256": sha256_file(Path(__file__)),
+                "thresholds": {
+                    "positive_min_mean": POSITIVE_MIN_MEAN,
+                    "negative_max_mean": NEGATIVE_MAX_MEAN,
+                },
+                "control_tasks_sha256": sha256_text(json_dumps(control_tasks)),
+            },
         }
         write_json(run_dir / "judge-calibration.json", calibration)
 
@@ -299,7 +333,7 @@ def run_judge(
     write_jsonl(judgments_path, [merged[key] for key in sorted(merged)])
 
     judge_json = {
-        **identity,
+        **_condition_identity(identity, list(merged.values())),
         "run_id": run_meta.get("run_id"),
         "questions_sha256": run_meta.get("questions_sha256"),
         "started_at": started_at,
@@ -316,6 +350,8 @@ def run_judge(
         "judgments_total_on_disk": len(merged),
         "judgments_replaced_this_call": replaced,
         "judgments_blank_discarded_this_call": discarded_blank,
+        "judgments_sha256": sha256_file(judgments_path),
+        "tasks_this_call_sha256": sha256_text(json_dumps(tasks)),
         "skipped": skipped,
         "stopped_early": judge.stop.is_set(),
         "stop_reasons": judge.stop_reasons,

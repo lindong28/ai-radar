@@ -1,4 +1,4 @@
-"""``ai-radar eval-fit {build,run,judge,report}`` argument wiring and dispatch."""
+"""``ai-radar eval-fit {audit,build,run,judge,report}`` argument wiring and dispatch."""
 
 from __future__ import annotations
 
@@ -15,6 +15,9 @@ def add_eval_fit_parser(subparsers: argparse._SubParsersAction) -> None:  # type
         description="Evaluate prefilter/score/enrich against AIHOT reference outputs (radar.db opened read-only).",
     )
     commands = parser.add_subparsers(dest="eval_fit_command", required=True)
+
+    audit = commands.add_parser("audit", help="Inspect the three-layer AIHOT eval system without LLM calls")
+    audit.add_argument("--runs", default=str(DEFAULT_RUNS_DIR), help="Local eval-fit runs directory to inspect")
 
     build = commands.add_parser("build", help="Join AIHOT batches to items and write questions.jsonl + manifest.json")
     build.add_argument("--db", default=str(db.DEFAULT_DB_PATH))
@@ -72,6 +75,12 @@ def _parse_sources(values: list[str] | None) -> tuple[tuple[str, Path], ...] | N
 
 
 def run_eval_fit(args: argparse.Namespace) -> int:
+    if args.eval_fit_command == "audit":
+        from .audit import audit_eval_system, render_audit
+
+        result = audit_eval_system(project_root=db.PROJECT_ROOT, runs_dir=Path(args.runs))
+        print(render_audit(result))
+        return 0 if result["summary"]["missing"] == 0 else 1
     if args.eval_fit_command == "build":
         from .build import DEFAULT_SOURCES, build_evalset
 
@@ -165,6 +174,9 @@ def run_eval_fit(args: argparse.Namespace) -> int:
                 print(f"WARNING: pipeline identity differs from the baseline on {','.join(sorted(drifted))}")
         elif comparison:
             print(f"vs baseline: NOT COMPARABLE ({comparison.get('reason')})")
+        excluded = (comparison or {}).get("excluded_metrics") or {}
+        if excluded:
+            print(f"NOT ACCEPTED in baseline comparison: {','.join(sorted(excluded))}")
         verdicts = payload.get("threshold_verdicts") or {}
         blocked = [name for name, v in verdicts.items() if v.get("confident") is False]
         unknown = [
@@ -176,9 +188,16 @@ def run_eval_fit(args: argparse.Namespace) -> int:
             print(f"thresholds: below={','.join(blocked) or 'none'} undetermined={','.join(unknown) or 'none'}")
         if payload.get("stopped_early"):
             print("WARNING: this run stopped early; the readings above cover only part of the subset")
-        calibration = payload.get("judge_calibration") or {}
-        if calibration and calibration.get("scale_ok") is not True:
-            print(f"WARNING: judge calibration scale_ok={calibration.get('scale_ok')}")
+        judge_acceptance = payload.get("judge_acceptance") or {}
+        judge_values_exist = any(
+            (payload["metrics"].get(name) or {}).get("n", 0) > 0
+            for name in ("summary_closeness_mean", "reason_closeness_mean")
+        )
+        if judge_values_exist and judge_acceptance.get("accepted") is not True:
+            print(
+                "NOT ACCEPTED: judge-dependent summary/reason metrics are diagnostic only "
+                f"({judge_acceptance.get('reason')})"
+            )
         print(f"metrics={Path(args.run) / 'metrics.json'} report={Path(args.run) / 'report.md'}")
         return 1 if blocked else 0
     raise SystemExit(f"unknown eval-fit command: {args.eval_fit_command}")

@@ -51,6 +51,11 @@ _VOCABULARY_SET = frozenset(CONTROLLED_VOCABULARY_V2)
 _READABLE_VOCABULARY_SET = _VOCABULARY_SET | frozenset(AIHOT_VOCABULARY_REMOVALS)
 
 
+def readable_vocabulary_v2() -> tuple[str, ...]:
+    """Return the resolved vocabulary accepted when reading stored v2 enrichments."""
+    return tuple(sorted(_READABLE_VOCABULARY_SET))
+
+
 def canonical_tag_map_bytes() -> bytes:
     payload = {
         "schema_version": "aihot-radar-tag-map-v1",

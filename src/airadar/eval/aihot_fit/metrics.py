@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import random
 import statistics
 from collections import Counter, defaultdict
@@ -13,6 +14,7 @@ from typing import Any
 
 from ...curator import select as curator_select
 from ...curator.select import category_multiplier
+from ...enrich.normalizers import production_enrich_provider_output_v2 as tag_normalizer
 from ...enrich.normalizers.production_enrich_provider_output_v2 import (
     AIHOT_TO_RADAR_TAG_MAP,
     is_in_v2_vocabulary,
@@ -20,9 +22,11 @@ from ...enrich.normalizers.production_enrich_provider_output_v2 import (
 from .common import (
     METRICS_SCHEMA_VERSION,
     PRIMARY_CATEGORIES,
+    json_dumps,
     load_questions,
     read_json,
     read_jsonl,
+    sha256_file,
     sha256_text,
     utc_now,
     write_json,
@@ -34,6 +38,7 @@ BOOTSTRAP_SEED = 0
 BOOTSTRAP_MIN_KEPT_RATIO = 0.95
 SHUFFLE_ROUNDS = 100
 HIGHER = "higher_is_better"
+JUDGE_DEPENDENT_METRICS = frozenset({"summary_closeness_mean", "reason_closeness_mean"})
 
 # Reference (AIHOT) tag -> our controlled vocabulary. Spec-listed aliases layered on the
 # production map; anything still outside the v2 vocabulary is dropped and counted.
@@ -588,10 +593,164 @@ def compute_all(rows: Sequence[Joined]) -> dict[str, Metric]:
     return {metric.name: metric for metric in metrics}
 
 
-def _judge_identity_of(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+_BOOTSTRAP_CONFIG = {
+    "rounds": BOOTSTRAP_ROUNDS,
+    "seed": BOOTSTRAP_SEED,
+    "min_kept_ratio": BOOTSTRAP_MIN_KEPT_RATIO,
+}
+_METRIC_EMITTERS: dict[str, tuple[tuple[Callable[..., Any] | type[Any], ...], dict[str, Any]]] = {
+    "ai_recall": ((ai_recall, _mean_metric, _mean, bootstrap_ci), _BOOTSTRAP_CONFIG),
+    "category_agreement": (
+        (category_agreement, category_pairs, _mean_metric, _mean, bootstrap_ci),
+        {**_BOOTSTRAP_CONFIG, "primary_categories": PRIMARY_CATEGORIES},
+    ),
+    "tag_jaccard_mean": (
+        (
+            tag_jaccard_mean,
+            tag_pairs,
+            map_reference_tags,
+            _jaccard,
+            _mean_metric,
+            _mean,
+            bootstrap_ci,
+            is_in_v2_vocabulary,
+        ),
+        {**_BOOTSTRAP_CONFIG, "shuffle_rounds": SHUFFLE_ROUNDS, "reference_tag_map": REFERENCE_TAG_MAP},
+    ),
+    "score_spearman": (
+        (score_spearman, score_pairs, spearman, _ranks, bootstrap_ci),
+        _BOOTSTRAP_CONFIG,
+    ),
+    "selected_auc": ((selected_auc, selected_pairs, auc, bootstrap_ci), _BOOTSTRAP_CONFIG),
+    "selected_auc_ranked": (
+        (selected_auc_ranked, ranking_score, auc, bootstrap_ci, category_multiplier),
+        _BOOTSTRAP_CONFIG,
+    ),
+    "selected_p_at_k": (
+        (selected_p_at_k, day_buckets, _utc_day, pooled_precision, DayBucket, bootstrap_ci),
+        _BOOTSTRAP_CONFIG,
+    ),
+    "summary_closeness_mean": (
+        (closeness_mean, _mean_metric, _mean, bootstrap_ci),
+        {**_BOOTSTRAP_CONFIG, "dimension": "summary"},
+    ),
+    "reason_closeness_mean": (
+        (closeness_mean, _mean_metric, _mean, bootstrap_ci),
+        {**_BOOTSTRAP_CONFIG, "dimension": "reason"},
+    ),
+    "summary_bigram_jaccard": (
+        (bigram_jaccard, text_pairs, char_bigrams, _jaccard, _mean_metric, _mean, bootstrap_ci),
+        {**_BOOTSTRAP_CONFIG, "shuffle_rounds": SHUFFLE_ROUNDS, "text_fields": _TEXT_FIELDS, "dimension": "summary"},
+    ),
+    "reason_bigram_jaccard": (
+        (bigram_jaccard, text_pairs, char_bigrams, _jaccard, _mean_metric, _mean, bootstrap_ci),
+        {**_BOOTSTRAP_CONFIG, "shuffle_rounds": SHUFFLE_ROUNDS, "text_fields": _TEXT_FIELDS, "dimension": "reason"},
+    ),
+}
+
+
+def _tag_vocabulary_dependency_digest() -> str:
+    """Hash the authority that owns the readable vocabulary used by the tag metric."""
+    return sha256_file(Path(tag_normalizer.__file__))
+
+
+def metric_emitter_identity(metric_names: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """Identify each metric by its emitter and explicitly named local dependencies."""
+    identities: dict[str, dict[str, Any]] = {}
+    for name in metric_names:
+        symbols, config = _METRIC_EMITTERS[name]
+        resolved_config = dict(config)
+        if name == "tag_jaccard_mean":
+            resolved_config["tag_vocabulary_authority_sha256"] = _tag_vocabulary_dependency_digest()
+            resolved_config["readable_vocabulary"] = tag_normalizer.readable_vocabulary_v2()
+        elif name == "selected_auc_ranked":
+            resolved_config["category_multipliers"] = dict(curator_select.CATEGORY_MULTIPLIERS)
+        source = [
+            {"symbol": f"{symbol.__module__}.{symbol.__qualname__}", "source": inspect.getsource(symbol)}
+            for symbol in symbols
+        ]
+        identities[name] = {
+            "module": "airadar.eval.aihot_fit.metrics",
+            "metric_name": name,
+            "symbols": [entry["symbol"] for entry in source],
+            "emitter_sha256": sha256_text(json_dumps({"source": source, "config": resolved_config})),
+        }
+    return identities
+
+
+def _judge_condition_identity(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if not payload:
         return None
-    return {"model": payload.get("model"), "prompt_sha256": payload.get("prompt_sha256")}
+    keys = (
+        "schema_version",
+        "requested_model",
+        "temperature",
+        "max_tokens",
+        "prompt_sha256",
+        "ark_host",
+        "provider_module_sha256",
+        "served_providers",
+        "served_models",
+    )
+    identity = {key: payload.get(key) for key in keys}
+    complete = all(identity.get(key) not in (None, [], {}) for key in keys)
+    return {**identity, "complete": complete}
+
+
+def judge_acceptance(
+    judge_meta: dict[str, Any] | None,
+    calibration: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return whether judge-derived metrics may enter quality conclusions."""
+    condition = _judge_condition_identity(judge_meta)
+    if condition is None:
+        return {"accepted": False, "reason": "judge identity missing", "condition_identity": None}
+    if not condition["complete"]:
+        return {"accepted": False, "reason": "judge identity incomplete", "condition_identity": condition}
+    if calibration is None:
+        return {"accepted": False, "reason": "judge calibration missing", "condition_identity": condition}
+    calibration_condition = _judge_condition_identity(calibration.get("identity"))
+    calibration_identity = calibration.get("calibration_identity")
+    required_calibration = ("implementation_sha256", "thresholds", "control_tasks_sha256")
+    if not isinstance(calibration_identity, dict) or any(
+        calibration_identity.get(key) in (None, {}, []) for key in required_calibration
+    ):
+        return {
+            "accepted": False,
+            "reason": "judge calibration identity incomplete",
+            "condition_identity": condition,
+        }
+    if calibration_condition != condition:
+        return {
+            "accepted": False,
+            "reason": "judge and calibration identities differ",
+            "condition_identity": condition,
+            "calibration_condition_identity": calibration_condition,
+        }
+    if calibration.get("scale_ok") is not True:
+        return {
+            "accepted": False,
+            "reason": f"judge calibration scale_ok={calibration.get('scale_ok')}",
+            "condition_identity": condition,
+        }
+    return {
+        "accepted": True,
+        "reason": "judge calibration covers this judge identity",
+        "condition_identity": condition,
+    }
+
+
+def _judge_identity_of(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    return _judge_condition_identity(payload)
+
+
+def _calibration_identity_of(payload: dict[str, Any]) -> dict[str, Any] | None:
+    calibration = (payload.get("measurement_identity") or {}).get("calibration")
+    if not isinstance(calibration, dict):
+        return None
+    keys = ("implementation_sha256", "thresholds", "control_tasks_sha256")
+    identity = {key: calibration.get(key) for key in keys}
+    return identity if all(identity.values()) else None
 
 
 def _paired_verdict(current: Any, baseline: Any) -> dict[str, Any] | None:
@@ -657,15 +816,17 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
             stage_diff[stage] = {
                 key: {"current": current_identity[key], "baseline": baseline_identity[key]} for key in shared
             }
+    excluded: dict[str, str] = {}
     current_judge = _judge_identity_of(current.get("judge"))
     baseline_judge = _judge_identity_of(baseline.get("judge"))
-    if current_judge and baseline_judge and current_judge != baseline_judge:
-        return {
-            "comparable": False,
-            "reason": "judge identity differs",
-            "current": current_judge,
-            "baseline": baseline_judge,
-        }
+    if current_judge != baseline_judge:
+        for name in JUDGE_DEPENDENT_METRICS & current["metrics"].keys():
+            excluded[name] = "judge identity differs or is missing"
+    current_calibration = _calibration_identity_of(current)
+    baseline_calibration = _calibration_identity_of(baseline)
+    if current_calibration != baseline_calibration or current_calibration is None:
+        for name in JUDGE_DEPENDENT_METRICS & current["metrics"].keys():
+            excluded[name] = "judge calibration identity differs or is missing"
     # `selected_auc_ranked` is derived at compute time from CATEGORY_MULTIPLIERS, so the same
     # archived outputs yield a different value after that table changes. Without this gate the
     # report presents a pure configuration change as an effect: a baseline stored under
@@ -676,15 +837,29 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
     current_ranking = (current.get("ranking") or {}).get("category_multipliers")
     baseline_ranking = (baseline.get("ranking") or {}).get("category_multipliers")
     if current_ranking != baseline_ranking:
-        return {
-            "comparable": False,
-            "reason": "ranking category_multipliers differ",
-            "current": current_ranking,
-            "baseline": baseline_ranking,
-        }
+        excluded["selected_auc_ranked"] = "ranking category_multipliers differ"
+    current_emitters = ((current.get("measurement_identity") or {}).get("metric_emitters") or {})
+    baseline_emitters = ((baseline.get("measurement_identity") or {}).get("metric_emitters") or {})
+    for name in current["metrics"]:
+        if current_emitters.get(name) != baseline_emitters.get(name):
+            excluded[name] = "metric emitter identity differs or is missing"
     deltas: dict[str, Any] = {}
     for name, metric in current["metrics"].items():
         other = baseline["metrics"].get(name)
+        if name in JUDGE_DEPENDENT_METRICS and (
+            metric.get("acceptance", {}).get("accepted") is not True
+            or (other or {}).get("acceptance", {}).get("accepted") is not True
+        ):
+            excluded[name] = "judge-dependent metric is not accepted on both sides"
+        if name in excluded:
+            deltas[name] = {
+                "delta": None,
+                "improved": None,
+                "regressed": None,
+                "accepted": False,
+                "reason": excluded[name],
+            }
+            continue
         if not other or metric.get("value") is None or other.get("value") is None:
             deltas[name] = {"delta": None, "improved": None}
             continue
@@ -739,9 +914,11 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
             "n": metric.get("n"),
         }
     return {
-        "comparable": True,
+        "comparable": any(name not in excluded for name in current["metrics"]),
+        "partially_comparable": bool(excluded) and any(name not in excluded for name in current["metrics"]),
         "baseline_run_id": baseline.get("run_id"),
         "stage_identity_diff": stage_diff,
+        "excluded_metrics": excluded,
         "metrics": deltas,
     }
 
@@ -785,6 +962,14 @@ def evaluate_thresholds(
         if metric is None or minimum is None or metric.get("value") is None:
             verdicts[name] = {"min": minimum, "value_meets": None, "confident": None, "reason": "no value"}
             continue
+        if metric.get("acceptance", {}).get("accepted") is False:
+            verdicts[name] = {
+                "min": minimum,
+                "value_meets": None,
+                "confident": None,
+                "reason": f"unaccepted diagnostic: {metric['acceptance'].get('reason')}",
+            }
+            continue
         ci = metric.get("ci95")
         usable = ci is not None and ci[0] < ci[1]
         verdicts[name] = {
@@ -817,6 +1002,10 @@ def compute_metrics(
 
     rows = join_rows(questions, outputs, judgments)
     metrics = compute_all(rows)
+    acceptance = judge_acceptance(judge_meta, calibration)
+    metric_payload = {name: metric.as_dict() for name, metric in metrics.items()}
+    for name in JUDGE_DEPENDENT_METRICS:
+        metric_payload[name]["acceptance"] = acceptance
     failures = {
         stage: {
             "errors": sum(1 for row in outputs if isinstance(row.get(stage), dict) and row[stage].get("error")),
@@ -852,12 +1041,38 @@ def compute_metrics(
             "selected_auc_ranked.missing_enrich)",
         },
         "bootstrap": {"rounds": BOOTSTRAP_ROUNDS, "seed": BOOTSTRAP_SEED, "level": 0.95},
+        "measurement_identity": {
+            "questions": {
+                "questions_sha256": run_meta.get("questions_sha256"),
+                "subset_sha256": sha256_text("\n".join(sorted(str(i) for i in (run_meta.get("item_ids") or [])))),
+            },
+            "metric_emitters": metric_emitter_identity(list(metrics)),
+            "calibration": None
+            if calibration is None
+            else {
+                **(calibration.get("calibration_identity") or {}),
+                "artifact_sha256": sha256_file(calibration_path),
+            },
+        },
         "identity": run_meta.get("identity"),
         "judge": None
         if judge_meta is None
         else {
             key: judge_meta.get(key)
-            for key in ("model", "prompt_sha256", "temperature", "max_tokens", "schema_version", "ark_host")
+            for key in (
+                "model",
+                "requested_model",
+                "served_models",
+                "served_providers",
+                "provider_module_sha256",
+                "prompt_sha256",
+                "temperature",
+                "max_tokens",
+                "schema_version",
+                "ark_host",
+                "judgments_sha256",
+                "tasks_this_call_sha256",
+            )
         },
         "judge_calibration": None
         if calibration is None
@@ -865,13 +1080,16 @@ def compute_metrics(
             "means": calibration.get("means"),
             "scale_ok": calibration.get("scale_ok"),
             "verdicts": calibration.get("verdicts"),
+            "identity": calibration.get("identity"),
+            "calibration_identity": calibration.get("calibration_identity"),
         },
-        "metrics": {name: metric.as_dict() for name, metric in metrics.items()},
+        "judge_acceptance": acceptance,
+        "metrics": metric_payload,
         "failures": failures,
         "stopped_early": bool(run_meta.get("stopped_early")) or bool(judge_meta and judge_meta.get("stopped_early")),
         "thresholds": thresholds,
         "threshold_verdicts": evaluate_thresholds(
-            {name: metric.as_dict() for name, metric in metrics.items()},
+            metric_payload,
             thresholds,
             sha256_text("\n".join(sorted(str(i) for i in (run_meta.get("item_ids") or [])))),
         ),
@@ -932,6 +1150,11 @@ def render_report(
         )
     else:
         lines.append("- 判官: 未运行")
+    acceptance = payload.get("judge_acceptance") or {}
+    lines.append(
+        "- 判官指标采信: "
+        + ("可采信" if acceptance.get("accepted") is True else f"未采信（{acceptance.get('reason')}）")
+    )
     lines += ["", "## 题集摘要", ""]
     run_ids = set(run_meta.get("item_ids") or [])
     subset = [question for question in questions if question["input"]["item_id"] in run_ids] or list(questions)
@@ -941,7 +1164,13 @@ def render_report(
     lines.append(f"- 参考 selected: {sum(1 for question in subset if question['reference'].get('selected'))}")
     lines.append(f"- 参考 tags 非空: {sum(1 for question in subset if question['reference'].get('tags'))}")
     lines.append(f"- 参考 reason 非空: {sum(1 for question in subset if question['reference'].get('reason'))}")
-    lines += ["", "## 指标", "", "| 指标 | n | 点估计 | 95% CI | 对照 / 下界 |", "|---|---|---|---|---|"]
+    lines += [
+        "",
+        "## 指标",
+        "",
+        "| 指标 | n | 点估计 | 95% CI | 采信 | 对照 / 下界 |",
+        "|---|---|---|---|---|---|",
+    ]
     for name, metric in payload["metrics"].items():
         baseline = metric.get("baseline") or {}
         baseline_text = f"{baseline.get('kind', '')} {_fmt(baseline.get('value'))}".strip()
@@ -951,8 +1180,14 @@ def render_report(
         # statistic. Show the count the metric actually depends on.
         positives = metric.get("positives")
         n_text = f"{metric['n']}（正例 {positives}）" if positives is not None else str(metric["n"])
+        metric_acceptance = metric.get("acceptance")
+        accepted_text = (
+            "是"
+            if metric_acceptance is None or metric_acceptance.get("accepted") is True
+            else f"否：{metric_acceptance.get('reason')}"
+        )
         lines.append(
-            f"| {name} | {n_text} | {_fmt(metric['value'])} | {f'[{ci[0]:.4f}, {ci[1]:.4f}]' if ci else 'n/a'} | {baseline_text} |"
+            f"| {name} | {n_text} | {_fmt(metric['value'])} | {f'[{ci[0]:.4f}, {ci[1]:.4f}]' if ci else 'n/a'} | {accepted_text} | {baseline_text} |"
         )
     matrix = payload["metrics"]["category_agreement"].get("confusion_matrix", {}).get("counts", {})
     if matrix:
@@ -1006,7 +1241,7 @@ def render_report(
                 f"| {name} | {_fmt(verdict.get('min'))} | {_fmt(metric.get('value'))} | "
                 f"{'是' if verdict.get('value_meets') else '否' if verdict.get('value_meets') is not None else 'n/a'} | "
                 f"{'是' if confident else '不确定' if confident is None else '否'} | "
-                f"{verdict.get('basis') or ''} |"
+                f"{verdict.get('reason') or verdict.get('basis') or ''} |"
             )
         blocked = [n for n, v in verdicts.items() if v.get("confident") is False]
         unknown = [n for n, v in verdicts.items() if v.get("confident") is None]
@@ -1019,7 +1254,10 @@ def render_report(
     if comparison is not None:
         lines += ["", "## 与基线比较", ""]
         if not comparison.get("comparable"):
-            lines.append(f"- 不可比: {comparison.get('reason')}")
+            if comparison.get("excluded_metrics"):
+                lines.append("- 无可采信且同身份窗口的指标可比")
+            else:
+                lines.append(f"- 不可比: {comparison.get('reason')}")
         else:
             lines += [
                 f"- 基线 run: `{comparison.get('baseline_run_id')}`",
@@ -1047,4 +1285,9 @@ def render_report(
                 )
             regressed = [n for n, d in comparison["metrics"].items() if d.get("regressed") is True]
             lines += ["", f"- **判定为回归的指标**: {', '.join(regressed) if regressed else '无'}"]
+        if comparison.get("excluded_metrics"):
+            lines.append(
+                "- **未进入比较的指标**: "
+                + "; ".join(f"{name}（{reason}）" for name, reason in comparison["excluded_metrics"].items())
+            )
     return "\n".join(lines) + "\n"

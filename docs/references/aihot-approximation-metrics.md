@@ -620,13 +620,31 @@ industry 有效的干预。
 
 | 环节 | 机制 |
 |---|---|
-| 固定尺子 | 题集 `questions_sha256` + 抽样 `subset_sha256` + 判官身份三者全同才可比，任一不同即拒比 |
+| 固定尺子 | ②题集 `questions_sha256` + 抽样 `subset_sha256`；③判官的 requested/served model、provider、provider module、prompt、decode 与 schema；④每个 metric emitter 的源码/具名依赖/config digest；⑤校验实现、阈值与 control-task digest。②不同时整轮拒比；③或⑤不同时只排除判官依赖指标；④不同时只排除对应指标。①被评测对象身份允许变化且作为比较变量保留 warning，不误当成②③④⑤窗口。 |
 | 固定抽样 | 先按 `question_id` 排序再 `random.Random(seed).sample` ⇒ 固定 `--limit/--seed` 即可复现同一子集 |
 | 迭代档 | `eval-fit run --limit 300 --seed 7`（约 900 次调用）；理由维度 `--limit 78 --require-reference reason`（参考侧完整总体）；精选排序只有全量 run 才有足够正例 |
 | 判官每轮自证 | `judge --calibrate 20` 跑阳性（候选=参考自身）与阴性（候选=另一题的参考），`scale_ok` 三态 |
 | 判改善 | **优先：配对逐题 bootstrap，差值的 95% CI 排除 0**（`metrics.py:_paired_verdict`，两次 run 都带 `per_question` 且共有题 ≥20 时走它）。**两个边际 CI 不重叠只是无法配对时的 fallback**——本行此前只写了 fallback，与实现不符，2026-09-12 订正。三代判据的实测假阳性：旧"下界 > 基线点估计" **9.0%**（名义 2.5%）→ 不重叠 **0.4%**（**过校正约一个数量级，功效随之掉**）→ 配对差值 CI 回到名义水平。代价读数就在代码注释里：`reason closeness 0.372→0.460`，**不重叠判据读成"无变化"，配对检验 p=0.0005** |
 | 判回归 | 设闸指标 CI 下界确认低于 floor ⇒ `report` exit 1 |
 | floor 怎么定 | **必须与它将被施加的样本量成对**：取 n=300 迭代档的 CI 下界，不取全量的——区间宽度随 √n 收缩，拿全量下界去要求一次 n=300 确认会在**零回归**时开火 |
+
+### 三层接续审计（2026-09-13）
+
+零调用入口是 `./run.sh eval-fit audit --runs data/eval-fit/runs`；它只读盘点并在存在 `missing` 时 exit 1，不自动运行任何付费阶段。实际执行链为：`./run.sh eval-fit build` 建题集 → `uv run python scripts/eval/measure_archive_composition.py --record` 记录权威归档面 → 在 `docs/issues/aihot-fit-eval.md` 事前写 `differential_prediction` 并用 `uv run python scripts/eval/<cause-specific-driver>.py` 运行与归因匹配的离线实验 → `./run.sh eval-fit run` / 可选 `judge` → `./run.sh eval-fit report` 做回归与落报告 → `./run.sh eval-fit audit` 检查三层接续。旧 `./run.sh eval` 同时存在，当前只证实它是独立的 presentation comparison 实现，未核实它在父体系中的权威归属，不能把它静默当作 `eval-fit` 的别名或废弃入口。
+
+**L1 五槽与全部参考输出面：**
+
+| 槽位 | 已定位 | 明确不适用 | 缺失 / 代理面 |
+|---|---|---|---|
+| ① 优化对象 | `src/airadar/{prefilter,scorer,enrich,presentation}/`、`src/airadar/curator/select.py` | — | — |
+| ② 评测题 | `benchmarks/aihot/evalsets/aihot-fit-v1/questions.jsonl`；reference 覆盖 selected、reason、summary、score、category、tags、title | — | — |
+| ③ 判官 | summary / reason：`src/airadar/eval/aihot_fit/{judge.py,judge_prompts.py}` | selected / category 的确定性逐题标签不需要 LLM 判官 | title 与最终展示分数没有判官；tags 只有确定性集合指标 |
+| ④ 自动指标 | selected、category、summary、reason 均有逐题或聚合指标 | — | `tag_jaccard_mean` 量 enrich 原始 tags，不是 presentation 的 `topic_tags_v2`；`score_spearman` 量上游 raw/fit score，不是精选后 rank-linear 62–92；title 没有指标 |
+| ⑤ 判官校验 | summary / reason 的 calibration 条件身份、实现 digest、阈值与 control-task digest 已接入采信判断 | 不依赖判官的确定性指标无需判官 calibration | 旧产物缺身份时不补造校验，判官指标改为未采信诊断值 |
+
+**L2 七类资产：**题集与 reference 由 git-tracked submodule 固定；逐题 outputs、逐题 metrics 与判官 raw judgments 保留在 gitignored `data/eval-fit/runs/`，由 retention 规则管理，不能把未初始化 submodule 或隔离 checkout 的空目录误读成历史从未存在；agent labels 有 `PROVENANCE.md`，但没有定位到 user ballot 序列；归因假设与差异预测保存在 tracked `docs/issues/aihot-fit-eval.md`；`scripts/eval/composition-history.jsonl` 保留权威归档趋势。历史证据没有被迁移或改写。仍缺一份统一逐轮台账，把②③④⑤身份、指标采信与全部用户可见面的距离放在同一记录中，因此本层状态为部分接通而非闭合。
+
+**L3 治理：**①对象的 `run.json` 已有 git/stage/input 字段，但未定位 user-scope `eval-identity` 生成的身份收据，故只能算 partial；新 `metrics.json` 增加②问题/子集、③判官实际条件、④逐 metric emitter 源码/具名依赖/config digest、⑤校验实现/阈值/control-task 的身份。`compare_to_baseline()` 对②差异整轮拒比，对③⑤差异排除 judge-dependent 指标，对④差异排除对应指标；stage identity 差异只 warning，因为它是本来要比较的①版本。⑤缺失、`scale_ok != true` 或身份不符时，summary/reason 仍可展示为诊断值，但明确未采信并排除 threshold、baseline/regression 与优化结论；`report` 维持 exit 0，让确定性部分成功且不会隐式要求付费 calibration。`run_eval_fit→audit_eval_system/compute_metrics` 与 `compute_metrics→judge_acceptance/compare_to_baseline` 只由静态语法检查证明源代码含直接调用，新 audit/report 入口另由本轮真实命令执行证明可达；这不是通用动态 call graph，也不证明日常 schedule 或归因准入 caller 已接通，因此 caller wiring 整体为 partial。归因准入仍只有 tracked 政策与事前记录，没有机械 caller，因此 audit 明确报 `missing`，不把纪律冒充 gate。
 
 **节奏（用户 2026-09-10 裁定）：现阶段不上定时评测。** 改为持续收集 AIHOT 数据到「数量达标」（上节那张表），
 再基于这批数据做离线评测与优化迭代。所以"A 家族最后一次带 metrics 的 run 是 09-08、`paper: 0.95` 上线后

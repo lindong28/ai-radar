@@ -15,8 +15,8 @@ from ... import db
 
 BUILDER_VERSION = "aihot-fit-build-v1"
 RUN_SCHEMA_VERSION = "aihot-fit-run-v1"
-JUDGE_SCHEMA_VERSION = "aihot-fit-judge-v1"
-METRICS_SCHEMA_VERSION = "aihot-fit-metrics-v1"
+JUDGE_SCHEMA_VERSION = "aihot-fit-judge-v2"
+METRICS_SCHEMA_VERSION = "aihot-fit-metrics-v2"
 REFERENCE_FIELD = {"summary": "summary", "reason": "reason"}
 
 

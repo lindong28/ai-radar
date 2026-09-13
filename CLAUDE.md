@@ -51,6 +51,7 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
   （本轮丢一条，不撤销它在更早 run 的归档成员资格）。机制细节与两面出界类的对照见指标档同名节。
 - **每完成一轮迭代，给那次读数补一个 `--record`**：它追加到 `scripts/eval/composition-history.jsonl`，
   那是"随迭代逐步逼近"这条期望**唯一**的观测面。不 record，趋势就不存在——探索性对照别 record。
+- **三层接续先跑零调用审计**：`./run.sh eval-fit audit --runs data/eval-fit/runs` 盘点 L1 五槽、L2 七类资产、L3 身份/采信/caller 与建立→评测→归因优化→回归→报告入口；它不发起 LLM 调用，有 `missing` 时 exit 1。`report` 不会自动补付费 calibration：⑤缺失、未过或身份不符时，summary/reason 判官指标保留为诊断读数但标为**未采信**，不进入 threshold、baseline/regression 或优化结论；确定性指标照常有效。
 - **归因先于干预**：动 prompt / 权重 / 系数之前，先在
   [docs/issues/aihot-fit-eval.md](docs/issues/aihot-fit-eval.md) 写下带
   `differential_prediction` 的假设（取数**之前**写），再取对照读数。本仓已有多次"先取数后解释"
