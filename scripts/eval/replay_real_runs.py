@@ -41,6 +41,7 @@ import json
 import sqlite3
 import sys
 from datetime import UTC, datetime
+from math import comb
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -208,6 +209,13 @@ def main() -> None:
     ap.add_argument("--runs", type=int, default=20, help="抽多少条真实 run 做自校准")
     ap.add_argument("--since", default=None, help="只取 created_at >= 该 UTC 前缀的 run")
     ap.add_argument("--limit", type=int, default=sel.DEFAULT_LIMIT)
+    ap.add_argument(
+        "--arm-b",
+        default=None,
+        metavar="rel,den,rec,auth,eng,sig",
+        help="再跑一遍这个权重向量，与生产权重**配对**比 AIHOT 精选的召回。"
+             "只计入 arm A 逐条相同的 run——不同的那些量的是实现漂移，不是干预效应。",
+    )
     args = ap.parse_args()
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
@@ -257,6 +265,81 @@ def main() -> None:
               "剩余不一致里有多少归它，本尺子分不出来。")
     print("   判读：逐条相同率就是这把尺子的误差棒。**不接近 1 就别读 arm B**"
           "——那时它量的是实现差异，不是干预效应。")
+
+    if args.arm_b:
+        arm_b(conn, runs, args)
+
+
+def arm_b(conn: sqlite3.Connection, runs: list, args) -> None:
+    """配对比较：换一个权重向量，AIHOT 的精选召回是升是降。
+
+    **分母是「作为候选进过至少一轮」，不是「归档面上够得着」。** 后者把信源可达性混进来，
+    而权重动不了可达性；前者把它整个拿掉，剩下的差异只可能来自排序与闸。
+
+    代价要一起读：这个分母也混进了几天前的精选——它们早被更早的 run 选过，本窗口不会再选，
+    所以**绝对召回远低于归档面那个数，两者不可比**。可比的是两臂之差，它是配对的。
+    故这里报 McNemar 而不是两个比例：n 小的时候，「差了几个百分点」与随机噪声长得一样。
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_mcc", Path(__file__).with_name("measure_curated_composition.py"))
+    assert spec and spec.loader
+    mcc = importlib.util.module_from_spec(spec)
+    sys.modules["_mcc"] = mcc
+    spec.loader.exec_module(mcc)
+
+    dims = [float(x) for x in args.arm_b.split(",")]
+    if len(dims) != 6:
+        raise SystemExit("--arm-b 要六个数：rel,den,rec,auth,eng,sig")
+    cand_dims = dict(zip(
+        ("relevance", "density", "recency", "authority", "engineering", "significance"), dims, strict=True))
+
+    refs = {mcc.normalize_url(r["url"])[0]: r
+            for r in mcc.load_aihot().values() if r["selected"] and r.get("url")}
+    # 一条参照 URL 在我方可能对应多行 items（跨源重复）。取第一行即可：下面两边都按
+    # **URL 集合**算命中，同一 URL 命中几次不改变结果，但让两臂的分母保持同一个口径。
+    url_to_item: dict[str, str] = {}
+    for iid, u in conn.execute("SELECT id, url FROM items WHERE url IS NOT NULL"):
+        n = mcc.normalize_url(str(u))[0]
+        if n in refs:
+            url_to_item.setdefault(n, iid)
+    item_to_url = {v: k for k, v in url_to_item.items()}
+
+    pool_refs: set[str] = set()
+    hit: dict[str, set[str]] = {"A": set(), "B": set()}
+    used = 0
+    for run in runs:
+        recorded = json.loads(run["output_curated_ids"])
+        w = json.loads(run["weights_json"])
+        tier = bool(w.get("uses_tier_multiplier", False))
+        base = Weights(**{d: float(w.get(d, 0.0)) for d in cand_dims}, uses_tier_multiplier=tier)
+        cfg = run_config(run)
+        kw = dict(limit=args.limit, source_quota=cfg["source_quota"],
+                  enrich_max=cfg["enrich_max"], mults=cfg["mults"])
+        if replay(conn, run, base, **kw) != recorded:
+            continue  # arm A 不精确的 run 不计入；上面的自校准表已逐条报过它
+        used += 1
+        got_b = replay(conn, run, Weights(**cand_dims, uses_tier_multiplier=tier), **kw)
+        eval_ids = json.loads(run["input_eval_ids"])
+        pool = {r[0] for r in conn.execute(
+            f"SELECT item_id FROM item_evaluations WHERE id IN ({','.join('?' * len(eval_ids))})", eval_ids)}
+        pool_refs |= {item_to_url[i] for i in pool & item_to_url.keys()}
+        hit["A"] |= {item_to_url[i] for i in set(recorded) & item_to_url.keys()}
+        hit["B"] |= {item_to_url[i] for i in set(got_b) & item_to_url.keys()}
+
+    n = len(pool_refs) or 1
+    print(f"\n>>> arm B {args.arm_b}：{used}/{len(runs)} 条 run 计入（arm A 逐条相同的那些）")
+    print(f"分母＝作为候选进过至少一轮的 AIHOT 精选 = **{len(pool_refs)}**")
+    for arm in ("A", "B"):
+        print(f"   arm {arm} 命中 {len(hit[arm]):>3}  = {100 * len(hit[arm]) / n:5.1f}%")
+    x, y = len(hit["B"] - hit["A"]), len(hit["A"] - hit["B"])
+    print(f"   Δ = {100 * (len(hit['B']) - len(hit['A'])) / n:+.1f}pp   不一致对 B独有={x} A独有={y}")
+    if x + y:
+        p = 2 * sum(comb(x + y, i) for i in range(min(x, y) + 1)) / 2 ** (x + y)
+        print(f"   McNemar 精确双侧 **p = {min(p, 1.0):.4f}**"
+              + ("  ⇒ 与随机不可分，不足以断言哪一臂更好" if p > 0.05 else ""))
+    else:
+        print("   零不一致对 ⇒ 这把尺子在本窗口对该干预**没有分辨力**，不是「两臂一样好」")
 
 
 if __name__ == "__main__":
