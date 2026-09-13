@@ -193,6 +193,11 @@ fi
 # objects are then gone machine-wide while the superproject keeps a pin pointing at nothing.
 # This is a dated program worktree -- exactly the kind that gets cleaned up. Pushing the
 # submodule is what makes the data durable; until then there is one copy, in a disposable place.
+# `git worktree remove` is not the only way that copy dies: retention above prunes capture
+# directories older than RETAIN days on its own clock, which does not consult whether they ever
+# reached a remote. A capture that stays unpushed long enough is deleted by this job itself --
+# and correctly reporting rc=1 every one of those days does not save it. The reachability check
+# further down is what makes those days loud; acting on them is still a human's job.
 #
 # Runs on no-request days too. Retention above deletes TRACKED capture directories, so a skip day
 # can produce real staged deletions; guarding this block on "we fetched something" left them as
@@ -220,6 +225,25 @@ if [ $rc -eq 0 ]; then
       echo "  submodule commit: $(git -C benchmarks/aihot rev-parse --short HEAD)"
       if git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot; then
         echo "  pointer commit: $(git rev-parse --short HEAD)"
+        # Report whether this commit reached the "second place" the KNOWN EXPOSURE block names.
+        # It does NOT push, and that is a decision, not an omission:
+        # [ADR-060](../docs/adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md)
+        # (accepted) writes 「顺序必须是 data local commit → 经显式授权 push并验证远端 exact ref →
+        # 主仓记录 gitlink；data push、远端配置、主仓 push与主分支整合互不隐含授权」. An unattended
+        # daily push is exactly the standing implied authorisation that sentence refuses, and the
+        # order here (gitlink already recorded above) is the reverse of what it mandates. So the
+        # push stays a human, per-push action; what was actually broken is that nobody was TOLD.
+        #
+        # What was broken, measured 2026-09-13: the capture sat on a detached submodule HEAD in
+        # this worktree's private gitdir -- unreachable to `git fetch`, destroyed by
+        # `git worktree remove` -- while the job reported rc=0 and the log said "published
+        # locally". Every downstream reader stayed pinned to the last pushed capture with no
+        # signal at all. That went unnoticed for two days.
+        #
+        # No network call: reachability is judged against the remote-tracking refs already on
+        # disk. Stale refs can only make this MORE pessimistic (claiming not-durable for
+        # something already pushed), which is the safe direction, and it keeps this block free of
+        # the credential-prompt and timeout hazards an unattended `git push` would add.
       else
         echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
         rc=1
@@ -229,6 +253,34 @@ if [ $rc -eq 0 ]; then
       rc=1
     fi
   fi
+    # Deliberately OUTSIDE the "did we stage anything today" branch. The real 2026-09-13
+    # failure was not one loud day followed by quiet ones -- it was that every day AFTER the
+    # unpushed capture staged nothing, said "submodule: nothing staged", and exited 0. A check
+    # that only runs on capture days is silent for exactly the days the data is at risk. The
+    # test suite caught this: case 19's second arm ran, staged nothing, and printed neither
+    # verdict.
+    #
+    # The switch exists because the 43 cases above assert a different invariant (a run leaves
+    # a clean tree, and persistence failures exit non-zero) on a fixture whose submodule is
+    # never pushed. Without it every one of them would fail for a reason none of them is
+    # about. It defaults ON, so a real run cannot lose the check by forgetting a variable;
+    # the two cases at the end of the test file cover both of its arms.
+    sub_head="$(git -C benchmarks/aihot rev-parse --short HEAD)"
+    if [ "${AIHOT_CAPTURE_DURABILITY_CHECK:-1}" != 1 ]; then
+      echo "  submodule durability check: off"
+    elif [ -n "$(git -C benchmarks/aihot branch -r --contains HEAD 2>/dev/null)" ]; then
+      echo "  submodule durable: $sub_head is on a remote-tracking ref"
+    else
+      echo "  WARNING: submodule commit $sub_head is NOT on any remote-tracking ref."
+      echo "           It exists only in this worktree's private gitdir; \`git worktree remove\`"
+      echo "           destroys it, no other checkout can fetch it, and every consumer of"
+      echo "           benchmarks/aihot keeps reading the last pushed capture with no signal."
+      echo "           ADR-060 keeps this push a per-push human action. To make it durable:"
+      echo "             git -C benchmarks/aihot push origin HEAD:refs/heads/captures/daily"
+      echo "           (Stale remote-tracking refs can trigger this after a real push; a"
+      echo "            \`git -C benchmarks/aihot fetch\` then re-run clears a false alarm.)"
+      rc=1
+    fi
 fi
 
 # Last word, after everything that can dirty the tree. The 2026-09-08 failure was invisible for

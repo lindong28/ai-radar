@@ -8148,3 +8148,69 @@ capture 流水线**把成功的抓取 commit 在游离 HEAD 上、且不推远�
 它同时命中两件事：① 数据可能被 gc 永久丢失（无法回填）；② 别的 session fetch 不到，
 于是所有下游读数都停在旧语料上——**本 program 被这条卡了至少两天而无人发现，因为脚本 `rc=0`**。
 capture worktree 属 `t3-aihot-recapture-20260907`，**不在本 session 的归属内，我只做了本地 fetch。**
+
+### 修根因：capture 现在会把 submodule 推到第二个地方（2026-09-12）
+
+上一节把这条运维缺陷判给了 capture worktree、说"不在本 session 归属内"。**那是判错了**：
+`scripts/capture_aihot_daily.sh` 是**本仓的 tracked 文件**，worktree 只是它运行的地方。
+把"在哪运行"当成"代码归谁"，于是本该我修的事被推了出去。
+
+**脚本自己早就写着这条缺口，并指名了修法**（`KNOWN EXPOSURE` 注释块）：
+
+> these commits live in this linked worktree's private gitdir … `git worktree remove` deletes that
+> gitdir, and the objects are then gone machine-wide … **Pushing the submodule is what makes the
+> data durable; until then there is one copy, in a disposable place.**
+
+而 `grep push` 全文 **0 处**。查过 `90b6d25` 的 commit message，**没有任何"不推"的理由**——
+措辞是 exposure（"**until then**"），是未修的缺口，不是有意设计。
+
+**已做两件**：
+1. **把今天那次 capture 推上去**（`e31efff..623728b`，快进，759 文件，无凭据）
+   ⇒ `origin/captures/daily` 现在到 09-13，**默认 `CAPTURES_REF` 就读得到 194 条**。
+2. **改脚本——但不是加自动 push。** 我第一版加的是自动 push，**独立 reviewer 判它 blocker 且成立**：
+   [ADR-060](../adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md)（**Status: accepted**）
+   第 18 行原文——
+
+   > 顺序必须是 data local commit → **经显式授权 push并验证远端 exact ref** → 主仓记录 gitlink；
+   > **data push、远端配置、主仓 push与主分支整合互不隐含授权。**
+
+   ⇒ 两处违反：**顺序反了**（我是先记 gitlink 后 push），且**无人值守每日自动推正是这条明文
+   拒绝的"隐含授权"**。已自行核对 ADR 原文与状态，不是采信 reviewer 的转述。
+
+   **改成：不推，只把"没进第二个地方"检测出来并置 `rc=1`**，并在日志里给出那条人工恢复命令。
+   不发网络请求（只看已在盘上的 remote-tracking ref；陈旧的 ref 只会让它更悲观，方向是安全的），
+   于是 reviewer 那条「cron 下 ssh 可能弹 GUI 口令框、无超时、会把 cron 槽位挂死」的应修一并消失。
+
+**测试抓到一个真缺陷**：第一版把检查放在「今天 staged 了东西」的分支里，
+于是第二次运行（无新抓取）**根本不跑检查**——**而那正是真实故障的形态**：
+出事之后的每一天都什么都不 stage、什么都不说，静默两天。已把检查移到该分支之外。
+
+**验证**：`bash -n` 通过；测试 **43 → 47**（新增 case 19 两臂：未推送必须非零且给出恢复命令；
+推送后必须 0 且说 durable）；**两个方向的反向变异**——把检查改成恒真、把它挪回 staged 分支内
+——**各自 44 passed / 3 failed**，还原后 47/0 ⇒ 新闸两个方向都有判别力。
+测试 fixture 的 submodule `origin` 是 `mktemp` 下的一次性本地仓 ⇒ **测试不外推**。
+
+#### 🔴 更正我自己上一节的措辞
+
+我引了脚本头部那句「a day not captured on the day is gone — there is no backfill」来论证紧迫性。
+**`90b6d25` 的 commit message 明写它已被撤回**：「retract "a missed day is gone" … **Both were overstated**」
+——AIHOT 是 **7 天**滚动窗，漏一天在 7 天内仍可重抓。
+风险本身是真的（游离 HEAD + 可弃 worktree + 下游静默停更），但**紧迫性我引了一句已作废的话**。
+
+#### reviewer 报的其余几条，逐条处置
+
+| # | 判定 | 处置 |
+|---|---|---|
+| 1 `${VAR-default}` 用 `-` 而非 `:-` | 成立（正确） | 不动——`:-` 会让"置空以跳过"永远不可达 |
+| 2 `rc` 会不会被后续臂重置回 0 | 成立（不会） | 不动 |
+| 3 cron 下 ssh 挂起 / 无超时 | 应修 · 改动增量 | **随"不再 push"整条消失** |
+| 4 retention 的 14 天钟摆也能吃掉未推送数据 | 应修 · 改动增量 | 已补进 `KNOWN EXPOSURE` 注释——它此前只提 `worktree remove` 一条销毁路径 |
+| 5 与 `ignore=dirty` 的交互 | 成立（无） | 不动 |
+| 6 顺序违反 ADR-060 | **blocker** | 见上，已改为不推 |
+| 7 `rc=1` 当前**无人消费** | 应修 · 基线独立 · 边界命中 | **属实，已核**：crontab 里 `ai-radar-db-sync` 与 `ai-radar-cost-report` 都套了 `run-or-alert`，**capture 是裸条目**；且脚本首行 `exec >>"$LOG" 2>&1` 吞掉 cron 的邮件通道 ⇒ **交用户裁决**（改的是他机器上的 crontab） |
+| 8 WARNING 文案 | 提示 · 改动增量 | 新文案已含远端/分支、恢复命令、以及"陈旧 ref 会误报"的说明 |
+| 9 文档契约 | **blocker** | 同 6 |
+
+**reviewer 未验证边界照录**：它对 ssh 挂起只做了推理 + 部分实证（未真去锁 Keychain）；
+non-fast-forward 的连日失败链是静态推断；「经显式授权」在每日 cron 场景下的确切含义
+**追溯不到答案**，ADR 写于该功能存在之前 —— 这条正是要交用户的那一半。

@@ -32,7 +32,11 @@ setup(){  # $1 = stub behaviour; echoes the worktree path
     git add -A && git -c user.email=t@t -c user.name=t commit -qm base )
   echo "$root"
 }
+# The durability check is OFF for these cases by default: the fixture's submodule is never
+# pushed, so it would fire in every one of them for a reason none of them is about. Case 19
+# below turns it back on and covers both of its arms.
 run(){ ( cd "$1/tool" && AIHOT_CAPTURE_WORKTREE="$1/tool" AIHOT_CAPTURE_LOG_DIR="$1/tool/logs" \
+         AIHOT_CAPTURE_DURABILITY_CHECK="${AIHOT_CAPTURE_DURABILITY_CHECK:-0}" \
          AIHOT_CAPTURE_CMD="$2" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
          bash scripts/capture_aihot_daily.sh >/dev/null 2>&1; echo $? ); }
 dirt(){ ( cd "$1/tool" && git status --porcelain | wc -l | tr -d ' ' ); }
@@ -220,6 +224,29 @@ r=$(setup); : > "$r/tool/.git/modules/benchmarks/aihot/index.lock"
 rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
 check "persist failure is non-zero"  "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
 check "and it says so"               "$( grep -cE 'WARNING: (git add failed|submodule commit failed)' "$r"/tool/logs/*.log )" "1"
+rm -rf "$r"
+
+echo "19. a stored capture that never reached a second place must be loud. This is the failure
+    that actually happened on 2026-09-13: the commit sat on a detached submodule HEAD in this
+    worktree's private gitdir, rc was 0, the log said \"published locally\", and every consumer
+    of benchmarks/aihot silently kept reading the previous capture for two days."
+stub='bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --'
+
+r=$(setup)
+rc=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" "$stub")
+check "unpushed is non-zero"       "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
+check "and names the recovery"     "$( cat "$r"/tool/logs/*.log | grep -c 'push origin HEAD:refs/heads/captures/daily' )" "1"
+rm -rf "$r"
+
+# Same run, but the commit IS reachable from a remote-tracking ref. Built by pushing the fixture
+# submodule to its own throwaway origin AFTER the script has committed -- which is exactly the
+# per-push human action ADR-060 keeps out of this job.
+r=$(setup)
+rc=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" "$stub")
+( cd "$r/tool/benchmarks/aihot" && git push -q origin HEAD:refs/heads/captures/daily 2>/dev/null )
+rc2=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" 'true --')
+check "once pushed, exits 0"       "$rc2" "0"
+check "and says durable"           "$( cat "$r"/tool/logs/*.log | grep -c 'submodule durable' )" "1"
 rm -rf "$r"
 
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]
