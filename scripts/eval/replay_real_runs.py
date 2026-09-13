@@ -144,8 +144,34 @@ def load_recorded_candidates(
     return out
 
 
+def run_config(run: sqlite3.Row) -> dict:
+    """从这一条 run 自己的记录里读出它当时生效的机制配置。
+
+    **这是本脚本最容易错、也最贵的一步**：拿今天的常量去重放一条老 run，会得到一个
+    「看起来像重放、其实在量实现差异」的读数，而它与「历史不可复现」逐字同形。
+    三处机制各有一个记录里读得到的标记：
+
+    | 机制 | 上线 | 标记 | 缺失时的正解 |
+    |---|---|---|---|
+    | 源配额 ADR-bc36 | 2026-09-03 | `shadow_json` 非空 | `source_quota=None`（当时没有配额） |
+    | 类别乘数 ADR-3f8b | 2026-09-10 | `weights_json.category_multipliers` | `{}`（当时没有乘数） |
+    | enrich 快照 ADR-9e21 | 较晚 | `weights_json.enrich_watermark` | **不可还原** |
+
+    第三行没有正解：老 run 没记 watermark，当时的类别快照取不回来，重放只能读今天的 enrich。
+    **这是本尺子对老窗的硬上限**，不是可以调好的参数——读老窗结果时必须一并读它。
+    """
+    w = json.loads(run["weights_json"])
+    return {
+        # `shadow_json` 是配额机制自己写的，没有它就是那一轮没跑配额——比按日期猜可靠
+        "source_quota": sel.DEFAULT_SOURCE_QUOTA if run["shadow_json"] else None,
+        "mults": w.get("category_multipliers", {}),
+        "enrich_max": w.get("enrich_watermark"),
+        "enrich_recoverable": "enrich_watermark" in w,
+    }
+
+
 def replay(conn: sqlite3.Connection, run: sqlite3.Row, weights: Weights, *, limit: int,
-           source_quota, enrich_max: int | None) -> list[str]:
+           source_quota, enrich_max: int | None, mults: dict | None = None) -> list[str]:
     """用生产的 `curate()` 重放一条 run，返回它选出的 item_id（按名次）。"""
     eval_ids = json.loads(run["input_eval_ids"])
     cands = load_recorded_candidates(conn, eval_ids, weights, enrich_max)
@@ -153,9 +179,14 @@ def replay(conn: sqlite3.Connection, run: sqlite3.Row, weights: Weights, *, limi
 
     sink = temp_sink(conn)
     real_loader, real_datetime = sel._load_candidates, sel.datetime
+    real_mults = sel.CATEGORY_MULTIPLIERS
     try:
         sel._load_candidates = lambda _conn, _weights: list(cands)
         sel.datetime = FrozenClock(moment)
+        # `ranking_key` 在调用时才读这个模块全局 ⇒ 在这里换掉就还原了那一轮的类别乘数。
+        # 老 run 的 `weights_json` 里没有这个键 = 当时**没有**类别乘数（ADR-3f8b 是 2026-09-10
+        # 才上的）；套今天的 `{"paper": 0.95}` 会把一整类的名次系统性挪位。
+        sel.CATEGORY_MULTIPLIERS = mults if mults is not None else real_mults
         sel.curate(
             sink,
             weights=weights,
@@ -165,6 +196,7 @@ def replay(conn: sqlite3.Connection, run: sqlite3.Row, weights: Weights, *, limi
         )
     finally:
         sel._load_candidates, sel.datetime = real_loader, real_datetime
+        sel.CATEGORY_MULTIPLIERS = real_mults
     rows = sink.execute("SELECT item_id FROM curated_items ORDER BY rank").fetchall()
     sink.close()
     return [r[0] for r in rows]
@@ -195,6 +227,7 @@ def main() -> None:
     print(f"{'run':26}{'输入':>8}{'记录选出':>9}{'重放选出':>9}{'逐条相同':>9}{'交集':>7}{'Jaccard':>9}")
     exact = 0
     jac_sum = 0.0
+    unrecoverable = 0
     for run in runs:
         recorded = json.loads(run["output_curated_ids"])
         w = json.loads(run["weights_json"])
@@ -203,16 +236,25 @@ def main() -> None:
         dims = {d: float(w.get(d, 0.0)) for d in
                 ("relevance", "density", "recency", "authority", "engineering", "significance")}
         weights = Weights(**dims, uses_tier_multiplier=bool(w.get("uses_tier_multiplier", False)))
-        got = replay(conn, run, weights, limit=args.limit,
-                     source_quota=sel.DEFAULT_SOURCE_QUOTA, enrich_max=w.get("enrich_watermark"))
+        cfg = run_config(run)
+        got = replay(conn, run, weights, limit=args.limit, source_quota=cfg["source_quota"],
+                     enrich_max=cfg["enrich_max"], mults=cfg["mults"])
         same = got == recorded
         inter = len(set(got) & set(recorded))
         union = len(set(got) | set(recorded)) or 1
         exact += same
         jac_sum += inter / union
         print(f"{run['id']:26}{len(json.loads(run['input_eval_ids'])):>8}{len(recorded):>9}"
-              f"{len(got):>9}{'✅' if same else '❌':>8}{inter:>7}{inter / union:>9.3f}")
+              f"{len(got):>9}{'✅' if same else '❌':>8}{inter:>7}{inter / union:>9.3f}"
+              f"   配额{'有' if cfg['source_quota'] else '无'}"
+              f" 乘数{'有' if cfg['mults'] else '无'}"
+              f" enrich{'可还原' if cfg['enrich_recoverable'] else '**不可还原**'}")
+        unrecoverable += not cfg["enrich_recoverable"]
     print(f"\n⇒ **逐条完全相同 {exact}/{len(runs)}**，平均 Jaccard {jac_sum / len(runs):.3f}")
+    if unrecoverable:
+        print(f"   ⚠️ 其中 **{unrecoverable}/{len(runs)}** 条没记 `enrich_watermark` ⇒ "
+              "重放只能读**今天**的类别，当时的快照取不回来。**这是对老窗的硬上限**，"
+              "剩余不一致里有多少归它，本尺子分不出来。")
     print("   判读：逐条相同率就是这把尺子的误差棒。**不接近 1 就别读 arm B**"
           "——那时它量的是实现差异，不是干预效应。")
 
