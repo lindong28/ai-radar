@@ -41,7 +41,17 @@ bounded() {
   # EOF, and EOF needs every writer to close, including a `sleep` that is doing nothing with the
   # pipe. The command finishes in milliseconds and the whole job still stalls; nothing reports it.
   # stdin too, so it can never contend for the terminal.
-  ( sleep "$bounded_secs"; kill -TERM "$bounded_pid" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+  # Children first, then the process itself. `git push` forks `ssh`, and a TERM that reaches only
+  # git leaves ssh running -- on this host that can mean an orphaned process still sitting on a
+  # Keychain dialog nobody will close. Killing the parent first would reparent the child and lose
+  # the handle on it. NOT `kill -- -$pid`: this shell runs without job control, so the background
+  # command shares the script's own process group and a group kill would take the script down too.
+  ( sleep "$bounded_secs"
+    for bounded_child in $(pgrep -P "$bounded_pid" 2>/dev/null); do
+      kill -TERM "$bounded_child" 2>/dev/null
+    done
+    kill -TERM "$bounded_pid" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
   bounded_killer=$!
   wait "$bounded_pid"; bounded_code=$?
   kill "$bounded_killer" 2>/dev/null

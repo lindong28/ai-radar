@@ -305,4 +305,20 @@ check "unreadable: says transient" "$( cat "$r"/tool/logs/*.log | grep -c 'Usual
 check "unreadable: not confused with (d)" "$( cat "$r"/tool/logs/*.log | grep -c 'Something else is writing' )" "0"
 rm -rf "$r"
 
+echo "20. bounded must terminate the command's CHILDREN too, not just the command. Found by an"
+echo "    independent reviewer after the first version shipped: \`git push\` forks \`ssh\`, and a"
+echo "    TERM that reaches only git leaves ssh running -- on this host possibly still sitting on"
+echo "    a Keychain dialog. The job stops waiting either way, so nothing in the suite noticed;"
+echo "    the earlier hand-check used \`sleep 30\`, a leaf with no children, and could not see it."
+r=$(mktemp -d); pidfile="$r/child.pid"
+(
+  eval "$(sed -n '/^bounded() {/,/^}/p' "$SCRIPT")"
+  bounded 2 sh -c "sleep 30 & echo \$! > $pidfile; wait"
+) >/dev/null 2>&1
+child=$(cat "$pidfile" 2>/dev/null)
+sleep 1
+check "bounded: spawns a child"     "$( [ -n "$child" ] && echo yes || echo no )" "yes"
+check "bounded: child terminated"   "$( kill -0 "$child" 2>/dev/null && echo alive || echo gone )" "gone"
+rm -rf "$r"
+
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]
