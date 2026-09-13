@@ -226,27 +226,83 @@ check "persist failure is non-zero"  "$( [ "$rc" != 0 ] && echo nonzero || echo 
 check "and it says so"               "$( grep -cE 'WARNING: (git add failed|submodule commit failed)' "$r"/tool/logs/*.log )" "1"
 rm -rf "$r"
 
-echo "19. a stored capture that never reached a second place must be loud. This is the failure
-    that actually happened on 2026-09-13: the commit sat on a detached submodule HEAD in this
-    worktree's private gitdir, rc was 0, the log said \"published locally\", and every consumer
-    of benchmarks/aihot silently kept reading the previous capture for two days."
+echo "19. the capture must reach a second place, and the gitlink must not outrun it."
+echo "    2026-09-13: the commit sat on a detached submodule HEAD in this worktree's private"
+echo "    gitdir, rc was 0, and every consumer kept reading the previous capture for two days."
+echo "    ADR-20260913-c7d4 authorises the daily push; ADR-060's ORDER still binds, so a failed"
+echo "    push must leave the superproject pin where it was rather than pinning an orphan."
 stub='bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --'
 
-r=$(setup)
-rc=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" "$stub")
-check "unpushed is non-zero"       "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
-check "and names the recovery"     "$( cat "$r"/tool/logs/*.log | grep -c 'push origin HEAD:refs/heads/captures/daily' )" "1"
+# (a) push turned off -- the pre-c7d4 world. The durability check is the only thing standing
+#     between that state and a silent two days, so it must fire and name the way out.
+r=$(setup); before=$( cd "$r/tool" && git rev-parse HEAD )
+rc=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 AIHOT_CAPTURE_PUSH_REMOTE= run "$r" "$stub")
+after=$( cd "$r/tool" && git rev-parse HEAD )
+check "push off: non-zero"         "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
+check "push off: names recovery"   "$( cat "$r"/tool/logs/*.log | grep -c 'push origin HEAD:refs/heads/captures/daily' )" "1"
+# The assertion this case was MISSING, and an independent reviewer found the bug it hid: the
+# guard read `[ -n "$pushed" ]`, which `pushed=skipped` satisfies, so a run with pushing turned
+# off still pinned the gitlink at a SHA no remote had. rc was non-zero anyway -- from the
+# unrelated durability check -- so both assertions above passed while the orphan was created.
+check "push off: no gitlink"       "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
 rm -rf "$r"
 
-# Same run, but the commit IS reachable from a remote-tracking ref. Built by pushing the fixture
-# submodule to its own throwaway origin AFTER the script has committed -- which is exactly the
-# per-push human action ADR-060 keeps out of this job.
+# (b) the shipped default: push, verify the remote exact ref, then pin.
 r=$(setup)
 rc=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" "$stub")
-( cd "$r/tool/benchmarks/aihot" && git push -q origin HEAD:refs/heads/captures/daily 2>/dev/null )
-rc2=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" 'true --')
-check "once pushed, exits 0"       "$rc2" "0"
-check "and says durable"           "$( cat "$r"/tool/logs/*.log | grep -c 'submodule durable' )" "1"
+check "push on: exits 0"           "$rc" "0"
+check "push on: verified"          "$( cat "$r"/tool/logs/*.log | grep -c 'submodule push: .* (verified)' )" "1"
+check "push on: landed on remote"  "$( cd "$r/data" && git rev-parse --verify -q refs/heads/captures/daily >/dev/null && echo yes || echo no )" "yes"
+rm -rf "$r"
+
+# (c) THE order invariant. A push that fails must not be followed by the pointer commit: a pin
+#     to a SHA that reached no remote is the orphan ADR-060's ordering exists to prevent, and it
+#     is worse than no pin because `git submodule update` then fails for everyone.
+r=$(setup); before=$( cd "$r/tool" && git rev-parse HEAD )
+rc=$(AIHOT_CAPTURE_PUSH_REMOTE="$r/no-such-remote.git" run "$r" "$stub")
+after=$( cd "$r/tool" && git rev-parse HEAD )
+check "push fails: non-zero"       "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
+check "push fails: no gitlink"     "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
+check "push fails: says why"       "$( cat "$r"/tool/logs/*.log | grep -c 'Not recording the gitlink' )" "1"
+rm -rf "$r"
+
+# (d) push reports success but the remote ref is NOT this commit. ADR-060 asks for the remote
+#     EXACT ref, not a zero exit, and this is why: a hook or a racing writer can leave the branch
+#     somewhere else, which reads as durable and is not. Simulated with a post-receive hook that
+#     moves the ref back. This is a fair unit test of the ls-remote branch (receive-pack
+#     answers the client only after post-receive runs, so the push itself still succeeds),
+#     but it is NOT a real concurrent publisher: a real race usually shows up one branch
+#     earlier, as a non-fast-forward rejection. It proves the check reads the remote, not
+#     that concurrency was reproduced.
+r=$(setup)
+other=$( cd "$r/data" && git rev-parse HEAD )
+mkdir -p "$r/data/.git/hooks"
+printf '#!/bin/sh\ngit update-ref refs/heads/captures/daily %s\n' "$other" > "$r/data/.git/hooks/post-receive"
+chmod +x "$r/data/.git/hooks/post-receive"
+before=$( cd "$r/tool" && git rev-parse HEAD )
+rc=$(run "$r" "$stub")
+after=$( cd "$r/tool" && git rev-parse HEAD )
+check "ref moved: non-zero"        "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
+check "ref moved: no gitlink"      "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
+check "ref moved: says who wrote" "$( cat "$r"/tool/logs/*.log | grep -c 'Something else is writing that ref' )" "1"
+rm -rf "$r"
+
+# (e) push reports success but the ref cannot be read back at all -- the branch the wording split
+#     created. Simulated with a post-receive hook that DELETES the ref; observationally the same
+#     empty `ls-remote` result as an unreachable remote or a timed-out read. It must be told apart
+#     from (d) in the log: (e) is usually transient and retries itself, (d) needs a human to find
+#     the other writer, and one shared sentence would send the 2am reader down the wrong path.
+r=$(setup)
+mkdir -p "$r/data/.git/hooks"
+printf '#!/bin/sh\ngit update-ref -d refs/heads/captures/daily\n' > "$r/data/.git/hooks/post-receive"
+chmod +x "$r/data/.git/hooks/post-receive"
+before=$( cd "$r/tool" && git rev-parse HEAD )
+rc=$(run "$r" "$stub")
+after=$( cd "$r/tool" && git rev-parse HEAD )
+check "unreadable: non-zero"       "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
+check "unreadable: no gitlink"     "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
+check "unreadable: says transient" "$( cat "$r"/tool/logs/*.log | grep -c 'Usually transient' )" "1"
+check "unreadable: not confused with (d)" "$( cat "$r"/tool/logs/*.log | grep -c 'Something else is writing' )" "0"
 rm -rf "$r"
 
 echo; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]

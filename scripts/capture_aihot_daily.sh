@@ -23,6 +23,32 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture START (worktree=$WORKTR
 
 cd "$WORKTREE" || { echo "FATAL: worktree missing"; exit 3; }
 
+# Wall-clock bound for the network calls below. There is no `timeout(1)` on this host (measured:
+# `command not found`), and ssh's own `ConnectTimeout` covers the TCP connect ONLY -- a half-open
+# connection after the handshake, a stalled resolver, or a slow large push all hang indefinitely,
+# holding the daily slot with an empty log because `exec >>"$LOG"` has already swallowed stdout.
+# That silent-hang shape is the one this job keeps getting bitten by, so the bound is outside the
+# tool rather than a flag on it. This is what ADR-20260913-c7d4 Consequences §1 calls the outer
+# timeout; `BatchMode=yes` handles the interactive-prompt half, and is deliberately not trusted to
+# handle this half -- whether it suppresses a macOS Keychain GUI dialog is unverified here.
+# bash 3.2 compatible: background the command, arm a killer, take whichever lands first.
+bounded() {
+  bounded_secs="$1"; shift
+  "$@" &
+  bounded_pid=$!
+  # The killer MUST NOT inherit this function's stdout. Measured: without `>/dev/null`, a caller
+  # that pipes us (`bounded ... git ls-remote | awk ...`) hangs for the full bound -- awk waits for
+  # EOF, and EOF needs every writer to close, including a `sleep` that is doing nothing with the
+  # pipe. The command finishes in milliseconds and the whole job still stalls; nothing reports it.
+  # stdin too, so it can never contend for the terminal.
+  ( sleep "$bounded_secs"; kill -TERM "$bounded_pid" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+  bounded_killer=$!
+  wait "$bounded_pid"; bounded_code=$?
+  kill "$bounded_killer" 2>/dev/null
+  wait "$bounded_killer" 2>/dev/null
+  return "$bounded_code"
+}
+
 # The canonical window is whatever the server designates; ask for the two most recent complete UTC
 # days and let the tool reject it if that is not the canonical pair.
 END="$(date -u +%Y-%m-%dT00:00:00Z)"
@@ -222,31 +248,78 @@ if [ $rc -eq 0 ]; then
       msg="chore(aihot): retention on a no-request day"
     fi
     if git -C benchmarks/aihot commit -q -m "$msg"; then
+      sub_sha="$(git -C benchmarks/aihot rev-parse HEAD)"
       echo "  submodule commit: $(git -C benchmarks/aihot rev-parse --short HEAD)"
-      if git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot; then
-        echo "  pointer commit: $(git rev-parse --short HEAD)"
-        # Report whether this commit reached the "second place" the KNOWN EXPOSURE block names.
-        # It does NOT push, and that is a decision, not an omission:
-        # [ADR-060](../docs/adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md)
-        # (accepted) writes 「顺序必须是 data local commit → 经显式授权 push并验证远端 exact ref →
-        # 主仓记录 gitlink；data push、远端配置、主仓 push与主分支整合互不隐含授权」. An unattended
-        # daily push is exactly the standing implied authorisation that sentence refuses, and the
-        # order here (gitlink already recorded above) is the reverse of what it mandates. So the
-        # push stays a human, per-push action; what was actually broken is that nobody was TOLD.
-        #
-        # What was broken, measured 2026-09-13: the capture sat on a detached submodule HEAD in
-        # this worktree's private gitdir -- unreachable to `git fetch`, destroyed by
-        # `git worktree remove` -- while the job reported rc=0 and the log said "published
-        # locally". Every downstream reader stayed pinned to the last pushed capture with no
-        # signal at all. That went unnoticed for two days.
-        #
-        # No network call: reachability is judged against the remote-tracking refs already on
-        # disk. Stale refs can only make this MORE pessimistic (claiming not-durable for
-        # something already pushed), which is the safe direction, and it keeps this block free of
-        # the credential-prompt and timeout hazards an unattended `git push` would add.
-      else
-        echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
+      # Order is load-bearing and comes from
+      # [ADR-060](../docs/adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md):
+      # 「data local commit → 经显式授权 push并验证远端 exact ref → 主仓记录 gitlink」.
+      # A failed push must therefore NOT be followed by the pointer commit, or the superproject
+      # pins a SHA that exists on no remote -- the exact orphan the pin is supposed to prevent.
+      # ADR-20260913-c7d4 supersedes only the AUTHORISATION half of that sentence (this one ref
+      # is authorised standing, by user decision on 2026-09-13); the ordering half stands.
+      #
+      # `BatchMode=yes` is not optional on this host: ssh here uses an encrypted key with
+      # `UseKeychain yes`, and a locked Keychain makes ssh raise a **GUI** passphrase dialog --
+      # not stdin, so ConnectTimeout does not reach it and cron cannot dismiss it. The job would
+      # hang holding its daily slot with an empty log. BatchMode turns that into a clean failure.
+      push_remote="${AIHOT_CAPTURE_PUSH_REMOTE-origin}"
+      push_ref="${AIHOT_CAPTURE_PUSH_REF:-refs/heads/captures/daily}"
+      # Set UNCONDITIONALLY, not `${GIT_SSH_COMMAND:-...}`: an inherited value -- from a manual
+      # re-run's shell, or any wrapper -- would silently replace these flags wholesale rather than
+      # add to them, and the loss is invisible (no log, no failure, just a job that can hang).
+      # Same reasoning as the `unset AI_RADAR_EGRESS_PROXY_PORT` above, and the same measured
+      # shape: a manual recovery run is the exposed case, cron's environment is near-empty.
+      export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15"
+      pushed=""
+      if [ -z "$push_remote" ]; then
+        echo "  submodule push: skipped -- AIHOT_CAPTURE_PUSH_REMOTE is set empty, so this run"
+        echo "           deliberately did not push. NOT a network failure; nothing to retry."
+        echo "           The gitlink is NOT recorded either: ADR-060's order pins only what a"
+        echo "           remote has verifiably got, and 'skipped' is not 'got'."
+        pushed=skipped
+      elif ! bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C benchmarks/aihot push -q "$push_remote" "HEAD:$push_ref"; then
+        echo "  WARNING: submodule push to $push_remote/$push_ref FAILED or timed out."
+        echo "           Not recording the gitlink: pinning a SHA that reached no remote is the"
+        echo "           orphan ADR-060's ordering exists to prevent. The capture is committed"
+        echo "           locally and tomorrow's run retries it -- IF the cause was transient."
+        echo "           A non-fast-forward does NOT self-heal: it fails identically every day"
+        echo "           until someone reconciles \`$push_ref\` by hand. git's own error is above."
         rc=1
+      # ADR-060 asks for the remote EXACT ref, not just a zero exit. A push can report success
+      # while a hook or a racing writer leaves the ref elsewhere; that reads as durable and is not.
+      else
+        remote_sha="$(bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C benchmarks/aihot ls-remote "$push_remote" "$push_ref" 2>/dev/null | awk 'NR==1{print $1}')"
+        if [ -z "$remote_sha" ]; then
+          # Empty means the read-back itself did not happen (unreachable, timed out, no such ref).
+          # Kept separate from a value mismatch: this one is usually transient and retries on its
+          # own, the other one means something else is writing the ref. Same log line for both
+          # would send the 2am reader down the wrong path.
+          echo "  WARNING: pushed, but could NOT read $push_remote/$push_ref back (empty result:"
+          echo "           unreachable, timed out, or the ref is absent). Durability unconfirmed,"
+          echo "           so the gitlink is not recorded. Usually transient -- tomorrow retries."
+          rc=1
+        elif [ "$remote_sha" != "$sub_sha" ]; then
+          echo "  WARNING: pushed, but $push_remote/$push_ref reads back as $remote_sha,"
+          echo "           not $sub_sha. Something else is writing that ref (a server hook, or a"
+          echo "           concurrent publisher). This does NOT clear on its own -- find the other"
+          echo "           writer. Gitlink not recorded."
+          rc=1
+        else
+          echo "  submodule push: $(git -C benchmarks/aihot rev-parse --short HEAD) -> $push_remote/$push_ref (verified)"
+          pushed=1
+        fi
+      fi
+      # `= 1`, NOT `-n`: `pushed=skipped` is also non-empty, and an earlier revision of this block
+      # used `-n` and therefore recorded the gitlink on skip days -- pinning a SHA that had reached
+      # no remote, which is the exact orphan ADR-060's ordering exists to prevent. Caught by an
+      # independent reviewer, not by the tests; case 19a now asserts it.
+      if [ "$pushed" = 1 ]; then
+        if git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot; then
+          echo "  pointer commit: $(git rev-parse --short HEAD)"
+        else
+          echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
+          rc=1
+        fi
       fi
     else
       echo "  WARNING: submodule commit failed; this run's output is uncommitted"
