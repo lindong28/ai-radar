@@ -55,6 +55,9 @@ def test_repository_audit_reports_real_entry_and_known_unconnected_governance() 
     assert result["l1"]["4_metrics"]["status"] == "located"
     assert result["l3"]["caller_wiring"]["status"] == "executable"
     assert "eval-fit command dispatch=6/6" in result["l3"]["caller_wiring"]["evidence"]
+    assert result["workflow"]["optimization"]["status"] == "partial"
+    assert "replay_real_runs.py" in result["workflow"]["optimization"]["path"]
+    assert "direct archive counterfactual remains unavailable" in result["workflow"]["optimization"]["evidence"]
     assert "archive ledger caller=True" in result["l3"]["caller_wiring"]["evidence"]
     assert result["l3"]["attribution_admission"]["status"] == "manual"
     assert result["workflow"]["legacy_eval"]["status"] == "located"
@@ -148,6 +151,16 @@ def test_malformed_run_metadata_is_not_silently_classified_as_legacy(tmp_path: P
 
     assert result["l3"]["comparison_window"]["status"] == "invalid"
     assert result["details"]["report_identity_inventory"]["invalid"] == 1
+
+
+def test_optimization_is_partial_without_the_real_run_replay_entry(tmp_path: Path) -> None:
+    root = tmp_path
+    (root / "src/airadar/eval/aihot_fit").mkdir(parents=True)
+
+    result = audit_eval_system(project_root=root, runs_dir=root / "runs")
+
+    assert result["workflow"]["optimization"]["status"] == "partial"
+    assert "replay entry wired=False" in result["workflow"]["optimization"]["evidence"]
 
 
 def test_current_ballot_provenance_uses_the_same_observed_state_in_l2_and_l3(tmp_path: Path) -> None:

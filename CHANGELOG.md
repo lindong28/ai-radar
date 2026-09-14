@@ -2,7 +2,7 @@
 
 ## 2026-09-14（AIHOT 拟合评测接通三层身份与回归链）
 
-- `./run.sh eval-fit audit` 现在从真实题集、轮次账本、身份 manifest、归档记录、报告与调用入口反推 L1/L2/L3 状态，并校验归档行摘要；audit 本身不发起 LLM 调用。旧 `./run.sh eval` 保留为独立的 legacy 快照比较/报告工具，但不再冒充 canonical `eval-fit` 或归档趋势入口。
+- `./run.sh eval-fit audit` 现在从真实题集、轮次账本、身份 manifest、归档记录、报告与调用入口反推 L1/L2/L3 状态，并校验归档行摘要；audit 本身不发起 LLM 调用。归因优化入口显式检查 `replay_real_runs.py` 的真实 run 配对 A/B 和运行时自校准，同时把仍缺直接归档反事实量具报为 partial；旧 `./run.sh eval` 保留为独立的 legacy 快照比较/报告工具，但不再冒充 canonical `eval-fit` 或归档趋势入口。
 - 新 run/report 在计算前固定并复核 questions、outputs、judgments 与 calibration 的生产时摘要；本机现有 33 个旧 run 与 25 个旧 report 因缺少 producer-time outputs identity 被保留为 non-comparable 历史资产，不补造身份。轮次 JSONL 已接通 build、run、judge、archive、report，当前归档记录有完整 started/completed 事件且无 orphan。
 - 新增并行 v2 题集与最终用户可见面的诊断指标：最终 `topic_tags_v2`、归档最终展示评分和可选标题语义判官。v1 题集、参考答案、判官模型与阈值未改；标题默认不增加调用，且在标题专用校验与目标标准获批前只作未采信诊断。
 - 最新归档权威读数（`captures_sha=623728b`，13 窗 / 190 条参照精选）为 2/5 类落入 95% CI、TV 0.163；最终展示评分 Spearman 0.1098（n=357），参照 capture 没有标签（n=0，读作未测而非零分）。这次相对旧记录同时扩了窗口与参照集，因此不据 `3/5 → 2/5` 单独宣称代码回归。

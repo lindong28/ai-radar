@@ -241,6 +241,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
     run_path = fit_root / "run.py"
     judge_path = fit_root / "judge.py"
     archive_measure_path = project_root / "scripts/eval/measure_archive_composition.py"
+    real_run_replay_path = project_root / "scripts/eval/replay_real_runs.py"
     benchmark = project_root / "benchmarks/aihot"
     questions_v1 = benchmark / "evalsets/aihot-fit-v1/questions.jsonl"
     questions_v2 = benchmark / "evalsets/aihot-fit-v2/questions.jsonl"
@@ -334,6 +335,12 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
     archive_ledger_caller = _has_direct_call(
         archive_measure_path, "main", "start_attempt"
     ) and _has_direct_call(archive_measure_path, "main", "record_event")
+    real_run_replay_entry = (
+        real_run_replay_path.is_file()
+        and _has_direct_call(real_run_replay_path, "main", "replay")
+        and _has_direct_call(real_run_replay_path, "main", "arm_b")
+        and _has_direct_call(real_run_replay_path, "arm_b", "replay")
+    )
 
     l1 = {
         "1_object": _entry(
@@ -481,15 +488,17 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
                         run_preflight,
                         judge_preflight,
                         archive_ledger_caller,
+                        real_run_replay_entry,
                     )
                 )
                 else "missing"
             ),
-            "src/airadar/eval/aihot_fit/{cli.py,run.py,judge.py,metrics.py} + scripts/eval/measure_archive_composition.py",
+            "src/airadar/eval/aihot_fit/{cli.py,run.py,judge.py,metrics.py} + scripts/eval/{measure_archive_composition,replay_real_runs}.py",
             (
                 f"eval-fit command dispatch={sum(eval_fit_dispatch.values())}/{len(eval_fit_dispatch)}; "
                 f"run identity caller={run_preflight}; judge identity caller={judge_preflight}; "
                 f"archive ledger caller={archive_ledger_caller}; archive measurement intentionally remains explicit"
+                f"; real-run replay entry={real_run_replay_entry}"
             ),
         ),
     }
@@ -507,9 +516,10 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
         ),
         "attribution": _entry("manual", "docs/issues/aihot-fit-eval.md", "hypothesis precedes diagnostic intervention"),
         "optimization": _entry(
-            "executable",
-            "docs/issues/aihot-fit-eval.md + scripts/eval/",
-            "record differential_prediction, then run the cause-specific offline experiment",
+            "partial",
+            "docs/issues/aihot-fit-eval.md + scripts/eval/replay_real_runs.py",
+            f"replay entry wired={real_run_replay_entry}; self-calibration gates paired run-level arm B; "
+            "direct archive counterfactual remains unavailable",
         ),
         "regression": _entry(
             "executable" if report_caller else "missing", "./run.sh eval-fit report", "threshold and baseline report"
@@ -545,6 +555,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
             "report_identity_inventory": report_inventory,
             "legacy_eval_probes": legacy_eval_probes,
             "eval_fit_dispatch": eval_fit_dispatch,
+            "real_run_replay_entry": real_run_replay_entry,
         },
         "summary": counts,
     }
