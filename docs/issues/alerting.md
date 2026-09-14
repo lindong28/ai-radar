@@ -112,6 +112,8 @@ A7 尚未在生产 firing 过，故两条都是代码路径分析、无生产实
 
 **闭合方向**：先加 error-class 信号，再以它为共因锚点做 rollup。
 
+**2026-09-14 待发布进度**：已删除仅凭同轮 co-fire 与 heartbeat freshness 合并 A1/A2/A5 的旧关联器，先消除“把第二起独立事故吞掉”的已知错误；W1→A2 heartbeat 的严格因果关联保留。规范化 error-class 与跨 A2/A4/A7 的正向共因 rollup 尚未实现，本条继续 open。
+
 ## ISSUE-A07 · A7 无条件 page，严重度不随影响缩放
 
 **状态**：open · **优先级**：high · **原则**：P2
@@ -122,6 +124,8 @@ A7 尚未在生产 firing 过，故两条都是代码路径分析、无生产实
 
 **闭合方向**：整批静默 → page；单源或少数源静默 → notice。前提是 ISSUE-A01 先修，否则会退回到当初促成硬编码 page 的那个状态。
 
+**2026-09-14 待发布进度**：按用户裁决，1 个可处置静默来源降为 notice，2 个及以上维持 page；真实历史里 A7 共 407 次 firing 投递，其中 299 次只有 1 个可处置来源，故该改动直接收窄主噪声面。合并本地 main 并部署后再归档本条。
+
 ## ISSUE-A08 · A4 的 page 支路去抖为 0，每天日界处结构性误 page
 
 **状态**：open · **优先级**：high · **原则**：P7
@@ -131,6 +135,8 @@ page 支路判据是 `items_today < daily_inserted_floor_elapsed`，而 floor �
 三次已投递并迅速撤回的实例：07-24 `00:14:24 → 00:19:51`（5.5 分钟，resolve 时 items 626）、08-13 `00:15:34 → 00:21:01`（5.5 分钟，items 2547）、08-17 `00:16:06 → 00:31:25`（15 分钟，items 333）。都不是事故，只是当日首轮尚未落库。
 
 **闭合方向**：给 floor 一个 warm-up（至少放过一轮 pipeline 周期），不必给它加 30 分钟去抖——真实断流的即时性应当保留。
+
+**2026-09-14 待发布进度**：items-floor 现在上海自然日内已有任意完整 fetch（含合法的 `attempted=0`），或当日任一非 SKIP 轮已明确记录非 healthy egress preflight 时上膛；跨午夜回归证明上一日完整轮仍新鲜、当日首轮尚未开始时，`items=0` 保持 `in_progress`，而当日 preflight 真实断流与完整空轮都会 page；后续未完成轮不会重新卸掉当日失败证据。该边界由用户在第二轮审查后明确批准，未扩大 A2 的 fire 条件。合并本地 main 并部署后再归档本条。
 
 ## ISSUE-A09 · A4 的 notice 分支把「已知良性」写死，而背书信号钝到测不出真实事故
 
@@ -155,6 +161,8 @@ fetch 失败率破线、items floor 未破线时，A4 无条件降级为 notice�
 
 **闭合方向**：三条补齐 `impact` / `urgency`；顺带去掉共享 formatter 的 `故障类别：` 行对标题的逐字重复（A1–A7 与 PERF 均有零信息增量）。
 
+**2026-09-14 待发布进度**：A1/A2/A3 已补影响与紧迫度，所有 firing 消息已去掉重复的「故障类别」行。合并本地 main 并部署后再归档本条。
+
 ## ISSUE-A11 · alert-check 日志无 rotation：告警侧的消费面
 
 **状态**：open · **优先级**：high · **原则**：P8
@@ -175,6 +183,8 @@ runbook 把「人工监看 `logs/alert-check.log` 大小」写成缓解措施，
 
 **闭合方向**：五条补 runbook 指针；把 `AI_RADAR_PROXY_FILE` 与 agent-proxy 这条链路写进 `docs/operations/services.md` 服务清单，并与图片代理那节明确区分。
 
+**2026-09-14 待发布进度**：A1 firing/resolved 已指向 `logs/pipeline-*.log` 与 `/admin/usage`；A2、A5 已给出 `logs/pipeline-*.log`，A2 egress 动作先校验端口范围再检查监听；A3 resolved 指向 access/error 日志与 status；A6 resolved 指向 `/admin/usage`；PERF resolved 指向 `logs/performance/evidence/`。`/admin` 摘要与 state 文件异常的用户影响/动作、以及 `AI_RADAR_PROXY_FILE` 在 services 文档的覆盖仍未闭合，本条继续 open。
+
 ## ISSUE-A13 · A6 的「至少 3 个基线日」门是死代码，14 个日桶含伪造日
 
 **状态**：open · **优先级**：medium · **原则**：P9
@@ -193,6 +203,8 @@ runbook 把「人工监看 `logs/alert-check.log` 大小」写成缓解措施，
 
 **闭合方向**：P95 支路降为 notice 或不 arm；A2 按命中的支路定档。
 
+**2026-09-14 待发布进度**：仅 P95 越线现为 notice；stage 错误率或 pipeline 心跳异常仍为 page。历史窗口里那次仅 P95 触发、下一轮即恢复的 page 将不再占 ALERT 通道。合并本地 main 并部署后再归档本条。
+
 ## ISSUE-A15 · A2 rate 支路半数以上轮次未上膛，消息不声明
 
 **状态**：open · **优先级**：medium · **原则**：P9
@@ -203,6 +215,8 @@ runbook 已自述该盲区、甚至写了「排障时不要把『A2 rate 未 fir
 
 **闭合方向**：未达样本量时在消息里显式声明该支路本轮未评估。
 
+**2026-09-14 待发布进度**：三个 stage 样本数全为 0 时改为 `in_progress`，不再用零样本关闭既有 episode；各 stage 有少量样本但低于各自门槛时仍未逐项披露，本条继续 open。
+
 ## ISSUE-A16 · A5 的 urgency 把系统已算出的分支丢回给读者
 
 **状态**：open · **优先级**：medium · **原则**：P3
@@ -210,6 +224,8 @@ runbook 已自述该盲区、甚至写了「排障时不要把『A2 rate 未 fir
 `urgency` 是静态字符串「是——有合格积压时立即核查；无合格积压时先恢复可评估性」，两个分支都写着，但代码本轮已经判出是哪个（`a5_firing` 要求 `wechat_pending_count > 0`，`a5_degraded` 是它的反面），且 detail 里已印着等待篇数。读者要自己把 detail 的数字和 urgency 的条件对上才知道落在哪一档。A4 的 `impact` / `urgency` 按分支取值，是同一文件里的正确对照。
 
 **闭合方向**：按分支取值。
+
+**2026-09-14 待发布进度**：A5 firing 时 urgency 直接写「有合格积压，立即核查解读日志与模型额度」，不再把互斥分支交给收件人二次判断。合并本地 main 并部署后再归档本条。
 
 ## ISSUE-A17 · 阈值注释与测试注释仍以已下线的 nitter 立论
 
@@ -473,6 +489,8 @@ worker 失败与候选待审都走默认 page，但正文主要是 `reason/viola
 
 **闭合方向**：把 cooldown 明确定义为 episode 内 reminder，而不是跨 episode 限流，并为所有规则补 `fire → resolve → 30 分钟内 recur` 对照；随后统一评估 page resolved 是否改走 notice，避免通道迁移与既有 consumer/dedup 契约脱节。
 
+**2026-09-14 待发布进度**：用户选择「仅状态变化」。共享状态机已删除同一 episode 的 30 分钟 reminder，只在首次确认、notice→page 升级和最终恢复时通知；所有 resolved 统一走 notice，成功恢复同时关闭同 rule 的未宣告 severity lifecycle。首次 firing 的待投递快照与 nonce 会在 sender 失败后保留，即使下一轮不可评估仍重试原通知；A7 actionable source 集合完全换批时用 INTERNAL 事件闭合旧 episode，并立即通知新 episode，避免“持续 firing”把不同故障无限合并。合并本地 main 并部署后再归档本条。
+
 ## ISSUE-ALERT-20260904-8f2c · 共享告警 ledger 可先写过上限后永久停录
 
 **状态**：open · **优先级**：medium · **原则**：P8
@@ -496,6 +514,10 @@ worker 失败与候选待审都走默认 page，但正文主要是 `reason/viola
 PERF journey monitor 的 lifecycle 以现有样本判定；样本生产者长期不产出、文件损坏或观测窗滑过旧失败样本时，没有独立 freshness/producer-health gate。一个先前 firing 的事故可能在没有新的成功观测时转为 resolved，或探针完全不运行却没有新的 page。当前 `performance-probe` 未安装/禁用只来自版本化服务文档，live 状态未核实。
 
 **闭合方向**：把“最新有效样本年龄/生产者运行状态”作为独立可评估前提；缺新鲜证据时保持事故或转 degraded，不以旧样本滑窗消失证明恢复。
+
+**2026-09-14 待发布进度**：带 `firing_basis=observed` 的既有 PERF episode 在新鲜样本滑空时保持 firing，并标 `in_progress`，不再发送假恢复；显式禁用或无可信身份的历史状态仍可退役。独立的 producer-health 告警尚未建立，本条继续 open。
+
+**同轮审查遗留**：首次 PERF firing 投递失败后，下一轮若最新样本变为 probe-infra outcome，`_pending_firing_result()` 会用 lifecycle 的简化字段重建 firing；共享状态机虽复用原 nonce，却会用这份重建结果覆盖 pending snapshot。应让该路径直接重放原 snapshot，或证明重建结果与原消息等价，并加“首次发送失败 → infra hold → 重试”的断言。本轮不扩大实现范围，继续由本条承接。
 
 ## ISSUE-ALERT-20260904-b19f · A5 与 D3 的非 firing 状态没有完整恢复契约
 
@@ -555,3 +577,5 @@ A5 在微信解读被配置关闭时可从既有 firing 直接进入 resolved，
 3. **消息未表达紧迫性升级**：A5 文案的时长在涨（`已 101.7 小时`），但严重度与呈现形态不随之变化。
 
 **闭合方向**：先量一次通道里各规则的 firing 占空比（有多少是常驻、自带"无需处置"的），再决定是收窄那些规则还是给 A5 加升级路径。**不要在量之前改投递逻辑**——本条首版就是这么错的。
+
+**2026-09-14 历史量化与待发布处置**：`data/alert-events.jsonl` 的 2026-09-01 至 09-14 窗口有 831 次非 INTERNAL firing 投递，却只有 89 个按 `(rule_id,severity,episode_since)` 去重的 episode；742 次是同一 episode 内重复提醒。A5 本身 196 次 firing，说明“持续重复”没有转化成可见行动，告警疲劳是本轮得到直接数量支持的根因，而非此前猜测的 transport 去重。用户选择全局「仅状态变化」后，状态机不再周期重发；A7 单源同时降为 notice。A5 的历史真实故障已由收据链修复闭合，但通道可达性与是否需要独立的持续时长升级仍未验证，本条继续 open。

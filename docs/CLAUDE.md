@@ -173,6 +173,7 @@
 | [20260913-e21a-clamp-rss-pubdate-to-fetch-time.md](adr/20260913-e21a-clamp-rss-pubdate-to-fetch-time.md) | RSS 入库把未来 pubDate 钳到当前时刻，只在 RSS 路径上（`web.py:_date()` 同形缺口有意不修，0 实测越界）；`published_at` 语义变为「不晚于我方**解析**到它的时刻」（文件名里的 fetch-time 是误称），与 [006-curated-archive](adr/006-curated-archive-mode.md) 的排序契约有交界面 |
 | [20260914-0442-close-the-aihot-eval-system-three-layer-loop.md](adr/20260914-0442-close-the-aihot-eval-system-three-layer-loop.md) | 接通 AIHOT 拟合评测的 L1 五槽、L2 轮次资产、L3 身份治理与完整执行闭环；v1 保持不变，v2 新标准未获批前不得采信 |
 | [20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md](adr/20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md) | 保留旧 `eval` 的快照比较与报告能力，但以当前源码静态连通性探针明确放在 canonical `eval-fit` / 归档链之外；旧 reports 保留为不可补造身份的 non-comparable 历史资产 |
+| [20260914-acdd-notify-alert-state-transitions.md](adr/20260914-acdd-notify-alert-state-transitions.md) | 飞书告警只在新事故、严重度变化与可证明恢复时投递；修复午夜 A4、低样本假恢复、无因果合并与 A7 单源 page 噪声 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

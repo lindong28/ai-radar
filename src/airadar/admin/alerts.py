@@ -39,7 +39,6 @@ RULESET = ("A1", "A2", "A3", "A4", "A5", "A6", "A7")
 WECHAT_BROWSER_PREFLIGHT_RULE_ID = "W1"
 DEFAULT_STATE_PATH = db.PROJECT_ROOT / "data" / "alert-state.json"
 DEFAULT_EVENT_PATH = db.PROJECT_ROOT / "data" / "alert-events.jsonl"
-COOLDOWN = timedelta(minutes=30)
 RETENTION_DAYS = 14
 MAX_LEDGER_BYTES = 64 * 1024 * 1024
 LEDGER_LOCK_TIMEOUT_SECONDS = 1.0
@@ -101,6 +100,11 @@ class AlertSignals:
     server_error_rate: float
     fetch_failed_ratio: float
     items_today: int
+    # The daily items floor is meaningful after a current-day complete fetch, or
+    # after the current day's newest non-SKIP round explicitly failed egress
+    # preflight. Before either event, zero items is startup state rather than
+    # evidence of an ingestion outage.
+    has_complete_fetch_today: bool = True
     last_successful_pipeline_at: datetime | None = None
     minutes_elapsed_today: int = MINUTES_PER_DAY
     # Newest round that actually reached the egress preflight, healthy or not.
@@ -108,6 +112,7 @@ class AlertSignals:
     # clearing them — a skip is not evidence that egress recovered.
     egress_preflight_status: str = ""
     egress_preflight_reason: str = ""
+    egress_preflight_failed_today: bool = False
     # A4 fetch dimension. `fetch_evaluated` is False when the log directory has
     # no complete fetch round (summary line followed by a `=== fetch OK|FAIL ===`
     # terminal line) or the newest complete round is older than
@@ -406,7 +411,8 @@ def evaluate_rules(
     stage_error_thresholds = a2.get("stage_error_rate", {})
     stage_min_samples = a2.get("min_samples", {})
     stage_p95_thresholds = a2.get("stage_p95_latency_ms", {})
-    stage_reasons: list[str] = []
+    stage_error_reasons: list[str] = []
+    stage_latency_reasons: list[str] = []
     if isinstance(stage_error_thresholds, dict):
         for stage, observed in sorted(signals.stage_error_rate.items()):
             threshold = float(stage_error_thresholds.get(stage, 0.3))
@@ -418,12 +424,12 @@ def evaluate_rules(
             )
             sample_count = signals.stage_sample_count.get(stage, 0)
             if sample_count >= min_samples and observed > threshold:
-                stage_reasons.append(f"{stage} 错误率 {observed:.1%} > {threshold:.1%}")
+                stage_error_reasons.append(f"{stage} 错误率 {observed:.1%} > {threshold:.1%}")
     if isinstance(stage_p95_thresholds, dict):
         for stage, observed in sorted(signals.stage_p95_latency_ms.items()):
             threshold = stage_p95_thresholds.get(stage)
             if threshold is not None and observed > int(threshold):
-                stage_reasons.append(f"{stage} P95 {observed}ms > {int(threshold)}ms")
+                stage_latency_reasons.append(f"{stage} P95 {observed}ms > {int(threshold)}ms")
     # A SKIP log means "pipeline already running" — a run is in progress, which is
     # liveness, not a fault. So skip count is never a standalone trigger; it only
     # rides along as context when the heartbeat itself has genuinely gone stale.
@@ -439,27 +445,10 @@ def evaluate_rules(
         # round that reached the preflight says it was not healthy, that IS the
         # cause; the skip count is dropped rather than shown beside it.
         if signals.egress_preflight_status and signals.egress_preflight_status != "healthy":
-            # The reason is copied verbatim from a line the pipeline wrote, and its
-            # length is not bounded by anything we control; it goes on to become an
-            # argv element for im-notify, so it is capped here. (Until 2026-09-09 the
-            # unbounded part was `check-proxy-status` output; it is now whatever the
-            # preflight itself reports.)
-            #
-            # 400, not a round 200: the longest reason across 770 real rounds is
-            # exactly 201 (`missing status fields:` with 11 field names, 14 rounds
-            # carry it), and a 200 cap silently ate the final letter of
-            # `tencent_status_scope`. That is the worst possible failure for this
-            # message — the field list is the whole reason this attribution exists,
-            # and a truncated one reads as a complete one naming a field that does
-            # not exist. The cap must sit above what production actually emits, and
-            # when it does bite it has to be visible.
-            raw = signals.egress_preflight_reason
-            reason = raw if len(raw) <= 400 else raw[:400] + "…（已截断）"
-            reason_text = f"，reason={reason}" if reason else ""
-            skip_note = f"（最近一轮出网 preflight status={signals.egress_preflight_status}{reason_text}）"
+            skip_note = f"（最近一轮出网 preflight status={signals.egress_preflight_status}）"
             heartbeat_action = (
-                "出网 preflight 未通过：上面 reason 点名的那个本地出口端口没人在听或不通，"
-                "用 lsof -nP -iTCP:<该端口> -sTCP:LISTEN 核，改出口端口用 AI_RADAR_EGRESS_PROXY_PORT；"
+                "出网 preflight 未通过：先确认 AI_RADAR_EGRESS_PROXY_PORT 是 1–65535 的整数，"
+                "再用 lsof -nP -iTCP:<该端口> -sTCP:LISTEN 确认该端口有监听且可达；"
                 "见 docs/operations/monitoring-alerting.md 的「出网 selector 的 preflight 与实际 route」。"
             )
         else:
@@ -474,18 +463,31 @@ def evaluate_rules(
             if signals.minutes_since_successful_pipeline >= 10_000
             else f"最近成功 pipeline 已超过 {signals.minutes_since_successful_pipeline} 分钟"
         )
-        stage_reasons.append(f"{elapsed_text}{skip_note}")
+        stage_error_reasons.append(f"{elapsed_text}{skip_note}")
+    stage_reasons = stage_error_reasons + stage_latency_reasons
+    a2_firing = bool(stage_reasons)
+    a2_missing_stage_evidence = not a2_firing and all(
+        signals.stage_sample_count.get(stage, 0) == 0
+        for stage in ("prefilter", "scoring", "enrich")
+    )
+    a2_severity: AlertSeverity = (
+        NOTICE_SEVERITY
+        if stage_latency_reasons and not stage_error_reasons
+        else PAGE_SEVERITY
+    )
 
     a3_rate = _float_threshold(a3, "server_error_rate", 0.05)
     a3_min_pv = _int_threshold(a3, "min_pv", math.ceil(1 / a3_rate) if a3_rate > 0 else 1)
     a3_healthz_failure_threshold = _int_threshold(a3, "healthz_consecutive_failures", 2)
     a3_reasons: list[str] = []
-    if signals.server_pv >= a3_min_pv and signals.server_error_rate > a3_rate:
+    a3_user_errors = signals.server_pv >= a3_min_pv and signals.server_error_rate > a3_rate
+    if a3_user_errors:
         a3_reasons.append(f"用户侧 5xx 率 {signals.server_error_rate:.1%} > {a3_rate:.1%}")
-    if (
+    a3_health_failed = (
         a3_healthz_failure_threshold > 0
         and signals.healthz_consecutive_failures >= a3_healthz_failure_threshold
-    ):
+    )
+    if a3_health_failed:
         a3_reasons.append(
             f"healthz 连续失败 {signals.healthz_consecutive_failures} 次 >= {a3_healthz_failure_threshold} 次"
         )
@@ -508,7 +510,10 @@ def evaluate_rules(
     # Fetch dimension is three-state: an unevaluated round (no complete round,
     # or the newest complete round is stale) must not read as 0% failures.
     a4_fetch_failed = a4_fetch_evaluated and signals.fetch_failed_ratio > a4_fetch_ratio
-    a4_items_low = signals.items_today < daily_inserted_floor_elapsed
+    a4_daily_floor_armed = (
+        signals.has_complete_fetch_today or signals.egress_preflight_failed_today
+    )
+    a4_items_low = a4_daily_floor_armed and signals.items_today < daily_inserted_floor_elapsed
     a4_account_failed = _account_failed_count(signals.failed_by_status, a4_account_codes)
     a4_account_ratio = a4_account_failed / a4_attempted if a4_attempted else 0.0
     a4_account_breached = a4_fetch_evaluated and a4_account_ratio > a4_fetch_ratio
@@ -768,17 +773,32 @@ def evaluate_rules(
                 "upstream_error_rate": signals.upstream_error_rate,
                 "upstream_sample_size": signals.upstream_sample_size,
             },
+            impact="依赖模型的文章筛选与解读可能停止产出" if a1_firing else "",
+            urgency="是——立即核查模型供应商可用性" if a1_firing else "",
+            evaluation_state=(
+                "in_progress"
+                if not a1_firing and signals.upstream_sample_size < a1_min_samples
+                else "healthy"
+            ),
         ),
         AlertRuleResult(
             rule_id="A2",
             title="阶段错误率/耗时异常",
-            firing=bool(stage_reasons),
-            detail="；".join(stage_reasons) if stage_reasons else "各阶段错误率、耗时与 pipeline 心跳在阈值内",
+            firing=a2_firing,
+            detail=(
+                "；".join(stage_reasons)
+                if stage_reasons
+                else (
+                    "本窗口无阶段样本，阶段错误率与耗时未评估；pipeline 心跳仍在阈值内"
+                    if a2_missing_stage_evidence
+                    else "各阶段错误率、耗时与 pipeline 心跳在阈值内"
+                )
+            ),
             # Only the heartbeat branch may retarget the action: A2 also fires on stage
             # error rate and P95, and those still need the "go read the stage logs"
             # instruction even while egress happens to be unhealthy.
             action=heartbeat_action
-            or "查看 pipeline 最新日志，定位异常 stage；若无成功轮次或连续 SKIP，检查 pipeline 锁和长任务。",
+            or "查看 logs/pipeline-*.log 最新一轮，定位异常 stage；若无成功轮次或连续 SKIP，检查 pipeline 锁和长任务。",
             values={
                 "stage_error_rate": signals.stage_error_rate,
                 "stage_sample_count": signals.stage_sample_count,
@@ -788,6 +808,22 @@ def evaluate_rules(
                 "egress_preflight_status": signals.egress_preflight_status,
                 "egress_preflight_reason": signals.egress_preflight_reason,
             },
+            severity=a2_severity,
+            impact=(
+                "后台文章处理变慢；当前没有错误率或 pipeline 心跳故障证据"
+                if a2_firing and a2_severity == NOTICE_SEVERITY
+                else "文章处理流水线可能失败或停滞"
+                if a2_firing
+                else ""
+            ),
+            urgency=(
+                "否——先观察下一轮；若错误率或心跳也异常再立即处置"
+                if a2_firing and a2_severity == NOTICE_SEVERITY
+                else "是——立即检查最新 pipeline 日志"
+                if a2_firing
+                else ""
+            ),
+            evaluation_state="in_progress" if a2_missing_stage_evidence else "healthy",
         ),
         AlertRuleResult(
             rule_id="A3",
@@ -807,6 +843,16 @@ def evaluate_rules(
                 "server_pv": signals.server_pv,
                 "healthz_consecutive_failures": signals.healthz_consecutive_failures,
             },
+            impact=(
+                "用户请求已出现 5xx，且本机 serve 健康检查连续失败"
+                if a3_user_errors and a3_health_failed
+                else "用户请求已出现 5xx"
+                if a3_user_errors
+                else "本机 serve 健康检查连续失败；本轮未由访问日志证明公网用户已受影响"
+                if a3_health_failed
+                else ""
+            ),
+            urgency="是——立即核查网站入口和 serve 日志" if a3_firing else "",
         ),
         AlertRuleResult(
             rule_id="A4",
@@ -825,6 +871,10 @@ def evaluate_rules(
                         f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}"
                         if a4_account_pending
                         else (
+                            f"等待今日首个完整 fetch 或明确的 egress preflight 失败后再评估 items 日内 floor；"
+                            f"当前 items 增量 {signals.items_today}"
+                            if not a4_daily_floor_armed
+                            else
                             f"最近 fetch 失败率 {signals.fetch_failed_ratio:.1%}，"
                             f"今日 items 增量 {signals.items_today}，按日内进度 floor "
                             f"{daily_inserted_floor_elapsed}/{daily_inserted_floor}，均在阈值内"
@@ -869,13 +919,19 @@ def evaluate_rules(
                 "minutes_elapsed_today": signals.minutes_elapsed_today,
                 "daily_inserted_floor": daily_inserted_floor,
                 "daily_inserted_floor_elapsed": daily_inserted_floor_elapsed,
+                "daily_floor_armed": a4_daily_floor_armed,
             },
             severity=a4_severity,
             impact=a4_impact,
             urgency=a4_urgency,
             evaluation_state=(
                 "in_progress"
-                if not a4_firing and (not a4_fetch_evaluated or a4_account_pending)
+                if not a4_firing
+                and (
+                    not a4_fetch_evaluated
+                    or a4_account_pending
+                    or not a4_daily_floor_armed
+                )
                 else "healthy"
             ),
         ),
@@ -904,7 +960,7 @@ def evaluate_rules(
                 )
             ),
             action=(
-                "先查近 4 小时 pipeline 与 interpret 日志中的成功/错误；再核对 DeepSeek/ARK 余额和配额。"
+                "先查 logs/pipeline-*.log 近 4 小时 interpret 阶段的成功/错误；再核对 DeepSeek/ARK 余额和配额。"
                 "data/ark-breaker.json 仅在 opened_at 仍处于 2 小时 cooldown 内时可作当前故障证据；"
                 "若仍在 cooldown，402 表示余额不足，429 AccountQuotaExceeded 表示方舟配额。"
             ),
@@ -916,7 +972,7 @@ def evaluate_rules(
                 "no_success_hours": a5_hours,
             },
             impact="微信文章解读停止更新，待处理或冻结文章不会产出",
-            urgency="是——有合格积压时立即核查；无合格积压时先恢复可评估性",
+            urgency="是——有合格积压，立即核查解读日志与模型额度" if a5_firing else "",
             evaluation_state="degraded" if a5_degraded else "healthy",
         ),
         AlertRuleResult(
@@ -971,8 +1027,8 @@ def evaluate_rules(
             ),
             evaluation_state=(
                 "in_progress"
-                if signals.a6_measurement_in_progress
-                else ("degraded" if a6_degraded else "scope_limited")
+                if signals.a6_measurement_in_progress or a6_degraded
+                else "scope_limited"
             ),
         ),
         AlertRuleResult(
@@ -1013,13 +1069,19 @@ def evaluate_rules(
                 ],
                 "paused_source_ids": signals.paused_source_ids,
             },
-            severity=PAGE_SEVERITY,
+            severity=NOTICE_SEVERITY if len(a7_named) == 1 else PAGE_SEVERITY,
             impact=(
                 f"{len(a7_named)} 个来源已停止产出，站点上这些来源的内容正在变旧"
                 if a7_firing
                 else ""
             ),
-            urgency="是——需立即核查" if a7_firing else "",
+            urgency=(
+                "否——单源静默，按来源日志核查即可"
+                if len(a7_named) == 1
+                else "是——多个来源同时静默，需立即核查共同链路"
+                if a7_firing
+                else ""
+            ),
             # A firing episode that ends because its sources faded out has not
             # resolved — nothing recovered, the rule just lost the ability to
             # see them. `degraded` routes that to the 🟡 "转为不可评估" close
@@ -1044,8 +1106,6 @@ def _format_firing(result: AlertRuleResult) -> str:
         lines.append(f"影响：{result.impact}")
     if result.urgency:
         lines.append(f"需否立即处置：{result.urgency}")
-    if result.rule_id != WECHAT_BROWSER_PREFLIGHT_RULE_ID:
-        lines.append(f"故障类别：{result.title}")
     lines.extend((f"具体故障对象/数值：{result.detail}", f"处置方向：{result.action}"))
     return "\n".join(lines)
 
@@ -1065,12 +1125,17 @@ _SCOPE_LIMITED_RESOLVED_COPY: dict[str, tuple[str, str, str]] = {
 }
 _SCOPE_LIMITED_RESOLVED_FALLBACK = ("已恢复", "；评估范围受限", "恢复证据")
 _RESOLVED_EVIDENCE_POINTERS = {
+    "A1": "复核入口：logs/pipeline-*.log 的模型调用错误与 /admin/usage；无需立即处置。",
+    "A2": "复核入口：logs/pipeline-*.log 最近成功轮次、异常 stage 与出网 preflight；无需立即处置。",
+    "A3": "复核入口：logs/serve-access.log、logs/serve-access.err.log 与 ./status.sh serve tunnel；无需立即处置。",
     "A4": (
         "无需立即处置；恢复结论只覆盖当前抓取，断流期间的缺口按 runbook 判是否补抓。"
         "复核入口：logs/pipeline-*.log 最近完整轮的 FAIL 行与 /api/v1/admin/metrics 的 ingestion.latest_fetch；"
         f"runbook：401/402 账户层见 docs/operations/monitoring-alerting.md 的「{A4_ACCOUNT_RUNBOOK_SECTION}」，"
         "整批失败/出网见「出网 selector 的 preflight 与实际 route」。"
     ),
+    "A5": "复核入口：logs/pipeline-*.log 的 interpret 阶段与 data/ark-breaker.json；无需立即处置。",
+    "A6": "复核入口：/admin/usage；无需立即处置。",
     "A7": (
         "复核入口：logs/pipeline-*.log；runbook：docs/operations/monitoring-alerting.md "
         "的「出网 selector 的 preflight 与实际 route」。"
@@ -1080,6 +1145,12 @@ _RESOLVED_EVIDENCE_POINTERS = {
         "的「微信 Chromium 前置检查」。"
     ),
 }
+
+
+def _resolved_evidence_pointer(rule_id: str) -> str | None:
+    if rule_id.startswith("PERF:"):
+        return "复核入口：logs/performance/evidence/；无需立即处置。"
+    return _RESOLVED_EVIDENCE_POINTERS.get(rule_id)
 
 
 def _format_resolved(
@@ -1105,7 +1176,7 @@ def _format_resolved(
     held = ""
     if quiet_since and held_rounds and held_rounds > 1:
         held = f"\n条件最迟已于 {quiet_since} 转为正常，之后又确认了 {held_rounds} 次评估才宣告恢复"
-    evidence_pointer = _RESOLVED_EVIDENCE_POINTERS.get(result.rule_id)
+    evidence_pointer = _resolved_evidence_pointer(result.rule_id)
     pointer_suffix = f"\n{evidence_pointer}" if evidence_pointer else ""
     if result.evaluation_state == "degraded":
         return (
@@ -1161,57 +1232,6 @@ def _correlate_wechat_browser_preflight_result(
         else result
         for result in results
     ]
-
-
-def _correlate_alert_results(
-    results: list[AlertRuleResult],
-    *,
-    heartbeat_fresh: bool,
-) -> list[AlertRuleResult]:
-    by_id = {result.rule_id: result for result in results}
-    if not (by_id.get("A5") and by_id["A5"].firing):
-        return results
-    carrier = "A5" if heartbeat_fresh else "A2"
-    carrier_result = by_id.get(carrier)
-    if (
-        carrier_result is None
-        or not carrier_result.firing
-        or carrier_result.suppressed_by is not None
-    ):
-        return results
-    suppressed_ids = (
-        {"A1", "A2"}
-        if heartbeat_fresh
-        else {"A5"}
-    )
-    correlated = []
-    related = [
-        rule_id
-        for rule_id in sorted(suppressed_ids)
-        if by_id.get(rule_id)
-        and by_id[rule_id].firing
-        and by_id[rule_id].suppressed_by is None
-    ]
-    for result in results:
-        if result.rule_id == carrier and related:
-            correlated.append(
-                replace(result, detail=f"{result.detail}；已合并关联信号 {','.join(related)}")
-            )
-        elif result.rule_id in related:
-            correlated.append(
-                replace(
-                    result,
-                    suppressed_by=carrier,
-                    suppression_reason=(
-                        "pipeline 心跳新鲜，同一 provider/阶段事故由 A5 合并通知"
-                        if heartbeat_fresh
-                        else "pipeline 心跳已过期，宿主/流水线事故由 A2 合并通知"
-                    ),
-                )
-            )
-        else:
-            correlated.append(result)
-    return correlated
 
 
 def _normalize_severity(value: object) -> AlertSeverity:
@@ -1340,6 +1360,19 @@ def _normalized_lifecycle(entry: dict[str, object]) -> dict[str, object]:
                 "event_type": event_type,
                 "episode_since": raw_pending.get("episode_since"),
             }
+            raw_snapshot = raw_pending.get("snapshot")
+            if (
+                event_type == "firing"
+                and isinstance(raw_snapshot, dict)
+                and isinstance(raw_snapshot.get("text"), str)
+                and isinstance(raw_snapshot.get("detail"), str)
+                and isinstance(raw_snapshot.get("values"), dict)
+            ):
+                pending_notification["snapshot"] = {
+                    "text": raw_snapshot["text"],
+                    "detail": raw_snapshot["detail"],
+                    "values": raw_snapshot["values"],
+                }
     normalized = {
         "state": state,
         "since": entry.get("since") if state == "firing" else None,
@@ -2309,6 +2342,7 @@ def _apply_alert_results(
             event_type: Literal["firing", "resolved"],
             episode_since: object,
             preferred_severity: AlertSeverity,
+            snapshot: dict[str, object] | None = None,
         ) -> tuple[dict[str, object], int]:
             pending = lifecycle.get("pending_notification")
             episode_identity = str(episode_since or "")
@@ -2328,6 +2362,8 @@ def _apply_alert_results(
                     "event_type": event_type,
                     "episode_since": episode_identity,
                 }
+            if snapshot is not None:
+                pending = {**pending, "snapshot": snapshot}
             existing_sequence = lifecycle.get("notification_sequence")
             if not isinstance(existing_sequence, int) or existing_sequence < 0:
                 existing_sequence = 0
@@ -2388,6 +2424,70 @@ def _apply_alert_results(
             return True
 
         if not result.firing and result.evaluation_state == "in_progress":
+            pending_retry: tuple[
+                AlertSeverity,
+                dict[str, object],
+                dict[str, object],
+                dict[str, object],
+            ] | None = None
+            for severity in (PAGE_SEVERITY, NOTICE_SEVERITY):
+                lifecycle = lifecycles.get(severity)
+                if lifecycle is None or lifecycle.get("state") != "firing":
+                    continue
+                pending = lifecycle.get("pending_notification")
+                if not isinstance(pending, dict) or pending.get("event_type") != "firing":
+                    continue
+                snapshot = pending.get("snapshot")
+                if (
+                    isinstance(pending.get("nonce"), int)
+                    and int(pending["nonce"]) > 0
+                    and isinstance(snapshot, dict)
+                    and isinstance(snapshot.get("text"), str)
+                    and isinstance(snapshot.get("detail"), str)
+                    and isinstance(snapshot.get("values"), dict)
+                ):
+                    pending_retry = (severity, lifecycle, pending, snapshot)
+                    break
+            if pending_retry is not None:
+                severity, lifecycle, pending, snapshot = pending_retry
+                snapshot_values = snapshot["values"]
+                notification_nonce = pending["nonce"]
+                assert isinstance(snapshot_values, dict)
+                assert isinstance(notification_nonce, int)
+                retry_result = replace(
+                    result,
+                    firing=True,
+                    severity=severity,
+                    detail=str(snapshot["detail"]),
+                    values=dict(snapshot_values),
+                )
+                receipt = _invoke_sender(
+                    result=retry_result,
+                    event_type="firing",
+                    text=str(snapshot["text"]),
+                    severity=severity,
+                    sender=sender,
+                    episode_since=lifecycle.get("since"),
+                    notification_nonce=notification_nonce,
+                    transport_dedup=transport_dedup,
+                )
+                sent.append(receipt)
+                delivered.append((receipt, retry_result))
+                delivered_now = receipt["delivered"] is True
+                lifecycles[severity] = {
+                    **lifecycle,
+                    "last_notified": (
+                        current.isoformat()
+                        if delivered_now
+                        else lifecycle.get("last_notified")
+                    ),
+                    "announced": delivered_now,
+                    "pending_notification": None if delivered_now else pending,
+                    "evaluation_state": result.evaluation_state,
+                }
+                state[result.rule_id] = project(severity)
+                _write_state(state_path, state)
+                continue
             if not lifecycles:
                 projected_severity = _normalize_severity(result.severity)
                 lifecycles[projected_severity] = _ok_lifecycle(
@@ -2440,29 +2540,47 @@ def _apply_alert_results(
             if not close_paused_a7_lifecycles(paused_a7_lifecycles):
                 continue
 
+        if result.firing and result.rule_id == "A7":
+            active_a7_lifecycles = [
+                (severity, lifecycle)
+                for severity, lifecycle in lifecycles.items()
+                if lifecycle.get("state") == "firing"
+            ]
+            current_source_ids = _a7_result_source_ids(result)
+            if len(active_a7_lifecycles) == 1 and current_source_ids:
+                old_severity, old_lifecycle = active_a7_lifecycles[0]
+                old_source_ids = _normalize_source_ids(old_lifecycle.get("source_ids"))
+                if old_source_ids and set(old_source_ids).isdisjoint(current_source_ids):
+                    replacement_event = {
+                        "ts": current.isoformat(),
+                        "rule_id": result.rule_id,
+                        "severity": old_severity,
+                        "type": "resolved",
+                        "detail": (
+                            "A7 source set changed; prior episode closed without "
+                            "recovery notification"
+                        ),
+                        "values": {
+                            "episode_source_ids": old_source_ids,
+                            "replacement_source_ids": current_source_ids,
+                        },
+                        "channel": INTERNAL_CHANNEL,
+                        "reason": "source_set_changed",
+                        "episode_since": old_lifecycle.get("since"),
+                    }
+                    _record_event_rows(
+                        event_path,
+                        current=current,
+                        new_rows=[replacement_event],
+                    )
+                    lifecycles[old_severity] = _ok_lifecycle(
+                        old_lifecycle,
+                        str(replacement_event["detail"]),
+                        result.evaluation_state,
+                    )
+
         if result.firing:
             effective_severity = _normalize_severity(result.severity)
-            announced_page = lifecycles.get(PAGE_SEVERITY)
-            if (
-                effective_severity == NOTICE_SEVERITY
-                and announced_page is not None
-                and announced_page.get("state") == "firing"
-                and _entry_announced(announced_page)
-            ):
-                lifecycles[PAGE_SEVERITY] = {
-                    **announced_page,
-                    "detail": result.detail,
-                    "evaluation_state": result.evaluation_state,
-                }
-                # Same reason as the pop below: the rule is firing again, so a
-                # part-served quiet count must not survive. This branch returns via
-                # `continue` and never reaches that pop -- review found the earlier
-                # version carrying the count across a page-to-notice handoff and
-                # resolving eleven minutes after the fault last showed.
-                lifecycles[PAGE_SEVERITY].pop("quiet_evaluations", None)
-                lifecycles[PAGE_SEVERITY].pop("quiet_since", None)
-                state[result.rule_id] = project(PAGE_SEVERITY)
-                continue
             debounce = _debounce_window(thresholds, result.rule_id, effective_severity)
             outgoing_announced = False
             outgoing_since: object = None
@@ -2526,18 +2644,10 @@ def _apply_alert_results(
                 since = current.isoformat()
             since_dt = _parse_dt(since)
             confirmed = since_dt is None or current - since_dt >= debounce
-            last_notified = _parse_dt(lifecycle.get("last_notified"))
-            cooldown_elapsed = (
-                last_notified is None or current - last_notified >= COOLDOWN
-            )
-            new_w1_episode = (
-                result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID
-                and not lifecycle_was_firing
-            )
             should_notify = (
                 result.suppressed_by is None
                 and confirmed
-                and (new_w1_episode or cooldown_elapsed)
+                and not previously_announced
             )
             lifecycle = {
                 **lifecycle,
@@ -2564,6 +2674,11 @@ def _apply_alert_results(
                     event_type="firing",
                     episode_since=since,
                     preferred_severity=effective_severity,
+                    snapshot={
+                        "text": text,
+                        "detail": result.detail,
+                        "values": result.values,
+                    },
                 )
                 receipt = _invoke_sender(
                     result=result,
@@ -2625,11 +2740,8 @@ def _apply_alert_results(
                 if _entry_announced(lifecycle):
                     # Hold the announcement until not-firing has lasted. One
                     # evaluation that happens to see nothing wrong is not a
-                    # recovery, and announcing on it costs more than the delay it
-                    # saves: the resolved message reads "all within thresholds",
-                    # and COOLDOWN then swallows the re-fire for 30 minutes while
-                    # the fault continues. Same branch and same shape as the A7
-                    # guard below -- keep firing, skip this resolve.
+                    # recovery. Keep firing until the rule-specific confirmation
+                    # count is satisfied.
                     resolve_rounds = _resolve_debounce_rounds(thresholds, result.rule_id)
                     # Only an evaluation that actually observed the subject may advance the
                     # count -- `degraded` means it could not, and counting it would let a
@@ -2692,11 +2804,7 @@ def _apply_alert_results(
                             held_rounds=_resolve_debounce_rounds(thresholds, result.rule_id),
                         ),
                         condition_cleared_at=quiet_since,
-                        severity=(
-                            NOTICE_SEVERITY
-                            if result.rule_id == WECHAT_BROWSER_PREFLIGHT_RULE_ID
-                            else severity
-                        ),
+                        severity=NOTICE_SEVERITY,
                         sender=sender,
                         episode_since=lifecycle.get("since"),
                         notification_nonce=notification_nonce,
@@ -2705,13 +2813,18 @@ def _apply_alert_results(
                     sent.append(receipt)
                     delivered.append((receipt, resolved_result))
                     if receipt["delivered"] is True:
-                        lifecycles[severity] = _ok_lifecycle(
-                            lifecycle,
-                            resolved_result.detail,
-                            resolved_result.evaluation_state,
-                        )
+                        for active_severity, active_lifecycle in tuple(lifecycles.items()):
+                            if active_lifecycle.get("state") == "firing":
+                                lifecycles[active_severity] = _ok_lifecycle(
+                                    active_lifecycle,
+                                    resolved_result.detail,
+                                    resolved_result.evaluation_state,
+                                )
                     state[result.rule_id] = project(projected_severity)
                     _write_state(state_path, state)
+                    # A rule recovery is one state transition, even if a legacy
+                    # entry still carries more than one severity lifecycle.
+                    break
                 else:
                     lifecycles[severity] = _ok_lifecycle(
                         lifecycle, result.detail, result.evaluation_state
@@ -2865,17 +2978,6 @@ def run_alert_state_machine(
                 browser_started_at is not None
                 and heartbeat_breached_at is not None
                 and browser_started_at <= heartbeat_breached_at
-            ),
-        )
-        results = _correlate_alert_results(
-            results,
-            heartbeat_fresh=(
-                signals.minutes_since_successful_pipeline
-                <= _int_threshold(
-                    _threshold_section(active_thresholds, "a2"),
-                    "no_success_minutes",
-                    120,
-                )
             ),
         )
         evaluation_sequence = _claim_evaluation_sequence(state)
@@ -3547,7 +3649,18 @@ def collect_alert_signals(
     # heartbeat correctly falls back to the lock wording.
     egress_preflight_status = ""
     egress_preflight_reason = ""
+    egress_preflight_failed_today = False
     if isinstance(recent_runs, list):
+        egress_preflight_failed_today = any(
+            isinstance(run, dict)
+            and not run.get("skip")
+            and isinstance((preflight := run.get("egress_preflight")), dict)
+            and bool(preflight.get("status"))
+            and str(preflight["status"]) != "healthy"
+            and (started_at := _parse_dt(run.get("started_at"))) is not None
+            and started_at.astimezone(SHANGHAI_TZ).date() == current.date()
+            for run in recent_runs
+        )
         for run in reversed(recent_runs):
             if not isinstance(run, dict) or run.get("skip"):
                 continue
@@ -3617,6 +3730,11 @@ def collect_alert_signals(
                     "failed_by_status": _int_keyed_counts(summary.get("failed_by_status")),
                 }
             )
+    has_complete_fetch_today = any(
+        (completed_at := _parse_dt(summary.get("completed_at"))) is not None
+        and completed_at.astimezone(SHANGHAI_TZ).date() == current.date()
+        for summary in recent_complete_fetches
+    )
     a7 = _threshold_section(ALERT_THRESHOLDS, "a7")
     evaluated_source_ids: list[str] = []
     (
@@ -3686,9 +3804,11 @@ def collect_alert_signals(
         consecutive_skip_logs=consecutive_skip_logs,
         egress_preflight_status=egress_preflight_status,
         egress_preflight_reason=egress_preflight_reason,
+        egress_preflight_failed_today=egress_preflight_failed_today,
         server_error_rate=_server_error_rate(users),
         fetch_failed_ratio=failed / attempted if attempted else 0.0,
         items_today=int(ingestion.get("items_today") or 0),
+        has_complete_fetch_today=has_complete_fetch_today,
         minutes_elapsed_today=_minutes_elapsed_today(current),
         fetch_evaluated=fetch_evaluated,
         fetch_stale_minutes=fetch_stale_minutes,

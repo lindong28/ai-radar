@@ -1653,7 +1653,7 @@ def test_legacy_incompatible_samples_hold_existing_site_firing_state(
     ]["state"] == "firing"
 
 
-def test_resolved_no_basis_firing_rearms_from_fresh_observed_samples(
+def test_observed_firing_holds_without_fresh_samples_and_does_not_repage(
     tmp_path: Path,
 ) -> None:
     started = datetime(2026, 7, 18, tzinfo=UTC)
@@ -1670,6 +1670,7 @@ def test_resolved_no_basis_firing_rearms_from_fresh_observed_samples(
                 firing=True,
                 detail="unstamped historical firing",
                 action="inspect",
+                firing_basis="observed",
             )
         ],
         state_path=state_path,
@@ -1700,10 +1701,10 @@ def test_resolved_no_basis_firing_rearms_from_fresh_observed_samples(
         send=lambda _text, *, severity="page", **_kwargs: {"skipped": False},
     )
 
-    assert [receipt["type"] for receipt in retired["sent"]] == ["resolved"]
+    assert retired["sent_count"] == 0
     assert json.loads(state_path.read_text(encoding="utf-8"))[rule_id][
         "state"
-    ] == "ok"
+    ] == "firing"
     fresh_started = current + timedelta(minutes=2)
     store_samples(
         sample_path,
@@ -1730,7 +1731,7 @@ def test_resolved_no_basis_firing_rearms_from_fresh_observed_samples(
         send=lambda _text, *, severity="page", **_kwargs: {"skipped": False},
     )
 
-    assert [receipt["type"] for receipt in rearmed["sent"]] == ["firing"]
+    assert rearmed["sent_count"] == 0
     state = json.loads(state_path.read_text(encoding="utf-8"))[rule_id]
     assert state["state"] == "firing"
     assert state["firing_basis"] == "observed"
@@ -1826,7 +1827,7 @@ def test_no_basis_firing_intent_is_cleared_without_replay(
     )
 
     assert not any(receipt["type"] == "firing" for receipt in deployed["sent"])
-    assert deploy_receipts == (["page"] if initial_delivered else [])
+    assert deploy_receipts == (["notice"] if initial_delivered else [])
     assert json.loads(state_path.read_text(encoding="utf-8"))[rule_id][
         "state"
     ] == "ok"
@@ -1889,7 +1890,7 @@ def test_no_basis_firing_without_evaluation_metadata_is_retired(
     )
 
     assert [receipt["type"] for receipt in deployed["sent"]] == ["resolved"]
-    assert receipts == ["page"]
+    assert receipts == ["notice"]
     assert json.loads(state_path.read_text(encoding="utf-8"))[rule_id][
         "state"
     ] == "ok"
@@ -2023,7 +2024,6 @@ def test_idle_only_migration_resolves_announced_legacy_busy_lifecycles_once(
         (receipt["rule_id"], receipt["effective_severity"], receipt["type"])
         for receipt in migrated["sent"]
     } == {
-        (dual_rule, "page", "resolved"),
         (dual_rule, "notice", "resolved"),
         (rollup_rule, "notice", "resolved"),
     }
@@ -2073,7 +2073,6 @@ def test_idle_only_migration_retries_only_skipped_real_sender_delivery(
     )
     outcomes = iter(
         [
-            subprocess.CompletedProcess([], 0, "", ""),
             subprocess.CompletedProcess([], 7, "", "notice unavailable"),
             subprocess.CompletedProcess([], 0, "", ""),
         ]
@@ -2123,8 +2122,8 @@ def test_idle_only_migration_retries_only_skipped_real_sender_delivery(
     assert [
         (receipt["effective_severity"], receipt["delivered"])
         for receipt in first["sent"]
-    ] == [("page", True), ("notice", False)]
-    assert after_first["lifecycles"]["page"]["state"] == "ok"
+    ] == [("notice", False)]
+    assert after_first["lifecycles"]["page"]["state"] == "firing"
     assert after_first["lifecycles"]["notice"]["state"] == "firing"
     assert [
         (receipt["effective_severity"], receipt["delivered"])
@@ -2132,7 +2131,8 @@ def test_idle_only_migration_retries_only_skipped_real_sender_delivery(
     ] == [("notice", True)]
     assert after_second["state"] == "ok"
     assert third["sent"] == []
-    assert sum("--alert" in command for command in commands) == 1
+    assert len(commands) == 2
+    assert all("--alert" not in command for command in commands)
 
 
 def test_idle_only_migration_send_exception_preserves_legacy_state(tmp_path: Path) -> None:
@@ -2158,7 +2158,7 @@ def test_idle_only_migration_send_exception_preserves_legacy_state(tmp_path: Pat
     def fail_send(_text: str, *, severity: str = "page") -> dict[str, object]:
         raise RuntimeError(f"{severity} unavailable")
 
-    with pytest.raises(RuntimeError, match="page unavailable"):
+    with pytest.raises(RuntimeError, match="notice unavailable"):
         run_performance_alerts(
             sample_path=tmp_path / "journey-samples.jsonl",
             state_path=state_path,
@@ -2180,7 +2180,7 @@ def test_idle_only_migration_send_exception_preserves_legacy_state(tmp_path: Pat
     }
 
 
-def test_round_without_new_samples_trims_stale_rows_and_resolves_stale_page(
+def test_round_without_new_samples_trims_stale_rows_and_holds_observed_page(
     monkeypatch,
     tmp_path: Path,
 ) -> None:  # noqa: ANN001
@@ -2248,13 +2248,10 @@ def test_round_without_new_samples_trims_stale_rows_and_resolves_stale_page(
     rows = [line for line in sample_path.read_text(encoding="utf-8").splitlines() if line]
     assert rows == []
     assert result["samples"] == []
-    assert [
-        (receipt["rule_id"], receipt["type"])
-        for receipt in result["alerts"]["sent"]
-    ] == [(rule_id, "resolved")]
+    assert result["alerts"]["sent"] == []
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert state[rule_id]["state"] == "ok"
-    assert len(sent) == 1
+    assert state[rule_id]["state"] == "firing"
+    assert sent == []
 
 
 def test_corrupt_sample_window_holds_existing_firing_state(

@@ -10,7 +10,6 @@ from airadar.admin.alerts import (
     AlertRuleResult,
     AlertSignals,
     _a6_measurement_in_progress,
-    _correlate_alert_results,
     _format_resolved,
     evaluate_rules,
     run_alert_results_state_machine,
@@ -148,7 +147,7 @@ def test_report_and_a6_surface_metering_loss(tmp_path: Path) -> None:
         )
     )
     a6_rule = next(rule for rule in rules if rule.rule_id == "A6")
-    assert a6_rule.evaluation_state == "degraded"
+    assert a6_rule.evaluation_state == "in_progress"
     assert "至少 2 次计量写入失败" in a6_rule.detail
 
 
@@ -279,7 +278,7 @@ def test_a6_notice_to_page_is_one_incident_and_only_recovers_after_condition_cle
         send=sender,
     )
     assert [(row["type"], row["effective_severity"]) for row in recovered["sent"]] == [
-        ("resolved", "page")
+        ("resolved", "notice")
     ]
     assert "✅ A6" in calls[-1][0]
     assert "记录行金额已回落" in calls[-1][0]
@@ -354,10 +353,10 @@ def test_a6_firing_episode_survives_in_flight_measurement_gap(
     assert [(row["type"], row["effective_severity"]) for row in receipts] == [
         ("firing", "notice"),
         ("firing", "page"),
-        ("resolved", "page"),
+        ("resolved", "notice"),
     ]
     assert {row["episode_since"] for row in receipts} == {started.isoformat()}
-    assert [severity for _text, severity in messages] == ["notice", "page", "page"]
+    assert [severity for _text, severity in messages] == ["notice", "page", "notice"]
     assert all("已恢复" not in text and "✅" not in text for text, _ in messages[:2])
     assert "未封口下界" in messages[1][0]
     assert "暂缓评估" not in messages[1][0]
@@ -451,7 +450,7 @@ def test_a6_identifies_only_live_current_day_run_as_measurement_in_progress(
     ) is False
 
 
-def test_a6_genuine_missing_measurement_still_closes_firing_episode(
+def test_a6_missing_measurement_holds_firing_episode_without_false_recovery(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "a6-missing.json"
@@ -488,8 +487,10 @@ def test_a6_genuine_missing_measurement_still_closes_firing_episode(
     )
 
     assert fired["sent"][0]["type"] == "firing"
-    assert missing["sent"][0]["type"] == "resolved"
-    assert "转为不可评估" in missing["sent"][0]["text"]
+    assert missing["sent"] == []
+    held_state = json.loads(state_path.read_text(encoding="utf-8"))["A6"]
+    assert held_state["state"] == "firing"
+    assert held_state["evaluation_state"] == "in_progress"
 
 
 def test_d3_retries_send_and_clear_preserves_intermittent_price_history(tmp_path: Path) -> None:
@@ -606,30 +607,28 @@ def test_d3_count_change_does_not_resend_and_price_change_keeps_old_value(tmp_pa
     assert "新值：input/cache/output USD per 1M=3/0.1/2" in sent[-1]
 
 
-def test_correlation_is_heartbeat_gated_and_suppression_is_ledgered(tmp_path: Path) -> None:
+def test_unanchored_cofiring_rules_remain_independent(tmp_path: Path) -> None:
     firing = [
         AlertRuleResult("A1", "上游", True, "供应商错误", "查供应商"),
         AlertRuleResult("A2", "阶段", True, "prefilter 错误", "查日志"),
         AlertRuleResult("A5", "停滞", True, "解读停滞", "查解释链路"),
     ]
-    fresh = _correlate_alert_results(firing, heartbeat_fresh=True)
-    assert next(row for row in fresh if row.rule_id == "A5").suppressed_by is None
-    assert next(row for row in fresh if row.rule_id == "A1").suppressed_by == "A5"
-    stale = _correlate_alert_results(firing, heartbeat_fresh=False)
-    assert next(row for row in stale if row.rule_id == "A5").suppressed_by == "A2"
-
     event_path = tmp_path / "events.jsonl"
-    run_alert_results_state_machine(
-        fresh,
+    result = run_alert_results_state_machine(
+        firing,
         state_path=tmp_path / "state.json",
         event_path=event_path,
         now=datetime.fromisoformat("2026-08-11T09:17:00+08:00"),
         send=lambda text, **kwargs: {"skipped": False},
     )
     rows = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
-    suppressed = [row for row in rows if row["type"] == "suppressed"]
-    assert {row["rule_id"] for row in suppressed} == {"A1", "A2"}
-    assert all(row["channel"] == "INTERNAL" and row["carrier"] == "A5" for row in suppressed)
+    assert result["sent_count"] == 3
+    assert {(row["rule_id"], row["type"]) for row in rows} == {
+        ("A1", "firing"),
+        ("A2", "firing"),
+        ("A5", "firing"),
+    }
+    assert all(row["channel"] != "INTERNAL" for row in rows)
 
 
 def test_admin_metrics_surfaces_degraded_rules(tmp_path: Path) -> None:

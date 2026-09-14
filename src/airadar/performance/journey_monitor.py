@@ -1021,7 +1021,7 @@ def run_performance_alerts(
             else (
                 "unstamped performance alert retired; awaiting fresh observed samples"
                 if not trusted_observed_firing
-                else "no retained fresh idle samples; stale performance alert auto-resolved"
+                else "no retained fresh idle samples; holding the observed alert until fresh evidence"
             )
         )
         results.append(
@@ -1032,6 +1032,11 @@ def run_performance_alerts(
                 detail=detail,
                 action="none",
                 severity=_normalize_severity(projected.get("severity")),
+                evaluation_state=(
+                    "in_progress"
+                    if not disabled and trusted_observed_firing
+                    else "healthy"
+                ),
             )
         )
     evidenced: list[AlertRuleResult] = []

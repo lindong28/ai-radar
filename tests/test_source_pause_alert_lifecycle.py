@@ -519,15 +519,17 @@ def test_a7_source_pause_retry_after_state_write_failure_does_not_duplicate_ledg
         send=_sender(calls),
     )
 
-    assert retried["sent_count"] == 0
+    assert retried["sent_count"] == (1 if rollover else 0)
     pause_rows = [row for row in _ledger(event_path) if row.get("reason") == "source_paused"]
     assert len(pause_rows) == 1
     final_state = json.loads(state_path.read_text(encoding="utf-8"))["A7"]
     if rollover:
         assert final_state["state"] == "firing"
         assert final_state["source_ids"] == ["new_active"]
+        assert len(calls) == 2
     else:
         assert final_state["state"] == "ok"
+        assert len(calls) == 1
 
 
 def test_a7_source_pause_idempotency_ignores_malformed_unrelated_row(
@@ -996,6 +998,96 @@ def test_a7_episode_identity_snapshot_does_not_expand_during_firing(
     }
 
 
+def test_a7_disjoint_source_set_starts_a_new_episode_without_a_recovery_push(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    calls: list[str] = []
+    started = datetime.fromisoformat("2026-09-04T09:00:00+08:00")
+
+    first = run_alert_results_state_machine(
+        [_a7_firing("source_a")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        send=_sender(calls),
+    )
+    replacement = run_alert_results_state_machine(
+        [_a7_firing("source_b")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=5),
+        send=_sender(calls),
+    )
+    repeated = run_alert_results_state_machine(
+        [_a7_firing("source_b")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=10),
+        send=_sender(calls),
+    )
+
+    assert first["sent_count"] == 1
+    assert replacement["sent_count"] == 1
+    assert repeated["sent_count"] == 0
+    assert len(calls) == 2
+    assert all("✅" not in call for call in calls)
+    state = json.loads(state_path.read_text(encoding="utf-8"))["A7"]
+    assert state["since"] == (started + timedelta(minutes=5)).isoformat()
+    assert state["source_ids"] == ["source_b"]
+    changed = [row for row in _ledger(event_path) if row.get("reason") == "source_set_changed"]
+    assert len(changed) == 1
+    assert changed[0]["episode_since"] == started.isoformat()
+    assert changed[0]["values"] == {
+        "episode_source_ids": ["source_a"],
+        "replacement_source_ids": ["source_b"],
+    }
+
+
+def test_a7_disjoint_source_set_notifies_when_internal_ledger_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "alert-state.json"
+    event_path = tmp_path / "alert-events.jsonl"
+    calls: list[str] = []
+    started = datetime.fromisoformat("2026-09-04T09:00:00+08:00")
+
+    run_alert_results_state_machine(
+        [_a7_firing("source_a")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        send=_sender(calls),
+    )
+    real_record = alerts_module._record_event_rows
+
+    def fail_internal_only(*args: object, **kwargs: object) -> bool:
+        rows = kwargs.get("new_rows")
+        if isinstance(rows, list) and any(
+            isinstance(row, dict) and row.get("reason") == "source_set_changed"
+            for row in rows
+        ):
+            return False
+        return real_record(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(alerts_module, "_record_event_rows", fail_internal_only)
+    replacement = run_alert_results_state_machine(
+        [_a7_firing("source_b")],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=5),
+        send=_sender(calls),
+    )
+
+    assert replacement["sent_count"] == 1
+    assert len(calls) == 2
+    state = json.loads(state_path.read_text(encoding="utf-8"))["A7"]
+    assert state["source_ids"] == ["source_b"]
+    assert state["since"] == (started + timedelta(minutes=5)).isoformat()
+
+
 def test_a7_full_pause_rolls_over_to_new_unrelated_firing_episode(
     tmp_path: Path,
 ) -> None:
@@ -1021,13 +1113,13 @@ def test_a7_full_pause_rolls_over_to_new_unrelated_firing_episode(
         send=_sender(calls),
     )
 
-    assert rolled_over["sent_count"] == 0
-    assert len(calls) == 1, "the new episode must retain the existing rule cooldown"
+    assert rolled_over["sent_count"] == 1
+    assert len(calls) == 2, "the unrelated source is a new episode and must notify immediately"
     state = json.loads(state_path.read_text(encoding="utf-8"))["A7"]
     assert state["state"] == "firing"
     assert state["since"] == (started + timedelta(minutes=5)).isoformat()
     assert state["source_ids"] == ["new_active"]
-    assert state["announced"] is False
+    assert state["announced"] is True
     pause_rows = [row for row in _ledger(event_path) if row.get("reason") == "source_paused"]
     assert len(pause_rows) == 1
     assert pause_rows[0]["episode_since"] == started.isoformat()
@@ -1036,14 +1128,14 @@ def test_a7_full_pause_rolls_over_to_new_unrelated_firing_episode(
         "paused_source_ids": ["wx_mp2rss"],
     }
 
-    notified = run_alert_results_state_machine(
+    repeated = run_alert_results_state_machine(
         [unrelated],
         state_path=state_path,
         event_path=event_path,
         now=started + timedelta(minutes=31),
         send=_sender(calls),
     )
-    assert notified["sent_count"] == 1
+    assert repeated["sent_count"] == 0
     assert len(calls) == 2
     assert json.loads(state_path.read_text(encoding="utf-8"))["A7"]["source_ids"] == [
         "new_active"

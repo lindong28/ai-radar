@@ -336,6 +336,50 @@ def test_a2_prefilter_latency_below_breakage_floor_does_not_page() -> None:
     assert "prefilter P95" in a2.detail
 
 
+def test_a2_p95_only_is_notice_but_errors_and_stale_heartbeat_page() -> None:
+    latency_only = _normal_signals()
+    latency_only.stage_p95_latency_ms["prefilter"] = 26000
+    latency_result = evaluate_rules(latency_only)[1]
+
+    stage_error = _normal_signals()
+    stage_error.stage_error_rate["scoring"] = 0.8
+    stage_error_result = evaluate_rules(stage_error)[1]
+
+    stale_heartbeat = _normal_signals()
+    stale_heartbeat.minutes_since_successful_pipeline = 130
+    stale_heartbeat_result = evaluate_rules(stale_heartbeat)[1]
+
+    assert latency_result.severity == "notice"
+    assert stage_error_result.severity == "page"
+    assert stale_heartbeat_result.severity == "page"
+
+
+def test_a1_a2_a6_missing_evidence_does_not_claim_recovery() -> None:
+    a1_missing = _normal_signals()
+    a1_missing.upstream_sample_size = 2
+    a1_missing.upstream_error_rate = 1.0
+
+    a2_missing = _normal_signals()
+    a2_missing.stage_sample_count = {"prefilter": 0, "scoring": 0, "enrich": 0}
+    a2_missing.stage_error_rate = {"prefilter": 0.0, "scoring": 0.0, "enrich": 0.0}
+    a2_missing.stage_p95_latency_ms = {"prefilter": 0, "scoring": 0, "enrich": 0}
+
+    a6_missing = _normal_signals()
+    a6_missing.a6_evaluable = False
+    a6_missing.a6_measurement_in_progress = False
+    a6_missing.a6_metering_complete = False
+
+    assert next(
+        row for row in evaluate_rules(a1_missing) if row.rule_id == "A1"
+    ).evaluation_state == "in_progress"
+    assert next(
+        row for row in evaluate_rules(a2_missing) if row.rule_id == "A2"
+    ).evaluation_state == "in_progress"
+    assert next(
+        row for row in evaluate_rules(a6_missing) if row.rule_id == "A6"
+    ).evaluation_state == "in_progress"
+
+
 def test_a3_fires_on_server_error_rate_or_confirmed_healthz_failures() -> None:
     healthy = _normal_signals()
     assert evaluate_rules(healthy)[2].firing is False
@@ -403,6 +447,19 @@ def test_a3_server_error_rate_requires_twenty_page_views() -> None:
     assert evaluate_rules(at_gate)[2].firing is True
 
 
+def test_a3_impact_distinguishes_public_5xx_from_local_health_failure() -> None:
+    public = _normal_signals()
+    public.server_error_rate = 0.10
+    local = _normal_signals()
+    local.healthz_consecutive_failures = 2
+
+    public_result = next(row for row in evaluate_rules(public) if row.rule_id == "A3")
+    local_result = next(row for row in evaluate_rules(local) if row.rule_id == "A3")
+
+    assert public_result.impact == "用户请求已出现 5xx"
+    assert local_result.impact == "本机 serve 健康检查连续失败；本轮未由访问日志证明公网用户已受影响"
+
+
 def test_a4_daily_insert_floor_is_time_proportional() -> None:
     early = _normal_signals()
     early.items_today = 3
@@ -422,6 +479,36 @@ def test_a4_daily_insert_floor_is_time_proportional() -> None:
 
     assert a4.firing is True
     assert a4.values["daily_inserted_floor_elapsed"] == 63
+
+
+def test_a4_daily_floor_waits_for_first_current_day_complete_fetch() -> None:
+    before_first_fetch = _normal_signals()
+    before_first_fetch.items_today = 0
+    before_first_fetch.minutes_elapsed_today = 15
+    before_first_fetch.has_complete_fetch_today = False
+
+    after_first_fetch = _normal_signals()
+    after_first_fetch.items_today = 0
+    after_first_fetch.minutes_elapsed_today = 15
+    after_first_fetch.has_complete_fetch_today = True
+
+    before = next(row for row in evaluate_rules(before_first_fetch) if row.rule_id == "A4")
+    after = next(row for row in evaluate_rules(after_first_fetch) if row.rule_id == "A4")
+
+    assert before.firing is False
+    assert before.evaluation_state == "in_progress"
+    assert "等待今日首个完整 fetch 或明确的 egress preflight 失败" in before.detail
+    assert after.firing is True
+
+    failed_preflight = replace(
+        before_first_fetch,
+        egress_preflight_failed_today=True,
+    )
+    failed_result = next(
+        row for row in evaluate_rules(failed_preflight) if row.rule_id == "A4"
+    )
+    assert failed_result.firing is True
+    assert failed_result.values["daily_floor_armed"] is True
 
 
 def test_a3_active_healthz_probe_uses_installed_serve_port_and_recovers(tmp_path: Path) -> None:
@@ -492,7 +579,7 @@ def test_a3_active_healthz_probe_uses_installed_serve_port_and_recovers(tmp_path
 
 
 @pytest.mark.parametrize("rule_id", ["A1", "A3"])
-def test_fixed_page_rules_preserve_success_cooldown_and_resolve_timing(
+def test_fixed_page_rules_notify_only_on_state_changes(
     tmp_path: Path,
     rule_id: str,
 ) -> None:
@@ -540,13 +627,13 @@ def test_fixed_page_rules_preserve_success_cooldown_and_resolve_timing(
 
     assert first["sent_count"] == 1
     assert second["sent_count"] == 0
-    assert third["sent_count"] == 1
+    assert third["sent_count"] == 0
     assert resolved["sent_count"] == 1
-    assert len(deliveries) == 3
+    assert len(deliveries) == 2
     assert deliveries[0][0].startswith("【AI Radar】")
     assert deliveries[-1][0].startswith("【AI Radar】")
     assert f"🔴 {rule_id}" in deliveries[0][0]
-    assert "故障类别" in deliveries[0][0]
+    assert "故障类别" not in deliveries[0][0]
     assert "处置方向" in deliveries[0][0]
     assert f"✅ {rule_id}" in deliveries[-1][0]
 
@@ -600,6 +687,31 @@ def test_w1_suppresses_only_causally_attributed_a2_heartbeat(tmp_path: Path) -> 
     suppressed = [row for row in rows if row["type"] == "suppressed"]
     assert {row["rule_id"] for row in suppressed} == {"A2"}
     assert all(row["carrier"] == "W1" for row in suppressed)
+
+
+def test_independent_a1_a2_a5_incidents_are_not_merged_without_causal_identity(
+    tmp_path: Path,
+) -> None:
+    signals = _normal_signals()
+    signals.upstream_error_rate = 0.8
+    signals.stage_error_rate["scoring"] = 0.8
+    signals.a5_enabled = True
+    signals.hours_since_successful_interpretation = 5.0
+    signals.wechat_pending_count = 2
+
+    result = run_alert_state_machine(
+        signals,
+        state_path=tmp_path / "alert-state.json",
+        event_path=tmp_path / "alert-events.jsonl",
+        now=datetime.fromisoformat("2026-09-14T08:00:00+08:00"),
+        send=_recording_sender([]),
+        healthz_probe=_healthz_ok,
+    )
+
+    rows = {row["rule_id"]: row for row in result["results"]}
+    assert rows["A1"]["suppressed_by"] is None
+    assert rows["A2"]["suppressed_by"] is None
+    assert rows["A5"]["suppressed_by"] is None
 
 
 def test_w1_does_not_suppress_a2_heartbeat_that_breached_before_it(
@@ -1219,8 +1331,8 @@ def test_a4_account_page_resolves_only_after_two_distinct_healthy_complete_round
     assert _receipt_identities(fired) == [("A4", "page", "firing")]
     assert repeated["sent"] == []
     assert held["sent"] == []
-    assert _receipt_identities(resolved) == [("A4", "page", "resolved")]
-    assert [severity for _text, severity in deliveries] == ["page", "page"]
+    assert _receipt_identities(resolved) == [("A4", "notice", "resolved")]
+    assert [severity for _text, severity in deliveries] == ["page", "notice"]
 
 
 def test_a4_thresholds_use_existing_failure_ratio_for_account_statuses() -> None:
@@ -1653,15 +1765,16 @@ def test_state_machine_routes_fire_and_resolve_on_persisted_episode_severity(
     assert len(receipts) == len(calls) == 2
     assert [(receipt["type"], receipt["effective_severity"], receipt["channel"]) for receipt in receipts] == [
         ("firing", severity, channel),
-        ("resolved", severity, channel),
+        ("resolved", "notice", "NOTIFICATION"),
     ]
-    assert calls[0][1] == calls[1][1] == severity
+    assert calls[0][1] == severity
+    assert calls[1][1] == "notice"
     assert f"{emoji} TEST" in calls[0][0]
     assert "影响：impact" in calls[0][0]
     assert "需否立即处置：urgency" in calls[0][0]
 
 
-def test_legacy_flat_state_without_severity_recovers_with_page_resolved(tmp_path: Path) -> None:
+def test_legacy_flat_state_recovers_on_notice_channel(tmp_path: Path) -> None:
     state_path = tmp_path / "legacy.json"
     state_path.write_text(
         json.dumps(
@@ -1687,9 +1800,9 @@ def test_legacy_flat_state_without_severity_recovers_with_page_resolved(tmp_path
     )
 
     assert len(calls) == 1
-    assert calls[0][1] == "page"
-    assert payload["sent"][0]["effective_severity"] == "page"
-    assert payload["sent"][0]["channel"] == "ALERT"
+    assert calls[0][1] == "notice"
+    assert payload["sent"][0]["effective_severity"] == "notice"
+    assert payload["sent"][0]["channel"] == "NOTIFICATION"
 
 
 def test_failed_firing_retries_until_success_then_allows_resolve(tmp_path: Path) -> None:
@@ -1839,8 +1952,8 @@ def test_unannounced_episode_closes_silently_and_failed_resolve_retries(tmp_path
     final_state = json.loads(announced_path.read_text(encoding="utf-8"))["TEST"]
 
     assert failed_resolve["sent_count"] == 1
-    assert failed_resolve["sent"][0]["effective_severity"] == "page"
-    assert failed_resolve["sent"][0]["channel"] == "ALERT"
+    assert failed_resolve["sent"][0]["effective_severity"] == "notice"
+    assert failed_resolve["sent"][0]["channel"] == "NOTIFICATION"
     assert failed_resolve["sent"][0]["send_result"] is resolve_failure
     assert next_ok["sent_count"] == 1
     assert next_ok["sent"][0]["delivered"] is True
@@ -1901,7 +2014,7 @@ def test_partial_resolve_exception_persists_delivered_lifecycle_and_retries_pend
         )
 
     partial = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]
-    assert partial["lifecycles"]["page"]["state"] == "ok"
+    assert partial["lifecycles"]["page"]["state"] == "firing"
     assert partial["lifecycles"]["notice"]["state"] == "firing"
 
     retried = run_alert_results_state_machine(
@@ -1919,7 +2032,7 @@ def test_partial_resolve_exception_persists_delivered_lifecycle_and_retries_pend
         send=lambda text, *, severity="page": pytest.fail("resolved lifecycle resent"),
     )
 
-    assert calls == ["page", "notice"]
+    assert calls == ["notice"]
     assert [
         (receipt["effective_severity"], receipt["type"])
         for receipt in retried["sent"]
@@ -2316,7 +2429,7 @@ def test_resolve_retry_after_state_persist_crash_is_transport_deduplicated(
     assert retried["sent"][0]["delivered"] is True
     assert len(attempts) == 2
     assert attempts[0] == attempts[1]
-    assert attempts[0]["key"] == "ai-radar:TEST:page:resolved:1"
+    assert attempts[0]["key"] == "ai-radar:TEST:notice:resolved:1"
     assert since.isoformat() in attempts[0]["identity"]
     assert len(visible) == 1
     assert json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["state"] == "ok"
@@ -2375,7 +2488,66 @@ def test_fresh_firing_retry_after_persist_crash_reuses_notification_nonce(
     assert final["pending_notification"] is None
 
 
-def test_cooldown_repage_allocates_new_notification_nonce(
+def test_pending_firing_retries_its_snapshot_while_rule_is_in_progress(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "pending-in-progress-state.json"
+    event_path = tmp_path / "pending-in-progress-events.jsonl"
+    started = datetime.fromisoformat("2026-07-24T07:00:00+08:00")
+    calls: list[tuple[str, str]] = []
+    outcomes = iter([{"skipped": True}, {"skipped": False}])
+
+    def sender(text: str, *, severity: str = "page") -> dict[str, object]:
+        calls.append((text, severity))
+        return next(outcomes)
+
+    firing = AlertRuleResult(
+        "TEST",
+        "fresh",
+        True,
+        "original failure detail",
+        "inspect",
+        values={"sample": 7},
+    )
+    unavailable = AlertRuleResult(
+        "TEST",
+        "fresh",
+        False,
+        "current sample unavailable",
+        "wait",
+        evaluation_state="in_progress",
+    )
+
+    failed = run_alert_results_state_machine(
+        [firing],
+        state_path=state_path,
+        event_path=event_path,
+        now=started,
+        send=sender,
+    )
+    pending = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["lifecycles"]["page"]
+    nonce = pending["pending_notification"]["nonce"]
+    retried = run_alert_results_state_machine(
+        [unavailable],
+        state_path=state_path,
+        event_path=event_path,
+        now=started + timedelta(minutes=1),
+        send=sender,
+    )
+
+    assert failed["sent"][0]["delivered"] is False
+    assert retried["sent"][0]["delivered"] is True
+    assert retried["sent"][0]["notification_nonce"] == nonce
+    assert calls[0] == calls[1]
+    row = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["detail"] == "original failure detail"
+    assert row["values"] == {"sample": 7}
+    final = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["lifecycles"]["page"]
+    assert final["announced"] is True
+    assert final["pending_notification"] is None
+
+
+def test_firing_episode_does_not_send_periodic_reminders(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2404,13 +2576,12 @@ def test_cooldown_repage_allocates_new_notification_nonce(
     ]
     visible = (transport_state / "visible.jsonl").read_text(encoding="utf-8").splitlines()
     lifecycle = json.loads(state_path.read_text(encoding="utf-8"))["TEST"]["lifecycles"]["page"]
-    assert reminded["sent_count"] == 1
-    assert len(attempts) == len(visible) == 2
-    assert attempts[0] != attempts[1]
-    assert lifecycle["notification_sequence"] == 2
+    assert reminded["sent_count"] == 0
+    assert len(attempts) == len(visible) == 1
+    assert lifecycle["notification_sequence"] == 1
 
 
-def test_page_incident_ignores_notice_deescalation_and_allocates_reminder_nonce(
+def test_page_to_notice_and_back_sends_each_severity_transition(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2454,8 +2625,12 @@ def test_page_incident_ignores_notice_deescalation_and_allocates_reminder_nonce(
     visible = (transport_state / "visible.jsonl").read_text(encoding="utf-8").splitlines()
     assert returned["sent_count"] == 1
     assert len(page_firings) == 2
-    assert page_firings[0] != page_firings[1]
     assert len(visible) == len(attempts)
+    assert [row["identity"].splitlines()[1] for row in attempts] == [
+        "page",
+        "notice",
+        "page",
+    ]
 
 
 def _delivery_outcome(case: str) -> object:
@@ -2548,15 +2723,15 @@ def test_fresh_fixed_severity_delivery_outcome_matrix(
         if succeeded:
             assert followed["sent_count"] == 1
             assert followed["sent"][0]["type"] == "resolved"
-            assert followed["sent"][0]["effective_severity"] == "page"
-            assert followed["sent"][0]["channel"] == "ALERT"
+            assert followed["sent"][0]["effective_severity"] == "notice"
+            assert followed["sent"][0]["channel"] == "NOTIFICATION"
             assert followed["sent"][0]["send_result"] == {"skipped": False}
         else:
             assert followed["sent_count"] == 0
             assert len(calls) == 1
 
 
-def test_legacy_last_notified_uses_single_cooldown_before_retry(tmp_path: Path) -> None:
+def test_legacy_announced_episode_does_not_retry_while_still_firing(tmp_path: Path) -> None:
     state_path = tmp_path / "legacy-cooldown.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     state_path.write_text(
@@ -2591,8 +2766,8 @@ def test_legacy_last_notified_uses_single_cooldown_before_retry(tmp_path: Path) 
     )
 
     assert suppressed["sent_count"] == 0
-    assert retried["sent_count"] == 1
-    assert calls[0][1] == "page"
+    assert retried["sent_count"] == 0
+    assert calls == []
 
 
 def _severity_result(severity: str, *, firing: bool = True) -> AlertRuleResult:
@@ -2838,7 +3013,7 @@ def test_announced_notice_to_page_escalates_without_recovery_message(tmp_path: P
     assert all("✅" not in text and "已恢复" not in text for text, _severity in calls)
 
 
-def test_announced_page_holds_through_notice_tier_until_true_recovery(tmp_path: Path) -> None:
+def test_announced_page_transitions_to_notice_then_resolves(tmp_path: Path) -> None:
     state_path = tmp_path / "page-to-notice.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     calls: list[tuple[str, str]] = []
@@ -2871,16 +3046,17 @@ def test_announced_page_holds_through_notice_tier_until_true_recovery(tmp_path: 
         thresholds=thresholds,
     )
 
-    assert transitioned["sent"] == []
-    assert held_severities == {"page"}
+    assert _receipt_identities(transitioned) == [("A4", "notice", "firing")]
+    assert held_severities == {"notice"}
     assert _firing_lifecycle_severities(state_path) == set()
-    assert _receipt_identities(recovered) == [("A4", "page", "resolved")]
-    assert [severity for _text, severity in calls] == ["page", "page"]
+    assert _receipt_identities(recovered) == [("A4", "notice", "resolved")]
+    assert [severity for _text, severity in calls] == ["page", "notice", "notice"]
     assert "✅" not in calls[0][0]
-    assert "✅" in calls[1][0]
+    assert "✅" not in calls[1][0]
+    assert "✅" in calls[2][0]
 
 
-def test_old_flat_announced_page_migrates_without_false_notice_recovery(
+def test_old_flat_announced_page_migrates_with_notice_deescalation(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "old-flat-page-to-notice.json"
@@ -2909,12 +3085,12 @@ def test_old_flat_announced_page_migrates_without_false_notice_recovery(
         thresholds={"a4": {"debounce_minutes_by_severity": {"page": 0, "notice": 30}}},
     )
 
-    assert transitioned["sent"] == []
-    assert calls == []
-    assert _firing_lifecycle_severities(state_path) == {"page"}
+    assert _receipt_identities(transitioned) == [("A4", "notice", "firing")]
+    assert [severity for _text, severity in calls] == ["notice"]
+    assert _firing_lifecycle_severities(state_path) == {"notice"}
 
 
-def test_notice_escalation_and_deescalation_stay_one_page_incident_until_recovery(
+def test_notice_escalation_and_deescalation_each_notify_until_recovery(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "notice-page-notice.json"
@@ -2948,7 +3124,7 @@ def test_notice_escalation_and_deescalation_stay_one_page_incident_until_recover
         send=_recording_sender(calls),
         thresholds=thresholds,
     )
-    assert _firing_lifecycle_severities(state_path) == {"page"}
+    assert _firing_lifecycle_severities(state_path) == {"notice"}
     recovered = run_alert_results_state_machine(
         [_severity_result("notice", firing=False)],
         state_path=state_path,
@@ -2960,16 +3136,17 @@ def test_notice_escalation_and_deescalation_stay_one_page_incident_until_recover
     assert _firing_lifecycle_severities(state_path) == set()
     assert _receipt_identities(first) == [("A4", "notice", "firing")]
     assert _receipt_identities(second) == [("A4", "page", "firing")]
-    assert deescalated["sent"] == []
-    assert _receipt_identities(recovered) == [("A4", "page", "resolved")]
+    assert _receipt_identities(deescalated) == [("A4", "notice", "firing")]
+    assert _receipt_identities(recovered) == [("A4", "notice", "resolved")]
     assert [(severity, "✅" in text) for text, severity in calls] == [
         ("notice", False),
         ("page", False),
-        ("page", True),
+        ("notice", False),
+        ("notice", True),
     ]
 
 
-def test_clear_resolves_only_announced_lifecycle(tmp_path: Path) -> None:
+def test_clear_sends_one_recovery_and_closes_unannounced_lifecycle(tmp_path: Path) -> None:
     state_path = tmp_path / "clear-announced-only.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     state_path.write_text(
@@ -3013,7 +3190,7 @@ def test_clear_resolves_only_announced_lifecycle(tmp_path: Path) -> None:
         send=_recording_sender(calls),
     )
 
-    assert _receipt_identities(cleared) == [("A4", "page", "resolved")]
+    assert _receipt_identities(cleared) == [("A4", "notice", "resolved")]
     state = json.loads(state_path.read_text(encoding="utf-8"))["A4"]
     assert state["state"] == "ok"
     assert all(lifecycle["state"] == "ok" for lifecycle in state["lifecycles"].values())
@@ -3253,7 +3430,7 @@ def test_failed_firing_after_severity_transition_retries_without_cooldown(tmp_pa
 
 
 @pytest.mark.parametrize("rule_id", ["A1", "A3"])
-def test_legacy_fixed_page_cooldown_migrates_idempotently(tmp_path: Path, rule_id: str) -> None:
+def test_legacy_fixed_page_episode_stays_silent_while_firing(tmp_path: Path, rule_id: str) -> None:
     state_path = tmp_path / f"legacy-{rule_id}.json"
     current = datetime.fromisoformat("2026-07-22T08:00:00+08:00")
     state_path.write_text(
@@ -3300,7 +3477,7 @@ def test_legacy_fixed_page_cooldown_migrates_idempotently(tmp_path: Path, rule_i
     assert _state_without_evaluation_metadata(
         first_saved
     ) == _state_without_evaluation_metadata(second_saved)
-    assert _receipt_identities(after_cooldown) == [(rule_id, "page", "firing")]
+    assert after_cooldown["sent"] == []
     state = json.loads(state_path.read_text(encoding="utf-8"))[rule_id]
     assert set(state["lifecycles"]) == {"page"}
 
@@ -3555,13 +3732,18 @@ def test_notification_ledger_records_only_new_firing_on_severity_transition(
     )
     batch = _read_ledger(event_path)[before:]
 
-    expected = [] if from_severity == "page" else [("A4", "page", "firing")]
+    expected = [("A4", to_severity, "firing")]
     assert _receipt_identities(transitioned) == expected
     assert [
         (row["rule_id"], row["severity"], row["type"], row["channel"])
         for row in batch
     ] == [
-        (rule_id, severity, event_type, "ALERT")
+        (
+            rule_id,
+            severity,
+            event_type,
+            "ALERT" if severity == "page" else "NOTIFICATION",
+        )
         for rule_id, severity, event_type in expected
     ]
 
@@ -4132,6 +4314,20 @@ def test_a7_rolls_silent_sources_into_one_page() -> None:
 
     signals.silent_sources = []
     assert next(r for r in evaluate_rules(signals) if r.rule_id == "A7").firing is False
+
+
+def test_a7_single_source_is_notice_and_multiple_sources_page() -> None:
+    signals = _normal_signals()
+    signals.silent_sources = [("x_one", "X One", 8.0, 6.0)]
+    one = next(row for row in evaluate_rules(signals) if row.rule_id == "A7")
+
+    signals.silent_sources.append(("x_two", "X Two", 9.0, 6.0))
+    multiple = next(row for row in evaluate_rules(signals) if row.rule_id == "A7")
+
+    assert one.severity == "notice"
+    assert one.urgency.startswith("否")
+    assert multiple.severity == "page"
+    assert multiple.urgency.startswith("是")
 
 
 def test_a7_announced_episode_closes_silently_when_its_source_is_paused(
@@ -4835,6 +5031,19 @@ def test_a7_resolve_does_not_borrow_a6_cost_copy() -> None:
     a6_message = _format_resolved(a6, "2026-08-23T07:10:57+08:00")
     assert "记录行金额已回落" in a6_message
     assert "记录行证据：" in a6_message
+    assert "复核入口：/admin/usage；无需立即处置。" in a6_message
+
+    perf_message = _format_resolved(
+        AlertRuleResult(
+            rule_id="PERF:timeline",
+            title="timeline",
+            firing=False,
+            detail="fresh evidence is healthy",
+            action="none",
+        ),
+        "2026-08-23T07:10:57+08:00",
+    )
+    assert "复核入口：logs/performance/evidence/；无需立即处置。" in perf_message
 
 
 def test_a7_firing_message_discloses_the_unmonitored_remainder() -> None:
@@ -4925,7 +5134,7 @@ def test_a7_faded_source_closes_as_unevaluable_not_recovered(tmp_path: Path) -> 
 
     round_at(opened)
     assert calls, "precondition: the dead source must open a firing episode"
-    assert "🔴" in calls[0][0], f"expected a firing page first, got {calls[0][0]!r}"
+    assert "🟡" in calls[0][0], f"expected a single-source notice first, got {calls[0][0]!r}"
 
     # Far enough out that every item has left the 30-day window.
     round_at(opened + timedelta(days=25))
@@ -5043,6 +5252,14 @@ _HEALTHY_ROUND = (
     "[{ts}] === fetch OK ===\n"
     "[{ts}] === PIPELINE DONE (failed=0; alert_recovery=OK) ===\n"
 )
+_EMPTY_HEALTHY_ROUND = (
+    "[{ts}] === pipeline RUN generation=g ===\n"
+    "egress-preflight status=healthy policy_id=domain-routing-v2 policy_sha256=deadbeef\n"
+    "[{ts}] === egress preflight OK ===\n"
+    "=== attempted=0 inserted=0 failed=0\n"
+    "[{ts}] === fetch OK ===\n"
+    "[{ts}] === PIPELINE DONE (failed=0; alert_recovery=OK) ===\n"
+)
 _BLOCKED_ROUND = (
     "[{ts}] === pipeline RUN generation=g ===\n"
     "egress-preflight status=unavailable reason=missing status fields: direct_status,router_status\n"
@@ -5069,7 +5286,8 @@ def test_a2_attributes_a_stale_heartbeat_to_the_egress_preflight() -> None:
     result = _a2(signals)
     assert result.firing
     assert "出网 preflight status=unavailable" in result.detail
-    assert "missing status fields" in result.detail
+    assert "missing status fields" not in result.detail
+    assert result.values["egress_preflight_reason"] == "missing status fields: direct_status,router_status"
     assert "僵尸锁" not in result.detail
     assert "SKIP" not in result.detail
     assert result.values["egress_preflight_status"] == "unavailable"
@@ -5095,6 +5313,7 @@ def test_a2_remediation_names_a_command_that_exists() -> None:
     action = _a2(signals).action
 
     assert EGRESS_PROXY_PORT_ENV in action
+    assert "1–65535 的整数" in action
     assert "lsof" in action
     # Both retired pointers, kept named so neither can quietly come back.
     assert "run.sh admin egress" not in action
@@ -5102,6 +5321,19 @@ def test_a2_remediation_names_a_command_that_exists() -> None:
     assert "出网 selector 的 preflight 与实际 route" in action
     runbook = Path(__file__).resolve().parents[1] / "docs/operations/monitoring-alerting.md"
     assert "出网 selector 的 preflight 与实际 route" in runbook.read_text(encoding="utf-8")
+
+
+def test_a5_remediation_names_the_pipeline_log_path() -> None:
+    signals = replace(
+        _normal_signals(),
+        hours_since_successful_interpretation=8.0,
+        wechat_pending_count=3,
+        a5_enabled=True,
+    )
+    result = next(row for row in evaluate_rules(signals) if row.rule_id == "A5")
+
+    assert result.firing is True
+    assert "logs/pipeline-*.log" in result.action
 
 def test_a2_leaves_the_stage_remediation_alone_when_the_heartbeat_is_fresh() -> None:
     """A2 also fires on stage error rate and P95; those still need the stage logs.
@@ -5123,15 +5355,16 @@ def test_a2_leaves_the_stage_remediation_alone_when_the_heartbeat_is_fresh() -> 
     assert "check-proxy-status" not in result.action
 
 
-def test_a2_caps_the_reason_copied_out_of_the_pipeline_log() -> None:
-    """The reason embeds `check-proxy-status` output and becomes an im-notify argv."""
+def test_a2_keeps_raw_preflight_reason_out_of_the_push_body() -> None:
     signals = replace(
         _normal_signals(),
         minutes_since_successful_pipeline=166,
         egress_preflight_status="unavailable",
         egress_preflight_reason="x" * 5000,
     )
-    assert len(_a2(signals).detail) < 500
+    result = _a2(signals)
+    assert "x" * 100 not in result.detail
+    assert result.values["egress_preflight_reason"] == "x" * 5000
 
 
 def test_a2_keeps_the_lock_wording_when_the_preflight_was_healthy() -> None:
@@ -5193,6 +5426,111 @@ def test_collect_signals_takes_the_preflight_from_the_newest_round(tmp_path: Pat
     signals = _collect(log_dir, tmp_path, "2026-09-08T14:00:00+08:00")
     assert signals.egress_preflight_status == "unavailable"
     assert "direct_status" in signals.egress_preflight_reason
+    assert signals.egress_preflight_failed_today is True
+
+
+def test_a4_items_floor_waits_for_first_current_day_complete_fetch(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    _write_round(
+        log_dir,
+        "20260913-234500",
+        _HEALTHY_ROUND.format(ts="2026-09-13T23:45:00+08:00"),
+    )
+
+    before_first_fetch = _collect(log_dir, tmp_path, "2026-09-14T00:15:00+08:00")
+    before_result = next(r for r in evaluate_rules(before_first_fetch) if r.rule_id == "A4")
+
+    _write_round(
+        log_dir,
+        "20260914-001000",
+        _HEALTHY_ROUND.format(ts="2026-09-14T00:10:00+08:00"),
+    )
+    after_first_fetch = _collect(log_dir, tmp_path, "2026-09-14T00:15:00+08:00")
+    after_result = next(r for r in evaluate_rules(after_first_fetch) if r.rule_id == "A4")
+
+    assert before_first_fetch.items_today == 0
+    assert before_first_fetch.has_complete_fetch_today is False
+    assert before_first_fetch.egress_preflight_failed_today is False
+    assert before_result.firing is False
+    assert before_result.evaluation_state == "in_progress"
+    assert after_first_fetch.has_complete_fetch_today is True
+    assert after_result.firing is True
+    assert "今日 items 增量 0 < 按日内进度 floor" in after_result.detail
+
+
+def test_a4_daily_floor_arms_on_current_day_preflight_failure(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    _write_round(
+        log_dir,
+        "20260913-234500",
+        _HEALTHY_ROUND.format(ts="2026-09-13T23:45:00+08:00"),
+    )
+    _write_round(
+        log_dir,
+        "20260914-001000",
+        _BLOCKED_ROUND.format(ts="2026-09-14T00:10:00+08:00"),
+    )
+
+    signals = _collect(log_dir, tmp_path, "2026-09-14T00:15:00+08:00")
+    result = next(row for row in evaluate_rules(signals) if row.rule_id == "A4")
+
+    assert signals.has_complete_fetch_today is False
+    assert signals.egress_preflight_failed_today is True
+    assert result.firing is True
+    assert result.severity == "page"
+    assert result.values["daily_floor_armed"] is True
+
+
+def test_a4_daily_floor_stays_armed_after_later_incomplete_healthy_preflight(
+    tmp_path: Path,
+) -> None:
+    log_dir = tmp_path / "logs"
+    _write_round(
+        log_dir,
+        "20260913-234500",
+        _HEALTHY_ROUND.format(ts="2026-09-13T23:45:00+08:00"),
+    )
+    _write_round(
+        log_dir,
+        "20260914-001000",
+        _BLOCKED_ROUND.format(ts="2026-09-14T00:10:00+08:00"),
+    )
+    _write_round(
+        log_dir,
+        "20260914-001500",
+        (
+            "[2026-09-14T00:15:00+08:00] === pipeline RUN generation=g ===\n"
+            "egress-preflight status=healthy policy_id=domain-routing-v2 "
+            "policy_sha256=deadbeef\n"
+            "[2026-09-14T00:15:00+08:00] === egress preflight OK ===\n"
+        ),
+    )
+
+    signals = _collect(log_dir, tmp_path, "2026-09-14T00:20:00+08:00")
+    result = next(row for row in evaluate_rules(signals) if row.rule_id == "A4")
+
+    assert signals.egress_preflight_status == "healthy"
+    assert signals.has_complete_fetch_today is False
+    assert signals.egress_preflight_failed_today is True
+    assert result.firing is True
+    assert result.severity == "page"
+
+
+def test_a4_daily_floor_arms_after_complete_zero_attempt_round(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    _write_round(
+        log_dir,
+        "20260914-001000",
+        _EMPTY_HEALTHY_ROUND.format(ts="2026-09-14T00:10:00+08:00"),
+    )
+
+    signals = _collect(log_dir, tmp_path, "2026-09-14T00:15:00+08:00")
+    result = next(row for row in evaluate_rules(signals) if row.rule_id == "A4")
+
+    assert signals.fetch_attempted == 0
+    assert signals.has_complete_fetch_today is True
+    assert result.firing is True
+    assert result.values["daily_floor_armed"] is True
 
 
 def test_collect_signals_does_not_reach_past_a_round_that_never_reported(tmp_path: Path) -> None:
@@ -5262,12 +5600,7 @@ def test_pipeline_log_parser_tolerates_a_timestamp_prefix(tmp_path: Path) -> Non
     assert run["egress_preflight"] == {"status": "unavailable", "reason": "status command returned 1"}
 
 
-def test_a2_does_not_truncate_the_longest_reason_production_actually_emits() -> None:
-    """201 chars, 14 rounds on 2026-09-08 carried it; a 200 cap ate the last letter.
-
-    The field list is the whole point of the attribution: a silently truncated one
-    reads as a complete one naming a field (`tencent_status_scop`) that does not exist.
-    """
+def test_a2_keeps_the_full_production_reason_in_values_not_push_detail() -> None:
     real = (
         "missing status fields: direct_status,gcp_sg_standard_status,overall_status,"
         "policy_id,policy_projection,policy_sha256,route_attribution,router_status,"
@@ -5280,23 +5613,22 @@ def test_a2_does_not_truncate_the_longest_reason_production_actually_emits() -> 
         egress_preflight_status="unavailable",
         egress_preflight_reason=real,
     )
-    detail = _a2(signals).detail
-    assert real in detail
-    assert "已截断" not in detail
+    result = _a2(signals)
+    assert real not in result.detail
+    assert result.values["egress_preflight_reason"] == real
 
 
-def test_a2_marks_the_cut_when_a_reason_does_exceed_the_cap() -> None:
-    """`duplicate status field: {key}` embeds a whole stdout line, so the cap can
-    still bite; when it does, the reader must be able to tell."""
+def test_a2_long_reason_does_not_expand_the_push_body() -> None:
     signals = replace(
         _normal_signals(),
         minutes_since_successful_pipeline=166,
         egress_preflight_status="unavailable",
         egress_preflight_reason="y" * 5000,
     )
-    detail = _a2(signals).detail
-    assert "已截断" in detail
-    assert len(detail) < 600
+    result = _a2(signals)
+    assert "y" * 100 not in result.detail
+    assert len(result.detail) < 300
+    assert result.values["egress_preflight_reason"] == "y" * 5000
 
 
 def _a2_firing_signals() -> AlertSignals:
