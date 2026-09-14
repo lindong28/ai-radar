@@ -43,7 +43,7 @@
 | [source-maintenance.md](references/source-maintenance.md) | 信源清单维护与验证规则 [Developer]（aihot_sources.json 机器契约、enabled/paused/fetchable 语义、audit 脚本） |
 | [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)，本档只留取证读数 |
 | [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源历史 recipe [User]（当前 checkout 不可直接执行；完整 package 须从 `29ca189^` 恢复并迁移 v2 contract；仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused） |
-| [aihot-approximation-metrics.md](references/aihot-approximation-metrics.md) | 衡量「与 AIHOT 近似度」的**达标线与指标索引** [Developer]：**这条工作线的单一入口**：任务目标原文与出处（台账不入 git，原文抄在此）、用什么数据判（两个源、并集 16 个日期 / 144 条精选；量具当前用到 9 窗 / 122 条，合并题集上界 10 窗 / 128 条——"数据里有"与"量具够得着"是两件事；含身份锚 `captures_sha` 与两条时间边界）、达标线（自 2026-09-10 起是「逐类占比落进 AIHOT 该类 95% CI」，权威口径生产深度，基线 **3/5**：model −5.24pp、industry +2.40pp，零假设 P(5/5)=0.949 故为真信号）、**五条轴的处置与各自的重开条件**（**不是五条都已证伪**；含"`paper: 0.95` 是当前生产、别去撤"这条警告）、**量具纪律**（条数会长，别在别处硬编码计数）、样本量表与趋势序列落点（该序列现 n=1、尚无趋势可读）；另有逐条拟合台（8 条设闸）与版面构成（无闸）两家族的分辨力限定、**拿这些指标怎么迭代**，以及节奏裁定（不上定时评测，改持续收集） |
+| [aihot-approximation-metrics.md](references/aihot-approximation-metrics.md) | 衡量「与 AIHOT 近似度」的**达标线与指标索引** [Developer]：这条工作线的单一入口；当前归档记录锚 `623728b`，13 窗 / 190 条参照精选、2/5 类进 95% CI、TV 0.163；序列共 3 行但只有两个可比身份，尚不能读成同口径改善趋势；含目标原文、数据边界、五条轴处置与重开条件、量具纪律、逐条拟合指标及轮次接续 |
 | [web-contract-golden.md](references/web-contract-golden.md) | 行为等价 Web 重构的冻结 DB + HTTP golden 使用边界、命令与 re-baseline 规则 |
 
 ### docs/prd/ [Developer]
@@ -172,6 +172,7 @@
 | [20260910-9e21-pin-the-category-snapshot-with-one-integer.md](adr/20260910-9e21-pin-the-category-snapshot-with-one-integer.md) | 类别快照用一个整数（`enrich_watermark`）固定；不按 enrich 戳收窄类别系数施加面；评测台追加 `selected_auc_ranked` 而不替换既有指标 |
 | [20260913-e21a-clamp-rss-pubdate-to-fetch-time.md](adr/20260913-e21a-clamp-rss-pubdate-to-fetch-time.md) | RSS 入库把未来 pubDate 钳到当前时刻，只在 RSS 路径上（`web.py:_date()` 同形缺口有意不修，0 实测越界）；`published_at` 语义变为「不晚于我方**解析**到它的时刻」（文件名里的 fetch-time 是误称），与 [006-curated-archive](adr/006-curated-archive-mode.md) 的排序契约有交界面 |
 | [20260914-0442-close-the-aihot-eval-system-three-layer-loop.md](adr/20260914-0442-close-the-aihot-eval-system-three-layer-loop.md) | 接通 AIHOT 拟合评测的 L1 五槽、L2 轮次资产、L3 身份治理与完整执行闭环；v1 保持不变，v2 新标准未获批前不得采信 |
+| [20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md](adr/20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md) | 保留旧 `eval` 的快照比较与报告能力，但以当前源码静态连通性探针明确放在 canonical `eval-fit` / 归档链之外；旧 reports 保留为不可补造身份的 non-comparable 历史资产 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

@@ -26,6 +26,160 @@ def _has_direct_call(path: Path, enclosing: str, target: str) -> bool:
     return False
 
 
+def _call_name(call: ast.Call) -> str | None:
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def _has_subparser(path: Path, command: str) -> bool:
+    if not path.is_file():
+        return False
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return any(
+        isinstance(node, ast.Call)
+        and _call_name(node) == "add_parser"
+        and bool(node.args)
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == command
+        for node in ast.walk(tree)
+    )
+
+
+def _dispatches_command(
+    path: Path,
+    *,
+    enclosing: str,
+    command_field: str = "command",
+    command: str,
+    target: str,
+) -> bool:
+    if not path.is_file():
+        return False
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) or function.name != enclosing:
+            continue
+        for branch in (node for node in ast.walk(function) if isinstance(node, ast.If)):
+            compares_command = any(
+                isinstance(node, ast.Compare)
+                and isinstance(node.left, ast.Attribute)
+                and node.left.attr == command_field
+                and any(isinstance(value, ast.Constant) and value.value == command for value in node.comparators)
+                for node in ast.walk(branch.test)
+            )
+            dispatches = any(
+                isinstance(node, ast.Call) and _call_name(node) == target
+                for statement in branch.body
+                for node in ast.walk(statement)
+            )
+            if compares_command and dispatches:
+                return True
+    return False
+
+
+def _has_output_contract(path: Path, *, enclosing: str) -> bool:
+    if not path.is_file():
+        return False
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) or function.name != enclosing:
+            continue
+        writes = sum(
+            1 for node in ast.walk(function) if isinstance(node, ast.Call) and _call_name(node) == "write_text"
+        )
+        returns_artifacts = any(
+            isinstance(node, ast.Call)
+            and _call_name(node) == "EvaluationArtifacts"
+            and {keyword.arg for keyword in node.keywords} >= {"report_path", "compare_path", "metrics"}
+            for node in ast.walk(function)
+        )
+        return writes >= 2 and returns_artifacts
+    return False
+
+
+def _legacy_eval_state(project_root: Path) -> tuple[str, str, dict[str, bool]]:
+    cli_path = project_root / "src/airadar/cli.py"
+    judge_path = project_root / "src/airadar/eval/judge.py"
+    probes = {
+        "parser": _has_subparser(cli_path, "eval"),
+        "dispatcher": _dispatches_command(cli_path, enclosing="main", command="eval", target="_eval"),
+        "adapter": _has_direct_call(cli_path, "_eval", "run_eval"),
+        "producer": any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run_eval"
+            for node in (
+                ast.walk(ast.parse(judge_path.read_text(encoding="utf-8"), filename=str(judge_path)))
+                if judge_path.is_file()
+                else ()
+            )
+        ),
+        "output_contract": _has_output_contract(judge_path, enclosing="run_eval"),
+    }
+    if all(probes.values()):
+        status = "located"
+    elif any(probes.values()):
+        status = "invalid"
+    else:
+        status = "missing"
+    evidence = "; ".join(f"{name}={value}" for name, value in probes.items())
+    return status, evidence, probes
+
+
+def _report_identity_inventory(runs_dir: Path) -> dict[str, int]:
+    run_paths = sorted(runs_dir.glob("*/run.json")) if runs_dir.is_dir() else []
+    metrics_paths = sorted(runs_dir.glob("*/metrics.json")) if runs_dir.is_dir() else []
+    governed_runs: set[Path] = set()
+    invalid = 0
+    for run_path in run_paths:
+        try:
+            meta = json.loads(run_path.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                invalid += 1
+                continue
+            outputs_path = run_path.parent / "outputs.jsonl"
+            expected = meta.get("outputs_sha256")
+            questions = meta.get("questions_sha256")
+            if expected and not questions:
+                invalid += 1
+                continue
+            if expected and questions:
+                if not outputs_path.is_file() or hashlib.sha256(outputs_path.read_bytes()).hexdigest() != expected:
+                    invalid += 1
+                else:
+                    governed_runs.add(run_path.parent)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            invalid += 1
+    governed_reports = 0
+    for metrics_path in metrics_paths:
+        run_path = metrics_path.parent / "run.json"
+        if metrics_path.parent not in governed_runs:
+            if not run_path.is_file():
+                invalid += 1
+            continue
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            run_meta = json.loads(run_path.read_text(encoding="utf-8"))
+            if (
+                isinstance(metrics, dict)
+                and metrics.get("questions_sha256") == run_meta.get("questions_sha256")
+                and isinstance(metrics.get("measurement_identity"), dict)
+            ):
+                governed_reports += 1
+            else:
+                invalid += 1
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            invalid += 1
+    return {
+        "runs": len(run_paths),
+        "governed_runs": len(governed_runs),
+        "reports": len(metrics_paths),
+        "governed_reports": governed_reports,
+        "invalid": invalid,
+    }
+
+
 def _entry(status: str, path: str, evidence: str) -> dict[str, str]:
     return {"status": status, "path": path, "evidence": evidence}
 
@@ -86,6 +240,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
     metrics_path = fit_root / "metrics.py"
     run_path = fit_root / "run.py"
     judge_path = fit_root / "judge.py"
+    archive_measure_path = project_root / "scripts/eval/measure_archive_composition.py"
     benchmark = project_root / "benchmarks/aihot"
     questions_v1 = benchmark / "evalsets/aihot-fit-v1/questions.jsonl"
     questions_v2 = benchmark / "evalsets/aihot-fit-v2/questions.jsonl"
@@ -97,6 +252,8 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
     output_count = _count_run_files(runs_dir, "outputs.jsonl")
     metrics_count = _count_run_files(runs_dir, "metrics.json")
     judgment_count = _count_run_files(runs_dir, "judgments.jsonl")
+    report_inventory = _report_identity_inventory(runs_dir)
+    legacy_eval_status, legacy_eval_evidence, legacy_eval_probes = _legacy_eval_state(project_root)
 
     try:
         events = ledger_events(ledger_path)
@@ -150,13 +307,33 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
             invalid_archive_index.append(f"{record_id}:artifact={artifact or 'missing'}")
     unidentifiable_archive_rows = sum(1 for row in archive_rows if not row.get("record_id"))
 
-    report_caller = _has_direct_call(cli_path, "run_eval_fit", "compute_metrics")
-    audit_caller = _has_direct_call(cli_path, "run_eval_fit", "audit_eval_system")
+    eval_fit_targets = {
+        "build": "build_evalset",
+        "validate": "validate_evalset",
+        "run": "run_stages",
+        "judge": "run_judge",
+        "report": "compute_metrics",
+        "audit": "audit_eval_system",
+    }
+    eval_fit_dispatch = {
+        command: _dispatches_command(
+            cli_path,
+            enclosing="run_eval_fit",
+            command_field="eval_fit_command",
+            command=command,
+            target=target,
+        )
+        for command, target in eval_fit_targets.items()
+    }
+    report_caller = eval_fit_dispatch["report"]
+    audit_caller = eval_fit_dispatch["audit"]
     acceptance_caller = _has_direct_call(metrics_path, "compute_metrics", "judge_acceptance")
     comparison_caller = _has_direct_call(metrics_path, "compute_metrics", "compare_to_baseline")
-    validate_caller = _has_direct_call(cli_path, "run_eval_fit", "validate_evalset")
     run_preflight = _has_direct_call(run_path, "run_stages", "run_identity_preflight")
     judge_preflight = _has_direct_call(judge_path, "run_judge", "run_identity_preflight")
+    archive_ledger_caller = _has_direct_call(
+        archive_measure_path, "main", "start_attempt"
+    ) and _has_direct_call(archive_measure_path, "main", "record_event")
 
     l1 = {
         "1_object": _entry(
@@ -180,9 +357,9 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
             "title/summary/reason are wired; title is deliberately diagnostic-only until title-specific validation is approved",
         ),
         "4_metrics": _entry(
-            "partial",
+            "located",
             "src/airadar/eval/aihot_fit/metrics.py + scripts/eval/measure_archive_composition.py",
-            "selection/category/summary/reason and final topic_tags_v2 have readings; complete rank-linear display score is only observable on archive replay",
+            "per-item selection/category/summary/reason/topic_tags_v2 and archive final display score have dedicated readings on their authoritative surfaces",
         ),
         "5_judge_validation": _entry(
             "partial" if acceptance_caller else "missing",
@@ -193,6 +370,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
 
     historical_ballot_adr = project_root / "docs/adr/20260903-bc36-quota-curated-selection-by-source-form.md"
     current_ballot_root = project_root / ".label-serve/quota-accept"
+    current_ballot_present = current_ballot_root.exists()
     l2 = {
         "1_questions": _entry(v1_status, str(questions_v1), v1_validation),
         "2_per_question_outputs": _entry(
@@ -207,11 +385,11 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
             or f"{metrics_count} retained metrics assets and {len(archive_rows)} authoritative archive records",
         ),
         "4_human_evaluations": _entry(
-            "located" if current_ballot_root.exists() else "unverified",
+            "located" if current_ballot_present else "unverified",
             "docs/adr/20260903-bc36... + .label-serve/quota-accept/",
             (
                 "historical record and current ballot asset are both present"
-                if current_ballot_root.exists()
+                if current_ballot_present
                 else f"historical record exists={historical_ballot_adr.is_file()}; current ballot asset was not located"
             ),
         ),
@@ -240,14 +418,30 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
             f"run/judge identity preflight wired={run_preflight and judge_preflight}; persistent manifests={len(identity_manifests)}",
         ),
         "comparison_window": _entry(
-            "partial",
+            (
+                "invalid"
+                if report_inventory["invalid"]
+                else "executable"
+                if report_caller and comparison_caller
+                else "missing"
+            ),
             "data/eval-fit/runs/*/metrics.json",
-            "reports pin questions/subset/judge/emitter/calibration; legacy reports still need recomputation",
+            (
+                f"future reports enforce questions/output/judge/calibration byte identity; "
+                f"governed_runs={report_inventory['governed_runs']}/{report_inventory['runs']}; "
+                f"governed_reports={report_inventory['governed_reports']}/{report_inventory['reports']}; "
+                f"invalid={report_inventory['invalid']}; legacy assets are preserved as non-comparable and cannot "
+                "be upgraded without producer-time identity"
+            ),
         ),
         "provenance": _entry(
-            "partial",
+            "located" if current_ballot_present else "partial",
             "benchmarks/aihot/labels/*/PROVENANCE.md + docs/adr/20260903-bc36...",
-            "agent labels are attributable; historical user-ballot statement is preserved but current asset is unverified",
+            (
+                "agent labels are attributable and the current ballot asset is present"
+                if current_ballot_present
+                else "agent labels are attributable; historical ballot record exists but current ballot asset was not located"
+            ),
         ),
         "attribution_admission": _entry(
             "manual",
@@ -263,7 +457,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
                 or dangling_archive_index
                 or duplicate_archive_ids
                 else "partial"
-                if unindexed_archive or unidentifiable_archive_rows
+                if unindexed_archive
                 else "located"
             ),
             "scripts/eval/composition-history.jsonl → scripts/eval/aihot-fit-history.jsonl",
@@ -271,18 +465,32 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
                 archive_error
                 or ledger_error
                 or f"records with record_id={len(archive_ids)}; unindexed={len(unindexed_archive)}; "
-                f"unidentifiable_legacy={unidentifiable_archive_rows}; invalid_refs={len(invalid_archive_index)}; "
+                f"pre_contract_legacy={unidentifiable_archive_rows}; invalid_refs={len(invalid_archive_index)}; "
                 f"dangling={len(dangling_archive_index)}; duplicate_ids={len(duplicate_archive_ids)}"
             ),
         ),
         "caller_wiring": _entry(
             (
-                "partial"
-                if all((audit_caller, validate_caller, report_caller, acceptance_caller, comparison_caller))
+                "executable"
+                if all(
+                    (
+                        audit_caller,
+                        all(eval_fit_dispatch.values()),
+                        acceptance_caller,
+                        comparison_caller,
+                        run_preflight,
+                        judge_preflight,
+                        archive_ledger_caller,
+                    )
+                )
                 else "missing"
             ),
-            "src/airadar/eval/aihot_fit/{cli.py,run.py,judge.py,metrics.py}",
-            "build/validate/run/judge/report/audit are callable; archive measurement remains an explicit production-observation command",
+            "src/airadar/eval/aihot_fit/{cli.py,run.py,judge.py,metrics.py} + scripts/eval/measure_archive_composition.py",
+            (
+                f"eval-fit command dispatch={sum(eval_fit_dispatch.values())}/{len(eval_fit_dispatch)}; "
+                f"run identity caller={run_preflight}; judge identity caller={judge_preflight}; "
+                f"archive ledger caller={archive_ledger_caller}; archive measurement intentionally remains explicit"
+            ),
         ),
     }
 
@@ -310,9 +518,13 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
             "executable" if audit_caller else "missing", "./run.sh eval-fit audit", "read-only three-layer status map"
         ),
         "legacy_eval": _entry(
-            "unverified",
+            legacy_eval_status,
             "./run.sh eval",
-            "coexists as a presentation comparator; no evidence establishes it as this parent system's authority",
+            (
+                "role=separate legacy snapshot comparison/reporting tool (V1-V5 metrics report + V6 presentation), "
+                "outside eval-fit and archive authority; current callers and future retirement are unverified; "
+                f"{legacy_eval_evidence}"
+            ),
         ),
     }
     sections = {"l1": l1, "l2": l2, "l3": l3, "workflow": workflow}
@@ -330,6 +542,9 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
             "dangling_archive_record_ids": dangling_archive_index,
             "duplicate_archive_record_ids": duplicate_archive_ids,
             "invalid_archive_index_refs": invalid_archive_index,
+            "report_identity_inventory": report_inventory,
+            "legacy_eval_probes": legacy_eval_probes,
+            "eval_fit_dispatch": eval_fit_dispatch,
         },
         "summary": counts,
     }

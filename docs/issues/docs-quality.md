@@ -2,6 +2,12 @@
 
 > 文档自身的质量债跟踪（README 定位、重复、可观察性等审查遗留）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
 
+## [open] 2026-09-14：ADR 索引保留了一条不存在的目标文件
+
+- Type: broken link · Priority: low · Discovered: 2026-09-14 AIHOT 评测体系收口的 changed-doc link check。
+
+`docs/adr/README.md` 的 `20260904-9890` 行指向 `20260904-9890-wechat2rss-lima-boot-runtime.md`，但仓内没有该文件；该行在本轮基线提交中已经存在。后续应先从 Git 历史或当时的决策记录确认正文是漏提交、改名还是仅剩索引误项，再恢复正确目标或把索引状态改为可追溯的历史说明。本轮只登记既有文档债，不把与 AIHOT 评测无关的 ADR 历史修复并入交付。
+
 ## [open] 2026-09-05：README 的 X 单源探针没有可观察终态
 
 - Type: observability · Priority: low · Discovered: 2026-09-05 微信来源暂停文档终审。

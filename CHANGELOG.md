@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-14（AIHOT 拟合评测接通三层身份与回归链）
+
+- `./run.sh eval-fit audit` 现在从真实题集、轮次账本、身份 manifest、归档记录、报告与调用入口反推 L1/L2/L3 状态，并校验归档行摘要；audit 本身不发起 LLM 调用。旧 `./run.sh eval` 保留为独立的 legacy 快照比较/报告工具，但不再冒充 canonical `eval-fit` 或归档趋势入口。
+- 新 run/report 在计算前固定并复核 questions、outputs、judgments 与 calibration 的生产时摘要；本机现有 33 个旧 run 与 25 个旧 report 因缺少 producer-time outputs identity 被保留为 non-comparable 历史资产，不补造身份。轮次 JSONL 已接通 build、run、judge、archive、report，当前归档记录有完整 started/completed 事件且无 orphan。
+- 新增并行 v2 题集与最终用户可见面的诊断指标：最终 `topic_tags_v2`、归档最终展示评分和可选标题语义判官。v1 题集、参考答案、判官模型与阈值未改；标题默认不增加调用，且在标题专用校验与目标标准获批前只作未采信诊断。
+- 最新归档权威读数（`captures_sha=623728b`，13 窗 / 190 条参照精选）为 2/5 类落入 95% CI、TV 0.163；最终展示评分 Spearman 0.1098（n=357），参照 capture 没有标签（n=0，读作未测而非零分）。这次相对旧记录同时扩了窗口与参照集，因此不据 `3/5 → 2/5` 单独宣称代码回归。
+
 ## 2026-09-13（首页不再被一条"明天"的时间戳掀翻：上游未来 pubDate 入库即钳住）
 
 - **症状是首页顶上一条"9月14 8:00"，而当时是 9 月 13 日上午。** 上游 `openai.com/news/rss.xml` 自己把那篇文章的 `pubDate` 标成了 `Mon, 14 Sep 2026 00:00:00 GMT`（该 feed 的日期本来就不单调，第 2 条比第 3 条还早）。我方忠实解析、没有上界，于是它在"按发布时间倒序"的首页上把自己钉在第一位。页面时区没有问题：存的是 UTC，按 UTC+8 渲染，零点正是 08:00。

@@ -43,7 +43,7 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
   （TV 的绝对值**指不出是哪一类**——相互抵消的偏差在它上面看不见）。
   **权威观察面自 2026-09-11 起是「归档面」**（用户裁定，见下）：
   `uv run python scripts/eval/measure_archive_composition.py --record`。
-  **看 `P(5/5)` 那一行再看 `k/5`**：判据自己的零假设，归档面 0.899——`3/5` 在它下面是真信号。
+  **看 `P(5/5)` 那一行再看 `k/5`**：最新 `--record`（2026-09-14，`captures_sha=623728b`）的零假设为 0.91885，实测 `2/5`；它相对 2026-09-11 的 `3/5` 同时扩了窗口与参照集，不能读成同身份代码回归。
 - **首页是「归档面」不是单轮 40 条**（[ADR-006](docs/adr/006-curated-archive-mode.md)：跨 run 并集按
   `published_at` 取前 40，**不看我方排序分**；约 48 run/天）。三条后果：
   **`measure_curated_composition.py` 是代理面、只用于 A/B**；`composition-history.jsonl` 带

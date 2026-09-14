@@ -6,6 +6,13 @@
 
 **读数基线**：下列各条引用的分布类读数由 reviewer 在**修复 H1 之前**那版题集（2730 题）上取得，未在修复后的 2741 题题集上重测——量级结论不受影响（修复只改变了 11 道题的归属），但 `79 条 reason` / `585 题 tags` 这类精确计数在新题集上是 78 / 584。凡据此定阈值前须重测。
 
+## 2026-09-14 三层体系收口后的明确边界
+
+- **标题判官仍未采信**：标题维度已接入，但默认不运行，也不进入 threshold、baseline、regression 或优化结论。要闭合它必须改变校验资产与目标标准，并会新增付费 calibration；这些都在用户保留裁决范围内，本轮没有越过。
+- **归档最终标签仍未测**：最新权威记录的 `presented_tag_jaccard_mean=null`、`presented_tag_n=0`，同时 `reference_rows_with_tags=0`。当前 capture 没有参照标签；补参考答案或改题集属于用户保留裁决，不能把 null 写成零分，也不能自行生成参考标签。
+- **旧报告不等待重算**：本机现有 33 个旧 run、25 个旧 report 都缺 producer-time outputs identity。新 report 已实测拒绝 `outputs_sha256=None`；这些资产保留为 pre-contract、non-comparable 历史证据，不能用今天的文件摘要升级身份。旧 `./run.sh eval` 的角色与当前源码静态连通性另见 [ADR-20260914-f1a8](../adr/20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md)。
+- **最新归档读数不是同身份回归**：`captures_sha=623728b`、13 窗 / 190 条参照精选、2/5、TV 0.163482；上一条可比身份是 `e31efff`、10 窗 / 159 条、3/5、TV 0.196439。窗口和参照集都变了，所以这里只更新当前 gap，不归因于代码变化。
+
 ## 分组一：会让读数偏移，但方向可知
 
 ### ISSUE-FIT-01 · ~~摘要 closeness 有一条 schema 造成的天花板~~ —— **假说已被干预实验证伪**
