@@ -93,3 +93,4 @@
 | [20260914-0442](./20260914-0442-close-the-aihot-eval-system-three-layer-loop.md) | 接通 AIHOT 拟合评测的 L1 五槽、L2 轮次资产、L3 身份治理与 build→run→judge→archive→report 闭环 | accepted；v1 保持不变，v2 与标题维度未获新标准前不得采信 | 2026-09-14 |
 | [20260914-f1a8](./20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md) | 把旧 `eval` 保留为 canonical AIHOT 评测链之外的 legacy snapshot comparison/reporting tool | accepted；旧 reports 保留为 non-comparable，不补造 producer-time identity | 2026-09-14 |
 | [20260914-acdd](./20260914-acdd-notify-alert-state-transitions.md) | 告警只按新事故、严重度变化与可证明恢复投递；低证据状态保持 in-progress | accepted；supersedes ADR-008 episode reminder 与 page resolved 通道、ADR-011 reminder nonce、ADR-20260904-51d2 的当日 items-floor warm-up 语义 | 2026-09-14 |
+| [20260914-2307](./20260914-2307-retain-aihot-raw-captures-for-thirty-days.md) | AIHOT 原始 capture 默认保留 30 天，eval runs 独立保持 14 天 | accepted；supersedes 2026-09-07 的 raw capture 14 天默认 | 2026-09-14 |

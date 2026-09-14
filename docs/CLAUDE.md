@@ -174,6 +174,7 @@
 | [20260914-0442-close-the-aihot-eval-system-three-layer-loop.md](adr/20260914-0442-close-the-aihot-eval-system-three-layer-loop.md) | 接通 AIHOT 拟合评测的 L1 五槽、L2 轮次资产、L3 身份治理与完整执行闭环；v1 保持不变，v2 新标准未获批前不得采信 |
 | [20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md](adr/20260914-f1a8-classify-legacy-eval-outside-aihot-fit.md) | 保留旧 `eval` 的快照比较与报告能力，但以当前源码静态连通性探针明确放在 canonical `eval-fit` / 归档链之外；旧 reports 保留为不可补造身份的 non-comparable 历史资产 |
 | [20260914-acdd-notify-alert-state-transitions.md](adr/20260914-acdd-notify-alert-state-transitions.md) | 飞书告警只在新事故、严重度变化与可证明恢复时投递；修复午夜 A4、低样本假恢复、无因果合并与 A7 单源 page 噪声 |
+| [20260914-2307-retain-aihot-raw-captures-for-thirty-days.md](adr/20260914-2307-retain-aihot-raw-captures-for-thirty-days.md) | AIHOT 原始 capture 默认保留 30 天；评测 run 独立保持 14 天，已删除历史不回填 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

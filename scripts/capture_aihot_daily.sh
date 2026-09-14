@@ -183,9 +183,9 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture EXIT rc=$rc ==="
 # ~550 KB per day and live outside it. Left alone this job adds ~11 GB a year to the dataset
 # repository, so the size has to be someone's decision rather than a side effect.
 #
-# 14 days, chosen by the repository owner on 2026-09-07, holds a steady ~420 MB. It is twice
-# AIHOT's own 7-day rolling coverage: once a window is older than that the source cannot be
-# re-captured at all, so 14 leaves one full re-take window of slack after a problem surfaces.
+# 30 days, chosen by the repository owner on 2026-09-14, keeps roughly one month of raw
+# evidence. Actual storage varies with AIHOT's content and the capture cadence, so it is not
+# derived from a fixed per-capture size estimate.
 # AIHOT_CAPTURE_RETAIN_DAYS overrides it; 0 keeps everything.
 #
 # Windows are never pruned -- they are the data. Captures are the evidence a window validates
@@ -197,7 +197,7 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture EXIT rc=$rc ==="
 # same directory. rc=2 was concurrent, not causal. And gating disk policy on network success is
 # backwards -- an outage is when pruning matters most, and a full disk is itself a reason
 # capture fails, which the guard would have made self-perpetuating.
-RETAIN="${AIHOT_CAPTURE_RETAIN_DAYS:-14}"
+RETAIN="${AIHOT_CAPTURE_RETAIN_DAYS:-30}"
 if [ "$RETAIN" -gt 0 ] 2>/dev/null; then
   # Age comes from the directory name (aihot-YYYYMMDDTHHMMSSZ), not from mtime. A fresh clone
   # stamps every capture with the checkout time, so an mtime predicate prunes nothing for the

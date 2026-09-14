@@ -40,11 +40,25 @@ run(){ ( cd "$1/tool" && AIHOT_CAPTURE_WORKTREE="$1/tool" AIHOT_CAPTURE_LOG_DIR=
          AIHOT_CAPTURE_CMD="$2" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
          bash scripts/capture_aihot_daily.sh >/dev/null 2>&1; echo $? ); }
 dirt(){ ( cd "$1/tool" && git status --porcelain | wc -l | tr -d ' ' ); }
+capture_stamp(){
+  days="$1"
+  date -u -v-"${days}"d +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -d "${days} days ago" +%Y%m%dT%H%M%SZ
+}
 
 echo "1. fresh capture, plus a tracked capture old enough to prune"
 r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z benchmarks/aihot/windows/w2; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json; echo y > benchmarks/aihot/windows/w2/items.jsonl" --')
 check "clean at exit"        "$(dirt "$r")" "0"
 check "the stale capture was pruned" "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+rm -rf "$r"
+
+echo "1b. the default retention keeps a 20-day capture and prunes a 31-day capture"
+r=$(setup); keep="$r/tool/benchmarks/aihot/captures/aihot-$(capture_stamp 20)"; prune="$r/tool/benchmarks/aihot/captures/aihot-$(capture_stamp 31)"
+mkdir -p "$keep" "$prune"; echo keep > "$keep/page.json"; echo prune > "$prune/page.json"
+rc=$(run "$r" 'bash -c "exit 0" --')
+check "default retention exits 0" "$rc" "0"
+check "20-day capture is retained" "$( [ -d "$keep" ] && echo present || echo pruned )" "present"
+check "31-day capture is pruned" "$( [ -d "$prune" ] && echo present || echo pruned )" "pruned"
+check "clean at exit" "$(dirt "$r")" "0"
 rm -rf "$r"
 
 echo "2. capture killed mid-flight leaves a .staging tree"
