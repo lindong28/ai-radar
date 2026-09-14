@@ -1,4 +1,4 @@
-"""Judge prompts for aihot-fit (summary and recommendation-reason closeness).
+"""Judge prompts for aihot-fit title, summary and recommendation-reason closeness.
 
 The reference is AIHOT's editorial output. It is the target *taste*, not ground
 truth: a candidate that is equally correct but picks different facts or a
@@ -27,6 +27,11 @@ _COMMON_RULES = """你是内容评测的裁判。你会拿到三样东西：
 只输出一个 JSON 对象：{{"closeness": <0-100 整数>, "rationale": "<一句话说明扣分或得分的主要原因>"}}。不要输出其它文字。"""
 
 SUMMARY_SYSTEM = _COMMON_RULES.format(limit=CONTENT_CHAR_LIMIT) + "\n本次比较的是「摘要」。"
+
+TITLE_SYSTEM = (
+    _COMMON_RULES.format(limit=CONTENT_CHAR_LIMIT)
+    + "\n本次比较的是「标题」：判断两者是否选择了同一条主要信息、表达了相近的具体程度与编辑语气。"
+)
 
 REASON_SYSTEM = (
     _COMMON_RULES.format(limit=CONTENT_CHAR_LIMIT)
@@ -60,11 +65,13 @@ def render_user(*, title: str, content: str, reference: str, candidate: str) -> 
 
 
 def prompt_sha256(dimension: str) -> str:
-    system = SUMMARY_SYSTEM if dimension == "summary" else REASON_SYSTEM
+    system = system_prompt(dimension)
     return hashlib.sha256((system + "\n---\n" + USER_TEMPLATE).encode("utf-8")).hexdigest()
 
 
 def system_prompt(dimension: str) -> str:
+    if dimension == "title":
+        return TITLE_SYSTEM
     if dimension == "summary":
         return SUMMARY_SYSTEM
     if dimension == "reason":

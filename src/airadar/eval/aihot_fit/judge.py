@@ -1,8 +1,10 @@
-"""LLM judge (DeepSeek via ARK) for summary / reason closeness to the AIHOT reference."""
+"""LLM judge (DeepSeek via ARK) for title / summary / reason closeness to AIHOT."""
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
 import os
 import statistics
 import threading
@@ -20,9 +22,9 @@ from .common import (
     is_stop_signal,
     isolate_side_effects,
     json_dumps,
-    load_questions,
-    read_json,
+    load_questions_bytes,
     read_jsonl,
+    read_jsonl_bytes,
     redact,
     require_ark_only,
     sha256_file,
@@ -31,21 +33,31 @@ from .common import (
     write_json,
     write_jsonl,
 )
+from .governance import (
+    DEFAULT_IDENTITY_MANIFEST_DIR,
+    DEFAULT_LEDGER_PATH,
+    IdentityRejected,
+    record_event,
+    run_identity_preflight,
+    start_attempt,
+)
 
 DEFAULT_JUDGE_MODEL = "deepseek-v4-flash-ga-260731"
 JUDGE_TEMPERATURE = 0.0
 JUDGE_MAX_TOKENS = 512
-DIMENSIONS: tuple[str, ...] = ("summary", "reason")
+DIMENSIONS: tuple[str, ...] = ("title", "summary", "reason")
+DEFAULT_DIMENSIONS: tuple[str, ...] = ("summary", "reason")
+CALIBRATED_DIMENSIONS: tuple[str, ...] = ("summary", "reason")
 POSITIVE_MIN_MEAN = 80.0
 NEGATIVE_MAX_MEAN = 40.0
 _JUDGE_MODEL_ENV = "AI_RADAR_FIT_JUDGE_MODEL"
 _JUDGE_ARK_MODEL_ENV = "AI_RADAR_ARK_FIT_JUDGE_MODEL"
 
 
-_CANDIDATE_FIELD = {"summary": "summary_zh", "reason": "why_recommend"}
+_CANDIDATE_FIELD = {"title": "title_zh", "summary": "summary_zh", "reason": "why_recommend"}
 
 
-def judge_identity(model: str) -> dict[str, Any]:
+def judge_identity(model: str, dimensions: tuple[str, ...] = DEFAULT_DIMENSIONS) -> dict[str, Any]:
     provider_file = inspect.getsourcefile(chat_json)
     return {
         "schema_version": JUDGE_SCHEMA_VERSION,
@@ -53,7 +65,7 @@ def judge_identity(model: str) -> dict[str, Any]:
         "model": model,
         "temperature": JUDGE_TEMPERATURE,
         "max_tokens": JUDGE_MAX_TOKENS,
-        "prompt_sha256": {dimension: judge_prompts.prompt_sha256(dimension) for dimension in DIMENSIONS},
+        "prompt_sha256": {dimension: judge_prompts.prompt_sha256(dimension) for dimension in dimensions},
         "ark_host": urlsplit(_ark_base_url()).hostname,
         "provider_module_sha256": sha256_file(Path(provider_file)) if provider_file else None,
         "usage_recorded": False,
@@ -62,18 +74,10 @@ def judge_identity(model: str) -> dict[str, Any]:
 
 def _condition_identity(identity: dict[str, Any], readings: list[dict[str, Any]]) -> dict[str, Any]:
     providers = sorted(
-        {
-            str(raw["provider"])
-            for row in readings
-            if isinstance((raw := row.get("raw")), dict) and raw.get("provider")
-        }
+        {str(raw["provider"]) for row in readings if isinstance((raw := row.get("raw")), dict) and raw.get("provider")}
     )
     models = sorted(
-        {
-            str(raw["model"])
-            for row in readings
-            if isinstance((raw := row.get("raw")), dict) and raw.get("model")
-        }
+        {str(raw["model"]) for row in readings if isinstance((raw := row.get("raw")), dict) and raw.get("model")}
     )
     return {**identity, "served_providers": providers, "served_models": models}
 
@@ -198,7 +202,7 @@ def _calibration_tasks(
     questions: dict[str, dict[str, Any]], rows: list[dict[str, Any]], count: int
 ) -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
-    for dimension in DIMENSIONS:
+    for dimension in CALIBRATED_DIMENSIONS:
         eligible = [
             questions[str(row["question_id"])]
             for row in rows
@@ -239,7 +243,7 @@ def _control_means(results: list[dict[str, Any]]) -> dict[str, Any]:
     return summary
 
 
-def run_judge(
+def _run_judge_impl(
     *,
     run_dir: Path,
     questions_path: Path,
@@ -247,18 +251,24 @@ def run_judge(
     limit: int | None = None,
     calibrate: int | None = None,
     workers: int = DEFAULT_WORKERS,
+    identity_receipt: dict[str, Any] | None = None,
+    dimensions: tuple[str, ...] = DEFAULT_DIMENSIONS,
+    questions_snapshot: dict[str, dict[str, Any]],
+    rows_snapshot: list[dict[str, Any]],
+    run_meta_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     credentials = require_ark_only()
     side_effects = isolate_side_effects()
     # Pin the ARK model for this process so a global AI_RADAR_ARK_DEEPSEEK_MODEL cannot swap the judge.
     os.environ[_JUDGE_ARK_MODEL_ENV] = model
-    questions = {str(question["question_id"]): question for question in load_questions(questions_path)}
-    rows = sorted(read_jsonl(run_dir / "outputs.jsonl"), key=lambda row: str(row["question_id"]))
+    questions = dict(questions_snapshot)
+    rows = sorted(rows_snapshot, key=lambda row: str(row["question_id"]))
     if limit is not None:
         rows = rows[:limit]
-    run_meta = read_json(run_dir / "run.json")
+    run_meta = dict(run_meta_snapshot)
 
-    identity = judge_identity(model)
+    identity_dimensions = tuple(dict.fromkeys((*dimensions, *(CALIBRATED_DIMENSIONS if calibrate else ()))))
+    identity = judge_identity(model, identity_dimensions)
     judge = _Judge(model, workers)
     started_at = utc_now()
 
@@ -268,7 +278,7 @@ def run_judge(
         control_results = judge.run(control_tasks)
         means = _control_means(control_results)
         verdicts: dict[str, Any] = {}
-        for dimension in DIMENSIONS:
+        for dimension in CALIBRATED_DIMENSIONS:
             positive = means[f"{dimension}_positive"]["mean"]
             negative = means[f"{dimension}_negative"]["mean"]
             # None, not False, when the controls never ran: a dimension with fewer than two
@@ -304,7 +314,7 @@ def run_judge(
 
     skipped: dict[str, dict[str, int]] = {}
     tasks: list[dict[str, Any]] = []
-    for dimension in DIMENSIONS:
+    for dimension in dimensions:
         dimension_tasks, dimension_skipped = _judgeable(questions, rows, dimension)
         tasks.extend(dimension_tasks)
         skipped[dimension] = dimension_skipped
@@ -334,12 +344,14 @@ def run_judge(
 
     judge_json = {
         **_condition_identity(identity, list(merged.values())),
+        "identity_preflight": identity_receipt,
         "run_id": run_meta.get("run_id"),
         "questions_sha256": run_meta.get("questions_sha256"),
         "started_at": started_at,
         "finished_at": utc_now(),
         "limit": limit,
         "workers": workers,
+        "dimensions": list(dimensions),
         "credentials": credentials,
         "side_effects": side_effects,
         "judged": {
@@ -351,6 +363,7 @@ def run_judge(
         "judgments_replaced_this_call": replaced,
         "judgments_blank_discarded_this_call": discarded_blank,
         "judgments_sha256": sha256_file(judgments_path),
+        "calibration_sha256": sha256_file(run_dir / "judge-calibration.json") if calibration is not None else None,
         "tasks_this_call_sha256": sha256_text(json_dumps(tasks)),
         "skipped": skipped,
         "stopped_early": judge.stop.is_set(),
@@ -361,3 +374,110 @@ def run_judge(
     }
     write_json(run_dir / "judge.json", judge_json)
     return judge_json
+
+
+def planned_judge_behavior_identity(
+    *,
+    run_dir: Path,
+    questions_path: Path,
+    model: str,
+    limit: int | None,
+    calibrate: int | None,
+    dimensions: tuple[str, ...] = DEFAULT_DIMENSIONS,
+    run_digest: str | None = None,
+    outputs_digest: str | None = None,
+    questions_digest: str | None = None,
+) -> dict[str, Any]:
+    """Capture judge behavior without reading provider credentials or issuing a request."""
+    return {
+        "schema_version": "aihot-fit-judge-behavior-v1",
+        "run_sha256": run_digest or sha256_file(run_dir / "run.json"),
+        "outputs_sha256": outputs_digest or sha256_file(run_dir / "outputs.jsonl"),
+        "questions_sha256": questions_digest or sha256_file(questions_path),
+        "judge": judge_identity(
+            model,
+            tuple(dict.fromkeys((*dimensions, *(CALIBRATED_DIMENSIONS if calibrate else ())))),
+        ),
+        "dimensions": list(dimensions),
+        "calibrated_dimensions": list(CALIBRATED_DIMENSIONS if calibrate else ()),
+        "limit": limit,
+        "calibrate": calibrate,
+    }
+
+
+def run_judge(
+    *,
+    run_dir: Path,
+    questions_path: Path,
+    identity_spec_path: Path,
+    model: str = DEFAULT_JUDGE_MODEL,
+    limit: int | None = None,
+    calibrate: int | None = None,
+    workers: int = DEFAULT_WORKERS,
+    dimensions: tuple[str, ...] = DEFAULT_DIMENSIONS,
+    round_id: str | None = None,
+    ledger_path: Path = DEFAULT_LEDGER_PATH,
+    identity_manifest_dir: Path = DEFAULT_IDENTITY_MANIFEST_DIR,
+) -> dict[str, Any]:
+    unknown = [dimension for dimension in dimensions if dimension not in DIMENSIONS]
+    if unknown or not dimensions:
+        raise ValueError(f"dimensions must be a non-empty subset of {DIMENSIONS}, got {dimensions}")
+    attempt = start_attempt("judge", round_id=round_id or run_dir.name, ledger_path=ledger_path)
+    try:
+        run_bytes = (run_dir / "run.json").read_bytes()
+        outputs_bytes = (run_dir / "outputs.jsonl").read_bytes()
+        questions_bytes = questions_path.read_bytes()
+        run_meta = json.loads(run_bytes)
+        if not isinstance(run_meta, dict):
+            raise ValueError("run.json must be a JSON object")
+        questions_sha256 = hashlib.sha256(questions_bytes).hexdigest()
+        if run_meta.get("questions_sha256") != questions_sha256:
+            raise IdentityRejected("questions snapshot does not match run.json questions_sha256; refusing judge calls")
+        questions_snapshot = {
+            str(question["question_id"]): question for question in load_questions_bytes(questions_bytes)
+        }
+        rows_snapshot = list(read_jsonl_bytes(outputs_bytes))
+        behavior = planned_judge_behavior_identity(
+            run_dir=run_dir,
+            questions_path=questions_path,
+            model=model,
+            limit=limit,
+            calibrate=calibrate,
+            dimensions=dimensions,
+            run_digest=hashlib.sha256(run_bytes).hexdigest(),
+            outputs_digest=hashlib.sha256(outputs_bytes).hexdigest(),
+            questions_digest=questions_sha256,
+        )
+        receipt = run_identity_preflight(
+            attempt=attempt,
+            identity_spec_path=identity_spec_path,
+            local_run_dir=run_dir,
+            behavior_identity=behavior,
+            ledger_path=ledger_path,
+            manifest_dir=identity_manifest_dir,
+        )
+        result = _run_judge_impl(
+            run_dir=run_dir,
+            questions_path=questions_path,
+            model=model,
+            limit=limit,
+            calibrate=calibrate,
+            workers=workers,
+            identity_receipt=receipt,
+            dimensions=dimensions,
+            questions_snapshot=questions_snapshot,
+            rows_snapshot=rows_snapshot,
+            run_meta_snapshot=run_meta,
+        )
+        record_event(
+            attempt=attempt,
+            event="completed",
+            status="partial" if result.get("stopped_early") else "complete",
+            artifacts={"judge": str(run_dir / "judge.json"), "judgments": str(run_dir / "judgments.jsonl")},
+            relations={"questions_sha256": str(result["questions_sha256"])},
+            ledger_path=ledger_path,
+        )
+        return result
+    except Exception:
+        record_event(attempt=attempt, event="failed", status="failed", ledger_path=ledger_path)
+        raise

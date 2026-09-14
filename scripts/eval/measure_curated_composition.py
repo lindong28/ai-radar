@@ -163,6 +163,8 @@ def load_aihot() -> dict[str, dict]:
                     continue
                 items[row["id"]] = {
                     "url": (row.get("links") or {}).get("original") or "",
+                    "title": row.get("title"),
+                    "tags": row.get("tags") if isinstance(row.get("tags"), list) else None,
                     "category": SLUG_TO_BUCKET.get(row.get("category")),
                     "selected": bool(row.get("selected")),
                     "score": row.get("score"),

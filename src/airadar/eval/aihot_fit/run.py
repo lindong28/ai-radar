@@ -28,7 +28,7 @@ from .common import (
     has_reference,
     is_stop_signal,
     isolate_side_effects,
-    load_questions,
+    load_questions_bytes,
     model_selection_env,
     redact,
     require_ark_only,
@@ -36,6 +36,13 @@ from .common import (
     utc_now,
     write_json,
     write_jsonl,
+)
+from .governance import (
+    DEFAULT_IDENTITY_MANIFEST_DIR,
+    DEFAULT_LEDGER_PATH,
+    record_event,
+    run_identity_preflight,
+    start_attempt,
 )
 
 STAGES: tuple[str, ...] = ("prefilter", "score", "enrich")
@@ -173,6 +180,41 @@ def stage_identity(providers: dict[str, Any], rows: list[dict[str, Any]] | None 
     }
 
 
+def planned_behavior_identity(
+    *,
+    questions_path: Path,
+    stages: tuple[str, ...],
+    limit: int | None,
+    seed: int,
+    require_reference: str | None,
+    questions_digest: str | None = None,
+) -> dict[str, Any]:
+    """Capture intended behavior without constructing a provider or reading credentials."""
+    rulesets = {
+        "prefilter": current_version(),
+        "score": current_score_version(),
+        "enrich": current_version_v2(),
+    }
+    runners = {"prefilter": prefilter_runner, "score": scorer_runner, "enrich": enrich_runner}
+    return {
+        "schema_version": "aihot-fit-run-behavior-v1",
+        "questions_sha256": questions_digest or sha256_file(questions_path),
+        "stages": {
+            stage: {
+                "ruleset_version": rulesets[stage],
+                "prompt_sha256": sha256_file(db.PROJECT_ROOT / _PROMPT_FILES[stage]),
+                "rendered_inputs_sha256": _rendered_inputs_sha256(stage),
+                "runner_module_sha256": sha256_file(Path(runners[stage].__file__ or "")),
+            }
+            for stage in stages
+        },
+        "sampling": {"limit": limit, "seed": seed, "require_reference": require_reference},
+        "model_selection_env": model_selection_env(),
+        "weights": DEFAULT_WEIGHTS.as_dict(),
+        "fit_weights": AIHOT_FIT_WEIGHTS.as_dict(),
+    }
+
+
 def _cash_signal(output: dict[str, Any]) -> str | None:
     raw = output.get("raw") if isinstance(output, dict) else None
     provider = raw.get("provider") if isinstance(raw, dict) else None
@@ -203,7 +245,7 @@ def _evaluate(stage: str, provider: Any, item: ProviderItem, tier: str) -> dict[
     return record
 
 
-def run_stages(
+def _run_stages_impl(
     *,
     questions_path: Path,
     out_dir: Path,
@@ -212,6 +254,9 @@ def run_stages(
     stages: tuple[str, ...] = STAGES,
     workers: int = DEFAULT_WORKERS,
     require_reference: str | None = None,
+    identity_receipt: dict[str, Any] | None = None,
+    questions_snapshot: list[dict[str, Any]],
+    questions_sha256: str,
 ) -> dict[str, Any]:
     unknown = [stage for stage in stages if stage not in STAGES]
     if unknown:
@@ -220,8 +265,7 @@ def run_stages(
         raise ValueError(f"unknown reference dimension: {require_reference}")
     credentials = require_ark_only()
     side_effects = isolate_side_effects()
-    questions_sha256 = sha256_file(questions_path)
-    pool = load_questions(questions_path)
+    pool = list(questions_snapshot)
     pool_total = len(pool)
     if require_reference is not None:
         pool = [question for question in pool if has_reference(question, require_reference)]
@@ -275,7 +319,8 @@ def run_stages(
     rows.sort(key=lambda row: str(row["question_id"]))
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(out_dir / "outputs.jsonl", rows)
+    outputs_path = out_dir / "outputs.jsonl"
+    write_jsonl(outputs_path, rows)
 
     def latencies(stage: str) -> list[int]:
         return [
@@ -303,6 +348,7 @@ def run_stages(
         "run_id": out_dir.name,
         "questions_path": str(questions_path),
         "questions_sha256": questions_sha256,
+        "outputs_sha256": sha256_file(outputs_path),
         "n": len(questions),
         "limit": limit,
         "seed": seed,
@@ -319,6 +365,7 @@ def run_stages(
         "stop_reasons": stop_reasons,
         "stage_summary": stage_summary,
         "identity": {
+            "preflight": identity_receipt,
             "stages": stage_identity(providers, rows),
             "git": git_identity(),
             "model_selection_env": model_selection_env(),
@@ -331,3 +378,68 @@ def run_stages(
     }
     write_json(out_dir / "run.json", run_json)
     return run_json
+
+
+def run_stages(
+    *,
+    questions_path: Path,
+    out_dir: Path,
+    identity_spec_path: Path,
+    limit: int | None = None,
+    seed: int = 0,
+    stages: tuple[str, ...] = STAGES,
+    workers: int = DEFAULT_WORKERS,
+    require_reference: str | None = None,
+    round_id: str | None = None,
+    ledger_path: Path = DEFAULT_LEDGER_PATH,
+    identity_manifest_dir: Path = DEFAULT_IDENTITY_MANIFEST_DIR,
+) -> dict[str, Any]:
+    """Run stages only after the explicit identity spec passes the mechanical preflight."""
+    unknown = [stage for stage in stages if stage not in STAGES]
+    if unknown:
+        raise ValueError(f"unknown stages: {unknown}")
+    attempt = start_attempt("run", round_id=round_id or out_dir.name, ledger_path=ledger_path)
+    try:
+        questions_bytes = questions_path.read_bytes()
+        questions_sha256 = hashlib.sha256(questions_bytes).hexdigest()
+        questions_snapshot = load_questions_bytes(questions_bytes)
+        behavior = planned_behavior_identity(
+            questions_path=questions_path,
+            stages=stages,
+            limit=limit,
+            seed=seed,
+            require_reference=require_reference,
+            questions_digest=questions_sha256,
+        )
+        receipt = run_identity_preflight(
+            attempt=attempt,
+            identity_spec_path=identity_spec_path,
+            local_run_dir=out_dir,
+            behavior_identity=behavior,
+            ledger_path=ledger_path,
+            manifest_dir=identity_manifest_dir,
+        )
+        result = _run_stages_impl(
+            questions_path=questions_path,
+            out_dir=out_dir,
+            limit=limit,
+            seed=seed,
+            stages=stages,
+            workers=workers,
+            require_reference=require_reference,
+            identity_receipt=receipt,
+            questions_snapshot=questions_snapshot,
+            questions_sha256=questions_sha256,
+        )
+        record_event(
+            attempt=attempt,
+            event="completed",
+            status="partial" if result.get("stopped_early") else "complete",
+            artifacts={"run": str(out_dir / "run.json"), "outputs": str(out_dir / "outputs.jsonl")},
+            relations={"questions_sha256": str(result["questions_sha256"])},
+            ledger_path=ledger_path,
+        )
+        return result
+    except Exception:
+        record_event(attempt=attempt, event="failed", status="failed", ledger_path=ledger_path)
+        raise

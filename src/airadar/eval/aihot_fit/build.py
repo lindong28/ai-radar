@@ -15,6 +15,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from ... import db
 from .common import (
     BUILDER_VERSION,
+    BUILDER_VERSION_V2,
     CATEGORY_SLUG_TO_PRIMARY,
     read_json,
     read_jsonl,
@@ -86,6 +87,19 @@ def normalize_url(url: str) -> tuple[str, str]:
 
 def question_id_for(match_key: str) -> str:
     return hashlib.sha256(match_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _portable_source_path(path: Path, batch_name: str) -> str:
+    """Describe v2 authorities without committing a maintainer-local checkout path."""
+    if batch_name.startswith("t2-window-") and "windows" in path.parts:
+        index = path.parts.index("windows")
+        return str(Path("benchmarks/aihot", *path.parts[index:]))
+    if batch_name.startswith("t5-"):
+        return ".label-serve/round45-human/t5/r2_raw/aihot_items_raw_r2.json"
+    try:
+        return str(path.resolve().relative_to(db.PROJECT_ROOT.resolve()))
+    except ValueError:
+        return f"external/{path.name}"
 
 
 @dataclass(frozen=True)
@@ -176,14 +190,16 @@ class DbItem:
     item_id: str
     source_id: str
     tier: str
+    source_name: str
+    source_kind: str
     url: str
     title: str
     author: str | None
     published_at: str
     content_text: str
 
-    def as_input(self) -> dict[str, Any]:
-        return {
+    def as_input(self, evalset_version: str) -> dict[str, Any]:
+        payload = {
             "item_id": self.item_id,
             "source_id": self.source_id,
             "tier": self.tier,
@@ -194,6 +210,9 @@ class DbItem:
             "content_text": self.content_text,
             "content_sha256": sha256_text(self.content_text),
         }
+        if evalset_version == "v2":
+            payload.update({"source_name": self.source_name, "source_kind": self.source_kind})
+        return payload
 
 
 def _index_item_urls(conn: sqlite3.Connection) -> tuple[dict[str, str], int]:
@@ -212,7 +231,8 @@ def _index_item_urls(conn: sqlite3.Connection) -> tuple[dict[str, str], int]:
 def _fetch_item(conn: sqlite3.Connection, item_id: str) -> DbItem:
     row = conn.execute(
         """
-        SELECT i.id, i.source_id, COALESCE(s.tier, 'unknown'), i.url, i.title, i.author, i.published_at, i.content_text
+        SELECT i.id, i.source_id, COALESCE(s.tier, 'unknown'), COALESCE(s.name, i.source_id),
+               COALESCE(s.kind, 'feed'), i.url, i.title, i.author, i.published_at, i.content_text
         FROM items i LEFT JOIN sources s ON s.id = i.source_id
         WHERE i.id = ?
         """,
@@ -224,11 +244,13 @@ def _fetch_item(conn: sqlite3.Connection, item_id: str) -> DbItem:
         item_id=str(row[0]),
         source_id=str(row[1]),
         tier=str(row[2]),
-        url=str(row[3]),
-        title=str(row[4]),
-        author=row[5],
-        published_at=str(row[6]),
-        content_text=str(row[7] or ""),
+        source_name=str(row[3]),
+        source_kind=str(row[4]),
+        url=str(row[5]),
+        title=str(row[6]),
+        author=row[7],
+        published_at=str(row[8]),
+        content_text=str(row[9] or ""),
     )
 
 
@@ -237,8 +259,13 @@ def build_evalset(
     db_path: Path,
     out_dir: Path,
     sources: tuple[tuple[str, Path], ...] = DEFAULT_SOURCES,
+    evalset_version: str = "v1",
+    base_questions_path: Path | None = None,
 ) -> dict[str, Any]:
     """Write ``questions.jsonl`` + ``manifest.json`` into ``out_dir``; return the manifest."""
+    if evalset_version not in {"v1", "v2"}:
+        raise ValueError(f"unknown evalset version: {evalset_version}")
+    builder_version = BUILDER_VERSION if evalset_version == "v1" else BUILDER_VERSION_V2
     built_at = utc_now()
     conn = sqlite3.connect(readonly_db_uri(db_path), uri=True)
     try:
@@ -251,6 +278,9 @@ def build_evalset(
         for batch_name, source_path in sources:
             records = load_reference_batch(source_path)
             source_sha256 = sha256_file(source_path)
+            recorded_source_path = (
+                str(source_path) if evalset_version == "v1" else _portable_source_path(source_path, batch_name)
+            )
             matched = 0
             unmatched = 0
             deduped = 0
@@ -281,15 +311,15 @@ def build_evalset(
                 item = _fetch_item(conn, item_id)
                 questions[question_id] = {
                     "question_id": question_id,
-                    "input": item.as_input(),
+                    "input": item.as_input(evalset_version),
                     "reference": record.as_reference(),
                     "provenance": {
                         "batch": batch_name,
-                        "source_file": str(source_path),
+                        "source_file": recorded_source_path,
                         "source_sha256": source_sha256,
                         "match_method": method,
                         "built_at": built_at,
-                        "builder_version": BUILDER_VERSION,
+                        "builder_version": builder_version,
                     },
                 }
                 batches.setdefault(batch_name, {"kept": 0})
@@ -297,7 +327,7 @@ def build_evalset(
             batches.setdefault(batch_name, {"kept": 0})
             batches[batch_name].update(
                 {
-                    "source_file": str(source_path),
+                    "source_file": recorded_source_path,
                     "source_sha256": source_sha256,
                     "read": len(records),
                     "matched": matched,
@@ -309,16 +339,33 @@ def build_evalset(
         conn.close()
 
     ordered = [questions[question_id] for question_id in sorted(questions)]
+    base_sha256: str | None = None
+    if evalset_version == "v2":
+        base_path = base_questions_path or (_AIHOT_DATASET_ROOT / "evalsets/aihot-fit-v1/questions.jsonl")
+        base_questions = {str(row["question_id"]): row for row in read_jsonl(base_path)}
+        if set(base_questions) != set(questions):
+            raise ValueError("v2 question ids differ from the frozen v1 authority")
+        for question in ordered:
+            base = base_questions[str(question["question_id"])]
+            if base["reference"] != question["reference"]:
+                raise ValueError(f"v2 reference differs from v1 for {question['question_id']}")
+            question["input"] = {
+                **base["input"],
+                "source_name": question["input"]["source_name"],
+                "source_kind": question["input"]["source_kind"],
+            }
+            question["reference"] = base["reference"]
+        base_sha256 = sha256_file(base_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     questions_path = out_dir / "questions.jsonl"
     write_jsonl(questions_path, ordered)
     by_category: Counter[str] = Counter(str(question["reference"]["primary_category"]) for question in ordered)
     by_selected: Counter[str] = Counter(str(bool(question["reference"]["selected"])) for question in ordered)
     manifest = {
-        "evalset": "aihot-fit-v1",
-        "builder_version": BUILDER_VERSION,
+        "evalset": f"aihot-fit-{evalset_version}",
+        "builder_version": builder_version,
         "built_at": built_at,
-        "db_path": str(db_path),
+        "db_path": str(db_path) if evalset_version == "v1" else "data/radar.db",
         "db_items_max_fetched_at": max_fetched_at,
         "db_url_index_duplicates": db_url_duplicates,
         "batches": batches,
@@ -333,5 +380,92 @@ def build_evalset(
         "with_summary": sum(1 for question in ordered if question["reference"]["summary"]),
         "with_reason": sum(1 for question in ordered if question["reference"]["reason"]),
     }
+    if evalset_version == "v2":
+        manifest.update(
+            {
+                "thresholds_status": "absent",
+                "baseline_status": "absent",
+                "direct_presentation_inputs": [
+                    "source_id",
+                    "source_name",
+                    "source_kind",
+                    "url",
+                    "title",
+                    "content_text",
+                ],
+                "base_evalset": "aihot-fit-v1",
+                "base_questions_sha256": base_sha256,
+            }
+        )
     write_json(out_dir / "manifest.json", manifest)
     return manifest
+
+
+def validate_evalset(*, evalset_dir: Path, base_questions_path: Path | None = None) -> dict[str, Any]:
+    """Validate a persisted v1/v2 evalset offline without rewriting either asset."""
+    questions_path = evalset_dir / "questions.jsonl"
+    manifest_path = evalset_dir / "manifest.json"
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"{manifest_path}: manifest must be a JSON object")
+    questions = list(read_jsonl(questions_path))
+    question_ids: list[str] = []
+    for number, question in enumerate(questions, start=1):
+        if not isinstance(question, dict):
+            raise ValueError(f"{questions_path}:{number}: question must be an object")
+        missing = {"question_id", "input", "reference", "provenance"} - set(question)
+        if missing:
+            raise ValueError(f"{questions_path}:{number}: missing fields {sorted(missing)}")
+        if not all(isinstance(question[name], dict) for name in ("input", "reference", "provenance")):
+            raise ValueError(f"{questions_path}:{number}: input/reference/provenance must be objects")
+        question_ids.append(str(question["question_id"]))
+    if question_ids != sorted(question_ids):
+        raise ValueError(f"{questions_path}: question_id order is not deterministic")
+    if len(question_ids) != len(set(question_ids)):
+        raise ValueError(f"{questions_path}: duplicate question_id")
+    actual_sha256 = sha256_file(questions_path)
+    if manifest.get("questions_sha256") != actual_sha256:
+        raise ValueError(f"{manifest_path}: questions_sha256 does not match questions.jsonl")
+    if manifest.get("question_count") != len(questions):
+        raise ValueError(f"{manifest_path}: question_count does not match questions.jsonl")
+
+    evalset = str(manifest.get("evalset") or "")
+    if evalset == "aihot-fit-v2":
+        if manifest.get("thresholds_status") != "absent" or manifest.get("baseline_status") != "absent":
+            raise ValueError(f"{manifest_path}: v2 thresholds/baseline must remain absent until approved")
+        direct_inputs = set(manifest.get("direct_presentation_inputs") or [])
+        required_inputs = {"source_id", "source_name", "source_kind", "url", "title", "content_text"}
+        if direct_inputs != required_inputs:
+            raise ValueError(f"{manifest_path}: v2 direct_presentation_inputs do not match the consumer contract")
+        base_path = base_questions_path or (evalset_dir.parent / "aihot-fit-v1/questions.jsonl")
+        base_rows = {str(row["question_id"]): row for row in read_jsonl(base_path)}
+        if manifest.get("base_questions_sha256") != sha256_file(base_path):
+            raise ValueError(f"{manifest_path}: base_questions_sha256 does not match v1 authority")
+        if set(base_rows) != set(question_ids):
+            raise ValueError(f"{questions_path}: v2 question ids differ from v1 authority")
+        for question in questions:
+            question_id = str(question["question_id"])
+            base = base_rows[question_id]
+            if question["reference"] != base["reference"]:
+                raise ValueError(f"{questions_path}: v2 reference differs from v1 for {question_id}")
+            input_payload = dict(question["input"])
+            source_name = input_payload.pop("source_name", None)
+            source_kind = input_payload.pop("source_kind", None)
+            if (
+                not isinstance(source_name, str)
+                or not source_name
+                or not isinstance(source_kind, str)
+                or not source_kind
+            ):
+                raise ValueError(f"{questions_path}: v2 source fields missing for {question_id}")
+            if input_payload != base["input"]:
+                raise ValueError(f"{questions_path}: v2 input changed beyond source fields for {question_id}")
+    elif evalset != "aihot-fit-v1":
+        raise ValueError(f"{manifest_path}: unsupported evalset {evalset!r}")
+    return {
+        "evalset": evalset,
+        "question_count": len(questions),
+        "questions_sha256": actual_sha256,
+        "base_questions_sha256": manifest.get("base_questions_sha256"),
+        "result": "pass",
+    }

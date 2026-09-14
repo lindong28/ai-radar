@@ -24,23 +24,32 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sqlite3
 import subprocess
 from collections import Counter
 from pathlib import Path
+from uuid import uuid4
+
+from airadar.enrich.normalizers.production_enrich_provider_output_v2 import topic_tags_v2
+from airadar.eval.aihot_fit.governance import DEFAULT_LEDGER_PATH, record_event, start_attempt
+from airadar.eval.aihot_fit.metrics import map_reference_tags, spearman
 
 HERE = Path(__file__).resolve().parent
-_spec = importlib.util.spec_from_file_location(
-    "_composition", HERE / "measure_curated_composition.py"
-)
+_spec = importlib.util.spec_from_file_location("_composition", HERE / "measure_curated_composition.py")
 assert _spec and _spec.loader
 _comp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_comp)
 
 CATS = list(_comp.CATEGORIES)
 PAGE = 40  # 首页 `limit=40`，见 web/static/app.js 的 curatedApiPath
+
+
+def jaccard(left: set[str], right: set[str]) -> float:
+    union = left | right
+    return len(left & right) / len(union) if union else 1.0
 
 
 def archive_page(conn: sqlite3.Connection, day: str, limit: int) -> list[tuple[str, str]]:
@@ -71,6 +80,81 @@ def archive_page(conn: sqlite3.Connection, day: str, limit: int) -> list[tuple[s
     return [(str(u or ""), str(p or "")) for u, p in rows]
 
 
+def archive_page_visible_fields(conn: sqlite3.Connection, day: str, limit: int) -> list[dict[str, object]]:
+    """Read the score and tags emitted by the same latest-curated join as the public archive."""
+    cutoff = f"{day.replace('-', '')}T160000Z"
+    evaluated_cutoff = f"{day}T16:00:00Z"
+    rows = conn.execute(
+        """
+        SELECT i.url, i.published_at, i.source_id, s.name, s.kind, i.title, i.content_text,
+               c.weighted_score, enrich.output_json
+        FROM items i
+        JOIN sources s ON s.id=i.source_id
+        JOIN curated_items c
+          ON c.item_id=i.id
+         AND c.run_id=(
+           SELECT MAX(lc.run_id)
+           FROM curated_items lc
+           WHERE lc.item_id=i.id AND lc.run_id < ?
+         )
+        LEFT JOIN item_evaluations enrich ON enrich.id=(
+          SELECT le.id FROM item_evaluations le
+          WHERE le.item_id=i.id AND le.stage='enrich' AND le.error IS NULL
+            AND le.evaluated_at < ?
+          ORDER BY le.evaluated_at DESC, le.id DESC
+          LIMIT 1
+        )
+        ORDER BY i.published_at DESC, i.fetched_at DESC, i.id DESC
+        LIMIT ?
+        """,
+        (cutoff, evaluated_cutoff, limit),
+    ).fetchall()
+    visible: list[dict[str, object]] = []
+    for url, published, source_id, source_name, source_kind, title, content_text, weighted_score, output_json in rows:
+        try:
+            enrichment = json.loads(output_json) if output_json else None
+        except (TypeError, ValueError):
+            enrichment = None
+        # Production returns no presentation tags when no enrichment existed at that moment.
+        # Calling topic_tags_v2 on an empty list would synthesize source/content tags that the
+        # historical user never saw.
+        tags = (
+            topic_tags_v2(
+                [str(tag) for tag in enrichment.get("tags") or []],
+                source_id=str(source_id or "") or None,
+                source_name=str(source_name or "") or None,
+                url=str(url or "") or None,
+                title=str(title or "") or None,
+                content_text=str(content_text or "") or None,
+            )
+            if isinstance(enrichment, dict)
+            else []
+        )
+        visible.append(
+            {
+                "url": str(url or ""),
+                "published_at": str(published or ""),
+                "display_score_0_100": round(float(weighted_score) * 10),
+                "tags": tags,
+                "source_kind": str(source_kind or "feed"),
+            }
+        )
+    return visible
+
+
+def _record_ledger_path(record_path: Path, ledger_arg: str | None) -> Path | None:
+    """Keep exploratory histories out of the canonical append-only ledger."""
+    canonical_history = _comp.DEFAULT_HISTORY.resolve()
+    canonical_ledger = DEFAULT_LEDGER_PATH.resolve()
+    record_is_canonical = record_path.resolve() == canonical_history
+    explicit_ledger = Path(ledger_arg).resolve() if ledger_arg else None
+    if record_is_canonical and explicit_ledger not in (None, canonical_ledger):
+        raise SystemExit("canonical composition history must use the canonical eval-fit ledger")
+    if not record_is_canonical and explicit_ledger == canonical_ledger:
+        raise SystemExit("a custom composition history cannot be indexed by the canonical eval-fit ledger")
+    return DEFAULT_LEDGER_PATH if record_is_canonical else (Path(ledger_arg) if ledger_arg else None)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=str(_comp.REPO / "data" / "radar.db"))
@@ -80,8 +164,14 @@ def main() -> None:
         nargs="?",
         const=str(_comp.DEFAULT_HISTORY),
         default=None,
-        help="把本次判定追加进历史序列。**行里带 `surface: \"archive\"`**——既有行没有这个键，"
+        help='把本次判定追加进历史序列。**行里带 `surface: "archive"`**——既有行没有这个键，'
         "即「当时量的是单轮重放面」，两代不可直接比，但各自内部可比。",
+    )
+    ap.add_argument("--round-id", help="Link this archive reading to an eval-fit round ledger id")
+    ap.add_argument(
+        "--ledger",
+        default=None,
+        help="Ledger for a custom --record path; canonical history always uses the canonical ledger",
     )
     args = ap.parse_args()
 
@@ -105,6 +195,7 @@ def main() -> None:
     ours_pooled: Counter = Counter()
     reference_pooled: Counter = Counter()
     used: list[str] = []
+    visible_by_day: dict[str, list[dict[str, object]]] = {}
     for day in days:
         page = archive_page(conn, day, args.limit)
         if not page:
@@ -118,13 +209,11 @@ def main() -> None:
         # 这个比例决定"拿它与 AIHOT 当日构成比"是不是同一件事，所以每行都打印。
         same_day = sum(1 for _u, p in page if _comp.sel._shanghai_date(p) == day)
         detail = " ".join(f"{c[:3]}:{labelled[c]}" for c in CATS if labelled[c])
-        print(
-            f"{day:12}{len(page):>8}{sum(labelled.values()):>14}"
-            f"{100 * same_day / len(page):>13.1f}%  {detail}"
-        )
+        print(f"{day:12}{len(page):>8}{sum(labelled.values()):>14}{100 * same_day / len(page):>13.1f}%  {detail}")
         ours_pooled += labelled
         reference_pooled += reference_by_day[day]
         used.append(day)
+        visible_by_day[day] = archive_page_visible_fields(conn, day, args.limit)
 
     if not used:
         raise SystemExit("没有可比日窗")
@@ -203,8 +292,7 @@ def main() -> None:
             f"{_comp.total_variation(union_pooled, reference_pooled):.3f}"
             f"（页面 {verdicts['inside_count']}/{verdicts['total']}·{tv:.3f}）"
         )
-        print("    读法：并集接近而页面不接近 ⇒ **截断/排序**问题（与精选逻辑无关）；"
-              "并集自己就不接近 ⇒ **选择**问题。")
+        print("    读法：并集接近而页面不接近 ⇒ **截断/排序**问题（与精选逻辑无关）；并集自己就不接近 ⇒ **选择**问题。")
 
     # --- 再劈一刀：逐类把「够不着」与「够得着没选」分开 -------------------------
     # 上一刀判出是选择问题，但「选择」还含两半，修法同样不同：
@@ -215,13 +303,10 @@ def main() -> None:
     print(f"{'类别':10}{'AIHOT 精选':>11}{'我方库里有':>11}{'收录率':>9}{'曾被精选':>10}{'召回':>9}")
     curated_urls = {
         _comp.normalize_url(str(u or ""))[0]
-        for (u,) in conn.execute(
-            "SELECT DISTINCT i.url FROM items i JOIN curated_items c ON c.item_id = i.id"
-        )
+        for (u,) in conn.execute("SELECT DISTINCT i.url FROM items i JOIN curated_items c ON c.item_id = i.id")
     }
     have_urls = {
-        _comp.normalize_url(str(u or ""))[0]
-        for (u,) in conn.execute("SELECT url FROM items WHERE url IS NOT NULL")
+        _comp.normalize_url(str(u or ""))[0] for (u,) in conn.execute("SELECT url FROM items WHERE url IS NOT NULL")
     }
     # 逐类之外还要留总计：**条目重合是第二个用户可见指标**，而在 2026-09-12 之前本量具
     # 只把它打到 stdout、不写进 `--record` 的行 ⇒ 趋势序列上它一个点都没有，
@@ -234,8 +319,7 @@ def main() -> None:
         refs = [
             _comp.normalize_url(r["url"])[0]
             for r in aihot.values()
-            if r["selected"] and r.get("category") == cat and r.get("url")
-            and r["published"] in used
+            if r["selected"] and r.get("category") == cat and r.get("url") and r["published"] in used
         ]
         if not refs:
             continue
@@ -253,36 +337,67 @@ def main() -> None:
     # 上面逐类只数 `cat in CATS` 的条目 ⇒ 参照物新增一个分类 slug 时，合计的分母会**静默变小**，
     # 而它印出来仍像一个完整总计。这一行让那件事出声（当前实测 0 条）。
     unmapped = sum(
-        1 for r in aihot.values()
+        1
+        for r in aihot.values()
         if r["selected"] and r.get("url") and r["published"] in used and r.get("category") not in CATS
     )
     if unmapped:
-        print(f"    ⚠️ 另有 **{unmapped}** 条 AIHOT 精选的分类不在 CATS 里，"
-              "**不计入下面的合计** ⇒ 分母偏小、重合被高估。先补 CATS 映射再读这一段。")
+        print(
+            f"    ⚠️ 另有 **{unmapped}** 条 AIHOT 精选的分类不在 CATS 里，"
+            "**不计入下面的合计** ⇒ 分母偏小、重合被高估。先补 CATS 映射再读这一段。"
+        )
     if overlap["reference_selected"]:
         print(
             f"{'（合计）':10}{overlap['reference_selected']:>11}{overlap['reachable']:>11}"
             f"{100 * overlap['reachable'] / overlap['reference_selected']:>8.1f}%"
             f"{overlap['hit']:>10}{100 * overlap['hit'] / max(overlap['reachable'], 1):>8.1f}%"
         )
-        # **不在这里合成一个「总差距」百分比**：`measure_curated_composition.py` 已经写下过
-        # 这条纪律——合成一个数会把「没收到」和「没挑中」混成同一个坏消息，而两者的处置
-        # 完全不同（信源 vs 排序）。上面那行已经把两段分开印了，读者要的处置方向在那里。
-        # 记录行里存的是三个**计数**，谁要算比值自己挑分母，不由本量具替他挑。
         print(
             f"    ⚠️ 这两列分母不同：收录率 = 够得着/AIHOT 精选（{overlap['reachable']}/"
             f"{overlap['reference_selected']}），召回 = 曾被精选/够得着（{overlap['hit']}/"
             f"{overlap['reachable']}）。**别把召回读成「我方覆盖了 AIHOT 的百分之几」**——"
             "那要再乘收录率，而这两段的修法不同，合成之后就分不开了。"
         )
-        # 「系统性更高」不写成无条件断言（复核轮的提示级 finding）：那个方向在**默认参数**下
-        # 有实测支撑（2026-09-11 的 per-day 4/8/12 扫描是 40.9 / 51.6 / 53.5%，都高于本次 35.8%），
-        # 但模拟器带 `--exclude-source` / `--multiplier` 等参数，原则上配得出更低的值。
         print(
             "    另：真实生产历史的重合与 `simulate_multirun_archive.py` 重放出来的那个数"
             "**不是同一个量**——后者用今天的代码重放历史，默认参数下实测系统性更高"
             "（换了它的参数就不一定，别跨脚本直接比数）。"
         )
+
+    # Direct consumer-surface fields. The archive stores calibrated weighted_score (6.2–9.2),
+    # which the browser renders as an integer 62–92; this is not the per-item raw score proxy.
+    reference_by_url = {_comp.normalize_url(record["url"])[0]: record for record in aihot.values() if record.get("url")}
+    final_score_pairs: list[tuple[float, float]] = []
+    final_tag_values: list[float] = []
+    final_tag_reference_rows = 0
+    for rows in visible_by_day.values():
+        for item in rows:
+            reference = reference_by_url.get(_comp.normalize_url(str(item["url"]))[0])
+            if not reference:
+                continue
+            if reference.get("score") is not None:
+                final_score_pairs.append((float(item["display_score_0_100"]), float(reference["score"])))
+            if reference.get("tags"):
+                mapped, _dropped = map_reference_tags(reference["tags"])
+                if mapped:
+                    final_tag_reference_rows += 1
+                    final_tag_values.append(jaccard(set(item["tags"]), mapped))
+    presentation_fields = {
+        "display_score_spearman": spearman(final_score_pairs),
+        "display_score_n": len(final_score_pairs),
+        "presented_tag_jaccard_mean": (
+            round(sum(final_tag_values) / len(final_tag_values), 4) if final_tag_values else None
+        ),
+        "presented_tag_n": len(final_tag_values),
+        "reference_rows_with_tags": final_tag_reference_rows,
+        "surface": "public archive latest-curated score + topic_tags_v2",
+    }
+    print("\n>>> 用户最终展示字段（归档消费者面）")
+    print(
+        f"    display_score Spearman={presentation_fields['display_score_spearman']} "
+        f"n={presentation_fields['display_score_n']}；presented tags Jaccard="
+        f"{presentation_fields['presented_tag_jaccard_mean']} n={presentation_fields['presented_tag_n']}"
+    )
 
     # --- 第三刀：漏选的那些，是分数排不上去，还是被闸挡住 ------------------------
     # 三条出路的修法互斥：不在候选池 ⇒ 上游过滤；在池里但不过阈值 ⇒ 阈值/打分；
@@ -296,8 +411,7 @@ def main() -> None:
         for i, u in conn.execute("SELECT id, url FROM items WHERE url IS NOT NULL")
     }
     curated_ids = {str(r[0]) for r in conn.execute("SELECT DISTINCT item_id FROM curated_items")}
-    print(f"\n>>> 漏选的那些：分数排不上去，还是被闸挡住（候选池 {len(cands)} 条，阈值 "
-          f"{_comp.sel.DEFAULT_THRESHOLD}）")
+    print(f"\n>>> 漏选的那些：分数排不上去，还是被闸挡住（候选池 {len(cands)} 条，阈值 {_comp.sel.DEFAULT_THRESHOLD}）")
     print(f"{'类别':10}{'漏选':>6}{'在候选池':>9}{'漏选分中位':>11}{'选中分中位':>11}{'漏选过闸':>9}")
     import statistics
 
@@ -305,7 +419,9 @@ def main() -> None:
         ids = [
             id_by_url[_comp.normalize_url(r["url"])[0]]
             for r in aihot.values()
-            if r["selected"] and r.get("category") == cat and r.get("url")
+            if r["selected"]
+            and r.get("category") == cat
+            and r.get("url")
             and r["published"] in used
             and _comp.normalize_url(r["url"])[0] in id_by_url
         ]
@@ -320,15 +436,19 @@ def main() -> None:
             f"{cat:10}{len(miss):>6}{len(sm):>9}{med(sm):>11}{med(sg):>11}"
             f"{sum(1 for x in sm if x >= _comp.sel.DEFAULT_THRESHOLD):>9}"
         )
-    print("    读法：**漏选过闸的条数**就是纯排序欠的债——它们在池里、过了阈值，"
-          "却在每一轮的 40 格里都排不进去。漏选分中位**高于**选中分中位的那一类，瓶颈不在分数。")
+    print(
+        "    读法：**漏选过闸的条数**就是纯排序欠的债——它们在池里、过了阈值，"
+        "却在每一轮的 40 格里都排不进去。漏选分中位**高于**选中分中位的那一类，瓶颈不在分数。"
+    )
 
     if args.record:
         head = subprocess.run(
             ["git", "-C", str(_comp.SUBMODULE), "rev-parse", "--short", _comp.CAPTURES_REF],
-            capture_output=True, check=False,
+            capture_output=True,
+            check=False,
         )
         row = {
+            "record_id": str(uuid4()),
             "recorded_at": _comp.sel._utc_now(),
             # **新键，既有行没有**。缺它即「当时量的是单轮重放面」，两代不可直接比。
             "surface": "archive",
@@ -344,15 +464,33 @@ def main() -> None:
             # 新增于 2026-09-12。**既有 archive 行没有这个键**，缺它即「当时没记」，
             # 不是「当时是 0」——两者在序列上必须分得开。
             "overlap": overlap,
+            "presentation_fields": presentation_fields,
             "rows": verdicts["rows"],
             "verdict_null_p_all_inside": vnull.get("p_all_inside"),
             "verdict_null_expected_inside": vnull.get("expected_inside"),
         }
         target = Path(args.record)
+        ledger_path = _record_ledger_path(target, args.ledger)
         target.parent.mkdir(parents=True, exist_ok=True)
+        encoded_row = json.dumps(row, ensure_ascii=False)
         with target.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            handle.write(encoded_row + "\n")
+        if ledger_path is not None:
+            attempt = start_attempt("archive", round_id=args.round_id, ledger_path=ledger_path)
+            record_event(
+                attempt=attempt,
+                event="completed",
+                status="succeeded",
+                artifacts={"composition_history": str(target)},
+                relations={
+                    "composition_record_id": row["record_id"],
+                    "composition_row_sha256": hashlib.sha256(encoded_row.encode("utf-8")).hexdigest(),
+                },
+                ledger_path=ledger_path,
+            )
         print(f"\n已追加一行到 {target}（surface=archive）")
+        if ledger_path is None:
+            print("自定义 history 未进入 canonical round ledger（探索性读数）")
 
 
 if __name__ == "__main__":

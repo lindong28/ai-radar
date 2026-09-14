@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+
+import pytest
 
 from airadar.curator import select as curator_select
 from airadar.eval.aihot_fit import metrics  # noqa: F401
@@ -12,6 +15,7 @@ from airadar.eval.aihot_fit.metrics import (
     evaluate_thresholds,
     judge_acceptance,
     metric_emitter_identity,
+    presented_tag_jaccard_mean,
     ranking_score,
     selected_auc,
     selected_auc_ranked,
@@ -66,9 +70,7 @@ def test_unaccepted_judge_metric_is_excluded_from_threshold_and_baseline_verdict
         "ci95": [0.8, 0.95],
         "acceptance": {"accepted": False, "reason": "judge calibration missing"},
     }
-    verdict = evaluate_thresholds(
-        {"summary_closeness_mean": diagnostic}, {"summary_closeness_mean": {"min": 0.5}}
-    )
+    verdict = evaluate_thresholds({"summary_closeness_mean": diagnostic}, {"summary_closeness_mean": {"min": 0.5}})
     assert verdict["summary_closeness_mean"]["confident"] is None
     assert verdict["summary_closeness_mean"]["value_meets"] is None
     assert "unaccepted diagnostic" in verdict["summary_closeness_mean"]["reason"]
@@ -157,17 +159,13 @@ def test_metric_emitter_identity_difference_excludes_only_affected_metric() -> N
     current = {
         **common,
         "measurement_identity": {
-            "metric_emitters": {
-                "ai_recall": {"module": "m", "metric_name": "ai_recall", "emitter_sha256": "new"}
-            }
+            "metric_emitters": {"ai_recall": {"module": "m", "metric_name": "ai_recall", "emitter_sha256": "new"}}
         },
     }
     baseline = {
         **common,
         "measurement_identity": {
-            "metric_emitters": {
-                "ai_recall": {"module": "m", "metric_name": "ai_recall", "emitter_sha256": "old"}
-            }
+            "metric_emitters": {"ai_recall": {"module": "m", "metric_name": "ai_recall", "emitter_sha256": "old"}}
         },
     }
 
@@ -276,12 +274,25 @@ def test_report_keeps_exit_zero_when_only_judge_metrics_are_unaccepted(monkeypat
         questions=str(tmp_path / "questions.jsonl"),
         baseline=None,
         thresholds=None,
+        round_id=None,
+        ledger=str(tmp_path / "history.jsonl"),
     )
 
     assert run_eval_fit(args) == 0
     output = capsys.readouterr().out
     assert "thresholds: below=none undetermined=summary_closeness_mean" in output
     assert "NOT ACCEPTED: judge-dependent summary/reason metrics are diagnostic only" in output
+
+
+def test_report_rejects_a_questions_file_that_does_not_match_the_run(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    questions = tmp_path / "questions.jsonl"
+    questions.write_text('{"question_id":"q1","input":{},"reference":{"summary":"changed"}}\n')
+    (run_dir / "run.json").write_text(json.dumps({"run_id": "r1", "questions_sha256": "0" * 64}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match run.json questions_sha256"):
+        metrics.compute_metrics(run_dir=run_dir, questions_path=questions)
 
 
 def _row(
@@ -342,6 +353,179 @@ def test_tag_jaccard_maps_reference_aliases_and_drops_unknown() -> None:
     assert good.n == 2 and good.value == 1.0
     assert good.extra["reference_tags_dropped_out_of_vocabulary"] == 1
     assert bad.n == 2 and bad.value == 0.0
+
+
+def test_presented_tag_metric_includes_deterministic_source_tags() -> None:
+    row = Joined(
+        question_id="q1",
+        input={
+            "source_id": "openai_blog",
+            "source_name": "OpenAI Blog",
+            "url": "https://openai.com/news/x",
+            "title": "Release",
+            "content_text": "body",
+        },
+        reference={"tags": ["OpenAI"]},
+        enrich={"tags": []},
+    )
+
+    assert tag_jaccard_mean([row]).value == 0.0
+    metric = presented_tag_jaccard_mean([row])
+    assert metric.value == 1.0
+    assert metric.extra["observation_surface"] == "presentation.topic_tags_v2"
+
+
+def test_v2_report_refuses_v1_targets_and_keeps_title_diagnostic(tmp_path) -> None:
+    evalset = tmp_path / "aihot-fit-v2"
+    run_dir = tmp_path / "run"
+    evalset.mkdir()
+    run_dir.mkdir()
+    question = {
+        "question_id": "q1",
+        "input": {
+            "item_id": "i1",
+            "source_id": "openai_blog",
+            "source_name": "OpenAI Blog",
+            "source_kind": "feed",
+            "url": "https://openai.com/x",
+            "title": "Original",
+            "content_text": "body",
+        },
+        "reference": {
+            "title": "参考标题",
+            "primary_category": "model",
+            "tags": ["OpenAI"],
+            "score_0_100": 80,
+            "selected": False,
+            "summary": None,
+            "reason": None,
+        },
+    }
+    (evalset / "questions.jsonl").write_text(json.dumps(question) + "\n", encoding="utf-8")
+    (evalset / "manifest.json").write_text(
+        json.dumps(
+            {
+                "evalset": "aihot-fit-v2",
+                "thresholds_status": "absent",
+                "baseline_status": "absent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (evalset / "thresholds.json").write_text(json.dumps({"ai_recall": {"min": 1.0}}), encoding="utf-8")
+    output = {
+        "question_id": "q1",
+        "item_id": "i1",
+        "prefilter": {"output": {"is_ai_related": True}, "error": None},
+        "enrich": {
+            "output": {"title_zh": "候选标题", "primary_category": "model", "tags": []},
+            "error": None,
+        },
+    }
+    (run_dir / "outputs.jsonl").write_text(json.dumps(output) + "\n", encoding="utf-8")
+    (run_dir / "judgments.jsonl").write_text(
+        json.dumps({"question_id": "q1", "dimension": "title", "closeness": 75}) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "judge.json").write_text(
+        json.dumps(
+            {
+                "judgments_sha256": metrics.sha256_file(run_dir / "judgments.jsonl"),
+                "calibration_sha256": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "r1",
+                "questions_sha256": metrics.sha256_file(evalset / "questions.jsonl"),
+                "outputs_sha256": metrics.sha256_file(run_dir / "outputs.jsonl"),
+                "n": 1,
+                "item_ids": ["i1"],
+                "stages": ["prefilter", "enrich"],
+                "identity": {"stages": {}, "git": {}},
+                "stopped_early": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    baseline = tmp_path / "v1-metrics.json"
+    baseline.write_text("{}", encoding="utf-8")
+
+    payload = metrics.compute_metrics(
+        run_dir=run_dir,
+        questions_path=evalset / "questions.jsonl",
+        baseline_path=baseline,
+    )
+
+    assert payload["thresholds"] is None
+    assert payload["comparison"] == {"comparable": False, "reason": "evalset baseline_status is not approved"}
+    assert payload["metrics"]["title_closeness_mean"]["acceptance"] == {
+        "accepted": False,
+        "reason": "title-specific judge validation missing",
+    }
+
+
+def test_report_rejects_tampered_outputs_bytes(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    questions = tmp_path / "questions.jsonl"
+    questions.write_text('{"question_id":"q1","input":{},"reference":{}}\n', encoding="utf-8")
+    outputs = run_dir / "outputs.jsonl"
+    outputs.write_text('{"question_id":"q1"}\n', encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "questions_sha256": metrics.sha256_file(questions),
+                "outputs_sha256": metrics.sha256_file(outputs),
+            }
+        ),
+        encoding="utf-8",
+    )
+    outputs.write_text('{"question_id":"q1","changed":true}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match run.json outputs_sha256"):
+        metrics.compute_metrics(run_dir=run_dir, questions_path=questions)
+
+
+@pytest.mark.parametrize("artifact", ["judgments", "calibration"])
+def test_report_rejects_tampered_judge_artifact_bytes(tmp_path, artifact) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    questions = tmp_path / "questions.jsonl"
+    questions.write_text('{"question_id":"q1","input":{},"reference":{}}\n', encoding="utf-8")
+    outputs = run_dir / "outputs.jsonl"
+    outputs.write_text('{"question_id":"q1"}\n', encoding="utf-8")
+    judgments = run_dir / "judgments.jsonl"
+    judgments.write_text('{"question_id":"q1","dimension":"summary","closeness":80}\n', encoding="utf-8")
+    calibration = run_dir / "judge-calibration.json"
+    calibration.write_text('{"scale_ok":true}\n', encoding="utf-8")
+    (run_dir / "judge.json").write_text(
+        json.dumps(
+            {
+                "judgments_sha256": metrics.sha256_file(judgments),
+                "calibration_sha256": metrics.sha256_file(calibration),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "questions_sha256": metrics.sha256_file(questions),
+                "outputs_sha256": metrics.sha256_file(outputs),
+            }
+        ),
+        encoding="utf-8",
+    )
+    target = judgments if artifact == "judgments" else calibration
+    target.write_text(target.read_text(encoding="utf-8") + "{}\n", encoding="utf-8")
+
+    expected = "judgments file" if artifact == "judgments" else "calibration file"
+    with pytest.raises(ValueError, match=expected):
+        metrics.compute_metrics(run_dir=run_dir, questions_path=questions)
 
 
 def test_selected_p_at_k_rewards_ranking_selected_items_first() -> None:

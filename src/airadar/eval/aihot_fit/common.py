@@ -14,10 +14,11 @@ from typing import Any
 from ... import db
 
 BUILDER_VERSION = "aihot-fit-build-v1"
+BUILDER_VERSION_V2 = "aihot-fit-build-v2"
 RUN_SCHEMA_VERSION = "aihot-fit-run-v1"
 JUDGE_SCHEMA_VERSION = "aihot-fit-judge-v2"
 METRICS_SCHEMA_VERSION = "aihot-fit-metrics-v2"
-REFERENCE_FIELD = {"summary": "summary", "reason": "reason"}
+REFERENCE_FIELD = {"title": "title", "summary": "summary", "reason": "reason"}
 
 
 def has_reference(question: dict[str, Any], dimension: str) -> bool:
@@ -28,6 +29,7 @@ def has_reference(question: dict[str, Any], dimension: str) -> bool:
 
 DEFAULT_WORKERS = 8
 DEFAULT_EVALSET_DIR = db.PROJECT_ROOT / "data" / "eval-fit" / "evalset-staging" / "aihot-fit-v1"
+DEFAULT_EVALSET_DIR_V2 = db.PROJECT_ROOT / "data" / "eval-fit" / "evalset-staging" / "aihot-fit-v2"
 DEFAULT_RUNS_DIR = db.PROJECT_ROOT / "data" / "eval-fit" / "runs"
 
 # Historical: eval usage rows written **before** 2026-09-11 live here, from when
@@ -198,8 +200,25 @@ def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
+def read_jsonl_bytes(data: bytes) -> Iterator[dict[str, Any]]:
+    """Parse a byte snapshot so identity checks and consumers can share one immutable input."""
+    for line in data.decode("utf-8").splitlines():
+        line = line.strip()
+        if line:
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise ValueError("JSONL rows must be objects")
+            yield value
+
+
 def load_questions(path: Path) -> list[dict[str, Any]]:
     questions = list(read_jsonl(path))
+    questions.sort(key=lambda question: str(question["question_id"]))
+    return questions
+
+
+def load_questions_bytes(data: bytes) -> list[dict[str, Any]]:
+    questions = list(read_jsonl_bytes(data))
     questions.sort(key=lambda question: str(question["question_id"]))
     return questions
 

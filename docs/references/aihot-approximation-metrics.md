@@ -630,21 +630,21 @@ industry 有效的干预。
 
 ### 三层接续审计（2026-09-13）
 
-零调用入口是 `./run.sh eval-fit audit --runs data/eval-fit/runs`；它只读盘点并在存在 `missing` 时 exit 1，不自动运行任何付费阶段。实际执行链为：`./run.sh eval-fit build` 建题集 → `uv run python scripts/eval/measure_archive_composition.py --record` 记录权威归档面 → 在 `docs/issues/aihot-fit-eval.md` 事前写 `differential_prediction` 并用 `uv run python scripts/eval/<cause-specific-driver>.py` 运行与归因匹配的离线实验 → `./run.sh eval-fit run` / 可选 `judge` → `./run.sh eval-fit report` 做回归与落报告 → `./run.sh eval-fit audit` 检查三层接续。旧 `./run.sh eval` 同时存在，当前只证实它是独立的 presentation comparison 实现，未核实它在父体系中的权威归属，不能把它静默当作 `eval-fit` 的别名或废弃入口。
+零调用入口是 `./run.sh eval-fit audit --runs data/eval-fit/runs`；它严格只读，并在存在 `missing` 或 `invalid` 时 exit 1，不自动运行任何付费阶段。实际执行链为：`./run.sh eval-fit build` 建题集 → `./run.sh eval-fit validate` 离线校验题集身份和 v2 对 v1 的不变式 → `eval-fit identity-spec` 生成待调用者补齐的本次身份骨架 → `run` / `judge` 冻结输入快照并在凭据读取前 fail-closed 运行 `eval-identity` → `report` 复算题集、outputs、judgments 与 calibration SHA 后做采信、回归与落报告；`judge` 默认仍只产生 summary/reason 调用，标题须由调用者用 `--dimensions` 明确 opt-in。真实归档面另由 `measure_archive_composition.py --record` 按同一历史截止点取精选与 enrichment，当时没有 enrichment 就保持空标签，写唯一权威记录，并把 canonical history 的 `record_id` 和行摘要登记到同一 round ledger；自定义 `--record` 默认不进 canonical ledger，audit 会复算摘要并校验账本 schema/状态迁移。归因优化仍先在 `docs/issues/aihot-fit-eval.md` 写 `differential_prediction`，再运行与原因相符的离线实验。旧 `./run.sh eval` 同时存在，当前只证实它是独立的 presentation comparison 实现，未核实它在父体系中的权威归属，不能把它静默当作 `eval-fit` 的别名或废弃入口。
 
 **L1 五槽与全部参考输出面：**
 
 | 槽位 | 已定位 | 明确不适用 | 缺失 / 代理面 |
 |---|---|---|---|
 | ① 优化对象 | `src/airadar/{prefilter,scorer,enrich,presentation}/`、`src/airadar/curator/select.py` | — | — |
-| ② 评测题 | `benchmarks/aihot/evalsets/aihot-fit-v1/questions.jsonl`；reference 覆盖 selected、reason、summary、score、category、tags、title | — | — |
-| ③ 判官 | summary / reason：`src/airadar/eval/aihot_fit/{judge.py,judge_prompts.py}` | selected / category 的确定性逐题标签不需要 LLM 判官 | title 与最终展示分数没有判官；tags 只有确定性集合指标 |
-| ④ 自动指标 | selected、category、summary、reason 均有逐题或聚合指标 | — | `tag_jaccard_mean` 量 enrich 原始 tags，不是 presentation 的 `topic_tags_v2`；`score_spearman` 量上游 raw/fit score，不是精选后 rank-linear 62–92；title 没有指标 |
-| ⑤ 判官校验 | summary / reason 的 calibration 条件身份、实现 digest、阈值与 control-task digest 已接入采信判断 | 不依赖判官的确定性指标无需判官 calibration | 旧产物缺身份时不补造校验，判官指标改为未采信诊断值 |
+| ② 评测题 | v1 reference 覆盖 selected、reason、summary、score、category、tags、title；v2 与 v1 的题号、reference 及既有 input 字节值保持一致，只增加 `source_name/source_kind` | — | v2 自身的 threshold/baseline 未获批，manifest 固定为 absent |
+| ③ 判官 | summary / reason 默认运行；title 仅显式 opt-in：`src/airadar/eval/aihot_fit/{judge.py,judge_prompts.py}` | selected / category 的确定性逐题标签不需要 LLM 判官 | title 尚无专用校验，只能产生未采信诊断值；未 opt-in 时不产生付费调用 |
+| ④ 自动指标 | selected、category、summary、reason、enrich raw tags/score 代理指标，以及最终 `topic_tags_v2`；归档消费者面直接量最终展示分 | — | 逐题模式没有完整精选集合，故不得伪造 rank-linear 62–92 展示分 |
+| ⑤ 判官校验 | summary / reason 的 calibration 条件身份、实现 digest、阈值与 control-task digest 已接入采信判断 | 不依赖判官的确定性指标无需判官 calibration | 旧产物缺身份时不补造校验；title 在专用校验与标准获批前固定 `accepted=false` |
 
-**L2 七类资产：**题集与 reference 由 git-tracked submodule 固定；逐题 outputs、逐题 metrics 与判官 raw judgments 保留在 gitignored `data/eval-fit/runs/`，由 retention 规则管理，不能把未初始化 submodule 或隔离 checkout 的空目录误读成历史从未存在；agent labels 有 `PROVENANCE.md`，但没有定位到 user ballot 序列；归因假设与差异预测保存在 tracked `docs/issues/aihot-fit-eval.md`；`scripts/eval/composition-history.jsonl` 保留权威归档趋势。历史证据没有被迁移或改写。仍缺一份统一逐轮台账，把②③④⑤身份、指标采信与全部用户可见面的距离放在同一记录中，因此本层状态为部分接通而非闭合。
+**L2 七类资产：**题集与 reference 由 git-tracked private submodule 固定；逐题 outputs、metrics 与判官 raw judgments 保留在 gitignored `data/eval-fit/runs/`，由 retention 管理；长期身份 manifest 不随 14 天 run 清理删除。agent labels 有 `PROVENANCE.md`，历史 user ballot 叙述保留，但当前票据资产没有定位到时只报“未核实”。归因假设与差异预测保存在 tracked `docs/issues/aihot-fit-eval.md`；`scripts/eval/composition-history.jsonl` 仍是权威归档趋势。新增 `scripts/eval/aihot-fit-history.jsonl` 作为 append-only round ledger，只索引 build/run/judge/archive/report 的状态与权威产物，不复制指标成为第二真相源；同 event ID 内容冲突时 fail closed，orphan start 明示为中断。
 
-**L3 治理：**①对象的 `run.json` 已有 git/stage/input 字段，但未定位 user-scope `eval-identity` 生成的身份收据，故只能算 partial；新 `metrics.json` 增加②问题/子集、③判官实际条件、④逐 metric emitter 源码/具名依赖/config digest、⑤校验实现/阈值/control-task 的身份。`compare_to_baseline()` 对②差异整轮拒比，对③⑤差异排除 judge-dependent 指标，对④差异排除对应指标；stage identity 差异只 warning，因为它是本来要比较的①版本。⑤缺失、`scale_ok != true` 或身份不符时，summary/reason 仍可展示为诊断值，但明确未采信并排除 threshold、baseline/regression 与优化结论；`report` 维持 exit 0，让确定性部分成功且不会隐式要求付费 calibration。`run_eval_fit→audit_eval_system/compute_metrics` 与 `compute_metrics→judge_acceptance/compare_to_baseline` 只由静态语法检查证明源代码含直接调用，新 audit/report 入口另由本轮真实命令执行证明可达；这不是通用动态 call graph，也不证明日常 schedule 或归因准入 caller 已接通，因此 caller wiring 整体为 partial。归因准入仍只有 tracked 政策与事前记录，没有机械 caller，因此 audit 明确报 `missing`，不把纪律冒充 gate。
+**L3 治理：**每次 `run` / `judge` 先冻结 questions、run/outputs（按阶段适用）的单次字节快照，从同一快照捕获 prompt/ruleset、模型选择与实现摘要等行为身份，写 `started` 后机械执行 caller 补齐的显式 identity spec；只有 `eval-identity` exit 0 且精确 spec/readout 与 tracked 安全 manifest 都落盘，才读取 provider 凭据并让执行器消费该快照。exit 1/2/64 一律保存拒绝收据并 fail closed。`run.json` 固定 outputs SHA，`judge.json` 固定 judgments/calibration SHA；`report` 先复算实际 questions、outputs、judgments、calibration SHA 与生产阶段记录对账。`metrics.json` 继续固定②问题/子集、③判官实际条件、④逐 metric emitter 源码/依赖/config digest、⑤校验实现/阈值/control-task；比较时②差异整轮拒比，③⑤差异只排除判官指标，④差异只排除对应指标。v2 不继承 v1 threshold/baseline，title 固定不进入 threshold、baseline、regression 或优化结论。只读 audit 实查题集校验、ledger schema/状态迁移与冲突/orphan、身份 manifest、归档 record/行摘要索引和 caller 直连；它仍不是通用动态 call graph，归因准入仍是人工评审步骤，旧 `./run.sh eval` 的父体系归属仍未核实，因此 caller wiring 保持 partial 而不是虚报全自动闭环。
 
 **节奏（用户 2026-09-10 裁定）：现阶段不上定时评测。** 改为持续收集 AIHOT 数据到「数量达标」（上节那张表），
 再基于这批数据做离线评测与优化迭代。所以"A 家族最后一次带 metrics 的 run 是 09-08、`paper: 0.95` 上线后

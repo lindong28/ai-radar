@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from airadar.eval.aihot_fit.build import build_evalset, normalize_url
+from airadar.eval.aihot_fit.build import build_evalset, normalize_url, validate_evalset
 from airadar.eval.aihot_fit.common import readonly_db_uri
 
 
@@ -55,12 +55,14 @@ def _seed_db(path: Path) -> None:
     conn = sqlite3.connect(path)
     conn.executescript(
         """
-        CREATE TABLE sources (id TEXT PRIMARY KEY, tier TEXT NOT NULL);
+        CREATE TABLE sources (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, tier TEXT NOT NULL, kind TEXT NOT NULL
+        );
         CREATE TABLE items (
           id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL,
           author TEXT, published_at TEXT NOT NULL, fetched_at TEXT NOT NULL, content_text TEXT NOT NULL
         );
-        INSERT INTO sources VALUES ('src-x', 'T1');
+        INSERT INTO sources VALUES ('src-x', 'Source X', 'T1', 'x');
         INSERT INTO items VALUES (
           'item-1', 'src-x', 'https://x.com/i/web/status/42', 'Hello', NULL,
           '2026-08-19T01:00:00Z', '2026-08-19T02:00:00Z', 'body text'
@@ -119,6 +121,7 @@ def test_build_matches_one_and_counts_one_unmatched(tmp_path: Path) -> None:
     assert question["reference"]["primary_category"] == "tutorial"
     assert question["reference"]["provider"] == "aihot"
     assert question["provenance"]["match_method"] == "x_status_id"
+    assert "source_name" not in question["input"]
     # The db must be unwritable through the URI build uses. Asserting "no -wal file
     # appeared" proves nothing here: the fixture db is in `delete` journal mode, so that
     # file never appears whether or not mode=ro was applied. Assert the connection
@@ -126,3 +129,97 @@ def test_build_matches_one_and_counts_one_unmatched(tmp_path: Path) -> None:
     with sqlite3.connect(readonly_db_uri(db_path), uri=True) as probe:
         with pytest.raises(sqlite3.OperationalError, match="readonly"):
             probe.execute("UPDATE items SET title = 'mutated' WHERE id = 'item-1'")
+
+
+def test_v2_adds_presentation_inputs_without_inheriting_v1_targets(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    _seed_db(db_path)
+    batch = tmp_path / "items.jsonl"
+    batch.write_text(
+        json.dumps(
+            {
+                "id": "aihot-1",
+                "original_url": "https://twitter.com/someone/status/42",
+                "aihot_title": "你好",
+                "aihot_category_slug": "tip",
+                "tags": ["OpenAI"],
+                "aihot_score_0_to_100": 71,
+                "aihot_selected": False,
+                "aihot_summary": "摘要",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    build_evalset(
+        db_path=db_path,
+        out_dir=tmp_path / "out-v1",
+        sources=(("test-batch", batch),),
+        evalset_version="v1",
+    )
+    manifest = build_evalset(
+        db_path=db_path,
+        out_dir=tmp_path / "out-v2",
+        sources=(("test-batch", batch),),
+        evalset_version="v2",
+        base_questions_path=tmp_path / "out-v1/questions.jsonl",
+    )
+    question = json.loads((tmp_path / "out-v2/questions.jsonl").read_text().splitlines()[0])
+
+    assert question["input"]["source_name"] == "Source X"
+    assert question["input"]["source_kind"] == "x"
+    assert manifest["evalset"] == "aihot-fit-v2"
+    assert manifest["thresholds_status"] == "absent"
+    assert manifest["baseline_status"] == "absent"
+    assert manifest["base_questions_sha256"]
+    assert validate_evalset(
+        evalset_dir=tmp_path / "out-v2", base_questions_path=tmp_path / "out-v1/questions.jsonl"
+    ) == {
+        "evalset": "aihot-fit-v2",
+        "question_count": 1,
+        "questions_sha256": manifest["questions_sha256"],
+        "base_questions_sha256": manifest["base_questions_sha256"],
+        "result": "pass",
+    }
+
+
+def test_validate_v2_rejects_reference_or_non_source_input_changes(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.db"
+    _seed_db(db_path)
+    batch = tmp_path / "batch.jsonl"
+    batch.write_text(
+        json.dumps(
+            {
+                "id": "aihot-1",
+                "original_url": "https://twitter.com/someone/status/42",
+                "aihot_title": "你好",
+                "aihot_category_slug": "tip",
+                "tags": ["OpenAI"],
+                "aihot_score_0_to_100": 71,
+                "aihot_selected": False,
+                "aihot_summary": "摘要",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    build_evalset(db_path=db_path, out_dir=tmp_path / "v1", sources=(("batch", batch),), evalset_version="v1")
+    build_evalset(
+        db_path=db_path,
+        out_dir=tmp_path / "v2",
+        sources=(("batch", batch),),
+        evalset_version="v2",
+        base_questions_path=tmp_path / "v1/questions.jsonl",
+    )
+    question = json.loads((tmp_path / "v2/questions.jsonl").read_text(encoding="utf-8"))
+    question["reference"]["title"] = "unauthorized reference edit"
+    (tmp_path / "v2/questions.jsonl").write_text(json.dumps(question) + "\n", encoding="utf-8")
+    manifest = json.loads((tmp_path / "v2/manifest.json").read_text(encoding="utf-8"))
+    manifest["questions_sha256"] = (
+        __import__("hashlib").sha256((tmp_path / "v2/questions.jsonl").read_bytes()).hexdigest()
+    )
+    (tmp_path / "v2/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="v2 reference differs"):
+        validate_evalset(evalset_dir=tmp_path / "v2", base_questions_path=tmp_path / "v1/questions.jsonl")

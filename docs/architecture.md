@@ -117,7 +117,7 @@ src/airadar/
 │   └── aihot_fit/      #   以 AIHOT 历史输出为参考输出的拟合评测台（CLI `eval-fit`）
 │       ├── build.py    #     题集构建：AIHOT 输出按 original_url 关联到我站 items
 │       ├── run.py      #     直接 import 生产 _evaluate_item；radar.db 只读，不写 item_evaluations
-│       ├── judge.py    #     判官：只判 summary_zh / why_recommend，带阳性+阴性对照
+│       ├── judge.py    #     判官：默认摘要/理由；标题仅显式 opt-in，带阳性+阴性对照
 │       ├── judge_prompts.py #  判官 prompt（其 sha256 进判官身份）
 │       ├── metrics.py  #     11 指标 + bootstrap CI + 达标线判定 + 可比性闸
 │       ├── common.py   #     AIHOT slug → 主类的映射契约
@@ -202,7 +202,7 @@ AIHOT benchmark 的代码/数据边界跨两个 Git 仓。主仓拥有 `scripts/
 
 Capture 以采集时刻的 public API/RSS/OpenAPI/SSR surface 为 baseline。连续两遍相邻 API pass 的两个正式 UTC 日 target hashes 一致，才接受 canonical pass 并发布 window；这只排除同次采集内的 transient drift，不声称可见 public surface 等于 AIHOT 内部 snapshot、筛选、标签或排序 authority。发布顺序固定为 data local commit → 经授权 push exact data SHA → 主仓 gitlink commit；data push、远端设置、主仓 push与主分支整合是彼此独立的授权边界。
 
-**「与 AIHOT 的近似度」由两套彼此独立的评测承载，都要跑，过一套不抵另一套。** ㈠ **逐条拟合台** `eval/aihot_fit/`：题集权威副本在数据仓 `evalsets/aihot-fit-v1/`（2741 题，每题 = input + AIHOT 参考输出 + provenance；`thresholds.json` 8 条设闸），`run` 直接 import 生产的 `_evaluate_item`（prefilter / scorer / enrich v2）与 curator 的同一权重函数，**不复制 prompt**，产物落 `data/eval-fit/runs/<RUN-ID>/`；`judge` 与 `report` 逐层附加判官判定与指标。三处身份锚（题集 `questions_sha256` / 抽样 `subset_sha256` / 判官身份）任一不等即**拒绝比较**，因为换了尺子。评测的 LLM 支出与熔断状态经 `AI_RADAR_LLM_USAGE_DB` / `AI_RADAR_ARK_BREAKER_STATE` 改指向 `data/eval-fit/`，不污染生产成本库、也不给生产开熔断。㈡ **版面构成** `scripts/eval/measure_*.py`：只读生产库或线上首页，量整页类别构成与 AIHOT 精选的总变差，无闸。两套的分工、各自的达标线现状与读它们之前必须知道的分辨力限定，见 [AIHOT 近似度指标索引](references/aihot-approximation-metrics.md)；设计决策见 [ADR-499e](adr/20260905-499e-aihot-reference-fit-eval-system.md)。
+**「与 AIHOT 的近似度」由两个权威观察面承载，过一个不抵另一个。** ㈠ **逐条拟合台** `eval/aihot_fit/`：数据仓的 v1 题集（2741 题）保留既有 8 条回归 floor；平行 v2 只增加最终展示标签所需的 `source_name/source_kind`，其阈值与基线保持 absent。`build → validate → run → judge → report` 依次建立、离线校验、运行生产对象、默认判摘要/理由并出回归报告；标题只有显式 opt-in 才调用，且在专用判官校验与目标标准获批前只作诊断。`run` / `judge` 必须在读取 provider 凭据前冻结并共用输入快照，再用本次显式 identity spec 通过 `eval-identity`；`report` 复算题集、outputs、judgments 与 calibration SHA，精确收据留在本地 run，安全摘要与 append-only attempt 账本长期保留。评测的 LLM 调用计入项目总体 usage；只有 breaker 状态改指向 `data/eval-fit/`，避免直接改写生产 breaker。㈡ **归档消费者面** `scripts/eval/measure_archive_composition.py --record`：只读生产历史，按同一历史截止点取精选与 enrichment；当时没有 enrichment 就保持空标签，不用今天的规则补造，直接量真实首页构成、最终 62–92 展示分和 `topic_tags_v2`。`composition-history.jsonl` 是归档指标唯一权威，attempt 账本只引用 canonical history 的 `record_id` 与行摘要，自定义 `--record` 默认不污染它；audit 会复算该摘要并校验账本状态机。只读 `eval-fit audit` 从题集、身份 manifest、轮次账本、归档记录和报告反推 L1/L2/L3 接续状态。详细分工、分辨力限制与日常入口见 [AIHOT 近似度指标索引](references/aihot-approximation-metrics.md)；设计决策见 [ADR-499e](adr/20260905-499e-aihot-reference-fit-eval-system.md) 与 [ADR-0442](adr/20260914-0442-close-the-aihot-eval-system-three-layer-loop.md)。
 
 仓库级验证工具：`scripts/web_contract_golden.py` 提供可复用的 Web contract capture、manifest 校验、JSON/HTML 比较和 SQLite 逻辑摘要。任务专用请求、adapter、快照与冻结库仅由执行工作区临时持有；任务完成后删除，只有最小且可独立维护的行为契约才提升到测试。使用触发与生命周期见 [Web Contract Golden 验证](references/web-contract-golden.md)。
 

@@ -159,7 +159,7 @@
 | [20260828-c3a5-retry-missing-criteria-reason-once.md](adr/20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 |
 | [20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md](adr/20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 |
 | [20260905-b00f-write-egress-receipt-after-live-policy-recheck.md](adr/20260905-b00f-write-egress-receipt-after-live-policy-recheck.md) | 出网收据只在写盘前复核生产策略后生成 |
-| [20260905-499e-aihot-reference-fit-eval-system.md](adr/20260905-499e-aihot-reference-fit-eval-system.md) | 以 AIHOT 历史输出为参考输出建立内容链拟合评测体系（eval-fit 四槽位），达标线在基线跑出后另定 |
+| [20260905-499e-aihot-reference-fit-eval-system.md](adr/20260905-499e-aihot-reference-fit-eval-system.md) | 以 AIHOT 历史输出为参考输出建立内容链拟合评测体系（eval-fit 四槽位）；v1 全量基线与 8 条达标线已写入 |
 | [20260829-a7f1-suppress-actionless-x-silence.md](adr/20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 |
 | [20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md](adr/20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并通过内部归档来源显式补录 ai-assistant KB |
 | [20260831-8b7c-control-wechat-review-term-aliases.md](adr/20260831-8b7c-control-wechat-review-term-aliases.md) | 微信搜索用受控评测词别名修复词汇错位，并保持 raw 作者优先 |
@@ -171,6 +171,7 @@
 | [20260904-d708-fail-pipeline-before-wechat-browser-degradation.md](adr/20260904-d708-fail-pipeline-before-wechat-browser-degradation.md) | 微信浏览器缺失时在 fetch 前终止 scheduled pipeline；W1 复用共享告警状态机，成功态只证明可执行文件路径存在 |
 | [20260910-9e21-pin-the-category-snapshot-with-one-integer.md](adr/20260910-9e21-pin-the-category-snapshot-with-one-integer.md) | 类别快照用一个整数（`enrich_watermark`）固定；不按 enrich 戳收窄类别系数施加面；评测台追加 `selected_auc_ranked` 而不替换既有指标 |
 | [20260913-e21a-clamp-rss-pubdate-to-fetch-time.md](adr/20260913-e21a-clamp-rss-pubdate-to-fetch-time.md) | RSS 入库把未来 pubDate 钳到当前时刻，只在 RSS 路径上（`web.py:_date()` 同形缺口有意不修，0 实测越界）；`published_at` 语义变为「不晚于我方**解析**到它的时刻」（文件名里的 fetch-time 是误称），与 [006-curated-archive](adr/006-curated-archive-mode.md) 的排序契约有交界面 |
+| [20260914-0442-close-the-aihot-eval-system-three-layer-loop.md](adr/20260914-0442-close-the-aihot-eval-system-three-layer-loop.md) | 接通 AIHOT 拟合评测的 L1 五槽、L2 轮次资产、L3 身份治理与完整执行闭环；v1 保持不变，v2 新标准未获批前不得采信 |
 | [README.md](adr/README.md) | ADR 索引（单一权威：每条决策的标题与状态只在该索引维护） |
 
 ### docs/experiences/ [Agent]

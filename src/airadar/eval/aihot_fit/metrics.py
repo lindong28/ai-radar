@@ -18,6 +18,7 @@ from ...enrich.normalizers import production_enrich_provider_output_v2 as tag_no
 from ...enrich.normalizers.production_enrich_provider_output_v2 import (
     AIHOT_TO_RADAR_TAG_MAP,
     is_in_v2_vocabulary,
+    topic_tags_v2,
 )
 from .common import (
     METRICS_SCHEMA_VERSION,
@@ -38,7 +39,7 @@ BOOTSTRAP_SEED = 0
 BOOTSTRAP_MIN_KEPT_RATIO = 0.95
 SHUFFLE_ROUNDS = 100
 HIGHER = "higher_is_better"
-JUDGE_DEPENDENT_METRICS = frozenset({"summary_closeness_mean", "reason_closeness_mean"})
+JUDGE_DEPENDENT_METRICS = frozenset({"title_closeness_mean", "summary_closeness_mean", "reason_closeness_mean"})
 
 # Reference (AIHOT) tag -> our controlled vocabulary. Spec-listed aliases layered on the
 # production map; anything still outside the v2 vocabulary is dropped and counted.
@@ -53,6 +54,7 @@ REFERENCE_TAG_MAP: dict[str, str] = {
 class Joined:
     question_id: str
     reference: dict[str, Any]
+    input: dict[str, Any] = field(default_factory=dict)
     prefilter: dict[str, Any] | None = None
     score: dict[str, Any] | None = None
     weighted_score: float | None = None
@@ -115,6 +117,7 @@ def join_rows(
         joined.append(
             Joined(
                 question_id=str(row["question_id"]),
+                input=question["input"],
                 reference=question["reference"],
                 prefilter=_stage_output(row, "prefilter"),
                 score=_stage_output(row, "score"),
@@ -286,6 +289,45 @@ def tag_jaccard_mean(rows: Sequence[Joined]) -> Metric:
     return metric
 
 
+def presented_tag_pairs(rows: Sequence[Joined]) -> tuple[list[tuple[set[str], set[str]]], int]:
+    """Compare the tags the public presenter emits, including deterministic source tags."""
+    pairs: list[tuple[set[str], set[str]]] = []
+    dropped_total = 0
+    for row in rows:
+        if not row.reference.get("tags") or row.enrich is None:
+            continue
+        reference, dropped = map_reference_tags(row.reference["tags"])
+        dropped_total += dropped
+        if not reference:
+            continue
+        source = row.input
+        ours = set(
+            topic_tags_v2(
+                [str(tag) for tag in row.enrich.get("tags") or []],
+                source_id=str(source.get("source_id") or "") or None,
+                source_name=str(source.get("source_name") or "") or None,
+                url=str(source.get("url") or "") or None,
+                title=str(source.get("title") or "") or None,
+                content_text=str(source.get("content_text") or "") or None,
+            )
+        )
+        pairs.append((ours, reference))
+    return pairs, dropped_total
+
+
+def presented_tag_jaccard_mean(rows: Sequence[Joined]) -> Metric:
+    pairs, dropped = presented_tag_pairs(rows)
+    values = [_jaccard(ours, reference) for ours, reference in pairs]
+    metric = _mean_metric(
+        "presented_tag_jaccard_mean",
+        values,
+        reference_tags_dropped_out_of_vocabulary=dropped,
+        observation_surface="presentation.topic_tags_v2",
+    )
+    metric.baseline = {"kind": "none", "note": "new direct presentation metric; no approved v2 floor"}
+    return metric
+
+
 # --- score -------------------------------------------------------------------
 
 
@@ -416,11 +458,7 @@ def selected_auc_ranked(rows: Sequence[Joined]) -> Metric:
     immune -- it scores ties at 0.5 rather than ordering them.
     """
 
-    pairs = [
-        (score, bool(row.reference.get("selected")))
-        for row in rows
-        if (score := ranking_score(row)) is not None
-    ]
+    pairs = [(score, bool(row.reference.get("selected"))) for row in rows if (score := ranking_score(row)) is not None]
     return Metric(
         name="selected_auc_ranked",
         n=len(pairs),
@@ -581,10 +619,12 @@ def compute_all(rows: Sequence[Joined]) -> dict[str, Metric]:
         ai_recall(rows),
         category_agreement(rows),
         tag_jaccard_mean(rows),
+        presented_tag_jaccard_mean(rows),
         score_spearman(rows),
         selected_auc(rows),
         selected_auc_ranked(rows),
         selected_p_at_k(rows),
+        closeness_mean(rows, "title"),
         closeness_mean(rows, "summary"),
         bigram_jaccard(rows, "summary"),
         closeness_mean(rows, "reason"),
@@ -617,6 +657,19 @@ _METRIC_EMITTERS: dict[str, tuple[tuple[Callable[..., Any] | type[Any], ...], di
         ),
         {**_BOOTSTRAP_CONFIG, "shuffle_rounds": SHUFFLE_ROUNDS, "reference_tag_map": REFERENCE_TAG_MAP},
     ),
+    "presented_tag_jaccard_mean": (
+        (
+            presented_tag_jaccard_mean,
+            presented_tag_pairs,
+            map_reference_tags,
+            _jaccard,
+            _mean_metric,
+            _mean,
+            bootstrap_ci,
+            topic_tags_v2,
+        ),
+        {**_BOOTSTRAP_CONFIG, "reference_tag_map": REFERENCE_TAG_MAP},
+    ),
     "score_spearman": (
         (score_spearman, score_pairs, spearman, _ranks, bootstrap_ci),
         _BOOTSTRAP_CONFIG,
@@ -633,6 +686,10 @@ _METRIC_EMITTERS: dict[str, tuple[tuple[Callable[..., Any] | type[Any], ...], di
     "summary_closeness_mean": (
         (closeness_mean, _mean_metric, _mean, bootstrap_ci),
         {**_BOOTSTRAP_CONFIG, "dimension": "summary"},
+    ),
+    "title_closeness_mean": (
+        (closeness_mean, _mean_metric, _mean, bootstrap_ci),
+        {**_BOOTSTRAP_CONFIG, "dimension": "title", "acceptance": "diagnostic_only"},
     ),
     "reason_closeness_mean": (
         (closeness_mean, _mean_metric, _mean, bootstrap_ci),
@@ -660,7 +717,7 @@ def metric_emitter_identity(metric_names: Sequence[str]) -> dict[str, dict[str, 
     for name in metric_names:
         symbols, config = _METRIC_EMITTERS[name]
         resolved_config = dict(config)
-        if name == "tag_jaccard_mean":
+        if name in {"tag_jaccard_mean", "presented_tag_jaccard_mean"}:
             resolved_config["tag_vocabulary_authority_sha256"] = _tag_vocabulary_dependency_digest()
             resolved_config["readable_vocabulary"] = tag_normalizer.readable_vocabulary_v2()
         elif name == "selected_auc_ranked":
@@ -838,8 +895,8 @@ def compare_to_baseline(current: dict[str, Any], baseline: dict[str, Any]) -> di
     baseline_ranking = (baseline.get("ranking") or {}).get("category_multipliers")
     if current_ranking != baseline_ranking:
         excluded["selected_auc_ranked"] = "ranking category_multipliers differ"
-    current_emitters = ((current.get("measurement_identity") or {}).get("metric_emitters") or {})
-    baseline_emitters = ((baseline.get("measurement_identity") or {}).get("metric_emitters") or {})
+    current_emitters = (current.get("measurement_identity") or {}).get("metric_emitters") or {}
+    baseline_emitters = (baseline.get("measurement_identity") or {}).get("metric_emitters") or {}
     for name in current["metrics"]:
         if current_emitters.get(name) != baseline_emitters.get(name):
             excluded[name] = "metric emitter identity differs or is missing"
@@ -990,22 +1047,67 @@ def compute_metrics(
     thresholds_path: Path | None = None,
 ) -> dict[str, Any]:
     run_meta = read_json(run_dir / "run.json")
+    actual_questions_sha256 = sha256_file(questions_path)
+    expected_questions_sha256 = run_meta.get("questions_sha256")
+    if not expected_questions_sha256 or actual_questions_sha256 != expected_questions_sha256:
+        raise ValueError(
+            "questions file does not match run.json questions_sha256: "
+            f"expected={expected_questions_sha256!r} actual={actual_questions_sha256}"
+        )
+    outputs_path = run_dir / "outputs.jsonl"
+    actual_outputs_sha256 = sha256_file(outputs_path)
+    expected_outputs_sha256 = run_meta.get("outputs_sha256")
+    if not expected_outputs_sha256 or actual_outputs_sha256 != expected_outputs_sha256:
+        raise ValueError(
+            "outputs file does not match run.json outputs_sha256: "
+            f"expected={expected_outputs_sha256!r} actual={actual_outputs_sha256}"
+        )
+    manifest_path = questions_path.parent / "manifest.json"
+    evalset_manifest = read_json(manifest_path) if manifest_path.exists() else {}
+    thresholds_allowed = evalset_manifest.get("thresholds_status") in (None, "approved")
+    baseline_allowed = evalset_manifest.get("baseline_status") in (None, "approved")
     resolved_thresholds = thresholds_path or (questions_path.parent / "thresholds.json")
-    thresholds = read_json(resolved_thresholds) if resolved_thresholds.exists() else None
+    thresholds = read_json(resolved_thresholds) if thresholds_allowed and resolved_thresholds.exists() else None
     questions = load_questions(questions_path)
-    outputs = list(read_jsonl(run_dir / "outputs.jsonl"))
+    outputs = list(read_jsonl(outputs_path))
     judgments_path = run_dir / "judgments.jsonl"
-    judgments = list(read_jsonl(judgments_path)) if judgments_path.exists() else []
     judge_meta = read_json(run_dir / "judge.json") if (run_dir / "judge.json").exists() else None
     calibration_path = run_dir / "judge-calibration.json"
-    calibration = read_json(calibration_path) if calibration_path.exists() else None
+    calibration_exists = calibration_path.exists()
+    if judge_meta is None and (judgments_path.exists() or calibration_exists):
+        raise ValueError("judge artifacts exist without judge.json identity")
+    if judge_meta is not None:
+        if not judgments_path.exists():
+            raise ValueError("judge.json exists but judgments.jsonl is missing")
+        actual_judgments_sha256 = sha256_file(judgments_path)
+        if judge_meta.get("judgments_sha256") != actual_judgments_sha256:
+            raise ValueError(
+                "judgments file does not match judge.json judgments_sha256: "
+                f"expected={judge_meta.get('judgments_sha256')!r} actual={actual_judgments_sha256}"
+            )
+        expected_calibration_sha256 = judge_meta.get("calibration_sha256")
+        if not calibration_exists and expected_calibration_sha256 is not None:
+            raise ValueError("judge.json expects judge-calibration.json but it is missing")
+        if calibration_exists:
+            actual_calibration_sha256 = sha256_file(calibration_path)
+            if not expected_calibration_sha256 or expected_calibration_sha256 != actual_calibration_sha256:
+                raise ValueError(
+                    "calibration file does not match judge.json calibration_sha256: "
+                    f"expected={expected_calibration_sha256!r} actual={actual_calibration_sha256}"
+                )
+    judgments = list(read_jsonl(judgments_path)) if judgments_path.exists() else []
+    calibration = read_json(calibration_path) if calibration_exists else None
 
     rows = join_rows(questions, outputs, judgments)
     metrics = compute_all(rows)
     acceptance = judge_acceptance(judge_meta, calibration)
     metric_payload = {name: metric.as_dict() for name, metric in metrics.items()}
     for name in JUDGE_DEPENDENT_METRICS:
-        metric_payload[name]["acceptance"] = acceptance
+        metric_payload[name]["acceptance"] = (
+            {"accepted": False, "reason": "title-specific judge validation missing"}
+            if name == "title_closeness_mean"
+            else acceptance
+        )
     failures = {
         stage: {
             "errors": sum(1 for row in outputs if isinstance(row.get(stage), dict) and row[stage].get("error")),
@@ -1018,7 +1120,10 @@ def compute_metrics(
         "schema_version": METRICS_SCHEMA_VERSION,
         "computed_at": utc_now(),
         "run_id": run_meta.get("run_id"),
-        "questions_sha256": run_meta.get("questions_sha256"),
+        "questions_sha256": actual_questions_sha256,
+        "evalset": evalset_manifest.get("evalset"),
+        "thresholds_status": evalset_manifest.get("thresholds_status", "legacy-v1"),
+        "baseline_status": evalset_manifest.get("baseline_status", "legacy-v1"),
         # Identifies the subset actually measured, which questions_sha256 does not.
         "subset_sha256": sha256_text("\n".join(sorted(str(i) for i in (run_meta.get("item_ids") or [])))),
         "sampling": {
@@ -1037,8 +1142,7 @@ def compute_metrics(
         "ranking": {
             "category_multipliers": dict(curator_select.CATEGORY_MULTIPLIERS),
             "applied_in": "ordering only (select.ranking_key); weighted_score is left unscaled",
-            "missing_enrich": "factor 1.0 (also for rows whose enrich errored; see "
-            "selected_auc_ranked.missing_enrich)",
+            "missing_enrich": "factor 1.0 (also for rows whose enrich errored; see selected_auc_ranked.missing_enrich)",
         },
         "bootstrap": {"rounds": BOOTSTRAP_ROUNDS, "seed": BOOTSTRAP_SEED, "level": 0.95},
         "measurement_identity": {
@@ -1096,7 +1200,11 @@ def compute_metrics(
         "comparison": None,
     }
     if baseline_path is not None:
-        payload["comparison"] = compare_to_baseline(payload, read_json(baseline_path))
+        payload["comparison"] = (
+            compare_to_baseline(payload, read_json(baseline_path))
+            if baseline_allowed
+            else {"comparable": False, "reason": "evalset baseline_status is not approved"}
+        )
     write_json(run_dir / "metrics.json", payload)
     (run_dir / "report.md").write_text(render_report(payload, run_meta, judge_meta, questions), encoding="utf-8")
     return payload
@@ -1126,10 +1234,7 @@ def render_report(
     # across a coefficient change otherwise differ only in a metric value -- which reads as a
     # measurement change. Reported by an adversarial reviewer.
     ranking = payload.get("ranking") or {}
-    lines += [
-        f"- 排序系数: `{ranking.get('category_multipliers')}`"
-        f"（施加面: {ranking.get('applied_in') or 'n/a'}）"
-    ]
+    lines += [f"- 排序系数: `{ranking.get('category_multipliers')}`（施加面: {ranking.get('applied_in') or 'n/a'}）"]
     lines += [
         f"- 题集 sha256: `{payload['questions_sha256']}`；run n={payload['n_questions_run']}（joined {payload['n_joined']}）"
     ]
@@ -1146,7 +1251,8 @@ def render_report(
         shas = judge_meta.get("prompt_sha256") or {}
         lines.append(
             f"- 判官: `{judge_meta.get('model')}` temp={judge_meta.get('temperature')} max_tokens={judge_meta.get('max_tokens')} "
-            f"host `{judge_meta.get('ark_host')}` prompt sha256 summary `{str(shas.get('summary'))[:16]}…` reason `{str(shas.get('reason'))[:16]}…`"
+            f"host `{judge_meta.get('ark_host')}` prompt sha256 title `{str(shas.get('title'))[:16]}…` "
+            f"summary `{str(shas.get('summary'))[:16]}…` reason `{str(shas.get('reason'))[:16]}…`"
         )
     else:
         lines.append("- 判官: 未运行")
