@@ -535,6 +535,8 @@ A5 在微信解读被配置关闭时可从既有 firing 直接进入 resolved，
 
 **闭合方向**：把 stale-lock 故障路径纳入 rotation，给 sync exit 2 补用户影响与首个证据入口，并按 replica freshness/连续失败给 sync 与周报失败重新分档；为 cost-report 日志定义可验证的 retention，或迁入保留值的共享事件账本；为 cost-report 调度器缺席指定独立探测 owner。
 
+**2026-09-16 部分修复**：producer 与 rotation 已改用同一内核锁，消除重启遗留目录导致同步和裁剪永久停止的路径（[决策](../adr/20260916-74b2-release-db-sync-lock-on-process-exit.md)）。独立审查另确认一个基线窗口：wrapper 在启动 producer 时先打开 `>>LOG_FILE`，producer 随后才获取锁；并发 wrapper 若在这个间隙替换日志 inode，首个 writer 的后续输出可能留在旧 inode。它不改变本次同步数据或互斥行为，本轮未扩修；由 ai-radar 维护者随本项日志保留工作处理，其余未闭合项保持 open。
+
 ## ISSUE-ALERT-20260904-e6a4 · D3 定价通知未拒绝 state/event 路径别名
 
 **状态**：open · **优先级**：low · **原则**：P8

@@ -57,12 +57,20 @@ SSH_OPTS="${AI_RADAR_SYNC_SSH_OPTS:--o ProxyCommand=none}"
 log()  { printf '[sync] %s\n' "$*"; }
 fail() { printf '[sync] ✗ %s\n' "$*" >&2; exit 1; }
 
+# OpenSSH closes extra descriptors. A waiting shell retains the producer lock
+# if the entrypoint is killed while SSH is still publishing remote artifacts.
+run_ssh() (
+  result=0
+  ssh "$@" || result=$?
+  exit "$result"
+)
+
 remote_journal_generation() {
   local remote_command
   printf -v remote_command 'AI_RADAR_JOURNAL_GENERATION=1 %q - %q' \
     "$REMOTE_PYTHON" "$REMOTE_JOURNAL"
   # shellcheck disable=SC2086 # SSH_OPTS intentionally follows the existing env-string contract.
-  ssh $SSH_OPTS "$SERVER" "$remote_command" <<'PY'
+  run_ssh $SSH_OPTS "$SERVER" "$remote_command" <<'PY'
 import hashlib
 import os
 import pathlib
@@ -96,7 +104,7 @@ remote_terminal_state() {
     "$REMOTE_PYTHON" "$REMOTE_JOURNAL" "$REMOTE_RECEIPT" \
     "$snapshot_id" "$manifest_sha256" "$previous_generation"
   # shellcheck disable=SC2086 # SSH_OPTS intentionally follows the existing env-string contract.
-  ssh $SSH_OPTS "$SERVER" "$remote_command" <<'PY'
+  run_ssh $SSH_OPTS "$SERVER" "$remote_command" <<'PY'
 import hashlib
 import json
 import os
@@ -262,7 +270,7 @@ supports_zstd_transfer() {
   grep -qiE 'Compress list:.*(^|[[:space:]])zstd([[:space:]]|$)' <<<"$local_version" || return 1
 
   # shellcheck disable=SC2086 # SSH_OPTS intentionally follows the script's existing env-string contract.
-  remote_version="$(ssh $SSH_OPTS "$SERVER" 'rsync --version' 2>/dev/null)" || return 1
+  remote_version="$(run_ssh $SSH_OPTS "$SERVER" 'rsync --version' 2>/dev/null)" || return 1
   grep -qE '^rsync[[:space:]]+version ' <<<"$remote_version" || return 1
   grep -qiE 'Compress list:.*(^|[[:space:]])zstd([[:space:]]|$)' <<<"$remote_version"
 }
@@ -273,10 +281,13 @@ main() {
   local rsync_bin; rsync_bin="$(resolve_rsync)"
   log "using $rsync_bin ($("$rsync_bin" --version | sed -n '1p'))"
 
-  # mkdir is the atomic test-and-set available everywhere; two overlapping runs
-  # would each snapshot a different instant and race on the same remote path.
-  mkdir "$LOCK_DIR" 2>/dev/null || fail "another sync is running (remove $LOCK_DIR if stale)"
-  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+  # Keep the inode: unlinking a held lock would let another producer enter.
+  # Unlike an EXIT-trap directory lock, the kernel lock dies with its holders
+  # even after SIGKILL or reboot (ADR-20260916-74b2).
+  mkdir -p "$LOCK_DIR" || fail "cannot create sync lock directory $LOCK_DIR"
+  exec 9>>"$LOCK_DIR/owner.flock" || fail "cannot open sync lock in $LOCK_DIR"
+  "$PYTHON" -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' \
+    || fail "another sync is running or its lock could not be acquired; retry later"
 
   "$PYTHON" "$SCRIPT_DIR/logical_delta.py" guard \
     --live-db "$DB" --snapshot "$SNAPSHOT" --replica "$REPLICA" --manifest "$MANIFEST" \
@@ -377,7 +388,7 @@ PY
   if [[ "$DRY_RUN" != "1" ]]; then
     log "publishing the immutable FTS manifest sidecar"
     # shellcheck disable=SC2086 # SSH_OPTS intentionally follows the existing env-string contract.
-    ssh $SSH_OPTS "$SERVER" \
+    run_ssh $SSH_OPTS "$SERVER" \
       "set -eu; upload='$REMOTE_DATA/$manifest_upload_name'; final='$REMOTE_DATA/$manifest_name'; \
        mv -n \"\$upload\" \"\$final\"; \
        if [ -e \"\$upload\" ]; then \
@@ -397,7 +408,7 @@ PY
 
   log "publishing the database commit marker atomically"
   # shellcheck disable=SC2086 # SSH_OPTS intentionally follows the existing env-string contract.
-  ssh $SSH_OPTS "$SERVER" "mv -f '$REMOTE_DATA/$upload_name' '$REMOTE_DATA/radar.db.incoming'" \
+  run_ssh $SSH_OPTS "$SERVER" "mv -f '$REMOTE_DATA/$upload_name' '$REMOTE_DATA/radar.db.incoming'" \
     || fail "upload completed but could not be published as radar.db.incoming"
 
   local previous_journal_generation
@@ -415,7 +426,7 @@ PY
   # is already bound to its own environment file; this script deliberately does
   # not source or reinterpret the remote service environment.
   # shellcheck disable=SC2086 # SSH_OPTS intentionally follows the existing env-string contract.
-  ssh $SSH_OPTS "$SERVER" "$REMOTE_APPLY_TRIGGER" \
+  run_ssh $SSH_OPTS "$SERVER" "$REMOTE_APPLY_TRIGGER" \
     || fail "could not trigger the remote apply (snapshot is staged as radar.db.incoming)"
   wait_for_apply_terminal \
     "$snapshot_id" "$manifest_sha256" "$previous_journal_generation"

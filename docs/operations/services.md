@@ -30,6 +30,12 @@ probe 的专属 plist 经 `./run.sh performance-probe` 启动。crontab 条目�
 
 ## DB sync 职责、验证与故障证据
 
+### 同步锁与重启恢复
+
+自 2026-09-16 起，producer 和日志裁剪共用 `data/.sync.lock/owner.flock` 内核锁。目录与文件永久保留，存在不表示任务运行；禁止以“清理 stale lock”为由删除正在使用的锁文件。所有本地持有者退出或主机重启后锁自动释放，下一次定时同步可继续。直接 SSH 的等待子 shell 保持锁，防止入口退出而 SSH 尚在发布时重入。详见 [锁决策](../adr/20260916-74b2-release-db-sync-lock-on-process-exit.md)。
+
+9 月 16 日排查确认此前停更由 9 月 13 日重启遗留的目录锁造成，本地采集和解读仍有新数据。`run-or-alert` 发送侧有首次失败记录，随后按同一退出码去重；发送成功不代表用户已读。本次从锁机制消除复发条件，不新增周期性重复提醒。活任务挂起或认证失败仍沿既有告警处置，日志入口为 `logs/sync-cron.log`。
+
 ### 职责边界与 freshness path
 
 | 位置 | 责任 | 不负责 |

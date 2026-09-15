@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import importlib.util
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -302,6 +305,174 @@ def _run_producer(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=30,
     )
+
+
+def test_producer_recovers_with_leftover_lock_directory(tmp_path: Path) -> None:
+    live = tmp_path / "live.db"
+    _create_live_db(live)
+    env = _producer_env(tmp_path, live)
+    Path(env["AI_RADAR_SYNC_LOCK"]).mkdir()
+    for _ in range(2):
+        result = _run_producer(env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "terminal state committed" in result.stdout
+
+
+@pytest.mark.parametrize("kill_parent_first", [False, True])
+@pytest.mark.parametrize("stage", ["python", "ssh"])
+def test_producer_lock_tracks_surviving_processes(
+    tmp_path: Path, kill_parent_first: bool, stage: str
+) -> None:
+    live = tmp_path / "live.db"
+    _create_live_db(live)
+    env = _producer_env(tmp_path, live)
+    ready = tmp_path / "stage-ready"
+    wrapper = tmp_path / "blocking-python"
+    _write_executable(wrapper, '''#!/usr/bin/env bash
+if [[ "$*" == *logical_delta.py*guard* ]]; then
+  echo ready > "$LOCK_TEST_READY"
+  sleep 30
+fi
+exec "$FAKE_REAL_PYTHON" "$@"
+''')
+    blocked_env = {**env, "AI_RADAR_PYTHON": str(wrapper), "LOCK_TEST_READY": str(ready)}
+    if stage == "ssh":
+        blocked_env["AI_RADAR_PYTHON"] = sys.executable
+        fake_ssh = tmp_path / "bin" / "ssh"
+        original_ssh = fake_ssh.with_name("original-ssh")
+        fake_ssh.rename(original_ssh)
+        _write_executable(fake_ssh, '''#!/usr/bin/env bash
+if [[ -n "${LOCK_TEST_READY:-}" && "$*" == *'mv -f'* ]]; then
+  exec 9>&-
+  echo ready > "$LOCK_TEST_READY"
+  sleep 30
+fi
+exec "$(dirname "$0")/original-ssh" "$@"
+''')
+    process = subprocess.Popen(
+        ["bash", str(SCRIPT)], cwd=REPO_ROOT, env=blocked_env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            assert process.poll() is None, "producer exited before guarded stage"
+            time.sleep(0.02)
+        assert ready.exists(), "guarded stage did not start"
+        if kill_parent_first:
+            process.kill()
+            process.wait(timeout=5)
+        snapshot = Path(env["AI_RADAR_SYNC_SNAPSHOT"])
+        before = snapshot.read_bytes() if snapshot.exists() else None
+        result = _run_producer(env)
+        assert result.returncode != 0
+        assert "another sync is running" in result.stderr
+        assert (snapshot.read_bytes() if snapshot.exists() else None) == before
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+    # Delivery of SIGKILL to descendants is asynchronous.
+    if stage == "ssh":
+        original_ssh.replace(fake_ssh)
+    deadline = time.monotonic() + 5
+    while True:
+        result = _run_producer(env)
+        if result.returncode == 0 or time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "terminal state committed" in result.stdout
+
+
+def test_real_rsync_keeps_producer_lock_after_parent_kill(tmp_path: Path) -> None:
+    real_rsync = Path("/opt/homebrew/bin/rsync")
+    if not real_rsync.exists():
+        pytest.skip("requires the production GNU rsync installation")
+    live = tmp_path / "live.db"
+    _create_live_db(live)
+    env = _producer_env(tmp_path, live)
+    payload = tmp_path / "payload"
+    payload.write_bytes(os.urandom(1024 * 1024))
+    ready = tmp_path / "rsync-pid"
+    fake_rsync = Path(env["AI_RADAR_RSYNC"])
+    _write_executable(fake_rsync, '''#!/usr/bin/env bash
+if [[ "${1:-}" == --version ]]; then
+  exec "$LOCK_TEST_RSYNC" --version
+fi
+echo $$ > "$LOCK_TEST_READY"
+exec "$LOCK_TEST_RSYNC" --bwlimit=32 "$LOCK_TEST_SOURCE" "$LOCK_TEST_DEST"
+''')
+    env.update({"LOCK_TEST_RSYNC": str(real_rsync), "LOCK_TEST_READY": str(ready),
+                "LOCK_TEST_SOURCE": str(payload), "LOCK_TEST_DEST": str(tmp_path / "copied")})
+    process = subprocess.Popen(
+        ["bash", str(SCRIPT)], cwd=REPO_ROOT, env=env, start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    lock_path = Path(env["AI_RADAR_SYNC_LOCK"]) / "owner.flock"
+    try:
+        deadline = time.monotonic() + 10
+        running_rsync = False
+        while time.monotonic() < deadline:
+            assert process.poll() is None
+            if ready.exists() and ready.read_text().strip():
+                pid = ready.read_text().strip()
+                command = subprocess.run(
+                    ["ps", "-p", pid, "-o", "comm="], capture_output=True, text=True, timeout=2
+                )
+                if command.stdout.strip() == str(real_rsync):
+                    running_rsync = True
+                    break
+            time.sleep(0.02)
+        assert running_rsync, "real rsync did not start"
+        process.kill()
+        process.wait(timeout=5)
+        with lock_path.open("a") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_cron_log_rotation_uses_kernel_lock(tmp_path: Path, busy: bool) -> None:
+    script_dir = tmp_path / "deploy" / "sync"
+    script_dir.mkdir(parents=True)
+    wrapper = script_dir / "sync-db-cron.sh"
+    shutil.copyfile(SCRIPT.with_name("sync-db-cron.sh"), wrapper)
+    _write_executable(script_dir / "sync-db-to-server.sh", "#!/bin/sh\nexit 0\n")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "ssh-add", "#!/bin/sh\necho test-fingerprint\n")
+    _write_executable(fake_bin / "ssh", "#!/bin/sh\necho 0\n")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    log = log_dir / "sync-cron.log"
+    log.write_text("old-head\n" + "x" * 4096 + "\nretained-tail\n")
+    lock_dir = tmp_path / "data" / ".sync.lock"
+    lock_dir.mkdir(parents=True)
+    lock_path = lock_dir / "owner.flock"
+    with lock_path.open("a") as lock:
+        inode = lock_path.stat().st_ino
+        if busy:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(
+            ["bash", str(wrapper)], cwd=tmp_path,
+            env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                 "AI_RADAR_PYTHON": sys.executable, "SSH_AUTH_SOCK": "fixture",
+                 "AI_RADAR_SYNC_KEY_SHA": "test-fingerprint", "AI_RADAR_SYNC_LOG_MAX_BYTES": "1024"},
+            capture_output=True, text=True, timeout=10,
+        )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("old-head" in log.read_text()) is busy
+    assert "retained-tail" in log.read_text()
+    assert lock_path.stat().st_ino == inode
 
 
 def test_snapshot_helper_enables_and_verifies_query_only_before_backup(

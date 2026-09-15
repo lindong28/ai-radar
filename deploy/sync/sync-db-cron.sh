@@ -57,14 +57,30 @@ FRESHNESS_MAX_AGE_MIN="${AI_RADAR_SYNC_FRESHNESS_MAX_AGE_MIN:-660}"
 SSH_OPTS="${AI_RADAR_SYNC_SSH_OPTS:--o ProxyCommand=none} -o BatchMode=yes"
 LOG_MAX_BYTES="${AI_RADAR_SYNC_LOG_MAX_BYTES:-5242880}"
 
-# Keep the log bounded: trim to the newest quarter once it exceeds the cap.
-# Skip while a sync holds its lock -- rotating the file under a writer that
-# still has the old inode open would silently lose its remaining output.
+# Keep the log bounded under the producer's lock. Its directory is permanent;
+# existence is not liveness, and a probe-then-release would race the writer.
 SYNC_LOCK_DIR="${AI_RADAR_SYNC_LOCK:-$REPO_ROOT/data/.sync.lock}"
-if [[ -f "$LOG_FILE" && ! -d "$SYNC_LOCK_DIR" ]] \
-   && (( $(stat -f %z "$LOG_FILE" 2>/dev/null || echo 0) > LOG_MAX_BYTES )); then
-  tail -c $(( LOG_MAX_BYTES / 4 )) "$LOG_FILE" > "$LOG_FILE.trim" && mv "$LOG_FILE.trim" "$LOG_FILE"
-fi
+"${AI_RADAR_PYTHON:-$REPO_ROOT/.venv/bin/python3}" - "$SYNC_LOCK_DIR" "$LOG_FILE" "$LOG_MAX_BYTES" <<'PY'
+import fcntl
+import os
+import pathlib
+import sys
+
+lock_dir, log_path, cap = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int(sys.argv[3])
+lock_dir.mkdir(parents=True, exist_ok=True)
+with (lock_dir / "owner.flock").open("a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(0)
+    if log_path.is_file() and log_path.stat().st_size > cap:
+        with log_path.open("rb") as source:
+            source.seek(-max(1, cap // 4), os.SEEK_END)
+            tail = source.read()
+        trimmed = log_path.with_suffix(log_path.suffix + ".trim")
+        trimmed.write_bytes(tail)
+        os.replace(trimmed, log_path)
+PY
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >>"$LOG_FILE"; }
 
