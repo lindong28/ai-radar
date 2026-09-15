@@ -24,10 +24,26 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 LOG_DIR="$SCRIPT_DIR/logs"
+COLLECT_ONLY=0
+if [[ "${1:-}" == "--collect-only" ]]; then
+  COLLECT_ONLY=1
+  LOG_DIR="$LOG_DIR/collector"
+  if [[ "${AI_RADAR_DECOUPLED_INGESTION:-0}" != "1" ]]; then
+    echo "FAIL collector requires explicitly enabled AI_RADAR_DECOUPLED_INGESTION=1"
+    exit 1
+  fi
+elif [[ "$#" -gt 0 ]]; then
+  echo "Usage: pipeline.sh [--collect-only]"
+  exit 1
+fi
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/pipeline-$(date +%Y%m%d-%H%M%S).log"
 LOCK_FILE="$SCRIPT_DIR/.pipeline.flock"
 ACTIVITY_FILE="$SCRIPT_DIR/.pipeline.activity"
+if (( COLLECT_ONLY )); then
+  LOCK_FILE="$SCRIPT_DIR/.collector.flock"
+  ACTIVITY_FILE="$SCRIPT_DIR/.collector.activity"
+fi
 PIPELINE_GENERATION=""
 
 log() {
@@ -38,7 +54,7 @@ mark_activity() {
   PIPELINE_GENERATION="$(python3 -c 'import uuid; print(uuid.uuid4())')" || return 1
   local activity_tmp=""
   local capability_tmp=""
-  activity_tmp="$(mktemp "$SCRIPT_DIR/.pipeline.activity.XXXXXX")" || return 1
+  activity_tmp="$(mktemp "${ACTIVITY_FILE}.XXXXXX")" || return 1
   if ! printf '%s\n' "$PIPELINE_GENERATION" >"$activity_tmp"; then
     rm -f "$activity_tmp"
     return 1
@@ -137,7 +153,29 @@ run_stage() {
   fi
 }
 
-run_stage fetch
+export AI_RADAR_PIPELINE_GENERATION="$PIPELINE_GENERATION"
+if (( COLLECT_ONLY )); then
+  # Keep the fetch log vocabulary for A4; this command performs real collection.
+  log "=== fetch START ==="
+  if ./run.sh collect >>"$LOG_FILE" 2>&1; then
+    log "=== fetch OK ==="
+  else
+    code=$?
+    log "=== fetch FAIL (exit $code) ==="
+    FAILED=1
+  fi
+  log "=== PIPELINE DONE (failed=$FAILED; alert_recovery=NOT_RUN) ==="
+  exit "$FAILED"
+elif [[ "${AI_RADAR_DECOUPLED_INGESTION:-0}" == "1" ]]; then
+  run_stage ingest
+  # A bad/misbound queue must not be disguised as a successful processing round.
+  if (( FAILED )); then
+    log "=== PIPELINE DONE (failed=$FAILED; alert_recovery=NOT_RUN) ==="
+    exit 1
+  fi
+else
+  run_stage fetch
+fi
 # Bounded batch, same reasoning as enrich below. Prefilter's stamp now derives from
 # its criterion, so editing the criterion makes every in-window item a candidate at
 # once -- measured 2026-09-09: 7020 items in the 24h window, and an unbounded round

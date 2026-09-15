@@ -388,9 +388,13 @@ def collect_metrics(
     a4_thresholds = a4_thresholds if isinstance(a4_thresholds, dict) else {}
     resolve_rounds = max(1, int(a4_thresholds.get("account_resolve_rounds", 2) or 2))
     stale_limit_minutes = int(a4_thresholds.get("fetch_stale_minutes", 90) or 90)
+    # Collector logs contain actual fetches; processing logs contain ingest only.
+    # Do not replace latest_run/AI heartbeat with the collector process lifecycle.
+    collector_runs = _load_pipeline_runs(log_dir / "collector")
+    fetch_runs = sorted(runs + collector_runs, key=lambda run: str(run.get("started_at", "")))
     complete_fetches: list[dict[str, object]] = []
     completed_at_seen: set[str] = set()
-    for run in reversed(runs):
+    for run in reversed(fetch_runs):
         fetch_obj = run.get("fetch")
         if not isinstance(fetch_obj, dict) or not fetch_obj.get("summary_seen"):
             continue
@@ -449,7 +453,13 @@ def collect_metrics(
         stages[stage].update(values)
     if latest_run:
         latest_stages_obj = latest_run.get("stages", {})
-        latest_stages = latest_stages_obj if isinstance(latest_stages_obj, dict) else {}
+        latest_stages = dict(latest_stages_obj) if isinstance(latest_stages_obj, dict) else {}
+        if collector_runs:
+            for run in reversed(fetch_runs):
+                fetch_stages = run.get("stages")
+                if isinstance(fetch_stages, dict) and "fetch" in fetch_stages:
+                    latest_stages["fetch"] = fetch_stages["fetch"]
+                    break
         for stage, values in latest_stages.items():
             if stage not in stages or not isinstance(values, dict):
                 continue

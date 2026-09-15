@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from . import db, runtime_env
 from .admin import edgeone
@@ -139,7 +139,7 @@ _PIPELINE_RUN_RE = re.compile(
 )
 _PIPELINE_CONTROL_RE = re.compile(
     r"^(?:\[[^\]]+\]\s+)?===\s+"
-    r"(?P<stage>egress preflight|wechat_browser_preflight|fetch|prefilter|score|enrich|curate|"
+    r"(?P<stage>egress preflight|wechat_browser_preflight|fetch|ingest|prefilter|score|enrich|curate|"
     r"interpret|wechat_browser_preflight_resolve)\s+"
     r"(?P<event>START|OK|FAIL|DEGRADED)(?:\s+\([^)]*\))?\s+===$"
 )
@@ -174,6 +174,7 @@ def _verify_pipeline_success_evidence(
     pipeline_lock_path: str | Path,
     pipeline_lock_fd: int,
     pipeline_capability_fd: int,
+    alert_state_path: str | Path | None = None,
 ) -> None:
     if pipeline_log is None:
         raise PipelineSuccessNotVerified("--pipeline-log is required")
@@ -251,7 +252,28 @@ def _verify_pipeline_success_evidence(
         raise PipelineSuccessNotVerified(
             "the pipeline log generation does not uniquely match the active run"
         )
-    if tuple(controls) != _PIPELINE_SUCCESS_CONTROL_SEQUENCE:
+    expected: tuple[tuple[str, str], ...] = _PIPELINE_SUCCESS_CONTROL_SEQUENCE
+    if ("ingest", "START") in controls:
+        expected = tuple(("ingest" if stage == "fetch" else stage, event) for stage, event in expected)
+        with db.get_conn() as conn:
+            receipt = conn.execute(
+                "SELECT MAX(completed_run_at) FROM ingestion_acks WHERE generation=?",
+                (generation,),
+            ).fetchone()
+        if receipt is None or receipt[0] is None:
+            raise PipelineSuccessNotVerified("this processing run did not consume a complete successful collection round")
+        if alert_state_path is not None and Path(alert_state_path).exists():
+            try:
+                state = json.loads(Path(alert_state_path).read_text())
+                w1 = state.get("W1", {})
+                if w1.get("state") == "firing":
+                    since = datetime.fromisoformat(str(w1["since"]).replace("Z", "+00:00"))
+                    completed = datetime.fromisoformat(receipt[0].replace("Z", "+00:00"))
+                    if completed < since:
+                        raise ValueError("collection predates the open browser incident")
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise PipelineSuccessNotVerified("collection does not prove recovery of the open browser incident") from exc
+    if tuple(controls) != expected:
         raise PipelineSuccessNotVerified(
             "the pipeline control events are missing, duplicated, failed, degraded, or out of order"
         )
@@ -393,6 +415,7 @@ def _wechat_browser_preflight(
                 pipeline_lock_path=pipeline_lock_path,
                 pipeline_lock_fd=pipeline_lock_fd,
                 pipeline_capability_fd=pipeline_capability_fd,
+                alert_state_path=state_path,
             )
         except PipelineSuccessNotVerified as exc:
             print("WeChat browser recovery: NOT VERIFIED — W1 remains open")
@@ -716,7 +739,14 @@ def _admin_db_retention(args: argparse.Namespace) -> int:
 
 
 def _fetch(args: argparse.Namespace) -> int:
+    if runtime_env.read_value("AI_RADAR_DECOUPLED_INGESTION") == "1":
+        print("FAIL direct fetch disabled in decoupled mode; use collector.sh and ./run.sh ingest")
+        return 1
     summary = fetch_all(Path(args.sources) if args.sources else None)
+    return _print_fetch_summary(summary)
+
+
+def _print_fetch_summary(summary) -> int:
     if summary.raw_capture_error:
         print(f"FAIL raw-capture {summary.raw_capture_error}; input archive incomplete, inspect capture run")
         return 1
@@ -727,6 +757,38 @@ def _fetch(args: argparse.Namespace) -> int:
             print(f"OK {source.source_id} fetched={source.fetched} inserted={source.inserted}")
     print(f"=== attempted={summary.attempted} inserted={summary.inserted} failed={summary.failed}")
     return 0
+
+
+def _ingestion(args: argparse.Namespace) -> int:
+    from .fetcher import ingestion
+
+    queue_value = runtime_env.read_value("AI_RADAR_INGESTION_DB").strip()
+    raw_value = runtime_env.read_value("AI_RADAR_RAW_CAPTURE_DIR").strip()
+    if not queue_value or not raw_value:
+        print("FAIL ingestion requires AI_RADAR_INGESTION_DB and AI_RADAR_RAW_CAPTURE_DIR")
+        return 1
+    main_path = db.resolve_db_path().resolve()
+    queue_path = db.resolve_db_path(queue_value).resolve()
+    raw_root = Path(raw_value).resolve()
+    sources = Path(args.sources) if args.sources else None
+    try:
+        if args.command == "collect":
+            summary = ingestion.collect(main_path, queue_path, raw_root, sources)
+            code = _print_fetch_summary(summary)
+            return code or (1 if summary.failed else 0)
+        with ingestion.lock(db.PROJECT_ROOT / ".pipeline.flock", inherited_fd=9):
+            if args.command == "ingestion-init":
+                with ingestion.lock(queue_path.with_suffix(".collector.lock")):
+                    ingestion.initialize(main_path, queue_path, raw_root, sources)
+                print("ingestion initialized; collector scheduling is not enabled by this command")
+            else:
+                generation = os.environ.get("AI_RADAR_PIPELINE_GENERATION") or str(uuid4())
+                result = ingestion.consume(main_path, queue_path, generation=generation, sources=sources)
+                print("ingest " + " ".join(f"{key}={value}" for key, value in result.items()))
+        return 0
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        print(f"FAIL ingestion {type(exc).__name__}: {exc}")
+        return 1
 
 
 def _prefilter(args: argparse.Namespace) -> int:
@@ -2537,6 +2599,10 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser = subparsers.add_parser("fetch")
     fetch_parser.add_argument("--sources", help="Override sources.toml path")
 
+    for name in ("ingestion-init", "collect", "ingest"):
+        ingestion_parser = subparsers.add_parser(name)
+        ingestion_parser.add_argument("--sources", help="Override sources.toml path")
+
     prefilter_parser = subparsers.add_parser("prefilter")
     prefilter_parser.add_argument("--since", default="24h")
     prefilter_parser.add_argument("--limit", type=int)
@@ -2842,6 +2908,8 @@ def main() -> None:
         )
     if args.command == "fetch":
         raise SystemExit(_fetch(args))
+    if args.command in {"ingestion-init", "collect", "ingest"}:
+        raise SystemExit(_ingestion(args))
     if args.command == "prefilter":
         raise SystemExit(_prefilter(args))
     if args.command == "score":

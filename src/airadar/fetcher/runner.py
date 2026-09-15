@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -30,6 +30,9 @@ from .rss import parse_feed
 from .web import fetch_web_source
 from .wechat import normalize_wechat_avatar_url, scrape_article
 from .x_api import fetch_x_timeline
+
+if TYPE_CHECKING:
+    from .ingestion import Outbox
 
 logger = logging.getLogger(__name__)
 WECHAT_AVATAR_NEGATIVE_CACHE_TTL = timedelta(days=2)
@@ -188,7 +191,7 @@ def _fetch_source_feed(source: SourceConfig) -> _SourceFeedResult:
         )
 
 
-def _persist_x_failure(conn: sqlite3.Connection, result: _SourceFeedResult) -> None:
+def _persist_x_failure(conn: sqlite3.Connection, result: _SourceFeedResult, *, commit: bool = True) -> None:
     if result.x_failure_reason is None or result.x_failure_recovery is None:
         return
     source = result.source
@@ -225,17 +228,31 @@ def _persist_x_failure(conn: sqlite3.Connection, result: _SourceFeedResult) -> N
     )
     if cursor.rowcount != 1:
         raise ValueError(f"X source state changed while fetching: {source.slug}")
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResult,
-                              archive: RawCapture | None = None) -> SourceFetchSummary:
+                              archive: RawCapture | None = None,
+                              outbox: Outbox | None = None) -> SourceFetchSummary:
     source = result.source
+
+    def commit(items: list[FetchedItem]) -> None:
+        if outbox is not None:
+            if archive is None:
+                raise ValueError("queued collection requires a raw archive")
+            outbox.record(conn, source, items, archive.run_id)
+        conn.commit()
+
     if result.error is not None:
         if archive is not None:
             archive.record(source, [], status="failed", http_status=result.http_status_code)
         try:
-            _persist_x_failure(conn, result)
+            if outbox is None:
+                _persist_x_failure(conn, result)
+            else:
+                _persist_x_failure(conn, result, commit=False)
+                commit([])
         except Exception as exc:
             conn.rollback()
             return SourceFetchSummary(
@@ -299,9 +316,8 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
                 archive.record(source, [], status="not_modified", http_status=response.status_code)
             if source.kind == "wechat":
                 _backfill_wechat_avatar_cache(conn, source.slug)
-                conn.commit()
-            elif result.meta_update is not None:
-                conn.commit()
+            if source.kind == "wechat" or result.meta_update is not None or outbox is not None:
+                commit([])
             return SourceFetchSummary(
                 source_id=source.slug,
                 http_status_class=f"{response.status_code // 100}xx",
@@ -319,7 +335,7 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
         inserted = 0
         for item in items:
             inserted += 1 if upsert_item(conn, item, wechat=is_wechat) else 0
-        conn.commit()
+        commit(items)
         return SourceFetchSummary(
             source_id=source.slug,
             fetched=len(items),
@@ -336,7 +352,8 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
 
 
 def _fetch_and_apply_sources(conn: sqlite3.Connection, sources: list[SourceConfig],
-                             archive: RawCapture | None = None) -> list[SourceFetchSummary]:
+                             archive: RawCapture | None = None,
+                             outbox: Outbox | None = None) -> list[SourceFetchSummary]:
     if not sources:
         return []
     summaries: list[SourceFetchSummary | None] = [None] * len(sources)
@@ -352,8 +369,11 @@ def _fetch_and_apply_sources(conn: sqlite3.Connection, sources: list[SourceConfi
                 result = future.result()
             except Exception as exc:
                 result = _SourceFeedResult(source=source, error=f"{type(exc).__name__}: {exc}")
-            summaries[index] = (_apply_source_feed_result(conn, result, archive) if archive
-                                else _apply_source_feed_result(conn, result))
+            if outbox is not None:
+                summaries[index] = _apply_source_feed_result(conn, result, archive, outbox)
+            else:
+                summaries[index] = (_apply_source_feed_result(conn, result, archive) if archive
+                                    else _apply_source_feed_result(conn, result))
     return [summary for summary in summaries if summary is not None]
 
 
@@ -646,16 +666,19 @@ def _checkpoint_after_fetch(db_path: Path | None) -> None:
         logger.warning("Failed FTS maintenance after fetch round: %s", exc)
 
 
-def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSummary:
+def fetch_all(path: Path | None = None, db_path: Path | None = None, *,
+              outbox: Outbox | None = None, raw_root: Path | None = None) -> FetchSummary:
     db.migrate(db_path)
     conn = db.get_conn(db_path)
     archive = None
-    raw_root = read_value("AI_RADAR_RAW_CAPTURE_DIR").strip()
+    raw_root_value = raw_root or read_value("AI_RADAR_RAW_CAPTURE_DIR").strip()
     try:
         reload_sources(conn, path)
         sources = load_fetchable_sources_from_db(conn)
-        if raw_root:
-            archive = RawCapture(Path(raw_root), sources, code_root=db.PROJECT_ROOT)
+        if outbox is not None and not sources:
+            raise ValueError("independent collection has no fetchable sources")
+        if raw_root_value:
+            archive = RawCapture(Path(raw_root_value), sources, code_root=db.PROJECT_ROOT)
         unavailable: list[SourceFetchSummary] = []
         if not read_value("X_BEARER_TOKEN").strip():
             unavailable = [
@@ -668,6 +691,7 @@ def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSum
                         x_failure_recovery="configure_X_BEARER_TOKEN_then_rerun_fetch",
                     ),
                     archive,
+                    *([outbox] if outbox is not None else []),
                 )
                 for source in sources
                 if source.kind == "x" and source.meta.get("adapter") == "x_api"
@@ -682,13 +706,18 @@ def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSum
                 for source in sources
                 if not (source.kind == "x" and source.meta.get("adapter") == "x_api")
             ]
-        summaries = unavailable + (_fetch_and_apply_sources(conn, sources, archive) if archive
-                                   else _fetch_and_apply_sources(conn, sources))
+        if outbox is not None:
+            summaries = unavailable + _fetch_and_apply_sources(conn, sources, archive, outbox)
+        else:
+            summaries = unavailable + (_fetch_and_apply_sources(conn, sources, archive) if archive
+                                       else _fetch_and_apply_sources(conn, sources))
         if archive is not None:
             archive.finish()
+            if outbox is not None:
+                outbox.finish(conn, archive, sum(bool(s.error) for s in summaries))
         return FetchSummary(summaries)
     except Exception as exc:
-        if raw_root:
+        if raw_root_value:
             return FetchSummary(raw_capture_error=type(exc).__name__)
         raise
     finally:

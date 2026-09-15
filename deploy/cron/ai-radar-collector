@@ -1,0 +1,4 @@
+# Opt-in: initialize the independent ingestion DB and enable the mode first.
+# Keep the existing processing pipeline schedule; do not add a second direct fetch.
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+*/15 * * * * /path/to/ai-radar/collector.sh >/dev/null 2>&1

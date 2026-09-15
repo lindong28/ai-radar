@@ -4,6 +4,24 @@
 
 ## 两条采集链
 
+### 独立采集与处理（2026-09-16 本地实现，尚未启用）
+
+本地验证：115 项定向测试通过，2 项真实微信公众号联网测试跳过；真实 loopback 双 RSS 在主库写锁占用时仍完成 raw 和后续导入，进程中断及重复投递对照通过。独立审查发现的 A4 告警入口遗漏已修复并复核，详细边界见 [采集解耦 ADR](../adr/20260916-e3a8-decouple-collection-from-processing.md)。以下仍是待获批启用步骤，不代表新生产调度已运行。
+
+新增 `collector.sh`（也可 `pipeline.sh --collect-only`）独立抓取入口，使用 `.collector.flock`；业务处理仍使用 `.pipeline.flock`。只有配置 `AI_RADAR_DECOUPLED_INGESTION=1` 后才切换：collector 执行原 egress/微信浏览器预检和 `collect`，不执行 AI；pipeline 执行 `ingest` 再跑原过滤、评分、enrich、精选和解读。直接 `./run.sh fetch` 在该模式拒绝运行，避免两个游标写者。
+
+切换须获部署许可，在采集侧新增配置 `AI_RADAR_INGESTION_DB=<独立采集库路径>`，继续使用既有 `AI_RADAR_RAW_CAPTURE_DIR`。先在主 pipeline 和 collector 都没有写者时运行 `./run.sh ingestion-init`；命令自身获取两把对应写锁，主库繁忙时失败，不杀旧任务。它迁移必要表、绑定主库身份，并只读复制匹配来源的抓取游标和微信正文/头像缓存到新库；不导入 T5 或模型输出。之后启用开关并安装 `deploy/cron/ai-radar-collector` 的每 15 分钟入口，保留原处理调度；不得在别台已复制业务库的展示服务器上初始化第二个采集写者。
+
+单源新闻与游标在采集库同事务写入压缩 outbox，即便整轮中断，已取得输入仍能交给主库。`ingest` 固定本轮待处理上界、顺序导入；主库新闻、该批 runtime 与确认记录同事务，提交后删除对应 outbox。中断后重试不会用旧批覆盖较新的主库新闻。原始评测资产仍走上文 `radar_raw_v1` 完整性规则，业务投递成功不代表中断 raw 轮可做完整评测。
+
+collector 的原始抓取日志在 `logs/collector/pipeline-*.log`；处理日志仍在 `logs/pipeline-*.log`，其中 `ingest applied_batches=... already_applied_batches=... pending_batches=...` 是投递结果，不是抓取成功率。A4 继续使用真实 fetch 完成轮（包含 collector 日志），A2/主处理心跳不拿 collector 成功代替。源异常、预检与原始留档失败仍通过现有 W1/A4 链观测；投递错误使处理轮失败，由原 A2 心跳链观测，不新增告警阈值或另一套状态机。W1 在全处理轮成功之外，还要求该 generation 实际消费了完整成功的采集轮，且其完成时间不早于当前 W1 故障；空队列不能关闭 W1。
+
+outbox 自包含、不依赖即将滚动清理的 raw 文件，因此未投递新闻不受 raw 30 天清理影响。代价是采集库新增正文缓存和确认前 payload：payload 确认后释放可复用页，SQLite 文件不会自动缩小；正文缓存及确认账本仍占用磁盘。初始化/采集库错误、哈希损坏或来源配置身份变化均失败并保留批次，不能删队列来“解锁”。来源发生变更时先核对待投递批次与当前 source 配置，再决定兼容导入，不静默套用旧游标。
+
+回退不能只关开关：先停独立采集的后续调度，待现有 collector 完成，保持解耦处理直到 pending 为零且主库已取得最后游标，再关闭开关恢复旧 fetch。若队列有错误未排空，停止切换并保留数据。上述启用/回退是运维入口说明，不代表本次已经修改生产配置。
+
+### 原始归档与 AIHOT
+
 AIHOT 使用 `scripts/capture_aihot_dataset.py`，保留真实 API 与 SSR 页面、逐条标签观察。`capture --start ... --end ...` 保持两完整 UTC 日的 v1 行为；新增 `--fill-missing` 只发布缺失日的 window_v2，校验已有窗口而不覆盖。新日要求相邻 API pass 的目标 ID 集相同、时间窗口处于两遍共同覆盖、逐条 tags 可由原始 HTML 重放；站方不再提供的时间段明确失败。v1 capture/item 不改版，v2 window 的校验报告显式为 v2；同工具的 `slice` 支持本 capture 的连续 v2 窗口，不借其他 capture 的日期填洞。旧评分/判官消费者不能未经适配直接把它当 v1。
 
 `scripts/capture_aihot_daily.sh` 默认仍使用旧路径。只有 `AIHOT_CAPTURE_FILL_MISSING=1` 才在最近六个完整 UTC 日内寻找缺窗；所有日期仍须由 API 的实际 response Date 验证，不以目录名证明覆盖。原有 30 次/分钟全局限流保留；ReadTimeout、连接错误采用原有限预算重试，认证/WAF 拒绝不重试。新模式需要工具工作树已含本次 clean commit；只设置环境变量而继续使用旧工具会失败。

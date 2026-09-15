@@ -271,9 +271,11 @@ def test_pipeline_reports_recovery_alert_degraded_without_reclassifying_success(
 def test_real_run_sh_chain_preserves_pipeline_lock_fd_and_generation(tmp_path: Path) -> None:
     pipeline_script = tmp_path / "pipeline.sh"
     shutil.copy2(REPO_ROOT / "pipeline.sh", pipeline_script)
+    original = pipeline_script.read_text(encoding="utf-8")
+    path_line = next(line for line in original.splitlines() if line.startswith('export PATH='))
     pipeline_script.write_text(
-        pipeline_script.read_text(encoding="utf-8").replace(
-            'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"',
+        original.replace(
+            path_line,
             'export PATH="$HOME/.local/bin:$PATH"',
         ),
         encoding="utf-8",
