@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260915-0eeb](./20260915-0eeb-publish-user-visible-eval-redesign-proposal.md) | 先交付面向最终展示的评测重建设计（仅出版草案，未批准实施） | accepted | 2026-09-15 |
 | [001](./001-deterministic-source-brand-tags.md) | 标签生成优先使用确定性 source/brand 标签 | accepted | 2026-05-12 |
 | [002](./002-deepseek-v4-flash-prefilter.md) | Prefilter 模型选用 deepseek-v4-flash 并禁用 thinking | accepted | 2026-05-15 |
 | [003](./003-dual-dotenv-loader.md) | Runtime env loader 读取双层 .env 文件 | accepted | 2026-05-15 |

@@ -21,6 +21,8 @@
 | 文件 | 性质 | 说明 |
 |---|---|---|
 | [architecture.md](architecture.md) | Mutable snapshot | 系统模块结构、分层、数据流、数据库设计、Web 层、关键抽象 |
+| [AIHOT 评测重建设计](references/aihot-eval-redesign-20260915/index.html) | Design proposal | 2026-09-15 面向最终用户显示的三层体系草案，含十四日盘点；待审核，未实施 |
+| [20260915-0eeb](adr/20260915-0eeb-publish-user-visible-eval-redesign-proposal.md) | Decision | 仅出版评测重建设计，不启用新体系或替代旧规则 |
 
 ### docs/operations/ [User]
 
