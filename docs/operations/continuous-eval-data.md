@@ -1,6 +1,6 @@
 # 持续采集评测原始数据
 
-> 本地实现说明，尚未启用新常驻配置。旧 T5 实验不是新数据来源；过去未留原始输入的窗口不能据业务数据库补成完整候选全集。
+> 新采集配置已于 2026-09-15 获用户批准并启用；真实首轮读数见末节。旧 T5 实验不是新数据来源；过去未留原始输入的窗口不能据业务数据库补成完整候选全集。
 
 ## 两条采集链
 
@@ -33,9 +33,9 @@ AIHOT 冻结：`scripts/capture_aihot_dataset.py freeze --output-root benchmarks
 
 采用用户选择的滚动 30 天＋冻结集长期保留。Radar `retention-preview --days 30` 只列旧且不再被近期 run 引用的候选；`prune --days 30 --apply` 才删除。近期 304 引用的更早 payload 保留，实际体积可能超过严格 30 天。存在未完成 run 时先不清理，避免把不明确依赖删掉。冻结资产不在清理目标中。本轮未运行任何真实 prune。
 
-AIHOT 现有 daily retention 仍可能删除老窗口引用的原始 capture；长期评测集必须先冻结完整依赖，不能只保留 items.jsonl。新的留档开关、每日 Radar prune 调度与 AIHOT 新模式要一次性明确配置后启用；未获批准不新增 cron、不更换生产工具工作树。
+AIHOT 现有 daily retention 仍可能删除老窗口引用的原始 capture；长期评测集必须先冻结完整依赖，不能只保留 items.jsonl。用户已批准启用留档与 AIHOT 新模式，原有频次不变；随后另行批准 Radar 每日 03:07 自动 prune，调度已安装，本轮不立即清理真实数据。
 
-现场 AIHOT daily 已经由 `run-or-alert --key ai-radar-aihot-capture` 包裹；非零退出复用这条链。Radar 归档失败通过 fetch 非零退出进入现有 pipeline 失败面；缺轮由 coverage 判，不额外建立常驻监控。启用动作 owner 是执行 session：用户批准配置后，由 session 核实实际工具 commit、环境变量、运行及告警消费路径，并保存首轮覆盖/体积读数；在此之前不宣称已持续完整留档。
+现场 AIHOT daily 已经由 `run-or-alert --key ai-radar-aihot-capture` 包裹；非零退出复用这条链。Radar 归档失败通过 fetch 非零退出进入现有 pipeline 失败面；缺轮由 coverage 判，不额外建立常驻监控。配置启用不等于已经取得连续完整窗口，须据实际归档与调度审计判定。
 
 ## 2026-09-15 恢复读数
 
@@ -45,8 +45,26 @@ AIHOT 9/14 的 daily 因旧两日窗口重叠而 skip；9/15 的 daily 发生 Re
 
 daily shell 套件最初在新树与 main 都是 70 通过、5 个相同 retention 断言失败；单独 fixture 日志定位为系统 Python 不支持 `datetime.UTC`。本地改用等价的 `datetime.timezone.utc` 后原套件 75 通过、0 失败，覆盖保留/删除边界、成功/失败/no-request、持久化与限时行为；真实旧数据未清理。这些是离线替身验证，不是新模式生产启用证据。
 
-独立代码审查最初发现 v2 slice 不兼容（HIGH、改动依附）；修复后原 reviewer 两问复核通过，无剩余 HIGH/CRITICAL、承重未核实项、独立 findings 或额外非功能加码。生产启用与完整运行体积仍未核实。
+独立代码审查最初发现 v2 slice 不兼容（HIGH、改动依附）；修复后原 reviewer 两问复核通过，无剩余 HIGH/CRITICAL、承重未核实项、独立 findings 或额外非功能加码。审查时生产启用与完整运行体积尚未核实；后续实测见末节。
 
 系统 Python 兼容修复经同 reviewer 定向核对：UTC 截止语义与删除路径/比较方式未变。在 Python 3.9 环境运行新版会恢复原先失效的过期清理，但这不是当前 cron 的环境：现场 crontab 显式 PATH 为 `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`，按该环境直接执行得到 Homebrew Python 3.14.6，且两种 UTC 对象为同一对象；`/usr/bin/python3` 才是 3.9.6。因此该修复不改变当前 cron 的清理语义，本地 main 整合不启用新留档或补缺开关。
 
 体积抽样：本机可用约 43 GiB；本次 AIHOT capture 磁盘占用约 15.8 MiB。Radar 当前可变业务库只读抽取最近 1000 行（12 来源，fetched_at 为 13:32:13Z—13:32:39Z），完整 JSONL 3,039,035 字节，按来源分别 gzip 共 797,563 字节，其中 26 条正文超过 4000 字。此样本仅用于体积量级估计，不是原始评测数据，不代表完整一轮或日增长；30 天容量仍须启用后测完整轮次再外推。
+
+## 2026-09-15 启用与首轮验证
+
+用户通过启用问题明确答复「启用并验证」。macmini / lindong 的项目 `.env` 于 22:39:13 +08:00 加入 `AI_RADAR_RAW_CAPTURE_DIR=<项目根>/data/raw-capture`，运行时读取已确认生效。Radar cron 仍为每 15 分钟，22:30 开始的旧轮次在配置变更前已启动，不计为新留档首轮。
+
+AIHOT cron 仍为每日 09:37，明确设置 `AIHOT_CAPTURE_FILL_MISSING=1`，转到专用 `continuous-raw-capture-20260915` 工作树并使用主树 venv。应用代码来自本地 main `5347b81`；专用树仅初始化数据 pin 后 clean tool commit 为 `4a40fb59436eca9d7cb92412de1a481a58172521`，不把其运行时数据指针写回主仓。原 t3 树保留、不再由此 cron 采集。数据仓远端仍为 `97f5ed0`，应用代码未推送。
+
+新模式真实运行从 14:41:17Z 到 14:43:29Z：最近六个完整 UTC 日均已有可验证窗口，退出 0，明确报告未发布新 capture；没有覆盖旧窗口。本次验证显式 `AIHOT_CAPTURE_RETAIN_DAYS=0`，未立即清理真实数据。它验证了真实 API 路径与已有窗口校验，不能充当真实新缺日 v2 发布的读数。
+
+Radar 首轮在旧 pipeline 结束后持同一 pipeline 排他锁运行真实 `./run.sh fetch`，未触发后续 LLM 阶段。run `20260915T144949.975393Z-a884ef09` 于 14:49:49.976700Z 开始、14:53:43.881521Z 完成，退出 0；计划 161 个来源均记录 success，其中 56 个非空、105 个明确为空，共 4,254 条输入，223 条正文超过 4,000 字符。JSONL 为 14,210,093 字节，gzip 为 3,222,179 字节。`read_run` 的哈希、逐源/总行数、行结构校验及依赖闭包校验通过；首轮无 304 依赖。这只是完整一轮，不是连续完整日或源站绝对全集，也不能据首轮体积固定外推 30 天容量。
+
+该轮记录 `code_commit=5347b819c0e296a1a2cc9cc1ad74104d698f214d`、`code_dirty=true`：主树原有 WIP 与未跟踪文件被保留，不能冒称 clean 评测基线。将审计起点设为启用前 14:30Z 时，coverage 明确返回 `complete=false` / `before_archive_enabled`，没有把旧时段补成完整。
+
+此后自动调度又产生 run `20260915T150217.020549Z-f52edcbf`，开始时刻为 15:02:17Z。23:05 +08:00 观察到它仍为 started、尚无 completed_at；该读数证明后续运行已进入归档入口，不计为另一轮完整数据。
+
+用户另答「每日自动清理」后，安装每日 03:07 的 `run-or-alert --key ai-radar-raw-retention` 调度，以项目 venv Python 和脚本绝对路径执行 `raw_capture.py --root <项目根>/data/raw-capture prune --days 30 --apply`，日志为 `logs/raw-retention.log`。仅清理 rolling runs 的已验证、过期且无保留依赖候选，冻结集排除。crontab 安装后逐字回读一致；同入口的 `retention-preview --days 30` 为 0 候选，本轮未执行真实 prune，未验证积累 30 天后的扫描耗时。
+
+原始留档位于 `data/raw-capture/runs/`。本机证据为 `logs/continuous-capture-first-run-validation-20260915.json`、`logs/continuous-capture-first-fetch-20260915.log`、`logs/aihot-capture-20260915-144117.log` 及 `logs/continuous-capture-crontab-final-20260915.txt`；这些运行数据和配置副本不提交到应用仓。未来评测仍需选两侧完整交集、核对来源并冻结；旧 T5 不补历史缺口。

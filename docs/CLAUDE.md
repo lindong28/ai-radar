@@ -31,7 +31,7 @@
 | 文件 | 说明 |
 |---|---|
 | [services.md](operations/services.md) | 服务清单 + 自启机制 + Instructions 位置 + 验证命令 + DB sync 的职责分工、验证与"已服务"终态判据 + X 图片新加坡出口代理（隧道链路、凭据边界、从内到外的诊断顺序）+ Cloudflare tunnel / Cache Rule 等 repo 外基础设施 |
-| [continuous-eval-data.md](operations/continuous-eval-data.md) | 过滤前输入留档、AIHOT v2 缺窗、完整性审计与冻结保留；新配置尚未启用 |
+| [continuous-eval-data.md](operations/continuous-eval-data.md) | 过滤前输入留档、AIHOT v2 缺窗、完整性审计与冻结保留；含启用与首轮验证读数 |
 | [monitoring-alerting.md](operations/monitoring-alerting.md) | `/admin` 运维 dashboard、A1–A7/W1 与 D3 告警、domain selector preflight/route audit、微信 Chromium preflight、周报、飞书 webhook、用户旅程性能监控 runbook |
 | [wechat-ingestion.md](operations/wechat-ingestion.md) | 微信公众号摄取：仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused 后保留历史可见与跨源去重身份；含 ai-assistant KB 手动归档补录、真名头像 backfill，后台发现候选已停止推进（见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)） |
 | [db-slimming.md](operations/db-slimming.md) | `radar.db` 瘦身：`summary_json` 常驻保留、`admin db retain`/`admin db slim`、VACUUM 仅用于低频磁盘维护且不是 DB sync 前置、Mac 主库 apply+回滚 |
