@@ -5114,6 +5114,81 @@ def test_capture_writer_runs_full_fake_transport_pipeline_and_offline_replay(
     assert sliced == persisted_items
 
 
+def test_fill_missing_publishes_v2_days_without_overwriting_existing(ds: Any, tmp_path: Path) -> None:
+    writer, _transport, _clock, _tool, root = make_capture_writer(ds, tmp_path)
+    result = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1], fill_missing=True)
+    for path in result.window_manifest_paths:
+        report = ds.validate_persisted_artifact(root, path)
+        assert report["artifact_type"] == "aihot_window_validation_report_v2"
+        assert report["result"] == "pass"
+    before = (root / result.window_manifest_paths[0]).read_bytes()
+    sliced = ds.slice_persisted_capture(root, capture_path=result.capture_path,
+        start=WINDOW_ONE[0], end=WINDOW_TWO[1], network_transport=FailIfNetworkTransport())
+    assert len(sliced.splitlines()) == 2
+    # A second capture uses the same frozen responses but must not replace existing windows.
+    writer, transport, _clock, _tool, other = make_capture_writer(ds, tmp_path / "second")
+    import shutil
+    shutil.copytree(root / "captures", other / "captures")
+    first_dir = Path(result.window_manifest_paths[0]).parent
+    shutil.copytree(root / first_dir, other / first_dir)
+    writer.capture_id = "fictional-second"
+    transport.capture_id = writer.capture_id
+    second = writer.capture(start=WINDOW_ONE[0], end=WINDOW_TWO[1], fill_missing=True)
+    assert second.window_manifest_paths == (result.window_manifest_paths[1],)
+    assert (other / result.window_manifest_paths[0]).read_bytes() == before
+    assert ds.slice_persisted_capture(other, capture_path=second.capture_path,
+        start=WINDOW_TWO[0], end=WINDOW_TWO[1], network_transport=FailIfNetworkTransport()) == (
+            other / synthetic_window_root(WINDOW_TWO) / "items.jsonl").read_bytes()
+    assert error_code(ds, lambda: ds.slice_persisted_capture(other,
+        capture_path=second.capture_path, start=WINDOW_ONE[0], end=WINDOW_TWO[1])) == "window_out_of_coverage"
+
+
+def test_fill_missing_earlier_days_slice_and_gap(ds: Any, tmp_path: Path) -> None:
+    writer, _transport, _clock, _tool, root = make_capture_writer(ds, tmp_path)
+    result = writer.capture(start="2026-08-15T00:00:00Z", end=WINDOW_TWO[1], fill_missing=True)
+    assert len(result.window_manifest_paths) == 5
+    assert len(ds.slice_persisted_capture(root, capture_path=result.capture_path,
+        start="2026-08-15T00:00:00Z", end=WINDOW_TWO[1],
+        network_transport=FailIfNetworkTransport()).splitlines()) == 2
+    # Removing a middle empty day must not silently turn a discontinuous window into coverage.
+    (root / result.window_manifest_paths[1]).unlink()
+    assert error_code(ds, lambda: ds.slice_persisted_capture(root,
+        capture_path=result.capture_path, start="2026-08-15T00:00:00Z", end=WINDOW_TWO[1])) == "window_out_of_coverage"
+
+
+def test_fill_missing_rejects_outside_common_coverage(ds: Any, tmp_path: Path) -> None:
+    writer, _transport, _clock, _tool, root = make_capture_writer(ds, tmp_path)
+    assert error_code(ds, lambda: writer.capture(start="2026-08-12T00:00:00Z", end=WINDOW_TWO[1], fill_missing=True)) == "window_out_of_coverage"
+    assert not (root / "captures").exists()
+
+
+@pytest.mark.parametrize("error_type", ["ReadTimeout", "ConnectError"])
+def test_transport_failure_retries_with_shared_limiter(ds: Any, error_type: str) -> None:
+    import httpx
+    clock = FakeClock()
+    limiter = ds.GlobalRateLimiter(monotonic=clock.monotonic, sleep=clock.sleep)
+    attempts = []
+    def send():
+        attempts.append(clock.monotonic())
+        if len(attempts) < 3:
+            raise getattr(httpx, error_type)("fixture")
+        return response(ds, page_payload([], has_more=False, next_cursor=None))
+    assert ds.request_with_policy(send, surface="api", limiter=limiter).status == 200
+    assert len(attempts) == 3 and attempts[1] - attempts[0] >= 2
+
+
+def test_transport_retry_exhaustion_is_not_success(ds: Any) -> None:
+    import httpx
+    clock = FakeClock()
+    limiter = ds.GlobalRateLimiter(monotonic=clock.monotonic, sleep=clock.sleep)
+    calls = []
+    def send():
+        calls.append(1)
+        raise httpx.ReadTimeout("fixture")
+    assert error_code(ds, lambda: ds.request_with_policy(send, surface="api", limiter=limiter)) == "transport_failed"
+    assert len(calls) == 3
+
+
 def test_capture_writer_sends_minimal_request_and_requires_normalized_response_query(
     ds: Any,
     tmp_path: Path,

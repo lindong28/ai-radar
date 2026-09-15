@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
@@ -26,6 +27,7 @@ def _parser() -> argparse.ArgumentParser:
     capture.add_argument("--start", required=True)
     capture.add_argument("--end", required=True)
     capture.add_argument("--output-root", type=Path, default=Path("benchmarks/aihot"))
+    capture.add_argument("--fill-missing", action="store_true", help="Publish only missing complete UTC days as v2; validate existing windows.")
 
     slice_command = subcommands.add_parser("slice", help="Create a deterministic offline JSONL slice.")
     slice_command.add_argument("--capture", required=True)
@@ -36,6 +38,10 @@ def _parser() -> argparse.ArgumentParser:
     validate = subcommands.add_parser("validate", help="Validate a persisted capture or window offline.")
     validate.add_argument("path", nargs="?")
     validate.add_argument("--report-json", metavar="PATH")
+    frozen = subcommands.add_parser("freeze", help="Copy validated windows and all their capture dependencies; no data deletion.")
+    frozen.add_argument("--output-root", type=Path, default=Path("benchmarks/aihot"))
+    frozen.add_argument("--window", action="append", required=True)
+    frozen.add_argument("--destination", type=Path, required=True)
     return parser
 
 
@@ -62,11 +68,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "freeze":
+            import json
+            paths: set[str] = set()
+            for subject in args.window:
+                validate_persisted_artifact(args.output_root, subject)
+                payload = json.loads((args.output_root / subject).read_bytes())
+                if payload.get("artifact_type") not in {"aihot_window_v1", "aihot_window_v2"}:
+                    raise DatasetContractError("window_invalid", "freeze requires window manifests")
+                paths.add(str(PurePosixPath(subject).parent))
+                paths.add(str(PurePosixPath(payload["capture"]["path"]).parent))
+            target = args.destination.resolve()
+            if target.is_relative_to(args.output_root.resolve() / "captures") or target.is_relative_to(args.output_root.resolve() / "windows"):
+                raise DatasetContractError("reference_invalid", "freeze destination must be outside rolling capture/window roots")
+            target.mkdir(parents=True, exist_ok=False)
+            for path in sorted(paths):
+                shutil.copytree(args.output_root / path, target / path)
+            for subject in args.window:
+                validate_persisted_artifact(target, subject)
+            print(f"Frozen {len(args.window)} validated windows with complete capture dependencies: {target}. No source files deleted.")
+            return 0
         if args.command == "capture":
             result = capture_dataset(
                 start=args.start,
                 end=args.end,
                 output_root=args.output_root,
+                **({"fill_missing": True} if args.fill_missing else {}),
             )
             print(f"Capture published locally: {result.capture_path}")
             print("Validated windows:")
@@ -107,6 +134,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("The report covers persisted public/API replay and the selected subject only.")
         return 0
     except DatasetContractError as error:
+        if error.code == "no_missing_windows":
+            print("No new capture published: every requested day already has a validated window. No action needed.")
+            return 0
         print(f"ERROR {error}", file=sys.stderr)
         recovery_actions = {
             "target_exists": "Choose a new output path and retry; existing files are never overwritten.",

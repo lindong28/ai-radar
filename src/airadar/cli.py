@@ -717,6 +717,9 @@ def _admin_db_retention(args: argparse.Namespace) -> int:
 
 def _fetch(args: argparse.Namespace) -> int:
     summary = fetch_all(Path(args.sources) if args.sources else None)
+    if summary.raw_capture_error:
+        print(f"FAIL raw-capture {summary.raw_capture_error}; input archive incomplete, inspect capture run")
+        return 1
     for source in summary.sources:
         if source.error:
             print(f"FAIL {source.source_id} {source.error}")

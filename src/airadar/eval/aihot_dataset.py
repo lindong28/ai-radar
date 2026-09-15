@@ -18,6 +18,7 @@ from typing import Any, Literal, Protocol
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from airadar.egress import selector_httpx_client
@@ -1307,6 +1308,11 @@ def request_with_policy(
         started_at = limiter.acquire(surface, not_before=not_before)
         try:
             response = send()
+        except (httpx.TimeoutException, httpx.NetworkError) as error:
+            if attempt == max_attempts:
+                raise DatasetContractError("transport_failed", "request transport failed after bounded retries") from error
+            not_before = started_at + min(2 ** attempt, 8)
+            continue
         except Exception as error:
             raise DatasetContractError("transport_failed", "request transport failed") from error
         if 200 <= response.status < 300:
@@ -2253,6 +2259,26 @@ class WindowManifest(_ManifestModel):
         )
 
 
+class WindowManifestV2(WindowManifest):
+    artifact_type: Literal["aihot_window_v2"]  # type: ignore[assignment]
+
+
+def _validate_extended_day(capture: CaptureManifest, start: str, end: str,
+                           raw_files: Mapping[str, bytes]) -> None:
+    begin, finish = _timestamp(start), _timestamp(end)
+    if begin.time() != datetime.min.time() or finish - begin != timedelta(days=1):
+        raise DatasetContractError("window_invalid", "v2 window must be one complete UTC day")
+    index = capture.canonical_pass_index
+    targets = []
+    for capture_pass in capture.passes[index - 1:index + 1]:
+        ensure_window_covered(start=start, end=end, first_response_date=capture_pass.raw_pages[0].date,
+                              last_response_date=capture_pass.raw_pages[-1].date)
+        items = _load_capture_pass_items(capture_pass, raw_files=raw_files)
+        targets.append(_target_digest([i.id for i in filter_window(items, start=start, end=end)]))
+    if len(targets) != 2 or targets[0] != targets[1]:
+        raise DatasetContractError("capture_unstable", "v2 day differs between accepted adjacent passes")
+
+
 def _walk_keys(value: object) -> set[str]:
     keys: set[str] = set()
     if isinstance(value, Mapping):
@@ -2908,24 +2934,23 @@ def validate_window_projection(
     capture_manifest: Mapping[str, object],
     files: Mapping[str, bytes],
     raw_files: Mapping[str, bytes],
+    _version: int = 1,
 ) -> list[AihotItemV1]:
     """Validate a normalized window by replaying its immutable API and SSR raw bytes."""
     forbidden = sorted(FORBIDDEN_PROVENANCE_KEYS & _walk_keys(payload))
     if forbidden:
         raise DatasetContractError("forbidden_provenance", "window manifest contains forbidden internal provenance")
     try:
-        _validate_json_schema_subset(
-            payload,
-            AIHOT_WINDOW_MANIFEST_V1_SEMANTICS,
-            field_path="window_manifest",
-        )
+        if _version == 1:
+            _validate_json_schema_subset(payload, AIHOT_WINDOW_MANIFEST_V1_SEMANTICS,
+                                         field_path="window_manifest")
     except ValueError as error:
         raise DatasetContractError(
             "window_integrity_failed",
             "window manifest machine semantics differ from the frozen v1 authority",
         ) from error
     try:
-        window = WindowManifest.model_validate(payload)
+        window = (WindowManifest if _version == 1 else WindowManifestV2).model_validate(payload)
         capture = CaptureManifest.model_validate(capture_manifest)
     except ValidationError as error:
         raise DatasetContractError("window_integrity_failed", "window or capture manifest shape is invalid") from error
@@ -2990,6 +3015,9 @@ def validate_window_projection(
             "window_integrity_failed",
             "window tag reconciliation counts or target hash do not match raw replay and reconciliation",
         )
+    if _version == 2:
+        _validate_extended_day(capture, window.window.start_inclusive, window.window.end_exclusive, raw_files)
+        return items
     matching = [
         formal
         for formal in canonical_pass.formal_windows
@@ -3340,7 +3368,7 @@ class HttpxTransport:
 @dataclass(frozen=True)
 class CaptureResult:
     capture_path: str
-    window_manifest_paths: tuple[str, str]
+    window_manifest_paths: tuple[str, ...]
     request_starts: tuple[RequestStart, ...]
 
 
@@ -3760,7 +3788,7 @@ class CaptureWriter:
         }
         return payload, items_path, items_bytes
 
-    def capture(self, *, start: str, end: str) -> CaptureResult:
+    def capture(self, *, start: str, end: str, fill_missing: bool = False) -> CaptureResult:
         tool_commit = self._preflight()
         _timestamp(start)
         _timestamp(end)
@@ -3796,15 +3824,41 @@ class CaptureWriter:
                 raise DatasetContractError("capture_unstable", "capture did not produce a stable adjacent pass pair")
             canonical = observations[decision.canonical_pass_index]
             formal_windows = canonical.formal_windows
-            if (start, end) != (formal_windows[0][0], formal_windows[1][1]):
+            if not fill_missing and (start, end) != (formal_windows[0][0], formal_windows[1][1]):
                 raise DatasetContractError(
                     "window_invalid",
                     "capture start/end must span the canonical two complete UTC days",
                 )
             canonical_items = list(traversals[decision.canonical_pass_index].items)
+            selected_windows = list(formal_windows)
+            if fill_missing:
+                selected_windows = []
+                day = _timestamp(start)
+                finish = _timestamp(end)
+                if day.time() != datetime.min.time() or finish.time() != datetime.min.time() or day >= finish:
+                    raise DatasetContractError("window_invalid", "fill-missing requires ordered UTC midnight boundaries")
+                while day < finish:
+                    bounds = (_format_rfc3339(day), _format_rfc3339(day + timedelta(days=1)))
+                    existing = f"{_window_root(*bounds)}/manifest.json"
+                    if (self.output_root / existing).exists():
+                        validate_persisted_artifact(self.output_root, existing)
+                    else:
+                        for index in (decision.canonical_pass_index - 1, decision.canonical_pass_index):
+                            traversal = traversals[index]
+                            ensure_window_covered(start=bounds[0], end=bounds[1],
+                                first_response_date=_required_header(traversal.pages[0].response, "Date"),
+                                last_response_date=_required_header(traversal.pages[-1].response, "Date"))
+                        sets = [{i.id for i in filter_window(traversals[index].items, start=bounds[0], end=bounds[1])}
+                                for index in (decision.canonical_pass_index - 1, decision.canonical_pass_index)]
+                        if sets[0] != sets[1]:
+                            raise DatasetContractError("capture_unstable", "missing day changed between API passes")
+                        selected_windows.append(bounds)
+                    day += timedelta(days=1)
+                if not selected_windows:
+                    raise DatasetContractError("no_missing_windows", "all requested days already have validated windows")
             target_items = [
                 item
-                for bounds in formal_windows
+                for bounds in selected_windows
                 for item in filter_window(canonical_items, start=bounds[0], end=bounds[1])
             ]
             ssr_observations, ssr_references = self._capture_ssr_observations(
@@ -3837,7 +3891,7 @@ class CaptureWriter:
             _write_staged(staging_root, capture_path, capture_bytes)
 
             window_payloads: list[tuple[str, dict[str, object], str, bytes]] = []
-            for window_start, window_end in formal_windows:
+            for window_start, window_end in selected_windows:
                 window_items = filter_window(
                     canonical_items,
                     start=window_start,
@@ -3853,6 +3907,8 @@ class CaptureWriter:
                     references=ssr_references,
                 )
                 manifest_path = f"{_window_root(window_start, window_end)}/manifest.json"
+                if fill_missing:
+                    window_payload["artifact_type"] = "aihot_window_v2"
                 _write_staged(staging_root, items_path, items_bytes)
                 _write_staged(staging_root, manifest_path, canonical_json_bytes(window_payload))
                 window_payloads.append((manifest_path, window_payload, items_path, items_bytes))
@@ -3874,6 +3930,7 @@ class CaptureWriter:
                         items_path: items_bytes,
                     },
                     raw_files=raw_files,
+                    _version=2 if fill_missing else 1,
                 )
 
             publish_roots = [
@@ -3905,7 +3962,7 @@ class CaptureWriter:
             _remove_exact_tree(staging_root, allowed_parent=staging_parent)
             return CaptureResult(
                 capture_path=capture_path,
-                window_manifest_paths=(window_payloads[0][0], window_payloads[1][0]),
+                window_manifest_paths=tuple(w[0] for w in window_payloads),
                 request_starts=tuple(self.limiter.request_starts),
             )
         except Exception:
@@ -3951,6 +4008,19 @@ def validate_persisted_artifact(
 ) -> dict[str, object]:
     _validate_relative_path(subject_path)
     files, raw_files = _persisted_artifact_maps(output_root, schema_bytes=schema_bytes)
+    payload = load_canonical_json_object(files[subject_path], artifact_name="validation subject")
+    if payload.get("artifact_type") == "aihot_window_v2":
+        window = WindowManifestV2.model_validate(payload)
+        capture_payload, capture = _load_report_capture(window.capture.path, files=files, raw_files=raw_files)
+        items = validate_window_projection(payload, manifest_path=subject_path, capture_manifest=capture_payload,
+                                           files=files, raw_files=raw_files, _version=2)
+        return {"artifact_type": "aihot_window_validation_report_v2", "result": "pass",
+                "subject": {"path": subject_path, "sha256": sha256_hex(files[subject_path]),
+                            "artifact_type": "aihot_window_v2"},
+                "identity": _validation_report_identity(capture),
+                "window": window.window.model_dump(mode="json"), "target_item_id_count": len(items),
+                "accepted_pass_index_pair": [capture.canonical_pass_index - 1, capture.canonical_pass_index],
+                "target_day_equal": True, "raw_api_and_ssr_replay": "pass"}
     return build_validation_report_v1(
         subject_path=subject_path,
         files=files,
@@ -4012,6 +4082,21 @@ def slice_persisted_capture(
     ]
     if len(expected_manifest_paths) != 2 or len(set(expected_manifest_paths)) != 2:
         raise DatasetContractError("window_missing", "capture must identify two distinct formal windows")
+    # Extended captures publish only missing days, not necessarily the formal pair.
+    # Discover their own windows without borrowing a day from another capture.
+    extended_paths = []
+    for candidate in sorted((root / "windows").glob("*/manifest.json")):
+        try:
+            payload = json.loads(candidate.read_bytes())
+        except (ValueError, OSError):
+            continue  # Unrelated malformed history is not part of this slice.
+        if (isinstance(payload, dict) and payload.get("artifact_type") == "aihot_window_v2"
+                and isinstance(payload.get("capture"), dict)
+                and payload["capture"].get("path") == capture_path):
+            extended_paths.append(candidate.relative_to(root).as_posix())
+    extended = bool(extended_paths)
+    if extended:
+        expected_manifest_paths = extended_paths
     manifest_files = load_persisted_artifacts(root, expected_manifest_paths)
     manifest_payloads: dict[str, dict[str, object]] = {}
     manifest_shapes: dict[str, WindowManifest] = {}
@@ -4022,7 +4107,7 @@ def slice_persisted_capture(
             artifact_name="window manifest",
         )
         try:
-            window = WindowManifest.model_validate(payload)
+            window = (WindowManifestV2 if extended else WindowManifest).model_validate(payload)
         except ValidationError as error:
             raise DatasetContractError("window_integrity_failed", "persisted window manifest is invalid") from error
         manifest_payloads[manifest_path] = payload
@@ -4062,6 +4147,7 @@ def slice_persisted_capture(
             capture_manifest=capture_payload,
             files=files,
             raw_files=raw_files,
+            _version=2 if extended else 1,
         )
         validated_windows.append((window, items))
     ordered_windows = sorted(validated_windows, key=lambda candidate: candidate[0].window.start_inclusive)
@@ -4069,6 +4155,17 @@ def slice_persisted_capture(
     coverage_end = ordered_windows[-1][0].window.end_exclusive
     if _timestamp(start) < _timestamp(coverage_start) or _timestamp(end) > _timestamp(coverage_end):
         raise DatasetContractError("window_out_of_coverage", "offline slice is outside persisted normalized coverage")
+    cursor = _timestamp(start)
+    for window, _items in ordered_windows:
+        window_start = _timestamp(window.window.start_inclusive)
+        window_end = _timestamp(window.window.end_exclusive)
+        if window_end <= cursor:
+            continue
+        if window_start > cursor:
+            raise DatasetContractError("window_out_of_coverage", "offline slice has an uncollected day")
+        cursor = window_end
+        if cursor >= _timestamp(end):
+            break
     records_by_id: dict[str, AihotItemV1] = {}
     for _window, items in ordered_windows:
         for item in items:
@@ -4083,6 +4180,7 @@ def capture_dataset(
     start: str,
     end: str,
     output_root: str | Path = "benchmarks/aihot",
+    fill_missing: bool = False,
 ) -> CaptureResult:
     tool_root = Path(__file__).resolve().parents[3]
     observed_at = datetime.now(UTC)
@@ -4107,6 +4205,6 @@ def capture_dataset(
         schema_bytes=(Path(__file__).resolve().parent / "schemas" / "aihot-item-v1.schema.json").read_bytes(),
     )
     try:
-        return writer.capture(start=start, end=end)
+        return writer.capture(start=start, end=end, fill_missing=fill_missing) if fill_missing else writer.capture(start=start, end=end)
     finally:
         transport.close()

@@ -192,7 +192,7 @@ def test_generated_config_dispatches_active_wechat_but_never_paused_mp2rss(
         return []
 
     monkeypatch.setattr(runner, "_fetch_and_apply_sources", fake_fetch_and_apply_sources)
-    monkeypatch.setattr(runner, "read_value", lambda name: "fixture-token")
+    monkeypatch.setattr(runner, "read_value", lambda name: "fixture-token" if name == "X_BEARER_TOKEN" else "")
     monkeypatch.setattr(runner.db, "checkpoint_db", lambda path: None)
     monkeypatch.setattr(runner.db, "maintain_fts", lambda path: None)
 

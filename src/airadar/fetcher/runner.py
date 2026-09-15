@@ -25,6 +25,7 @@ from ..sources.sync import (
 from ..sources.x_state import validate_x_runtime_meta, without_x_runtime_meta, x_runtime_meta
 from .dedup import FetchedItem, _normalized_url, upsert_item
 from .http_client import FeedResponse, fetch_feed
+from .raw_capture import RawCapture
 from .rss import parse_feed
 from .web import fetch_web_source
 from .wechat import normalize_wechat_avatar_url, scrape_article
@@ -50,6 +51,7 @@ class SourceFetchSummary:
 @dataclass(frozen=True)
 class FetchSummary:
     sources: list[SourceFetchSummary] = field(default_factory=list)
+    raw_capture_error: str | None = None
 
     @property
     def inserted(self) -> int:
@@ -114,7 +116,16 @@ def reload_sources(conn: sqlite3.Connection, path: Path | None = None) -> list[S
 
 
 def fetch_source(conn: sqlite3.Connection, source: SourceConfig) -> SourceFetchSummary:
-    return _apply_source_feed_result(conn, _fetch_source_feed(source))
+    root = read_value("AI_RADAR_RAW_CAPTURE_DIR").strip()
+    if not root:
+        return _apply_source_feed_result(conn, _fetch_source_feed(source))
+    archive = RawCapture(Path(root), [source], code_root=db.PROJECT_ROOT)
+    try:
+        result = _apply_source_feed_result(conn, _fetch_source_feed(archive.prepare(source)), archive)
+        archive.finish()
+        return result
+    finally:
+        archive.close()
 
 
 def _fetch_source_feed(source: SourceConfig) -> _SourceFeedResult:
@@ -217,9 +228,12 @@ def _persist_x_failure(conn: sqlite3.Connection, result: _SourceFeedResult) -> N
     conn.commit()
 
 
-def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResult) -> SourceFetchSummary:
+def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResult,
+                              archive: RawCapture | None = None) -> SourceFetchSummary:
     source = result.source
     if result.error is not None:
+        if archive is not None:
+            archive.record(source, [], status="failed", http_status=result.http_status_code)
         try:
             _persist_x_failure(conn, result)
         except Exception as exc:
@@ -233,6 +247,8 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
         return SourceFetchSummary(source_id=source.slug, error=result.error, http_status_class=result.http_status_class, http_status_code=result.http_status_code)
     response = result.response
     if response is None:
+        if archive is not None:
+            archive.record(source, [], status="failed")
         return SourceFetchSummary(source_id=source.slug, error="RuntimeError: missing feed response")
 
     try:
@@ -279,6 +295,8 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
                 if cursor.rowcount != 1:
                     raise ValueError(f"X source state changed while fetching: {update.source_id}")
         if response.not_modified:
+            if archive is not None:
+                archive.record(source, [], status="not_modified", http_status=response.status_code)
             if source.kind == "wechat":
                 _backfill_wechat_avatar_cache(conn, source.slug)
                 conn.commit()
@@ -293,6 +311,11 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
         is_wechat = source.kind == "wechat"
         if is_wechat:
             items = _enrich_wechat_bodies(conn, items)
+        if archive is not None:
+            headers = {k.lower(): v for k, v in (response.headers or {}).items()}
+            response_meta = {"etag": headers.get("etag"), "last_modified": headers.get("last-modified")}
+            archive.record(source, items, status="success", response_meta=response_meta,
+                           http_status=response.status_code)
         inserted = 0
         for item in items:
             inserted += 1 if upsert_item(conn, item, wechat=is_wechat) else 0
@@ -306,17 +329,21 @@ def _apply_source_feed_result(conn: sqlite3.Connection, result: _SourceFeedResul
         )
     except Exception as exc:
         conn.rollback()
+        if archive is not None:
+            # A failed write/apply leaves a visible incomplete source, never an empty success.
+            archive.record(source, [], status="failed", http_status=response.status_code)
         return SourceFetchSummary(source_id=source.slug, error=f"{type(exc).__name__}: {exc}")
 
 
-def _fetch_and_apply_sources(conn: sqlite3.Connection, sources: list[SourceConfig]) -> list[SourceFetchSummary]:
+def _fetch_and_apply_sources(conn: sqlite3.Connection, sources: list[SourceConfig],
+                             archive: RawCapture | None = None) -> list[SourceFetchSummary]:
     if not sources:
         return []
     summaries: list[SourceFetchSummary | None] = [None] * len(sources)
     workers = min(SOURCE_FETCH_WORKERS, len(sources))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(_fetch_source_feed, source): (index, source)
+            executor.submit(_fetch_source_feed, archive.prepare(source) if archive else source): (index, source)
             for index, source in enumerate(sources)
         }
         for future in as_completed(futures):
@@ -325,7 +352,8 @@ def _fetch_and_apply_sources(conn: sqlite3.Connection, sources: list[SourceConfi
                 result = future.result()
             except Exception as exc:
                 result = _SourceFeedResult(source=source, error=f"{type(exc).__name__}: {exc}")
-            summaries[index] = _apply_source_feed_result(conn, result)
+            summaries[index] = (_apply_source_feed_result(conn, result, archive) if archive
+                                else _apply_source_feed_result(conn, result))
     return [summary for summary in summaries if summary is not None]
 
 
@@ -621,9 +649,13 @@ def _checkpoint_after_fetch(db_path: Path | None) -> None:
 def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSummary:
     db.migrate(db_path)
     conn = db.get_conn(db_path)
+    archive = None
+    raw_root = read_value("AI_RADAR_RAW_CAPTURE_DIR").strip()
     try:
         reload_sources(conn, path)
         sources = load_fetchable_sources_from_db(conn)
+        if raw_root:
+            archive = RawCapture(Path(raw_root), sources, code_root=db.PROJECT_ROOT)
         unavailable: list[SourceFetchSummary] = []
         if not read_value("X_BEARER_TOKEN").strip():
             unavailable = [
@@ -635,6 +667,7 @@ def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSum
                         x_failure_reason="x_bearer_token_not_configured",
                         x_failure_recovery="configure_X_BEARER_TOKEN_then_rerun_fetch",
                     ),
+                    archive,
                 )
                 for source in sources
                 if source.kind == "x" and source.meta.get("adapter") == "x_api"
@@ -649,8 +682,17 @@ def fetch_all(path: Path | None = None, db_path: Path | None = None) -> FetchSum
                 for source in sources
                 if not (source.kind == "x" and source.meta.get("adapter") == "x_api")
             ]
-        summaries = unavailable + _fetch_and_apply_sources(conn, sources)
+        summaries = unavailable + (_fetch_and_apply_sources(conn, sources, archive) if archive
+                                   else _fetch_and_apply_sources(conn, sources))
+        if archive is not None:
+            archive.finish()
         return FetchSummary(summaries)
+    except Exception as exc:
+        if raw_root:
+            return FetchSummary(raw_capture_error=type(exc).__name__)
+        raise
     finally:
+        if archive is not None:
+            archive.close()
         conn.close()
         _checkpoint_after_fetch(db_path)

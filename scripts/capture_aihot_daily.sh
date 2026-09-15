@@ -8,8 +8,8 @@
 #
 # Why this runs daily at all: AIHOT's server only serves a 7-day rolling window
 # (`ensure_window_covered` derives coverage_start from the last response date minus 7 days), and the
-# capture tool only accepts the canonical window the server currently designates. A day not captured
-# on the day is gone -- there is no backfill.
+# legacy mode accepts only the canonical pair. Opt-in fill-missing mode can recover missing
+# days while they remain inside the API's observed rolling coverage.
 set -uo pipefail
 
 WORKTREE="${AIHOT_CAPTURE_WORKTREE:-/Users/lindong/research/ai-radar-worktrees/t3-aihot-recapture-20260907}"
@@ -144,7 +144,15 @@ print(best)
 PY
 )"
 requested=""
-if [ -n "$last_end" ] && [ "$last_end" \> "$START" ]; then
+if [ "${AIHOT_CAPTURE_FILL_MISSING:-0}" = 1 ]; then
+  # Opt-in only: six complete days fit inside the API's rolling seven-day coverage.
+  # The collector verifies every requested day's actual response-Date bounds.
+  START="$(date -u -v-6d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '6 days ago' +%Y-%m-%dT00:00:00Z)"
+  requested=1
+  AIHOT_CAPTURE_CMD="${AIHOT_CAPTURE_CMD:-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture}"
+  eval "$AIHOT_CAPTURE_CMD --fill-missing --start \"$START\" --end \"$END\""
+  rc=$?
+elif [ -n "$last_end" ] && [ "$last_end" \> "$START" ]; then
   echo "no request: windows already cover through $last_end, so the canonical pair"
   echo "            $START .. $END overlaps it and would drop its new day"
   rc=0
@@ -204,7 +212,7 @@ if [ "$RETAIN" -gt 0 ] 2>/dev/null; then
   # first RETAIN days on a new machine and then prunes the whole history at once -- and it fails
   # that way silently, which is exactly the shape this repo keeps getting bitten by.
   before=$(du -sm benchmarks/aihot/captures 2>/dev/null | cut -f1)
-  cutoff=$(python3 -c "import datetime,sys; print((datetime.datetime.now(datetime.UTC)-datetime.timedelta(days=int(sys.argv[1]))).strftime('%Y%m%dT%H%M%SZ'))" "$RETAIN")
+  cutoff=$(python3 -c "import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=int(sys.argv[1]))).strftime('%Y%m%dT%H%M%SZ'))" "$RETAIN")
   for d in benchmarks/aihot/captures/aihot-*; do
     [ -d "$d" ] || continue
     stamp="${d##*/aihot-}"

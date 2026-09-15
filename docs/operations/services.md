@@ -6,6 +6,8 @@
 
 ## 服务
 
+评测原始数据的留档与冻结入口见 [持续采集说明](continuous-eval-data.md)。该增量目前仅本地实现，不能将现有 pipeline 的持续 fetch 等同于已经启用了完整原始输入归档。
+
 | 服务 | 自动启动 | 当前状态 | 生命周期脚本 | Instructions |
 |---|---|---|---|---|
 | serve | launchd, KeepAlive=true | 已加载 | `./install.sh serve` / `./uninstall.sh serve` / `./status.sh serve` | [deploy/launchd/ai-radar-serve.plist.example](../../deploy/launchd/ai-radar-serve.plist.example) |
