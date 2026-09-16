@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AIHOT × AI RADAR · 评测体系设计报告</title>
+  <link rel="stylesheet" href="report.css">
+  <script defer src="report-data.js"></script><script defer src="report.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到报告正文</a>
+<aside class="sidebar">
+  <div class="brand">AIHOT <span>×</span> AI RADAR</div><p class="small muted">评测与迭代 · 设计报告<br>2026 年 9 月 16 日</p>
+  <nav aria-label="报告章节">
+    <a href="#overview">01　目标与架构</a><a href="#data">02　原始数据</a><a href="#coverage">03　拟合维度</a>
+    <div class="nav-label">逐对象 · 三层设计</div>
+    <a href="#O1">O1　新闻准入</a><a href="#O2">O2　新闻评分</a><a href="#O3">O3　内容富化</a><a href="#O4">O4　精选组合</a><a href="#O5">O5　最终可见内容</a>
+    <a href="#pending">04　尚未完成的设计</a>
+  </nav>
+  <p class="side-note">这是一份设计提案。<br>不是现有代码的能力报告，<br>也不是已运行评测的成绩单。</p>
+</aside>
+<main id="main">
+<header><div class="eyebrow">DESIGN PROPOSAL · 待审核</div><h1>以用户看到的内容为终点</h1><p class="lead">用同一时间段、共同来源的过滤前新闻，逐条拟合 AIHOT 的页面输出。组件评测用于归因，完整页面结果用于验收。</p><div class="notice">本报告按既有前置定义展开设计；未选定的判官模型、尚未形成的校验方案与阈值会明确留空，不用旧实验成绩补齐。</div></header>
+<section id="overview"><div class="section-heading"><span>01</span><h2>一条推理链，五个评测对象</h2></div>
+<p>三个直接 LLM 组件，两个组合对象。O4 / O5 复用前面的 LLM 输出，不代表额外新增两次 LLM 调用，也不能把五个成绩重复加总。</p>
+<div class="architecture" aria-label="拟议推理架构">
+ <div class="source-node">过滤前原始输入<br><small>共同来源 × 连续时段</small></div>
+ <div class="pipeline">
+  <button data-node="prefilter" data-object="O1">准入<small>prefilter · O1</small></button><span aria-hidden="true">→</span>
+  <button data-node="scorer" data-object="O2">评分<small>scorer · O2</small></button><span aria-hidden="true">→</span>
+  <button data-node="enrich" data-object="O3">内容富化<small>enrich-v2 · O3</small></button><span aria-hidden="true">→</span>
+  <button data-node="curator" data-object="O4">精选 / 归档<small>组合 workflow · O4</small></button><span aria-hidden="true">→</span>
+  <button data-node="presentation" data-object="O5">页面呈现<small>最终可见 · O5</small></button>
+ </div><p class="small muted">这是职责与依赖示意，不规定实际调用调度。选择对象后，高亮它涉及的路径；普通新闻也进入页面，不要求先成为精选。</p>
+</div>
+<div class="three-columns"><div><h3>L1 · 怎样算</h3><p>对象、题目、判官、自动指标、判官校验。先知道每个数字到底衡量什么。</p></div><div><h3>L2 · 留下什么</h3><p>保存输入、逐题输出、指标、评价和归因，让每轮结果能被复盘。</p></div><div><h3>L3 · 何时可信</h3><p>控制身份、可比性、评价来源、采信与归因准入，不把缺测当通过。</p></div></div>
+</section>
+<section id="data"><div class="section-heading"><span>02</span><h2>原始数据：宁少，不混、不补造</h2></div>
+<div class="two-columns"><article class="panel"><h3>输入：AI RADAR 过滤前归档</h3><p>保留共同来源的全量候选，包括后来被过滤的新闻。以采集时实际取得的文章版本及原始证据为准，不从可变业务库倒推历史输入。</p></article><article class="panel"><h3>目标：AIHOT 网站实际可见输出</h3><p>同窗口的页面捕获，以及支撑页面解释的 API / SSR 证据。参考输出是页面呈现，不是 API 中所有存在的字段。</p></article></div>
+<p class="callout"><strong>9/06—9/13 是期望范围，不是可用数据结论。</strong>UTC+8，含首尾 8 天 / 192 小时，对应 [2026-09-06 00:00, 2026-09-14 00:00)。实际完整连续窗口、来源数、新闻数、可用题数尚未核定。本报告不重新审计当前库存。</p>
+<div class="table-wrap"><table><thead><tr><th>准入面</th><th>拟采用的规则</th><th>不能据此推断</th></tr></thead><tbody>
+<tr><td>共同来源</td><td>同窗至少有一次 AIHOT 出现证据，并核对来源入口与语义映射；无证据来源隔离待核。</td><td>未见过 ≠ AIHOT 永不采集；不能只留 URL 交集。</td></tr>
+<tr><td>连续性</td><td>逐来源 × 采集时槽核对成功、成功空、失败、缺失；304 必须能追溯依赖内容。</td><td>有新闻的日期 ≠ 全天采集完整；不拼接断续窗口。</td></tr>
+<tr><td>文章配对</td><td>URL + 来源身份 + 内容版本 + 实际可用时间；分别保存发布时间、归窗时间与观察时间。</td><td>同 URL ≠ 同输入；AIHOT 内部输入等价性可仍未核实。</td></tr>
+<tr><td>参照状态</td><td>明确区分值已知、明确为空、页面隐藏、尚未捕获；缺失参照不填默认值。</td><td>AIHOT 未展示 ≠ prefilter 负例；看不到 tags ≠ tags=[]。</td></tr>
+<tr><td>排除范围</td><td>T5 旧实验、旧评测 runs，以及微信专用源 / 独有 /wechat 解读、interpret、知识库。</td><td>不按微信域名一刀切；共享新闻源里的微信原文仍可准入。网站所需数据继续保留。</td></tr>
+<tr><td>分组与历史</td><td>按真实使用历史划分开发、回归和真正未接触集；同事件、转载与文章版本不跨组。</td><td>反复看过的历史题不能改名 holdout。精选需初始归档状态与 warm-up。</td></tr>
+</tbody></table></div>
+<div class="flow"><span>来源 / 窗口准入</span><b>→</b><span>保留完整 raw 候选池</span><b>→</b><span>配对 AIHOT 页面参照</span><b>→</b><span>按对象派生题集</span></div>
+<p class="small muted">AIHOT 有、Radar 原始归档没有的条目仍进覆盖缺口账；不能删除它们以后宣称总体召回更高。原始证据保持不变，各题集只是不同派生视图。</p>
+</section>
+<section id="coverage"><div class="section-heading"><span>03</span><h2>最终需要拟合什么</h2></div><p>覆盖按用户看到的内容划分，不按内部模块划分。CSS 风格与独立性能优化不在本次范围；隐藏、截断、错误链接造成的内容差异在范围内。</p><div class="table-wrap"><table><thead><tr><th>维度</th><th>AIHOT 参照内容</th><th>直接归因 → 最终验证</th></tr></thead><tbody>
+<tr><td>D1 · 评分</td><td>可见 AI 分数、分档 / 徽标、跨页面同条分值</td><td>O2 → O4 / O5</td></tr><tr><td>D2 · 分类</td><td>类别归属、分类后的条目集合</td><td>O3 + O1 → O5</td></tr><tr><td>D3 · 标签</td><td>标签具体集合、空集、显示与隐藏</td><td>O3 → O5</td></tr><tr><td>D4 · 精选</td><td>成员、数量、顺序、重复与归档</td><td>O1–O3 → O4 → O5</td></tr><tr><td>D5 · 推荐理由</td><td>事实依据、编辑角度、具体性与回退后文本</td><td>O3 / O2 → O5</td></tr><tr><td>D6 · 新闻内容</td><td>标题、摘要、实际展示的正文片段与附带文本</td><td>O3 → O5</td></tr><tr><td>D7 · 普通列表</td><td>收录、遗漏、额外条目、顺序及去重</td><td>O1–O3 → O5</td></tr><tr><td>D8 · 事实身份</td><td>来源、作者、时间、原文链接、媒体与相关信息归属</td><td>主要确定性逻辑 → O5</td></tr><tr><td>D9 · 内容组织</td><td>日报分组、热点等双方确有的共同面</td><td>O5；共同面与参照覆盖待核</td></tr>
+</tbody></table></div></section>
+<section id="object-section"><div class="section-heading"><span>对象</span><h2>逐对象检查三层设计</h2></div><p class="small muted">状态只表示设计成熟度，不表示代码已实现或评测已通过。点击对象可切换；每个对象均列出五个 L1 槽位、七类 L2 资产与五个 L3 主题。</p><div id="object-tabs" class="object-tabs" aria-label="选择评测对象"></div><div id="object-detail" aria-live="polite"></div><noscript>需要启用 JavaScript 查看逐对象设计。可读取同目录 objects-and-metrics.md 与 raw-data.md。</noscript></section>
+<section id="pending"><div class="section-heading"><span>04</span><h2>尚未完成的设计，不写成已落实</h2></div><div class="table-wrap"><table><thead><tr><th>事项</th><th>当前边界</th><th>后续所需产物</th></tr></thead><tbody>
+<tr><td>真实数据集</td><td>有准入原则；尚未冻结本次题集</td><td>连续窗口、共同来源清单、配对和缺口账、按对象题量</td></tr>
+<tr><td>语义判官</td><td>O3 / O5 有评价方向；没有选定模型、prompt 与量表</td><td>判官定义、输出解释、校验题与真实校验结果；未校验读数不采信</td></tr>
+<tr><td>成功标准</td><td>有指标候选与边界；没有新达标阈值</td><td>按维度的聚合、基线、阈值、回归判据；不靠总分相互抵消</td></tr>
+<tr><td>运行与资产</td><td>三层结构已展开；没有新运行成绩</td><td>适配器、具体资产格式、身份锁定和采信机制；不自动继承旧体系“通过”</td></tr>
+<tr><td>优化循环</td><td>拟按题归因，再验证组合与最终页面</td><td>冻结输入 → 基线 → 差异归因 → 单项干预 → 同题回归 → 完整页面复验；调用预算另定</td></tr>
+</tbody></table></div><p class="callout">本轮仅交付设计报告。数据冻结、判官选择、L1/L2/L3 的执行实现和新一轮离线优化尚未启动；先由用户审核这份设计，再进入后续建设。</p></section>
+<footer><h3>依据与阅读边界</h3><p>内容依据：前置定义提交 <code>3d12f36</code>。没有把旧体系可运行状态当作新设计完成证据。</p><a href="README.md">范围与覆盖原文</a> · <a href="raw-data.md">原始数据定义</a> · <a href="objects-and-metrics.md">对象 / 指标 / 建题原文</a><p class="small muted">本页不连接生产服务，不触发采集或模型调用。链接文档供追溯；所有主要结论均直接展示在报告内。</p></footer>
+</main></body></html>
