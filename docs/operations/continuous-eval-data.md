@@ -4,9 +4,9 @@
 
 ## 两条采集链
 
-### 独立采集与处理（2026-09-16 本地实现，尚未启用）
+### 独立采集与处理（2026-09-16 已获批启用）
 
-本地验证：115 项定向测试通过，2 项真实微信公众号联网测试跳过；真实 loopback 双 RSS 在主库写锁占用时仍完成 raw 和后续导入，进程中断及重复投递对照通过。独立审查发现的 A4 告警入口遗漏已修复并复核，详细边界见 [采集解耦 ADR](../adr/20260916-e3a8-decouple-collection-from-processing.md)。以下仍是待获批启用步骤，不代表新生产调度已运行。
+本地验证：115 项定向测试通过，2 项真实微信公众号联网测试跳过；真实 loopback 双 RSS 在主库写锁占用时仍完成 raw 和后续导入，进程中断及重复投递对照通过。独立审查发现的 A4 告警入口遗漏已修复并复核，详细边界见 [采集解耦 ADR](../adr/20260916-e3a8-decouple-collection-from-processing.md)。本机启用及真实读数见末节；以下保留其他环境的启用前置条件。
 
 新增 `collector.sh`（也可 `pipeline.sh --collect-only`）独立抓取入口，使用 `.collector.flock`；业务处理仍使用 `.pipeline.flock`。只有配置 `AI_RADAR_DECOUPLED_INGESTION=1` 后才切换：collector 执行原 egress/微信浏览器预检和 `collect`，不执行 AI；pipeline 执行 `ingest` 再跑原过滤、评分、enrich、精选和解读。直接 `./run.sh fetch` 在该模式拒绝运行，避免两个游标写者。
 
@@ -14,11 +14,13 @@
 
 单源新闻与游标在采集库同事务写入压缩 outbox，即便整轮中断，已取得输入仍能交给主库。`ingest` 固定本轮待处理上界、顺序导入；主库新闻、该批 runtime 与确认记录同事务，提交后删除对应 outbox。中断后重试不会用旧批覆盖较新的主库新闻。原始评测资产仍走上文 `radar_raw_v1` 完整性规则，业务投递成功不代表中断 raw 轮可做完整评测。
 
+已确认副本清理若遇 collector 的 SQLite 写锁，本轮延后清理并继续后续导入，下轮按 ack 处理，不让清理争锁中止 AI 处理。仅捕获该处 SQLITE_BUSY，其他错误仍失败；详见 [d362](../adr/20260916-d362-defer-busy-outbox-cleanup.md)。`pending_batches` 是尚未清理的队列记录数，可能含已导入并确认的批次，不等于未导入新闻数。
+
 collector 的原始抓取日志在 `logs/collector/pipeline-*.log`；处理日志仍在 `logs/pipeline-*.log`，其中 `ingest applied_batches=... already_applied_batches=... pending_batches=...` 是投递结果，不是抓取成功率。A4 继续使用真实 fetch 完成轮（包含 collector 日志），A2/主处理心跳不拿 collector 成功代替。源异常、预检与原始留档失败仍通过现有 W1/A4 链观测；投递错误使处理轮失败，由原 A2 心跳链观测，不新增告警阈值或另一套状态机。W1 在全处理轮成功之外，还要求该 generation 实际消费了完整成功的采集轮，且其完成时间不早于当前 W1 故障；空队列不能关闭 W1。
 
 outbox 自包含、不依赖即将滚动清理的 raw 文件，因此未投递新闻不受 raw 30 天清理影响。代价是采集库新增正文缓存和确认前 payload：payload 确认后释放可复用页，SQLite 文件不会自动缩小；正文缓存及确认账本仍占用磁盘。初始化/采集库错误、哈希损坏或来源配置身份变化均失败并保留批次，不能删队列来“解锁”。来源发生变更时先核对待投递批次与当前 source 配置，再决定兼容导入，不静默套用旧游标。
 
-回退不能只关开关：先停独立采集的后续调度，待现有 collector 完成，保持解耦处理直到 pending 为零且主库已取得最后游标，再关闭开关恢复旧 fetch。若队列有错误未排空，停止切换并保留数据。上述启用/回退是运维入口说明，不代表本次已经修改生产配置。
+回退不能只关开关：先停独立采集的后续调度，待现有 collector 完成，保持解耦处理直到 pending 为零且主库已取得最后游标，再关闭开关恢复旧 fetch。若队列有错误未排空，停止切换并保留数据。回退同样需要相应部署许可，本次没有回退或清空队列。
 
 ### 原始归档与 AIHOT
 
@@ -86,3 +88,15 @@ Radar 首轮在旧 pipeline 结束后持同一 pipeline 排他锁运行真实 `.
 用户另答「每日自动清理」后，安装每日 03:07 的 `run-or-alert --key ai-radar-raw-retention` 调度，以项目 venv Python 和脚本绝对路径执行 `raw_capture.py --root <项目根>/data/raw-capture prune --days 30 --apply`，日志为 `logs/raw-retention.log`。仅清理 rolling runs 的已验证、过期且无保留依赖候选，冻结集排除。crontab 安装后逐字回读一致；同入口的 `retention-preview --days 30` 为 0 候选，本轮未执行真实 prune，未验证积累 30 天后的扫描耗时。
 
 原始留档位于 `data/raw-capture/runs/`。本机证据为 `logs/continuous-capture-first-run-validation-20260915.json`、`logs/continuous-capture-first-fetch-20260915.log`、`logs/aihot-capture-20260915-144117.log` 及 `logs/continuous-capture-crontab-final-20260915.txt`；这些运行数据和配置副本不提交到应用仓。未来评测仍需选两侧完整交集、核对来源并冻结；旧 T5 不补历史缺口。
+
+## 2026-09-16 独立采集启用与并发验证
+
+用户另行批准「启用并验证」。macmini / lindong 于 09:19:52 +08:00 完成切换：等待旧 pipeline 自然结束后持主锁初始化 `data/ingestion.db`，设置 `AI_RADAR_INGESTION_DB=<项目根>/data/ingestion.db` 与 `AI_RADAR_DECOUPLED_INGESTION=1`，保留 raw 路径。用户 crontab 新增每 15 分钟 `collector.sh`；原 pipeline、AIHOT 09:37 和 raw 清理 03:07 调度保留，安装前后整表回读一致。没有终止旧任务，没有推送应用代码。
+
+两轮手动真实 collector 均退出 0：`20260916T012035.396466Z-da8d698d` 为 161 来源 success、4,253 条过滤前输入；`20260916T012306.044143Z-97719c19` 为 161 来源 success、4,250 条。两者均经 `read_run` 内容哈希、行数和依赖闭包校验，均无 304 依赖；跨轮有重复，不能相加当独立新闻数。第二轮启动时实际主写锁被导入占用，采集仍完成。第一轮包含 222 条超过 4,000 字符的正文，gzip 共 3,279,009 字节。
+
+自动调度也取得直接读数：`logs/pipeline-20260916-093000.log` 于 09:30:02 报主锁忙而 SKIP；独立的 `logs/collector/pipeline-20260916-093000.log` 于 09:30:04 开始 fetch，09:33:04 fetch OK、PIPELINE DONE failed=0。这证明处理锁不再挡住采集入口，不等于已取得连续七天。
+
+真实导入暴露了确认后的队列清理争锁：主库成功提交 ack，`_discard` 的 DELETE 遇 SQLITE_BUSY 使旧版退出；重试曾推进至 190 个 ack（含首轮完整确认），没有删除未确认数据。修正及失败证据见 [d362](../adr/20260916-d362-defer-busy-outbox-cleanup.md)。定向隔离测试 24 项通过，覆盖队列写锁持有/释放、确认后重试及调度互斥；新修正的真实导入终态另补读数，不能用该测试替代。
+
+启用代码基线为本地 main `31b3362`（已含 `67ad563` 独立采集）；原有 WIP 原样保留，raw 记录 `code_dirty=true`，不是 clean 评测基线。初始化侧库约 496 MiB，两轮后约 672 MiB；只属启动期读数，不外推 30 天增长。初始化发现一条既有微信 `about:blank` 无法跨源识别，未改删原数据。现场配置备份与 crontab 前后副本在 ignored `logs/ingestion-*20260916*`，不提交凭据或原始数据。

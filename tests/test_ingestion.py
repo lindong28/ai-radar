@@ -125,6 +125,23 @@ def test_ack_then_delete_failure_retries_without_overwriting(setup_queue, monkey
     assert ingestion.consume(main, queue, generation="empty", sources=config)["applied_batches"] == 0
 
 
+def test_busy_collector_defers_only_acknowledged_cleanup(setup_queue, monkeypatch):
+    main, queue, raw, config, source = setup_queue
+    fake_network(monkeypatch, source, [make_item(source)])
+    ingestion.collect(main, queue, raw, config)
+    monkeypatch.setenv("AI_RADAR_SQLITE_BUSY_TIMEOUT_MS", "1")
+    with db.get_conn(queue) as collector_writer:
+        collector_writer.execute("BEGIN IMMEDIATE")
+        result = ingestion.consume(main, queue, generation="busy-collector", sources=config)
+        assert result == {"applied_batches": 2, "already_applied_batches": 0, "pending_batches": 2}
+        with db.get_conn(main) as conn:
+            assert conn.execute("SELECT count(*) FROM items").fetchone()[0] == 1
+            assert conn.execute("SELECT count(*) FROM ingestion_acks").fetchone()[0] == 2
+        collector_writer.rollback()
+    result = ingestion.consume(main, queue, generation="cleanup-retry", sources=config)
+    assert result == {"applied_batches": 0, "already_applied_batches": 2, "pending_batches": 0}
+
+
 @pytest.mark.parametrize("damage", ["payload", "target", "source"])
 def test_invalid_delivery_keeps_pending_batch(setup_queue, monkeypatch, damage):
     main, queue, raw, config, source = setup_queue

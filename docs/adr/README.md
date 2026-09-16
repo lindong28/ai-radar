@@ -6,6 +6,7 @@
 |---|---|---|---|
 | [20260916-74b2](./20260916-74b2-release-db-sync-lock-on-process-exit.md) | DB sync 用内核锁消除重启后的永久阻塞，日志裁剪共用锁 | accepted | 2026-09-16 |
 | [20260916-e3a8](./20260916-e3a8-decouple-collection-from-processing.md) | 采集独立于 AI 处理，以事务性 outbox 可靠交接；仅本地实现 | accepted | 2026-09-16 |
+| [20260916-d362](./20260916-d362-defer-busy-outbox-cleanup.md) | 已确认 outbox 清理争锁时延后，继续主库导入 | accepted | 2026-09-16 |
 | [20260915-1cc7](./20260915-1cc7-retain-continuous-prefilter-inputs.md) | 可选保留过滤前完整输入，并版本化补收 AIHOT 缺窗；仅本地实现 | accepted | 2026-09-15 |
 | [20260915-0eeb](./20260915-0eeb-publish-user-visible-eval-redesign-proposal.md) | 先交付面向最终展示的评测重建设计（仅出版草案，未批准实施） | accepted | 2026-09-15 |
 | [001](./001-deterministic-source-brand-tags.md) | 标签生成优先使用确定性 source/brand 标签 | accepted | 2026-05-12 |

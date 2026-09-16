@@ -182,6 +182,7 @@ def consume(main_path: Path, queue_path: Path, *, generation: str,
 
     main, queue = db.get_conn(main_path), db.get_conn(queue_path)
     applied = repeated = 0
+    cleanup_deferred = False
     try:
         target, binding = identity(main), identity(queue)
         if (binding["target_id"], binding["target_path"]) != (
@@ -209,7 +210,15 @@ def consume(main_path: Path, queue_path: Path, *, generation: str,
                                  (binding["database_id"], batch_id, row["sha256"], generation, completed_at))
                     applied += 1
             # Crash here is safe: the ack prevents replay from overwriting newer main data.
-            _discard(queue, batch_id)
+            if not cleanup_deferred:
+                try:
+                    _discard(queue, batch_id)
+                except sqlite3.OperationalError as exc:
+                    if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
+                        raise
+                    # Collection may own a write transaction. The main ack is
+                    # already durable, so retry cleanup next run without replay.
+                    cleanup_deferred = True
         return {"applied_batches": applied, "already_applied_batches": repeated,
                 "pending_batches": queue.execute("SELECT count(*) FROM ingestion_outbox").fetchone()[0]}
     finally:

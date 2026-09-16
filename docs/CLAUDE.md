@@ -24,7 +24,8 @@
 | [20260916-74b2](adr/20260916-74b2-release-db-sync-lock-on-process-exit.md) | Decision | DB sync 重启遗留锁根因、内核互斥与迁移边界 |
 | [AIHOT 评测重建设计](references/aihot-eval-redesign-20260915/index.html) | Design proposal | 2026-09-15 面向最终用户显示的三层体系草案，含十四日盘点；待审核，未实施 |
 | [20260915-0eeb](adr/20260915-0eeb-publish-user-visible-eval-redesign-proposal.md) | Decision | 仅出版评测重建设计，不启用新体系或替代旧规则 |
-| [20260916-e3a8](adr/20260916-e3a8-decouple-collection-from-processing.md) | Decision | 独立采集、过滤前 raw 与事务性 outbox；生产启用另批 |
+| [20260916-e3a8](adr/20260916-e3a8-decouple-collection-from-processing.md) | Decision | 独立采集、过滤前 raw 与事务性 outbox；已获批启用，读数见 operations |
+| [20260916-d362](adr/20260916-d362-defer-busy-outbox-cleanup.md) | Decision | 已确认队列副本清理争锁时延后，不阻塞后续导入 |
 
 ### docs/operations/ [User]
 
