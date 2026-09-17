@@ -21,7 +21,7 @@
 | 文件 | 性质 | 说明 |
 |---|---|---|
 | [architecture.md](architecture.md) | Mutable snapshot | 系统模块结构、分层、数据流、数据库设计、Web 层、关键抽象 |
-| [20260917-8b86](adr/20260917-8b86-wait-for-collector-process-groups.md) | Decision | 采集进程组退出竞态与监督失败告警修复；实际入口启用待许可 |
+| [20260917-8b86](adr/20260917-8b86-wait-for-collector-process-groups.md) | Decision | 采集进程组退出竞态与监督失败告警修复；已获批启用，19:58 真实入口结束 |
 | [20260917-b8e2](adr/20260917-b8e2-recover-continuous-raw-capture.md) | Decision | 后续 raw 持续采集恢复；已批准并安装调度，新日窗与连续性待验收 |
 | [20260916-74b2](adr/20260916-74b2-release-db-sync-lock-on-process-exit.md) | Decision | DB sync 重启遗留锁根因、内核互斥与迁移边界 |
 | [AIHOT 评测重建设计](references/aihot-eval-redesign-20260915/index.html) | Design proposal | 2026-09-15 面向最终用户显示的三层体系草案，含十四日盘点；待审核，未实施 |
