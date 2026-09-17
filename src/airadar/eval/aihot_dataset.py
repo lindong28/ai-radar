@@ -14,7 +14,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 
@@ -369,6 +369,22 @@ AIHOT_CAPTURE_MANIFEST_V1_SEMANTICS: dict[str, object] = _closed_object_semantic
             "minItems": 2,
             "maxItems": 3,
             "items": _CAPTURE_PASS_V1_SEMANTICS,
+        },
+    }
+)
+
+AIHOT_CAPTURE_MANIFEST_V2_SEMANTICS: dict[str, object] = _closed_object_semantics(
+    {
+        **cast(dict[str, object], AIHOT_CAPTURE_MANIFEST_V1_SEMANTICS["properties"]),
+        "artifact_type": {"type": "string", "const": "aihot_capture_v2"},
+        "public_responses": {"type": "array", "maxItems": 2, "items": _PUBLIC_RESPONSE_V1_SEMANTICS},
+        "probe_errors": {
+            "type": "array", "maxItems": 2,
+            "items": _closed_object_semantics({
+                "surface": {"type": "string", "enum": ["rss", "openapi"]},
+                "request_url": {"type": "string", "format": "http-uri"},
+                "error_code": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+            }),
         },
     }
 )
@@ -2195,6 +2211,47 @@ class CaptureManifest(_ManifestModel):
         return self
 
 
+class SupplementalProbeError(_ManifestModel):
+    """Diagnostic failure only; never evidence of successful public-surface capture."""
+
+    surface: Literal["rss", "openapi"]
+    request_url: str
+    error_code: str
+
+    @field_validator("request_url")
+    @classmethod
+    def validate_request_url(cls, value: str) -> str:
+        return _http_url(value, field_name="request_url")
+
+    @field_validator("error_code")
+    @classmethod
+    def validate_error_code(cls, value: str) -> str:
+        return _non_empty_string(value, field_name="error_code")
+
+
+class CaptureManifestV2(CaptureManifest):
+    artifact_type: Literal["aihot_capture_v2"]  # type: ignore[assignment]
+    probe_errors: list[SupplementalProbeError]
+
+    @model_validator(mode="after")
+    def validate_capture_shape(self) -> CaptureManifestV2:
+        if len(self.passes) not in {2, 3}:
+            raise ValueError("capture must contain exactly two or three ordered passes")
+        successes = [response.surface for response in self.public_responses]
+        failures = [error.surface for error in self.probe_errors]
+        if sorted(successes + failures) != ["openapi", "rss"]:
+            raise ValueError("each supplemental probe must have exactly one success or diagnostic failure")
+        if successes != [surface for surface in ("rss", "openapi") if surface in successes]:
+            raise ValueError("successful probes must retain RSS-to-OpenAPI order")
+        for error in self.probe_errors:
+            _require_request_contract(
+                error.request_url, self.source.base_url, field_name="probe_errors.request_url",
+                expected_path="/feed.xml" if error.surface == "rss" else "/openapi-v1.json",
+                expected_query={},
+            )
+        return self
+
+
 class WindowDescriptor(_ManifestModel):
     start_inclusive: str
     end_exclusive: str
@@ -2261,6 +2318,10 @@ class WindowManifest(_ManifestModel):
 
 class WindowManifestV2(WindowManifest):
     artifact_type: Literal["aihot_window_v2"]  # type: ignore[assignment]
+
+
+class WindowManifestV3(WindowManifest):
+    artifact_type: Literal["aihot_window_v3"]  # type: ignore[assignment]
 
 
 def _validate_extended_day(capture: CaptureManifest, start: str, end: str,
@@ -2418,21 +2479,22 @@ def validate_capture_manifest(
     schema_bytes: bytes,
 ) -> CaptureManifest:
     _validate_manifest_prelude(payload)
+    resilient = payload.get("artifact_type") == "aihot_capture_v2"
     try:
         _validate_json_schema_subset(
             payload,
-            AIHOT_CAPTURE_MANIFEST_V1_SEMANTICS,
+            AIHOT_CAPTURE_MANIFEST_V2_SEMANTICS if resilient else AIHOT_CAPTURE_MANIFEST_V1_SEMANTICS,
             field_path="capture",
         )
     except ValueError as error:
         raise DatasetContractError(
             "manifest_invalid",
-            "capture manifest machine semantics differ from the frozen v1 authority",
+            "capture manifest machine semantics differ from its versioned authority",
         ) from error
     try:
-        manifest = CaptureManifest.model_validate(payload)
+        manifest = (CaptureManifestV2 if resilient else CaptureManifest).model_validate(payload)
     except ValidationError as error:
-        raise DatasetContractError("manifest_invalid", "capture manifest does not match the v1 contract") from error
+        raise DatasetContractError("manifest_invalid", "capture manifest does not match its versioned contract") from error
     if manifest_path != f"captures/{manifest.capture_id}/capture.json":
         raise DatasetContractError(
             "reference_invalid",
@@ -2950,8 +3012,10 @@ def validate_window_projection(
             "window manifest machine semantics differ from the frozen v1 authority",
         ) from error
     try:
-        window = (WindowManifest if _version == 1 else WindowManifestV2).model_validate(payload)
-        capture = CaptureManifest.model_validate(capture_manifest)
+        window_type = {1: WindowManifest, 2: WindowManifestV2, 3: WindowManifestV3}[_version]
+        window = window_type.model_validate(payload)
+        capture_type = CaptureManifestV2 if _version == 3 else CaptureManifest
+        capture = capture_type.model_validate(capture_manifest)
     except ValidationError as error:
         raise DatasetContractError("window_integrity_failed", "window or capture manifest shape is invalid") from error
     expected_window_root = _window_root(window.window.start_inclusive, window.window.end_exclusive)
@@ -3015,7 +3079,7 @@ def validate_window_projection(
             "window_integrity_failed",
             "window tag reconciliation counts or target hash do not match raw replay and reconciliation",
         )
-    if _version == 2:
+    if _version in {2, 3}:
         _validate_extended_day(capture, window.window.start_inclusive, window.window.end_exclusive, raw_files)
         return items
     matching = [
@@ -3134,6 +3198,7 @@ def _load_report_capture(
     *,
     files: Mapping[str, bytes],
     raw_files: Mapping[str, bytes],
+    resilient: bool = False,
 ) -> tuple[dict[str, object], CaptureManifest]:
     capture_bytes = files.get(capture_path)
     if capture_bytes is None:
@@ -3146,7 +3211,7 @@ def _load_report_capture(
         artifact_name="capture.json",
     )
     try:
-        capture_shape = CaptureManifest.model_validate(capture_payload)
+        capture_shape = (CaptureManifestV2 if resilient else CaptureManifest).model_validate(capture_payload)
     except ValidationError as error:
         raise DatasetContractError(
             "manifest_invalid",
@@ -3522,6 +3587,8 @@ class CaptureWriter:
         self,
         staging_root: Path,
         raw_files: dict[str, bytes],
+        *,
+        probe_errors: list[dict[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         definitions = (
             (
@@ -3543,6 +3610,7 @@ class CaptureWriter:
             ),
         )
         references: list[dict[str, object]] = []
+        previous_public_response_date: datetime | None = None
         for (
             surface,
             request_url,
@@ -3550,12 +3618,38 @@ class CaptureWriter:
             accepted_media_types,
             canonical_url_provenance,
         ) in definitions:
-            response = self._send(
-                url=request_url,
-                params=None,
-                surface=surface,
-                accepted_media_types=accepted_media_types,
-            )
+            try:
+                response = self._send(
+                    url=request_url,
+                    params=None,
+                    surface=surface,
+                    accepted_media_types=accepted_media_types,
+                )
+                if probe_errors is not None:
+                    if response.status != 200:
+                        raise DatasetContractError(f"http_{response.status}", "probe requires HTTP 200")
+                    _validate_public_surface_body(surface, response.body)
+                    public_response_date = _http_date(_required_header(response, "Date"))
+                    if previous_public_response_date is not None and public_response_date < previous_public_response_date:
+                        raise DatasetContractError(
+                            "public_response_metadata_invalid",
+                            "supplemental probe Date precedes the previous successful probe",
+                        )
+                    _optional_non_empty_header(response, "ETag")
+                    _optional_non_empty_header(response, "Cache-Control")
+                    previous_public_response_date = public_response_date
+            except DatasetContractError as error:
+                if probe_errors is None:
+                    raise
+                probe_errors.append({"surface": surface, "request_url": request_url,
+                                     "error_code": error.code})
+                continue
+            except ValueError:
+                if probe_errors is None:
+                    raise
+                probe_errors.append({"surface": surface, "request_url": request_url,
+                                     "error_code": "public_response_metadata_invalid"})
+                continue
             compressed = self._store_raw(
                 staging_root,
                 raw_files,
@@ -3788,7 +3882,8 @@ class CaptureWriter:
         }
         return payload, items_path, items_bytes
 
-    def capture(self, *, start: str, end: str, fill_missing: bool = False) -> CaptureResult:
+    def capture(self, *, start: str, end: str, fill_missing: bool = False,
+                resilient: bool = False) -> CaptureResult:
         tool_commit = self._preflight()
         _timestamp(start)
         _timestamp(end)
@@ -3798,7 +3893,10 @@ class CaptureWriter:
         raw_files: dict[str, bytes] = {}
         try:
             started_at = _format_rfc3339(self.now().astimezone(UTC))
-            public_responses = self._capture_public_responses(staging_root, raw_files)
+            probe_errors: list[dict[str, object]] = []
+            public_responses = self._capture_public_responses(
+                staging_root, raw_files, probe_errors=probe_errors if resilient else None,
+            )
             traversals: list[TraversalResult] = []
             pass_payloads: list[dict[str, object]] = []
             observations: list[PassObservation] = []
@@ -3868,7 +3966,7 @@ class CaptureWriter:
             )
             capture_path = f"captures/{self.capture_id}/capture.json"
             capture_payload: dict[str, object] = {
-                "artifact_type": "aihot_capture_v1",
+                "artifact_type": "aihot_capture_v2" if resilient else "aihot_capture_v1",
                 "capture_id": self.capture_id,
                 "started_at": started_at,
                 "finished_at": _format_rfc3339(self.now().astimezone(UTC)),
@@ -3887,6 +3985,8 @@ class CaptureWriter:
                 "canonical_pass_index": decision.canonical_pass_index,
                 "passes": pass_payloads,
             }
+            if resilient:
+                capture_payload["probe_errors"] = probe_errors
             capture_bytes = canonical_json_bytes(capture_payload)
             _write_staged(staging_root, capture_path, capture_bytes)
 
@@ -3907,7 +4007,9 @@ class CaptureWriter:
                     references=ssr_references,
                 )
                 manifest_path = f"{_window_root(window_start, window_end)}/manifest.json"
-                if fill_missing:
+                if resilient:
+                    window_payload["artifact_type"] = "aihot_window_v3"
+                elif fill_missing:
                     window_payload["artifact_type"] = "aihot_window_v2"
                 _write_staged(staging_root, items_path, items_bytes)
                 _write_staged(staging_root, manifest_path, canonical_json_bytes(window_payload))
@@ -3930,7 +4032,7 @@ class CaptureWriter:
                         items_path: items_bytes,
                     },
                     raw_files=raw_files,
-                    _version=2 if fill_missing else 1,
+                    _version=3 if resilient else (2 if fill_missing else 1),
                 )
 
             publish_roots = [
@@ -3974,11 +4076,36 @@ def _persisted_artifact_maps(
     output_root: str | Path,
     *,
     schema_bytes: bytes | None = None,
+    subject_path: str | None = None,
 ) -> tuple[dict[str, bytes], dict[str, bytes]]:
     root = Path(output_root).resolve()
     files: dict[str, bytes] = {}
     raw_files: dict[str, bytes] = {}
+    if subject_path is not None:
+        files.update(load_persisted_artifacts(root, [subject_path]))
+        subject = load_canonical_json_object(files[subject_path], artifact_name="validation subject")
+        window_types = {"aihot_window_v1": WindowManifest, "aihot_window_v2": WindowManifestV2,
+                        "aihot_window_v3": WindowManifestV3}
+        raw_paths: set[str] = set()
+        capture_payload = subject
+        try:
+            subject_type = subject.get("artifact_type")
+            window_type = window_types.get(subject_type) if isinstance(subject_type, str) else None
+            if window_type is not None:
+                window = window_type.model_validate(subject)
+                files.update(load_persisted_artifacts(root, [window.capture.path, window.items.path]))
+                capture_payload = load_canonical_json_object(files[window.capture.path], artifact_name="capture.json")
+                raw_paths.update(reference.response_raw_path for reference in window.tag_observation_responses)
+            capture_type = CaptureManifestV2 if capture_payload.get("artifact_type") == "aihot_capture_v2" else CaptureManifest
+            capture = capture_type.model_validate(capture_payload)
+        except ValidationError as error:
+            raise DatasetContractError("manifest_invalid", "validation subject or dependency shape is invalid") from error
+        raw_paths.update(reference.raw_path for reference in capture.public_responses)
+        raw_paths.update(reference.raw_path for capture_pass in capture.passes for reference in capture_pass.raw_pages)
+        raw_files.update(load_persisted_artifacts(root, sorted(raw_paths)))
     for top_level in ("captures", "windows"):
+        if subject_path is not None:
+            break
         directory = root / top_level
         if not directory.is_dir():
             continue
@@ -4007,8 +4134,45 @@ def validate_persisted_artifact(
     schema_bytes: bytes | None = None,
 ) -> dict[str, object]:
     _validate_relative_path(subject_path)
-    files, raw_files = _persisted_artifact_maps(output_root, schema_bytes=schema_bytes)
+    files, raw_files = _persisted_artifact_maps(
+        output_root, schema_bytes=schema_bytes, subject_path=subject_path,
+    )
     payload = load_canonical_json_object(files[subject_path], artifact_name="validation subject")
+    if payload.get("artifact_type") in {"aihot_capture_v2", "aihot_window_v3"}:
+        window = WindowManifestV3.model_validate(payload) if payload["artifact_type"] == "aihot_window_v3" else None
+        capture_payload, capture = _load_report_capture(
+            window.capture.path if window is not None else subject_path,
+            files=files, raw_files=raw_files, resilient=True,
+        )
+        report: dict[str, object] = {
+            "artifact_type": "aihot_window_validation_report_v3" if window is not None else "aihot_capture_validation_report_v2",
+            "result": "pass",
+            "subject": {"path": subject_path, "sha256": sha256_hex(files[subject_path]),
+                        "artifact_type": payload["artifact_type"]},
+            "identity": {
+                "source_base_url": capture.source.base_url,
+                "first_api_response_observed_at": _format_rfc3339(_http_date(capture.passes[0].raw_pages[0].date)),
+                "clean_tool_commit": capture.tool.commit,
+                "item_schema_path": capture.schema_ref.path,
+                "item_schema_sha256": capture.schema_ref.sha256,
+            },
+            "supplemental_probes": {
+                "validated_surfaces": [reference.surface for reference in capture.public_responses],
+                "probe_errors": capture_payload["probe_errors"],
+                "failure_scope": "diagnostic_only_not_required_for_api_ssr_archive",
+            },
+            "accepted_pass_index_pair": [capture.canonical_pass_index - 1, capture.canonical_pass_index],
+            "raw_api_replay": "pass",
+        }
+        if window is not None:
+            items = validate_window_projection(
+                payload, manifest_path=subject_path, capture_manifest=capture_payload,
+                files=files, raw_files=raw_files, _version=3,
+            )
+            report.update({"window": window.window.model_dump(mode="json"),
+                           "target_item_id_count": len(items), "target_day_equal": True,
+                           "raw_api_and_ssr_replay": "pass"})
+        return report
     if payload.get("artifact_type") == "aihot_window_v2":
         window = WindowManifestV2.model_validate(payload)
         capture_payload, capture = _load_report_capture(window.capture.path, files=files, raw_files=raw_files)
@@ -4181,6 +4345,7 @@ def capture_dataset(
     end: str,
     output_root: str | Path = "benchmarks/aihot",
     fill_missing: bool = False,
+    resilient: bool = False,
 ) -> CaptureResult:
     tool_root = Path(__file__).resolve().parents[3]
     observed_at = datetime.now(UTC)
@@ -4205,6 +4370,11 @@ def capture_dataset(
         schema_bytes=(Path(__file__).resolve().parent / "schemas" / "aihot-item-v1.schema.json").read_bytes(),
     )
     try:
-        return writer.capture(start=start, end=end, fill_missing=fill_missing) if fill_missing else writer.capture(start=start, end=end)
+        options = {}
+        if fill_missing:
+            options["fill_missing"] = True
+        if resilient:
+            options["resilient"] = True
+        return writer.capture(start=start, end=end, **options)
     finally:
         transport.close()

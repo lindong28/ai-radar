@@ -61,7 +61,7 @@ bounded() {
 
 # The canonical window is whatever the server designates; ask for the two most recent complete UTC
 # days and let the tool reject it if that is not the canonical pair.
-END="$(date -u +%Y-%m-%dT00:00:00Z)"
+END="${AIHOT_CAPTURE_END:-$(date -u +%Y-%m-%dT00:00:00Z)}"
 START="$(date -u -v-2d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '2 days ago' +%Y-%m-%dT00:00:00Z)"
 # The capture refuses a dirty TOOL checkout -- it records the checkout's exact HEAD, an
 # eval-identity guarantee. Its data happens to live inside that checkout, so without this line
@@ -144,13 +144,18 @@ print(best)
 PY
 )"
 requested=""
-if [ "${AIHOT_CAPTURE_FILL_MISSING:-0}" = 1 ]; then
+if [ "${AIHOT_CAPTURE_SKIP_FETCH:-0}" = 1 ]; then
+  echo "no source request: supervised windows already validated; retrying pending publication"
+  rc=0
+elif [ "${AIHOT_CAPTURE_FILL_MISSING:-0}" = 1 ]; then
   # Opt-in only: six complete days fit inside the API's rolling seven-day coverage.
   # The collector verifies every requested day's actual response-Date bounds.
-  START="$(date -u -v-6d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '6 days ago' +%Y-%m-%dT00:00:00Z)"
+  START="${AIHOT_CAPTURE_START:-$(date -u -v-6d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '6 days ago' +%Y-%m-%dT00:00:00Z)}"
   requested=1
   AIHOT_CAPTURE_CMD="${AIHOT_CAPTURE_CMD:-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture}"
-  eval "$AIHOT_CAPTURE_CMD --fill-missing --start \"$START\" --end \"$END\""
+  resilient_flag=""
+  [ "${AIHOT_CAPTURE_RESILIENT:-0}" = 1 ] && resilient_flag="--resilient"
+  eval "$AIHOT_CAPTURE_CMD --fill-missing $resilient_flag --start \"$START\" --end \"$END\""
   rc=$?
 elif [ -n "$last_end" ] && [ "$last_end" \> "$START" ]; then
   echo "no request: windows already cover through $last_end, so the canonical pair"
@@ -265,7 +270,13 @@ if [ $rc -eq 0 ]; then
     else
       msg="chore(aihot): retention on a no-request day"
     fi
-    if git -C benchmarks/aihot commit -q -m "$msg"; then
+    if ! git -C benchmarks/aihot commit -q -m "$msg"; then
+      echo "  WARNING: submodule commit failed; this run's output is uncommitted"
+      rc=1
+    fi
+  fi
+  # Retry publication even when the previous attempt already committed the data.
+  if [ $rc -eq 0 ]; then
       sub_sha="$(git -C benchmarks/aihot rev-parse HEAD)"
       echo "  submodule commit: $(git -C benchmarks/aihot rev-parse --short HEAD)"
       # Order is load-bearing and comes from
@@ -365,17 +376,15 @@ if [ $rc -eq 0 ]; then
       # no remote, which is the exact orphan ADR-060's ordering exists to prevent. Caught by an
       # independent reviewer, not by the tests; case 19a now asserts it.
       if [ "$pushed" = 1 ]; then
-        if git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot; then
+        if git diff --quiet HEAD -- benchmarks/aihot; then
+          echo "  pointer already records the verified data commit"
+        elif git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot; then
           echo "  pointer commit: $(git rev-parse --short HEAD)"
         else
           echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
           rc=1
         fi
       fi
-    else
-      echo "  WARNING: submodule commit failed; this run's output is uncommitted"
-      rc=1
-    fi
   fi
     # Deliberately OUTSIDE the "did we stage anything today" branch. The real 2026-09-13
     # failure was not one loud day followed by quiet ones -- it was that every day AFTER the

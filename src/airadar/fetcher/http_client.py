@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
+
+import httpx
 
 from ..egress import selector_httpx_client
 from ..site_config import site_user_agent
@@ -50,13 +53,22 @@ def fetch_document(
     if last_modified:
         headers["If-Modified-Since"] = str(last_modified)
 
-    with selector_httpx_client(
-        callsite_id="fetcher.http_client.fetch_document",
-        request_url=source.url,
-        timeout=timeout,
-        follow_redirects=True,
-    ) as client:
-        response = client.get(source.url, headers=headers)
+    for attempt in range(3):
+        try:
+            with selector_httpx_client(
+                callsite_id="fetcher.http_client.fetch_document",
+                request_url=source.url,
+                timeout=timeout,
+                follow_redirects=True,
+            ) as client:
+                response = client.get(source.url, headers=headers)
+            if response.status_code != 429 and response.status_code < 500:
+                break
+            response.raise_for_status()
+        except (httpx.TransportError, httpx.HTTPStatusError):
+            if attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
     if response.status_code == 304:
         return FeedResponse(
             status_code=304,

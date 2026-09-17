@@ -282,6 +282,14 @@ after=$( cd "$r/tool" && git rev-parse HEAD )
 check "push fails: non-zero"       "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
 check "push fails: no gitlink"     "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
 check "push fails: says why"       "$( cat "$r"/tool/logs/*.log | grep -c 'Not recording the gitlink' )" "1"
+rc=$(AIHOT_CAPTURE_SKIP_FETCH=1 run "$r" 'false --')
+check "retry committed data: exits 0 without refetch" "$rc" "0"
+check "retry committed data: exact remote head" \
+  "$(git -C "$r/data" rev-parse refs/heads/captures/daily)" \
+  "$(git -C "$r/tool/benchmarks/aihot" rev-parse HEAD)"
+check "retry committed data: pointer caught up" \
+  "$(git -C "$r/tool" rev-parse HEAD:benchmarks/aihot)" \
+  "$(git -C "$r/tool/benchmarks/aihot" rev-parse HEAD)"
 rm -rf "$r"
 
 # (d) push reports success but the remote ref is NOT this commit. ADR-060 asks for the remote
@@ -351,7 +359,7 @@ base=$( cd "$r/data" && git rev-parse HEAD )
 ( cd "$r/tool/benchmarks/aihot" && git update-ref refs/remotes/origin/captures/daily "$base" )  # go stale
 rc2=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" 'true --')         # nothing staged, stale ref
 check "stale ref: still exits 0"   "$rc2" "0"
-check "stale ref: says stale"      "$( cat "$r"/tool/logs/*.log | grep -c 'local remote-tracking ref was stale' )" "1"
+check "stale ref: exact remote verification on both runs" "$( cat "$r"/tool/logs/*.log | grep -c 'submodule push: .* (verified)' )" "2"
 check "stale ref: no false alarm"  "$( cat "$r"/tool/logs/*.log | grep -c 'is on no remote-tracking ref, and the remote' )" "0"
 rm -rf "$r"
 

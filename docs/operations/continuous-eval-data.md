@@ -2,6 +2,8 @@
 
 > 新采集配置已于 2026-09-15 获用户批准并启用；真实首轮读数见末节。旧 T5 实验不是新数据来源；过去未留原始输入的窗口不能据业务数据库补成完整候选全集。
 
+> 2026-09-17 的恢复修复尚未启用：现有生产调度仍运行原代码，新增小时 AIHOT 与五分钟健康检查入口未安装。当前实施与发布边界见本页末节，不将前两日的启用读数外推为此次修复验收。
+
 ## 两条采集链
 
 ### 独立采集与处理（2026-09-16 已获批启用）
@@ -106,3 +108,25 @@ Radar 首轮在旧 pipeline 结束后持同一 pipeline 排他锁运行真实 `.
 新版真实 `./run.sh ingest` 退出 0，generation 为 `activation-busyfix-20260916`：`applied_batches=296 already_applied_batches=1 pending_batches=0`。09:45:00 +08:00 只读核对主库有连续批号 1—486 共 486 个 ack、3 个完整轮确认，分别对应上述 09:20、09:23、09:30 采集；队列为 0，主/侧库身份绑定一致。第三轮 raw `20260916T013031.585205Z-9eeb9659` 为 161 来源 success、4,251 条输入，内容/行数/依赖校验通过。抽查三个不同来源正文（62,946、118,286、143,045 字符），主库与首轮 raw 逐字一致。这些只覆盖本次交接，不声称既有正文由本轮首次写入，也不把主库当不可变 raw。
 
 此时持续运行机制为 macOS cron daemon 下 lindong 的用户 crontab，不依赖本 session 子进程；不是另起一个 agent 后台任务。原始输入位于主树 `data/raw-capture/runs/`，投递队列位于 `data/ingestion.db`。本次没有额外手动启动评分/精选调用，AIHOT 调度未在本次改动；完整评测窗口仍须未来按两侧交集审计、来源核对并冻结，不能承诺等七天就自动得到七天合格集。
+
+## 2026-09-17 持续采集恢复修复（待启用）
+
+用户要求修复后续持续采集，不回填历史缺口。Radar 留档继续保存完整 prefilter 输入，不以 prefilter、评分、AIHOT 是否出现或精选结果预筛。评测只取共同来源；`wx_wechat2rss` 属微信专用来源，不计入共同来源健康检查，但不因此停止网站采集或删除其数据。
+
+| 本地入口 | 行为与启用边界 |
+|---|---|
+| `collector.sh` → `scripts/collection_supervisor.py` | 总预算 14 分钟，最多尝试 3 次，间隔 15 秒；网络仍并发，trafilatura 提取互斥，既有 pipeline/outbox 双锁不变 |
+| `scripts/collect_aihot_supervised.sh` | 计划每小时运行；独立 job 锁、40 分钟预算；从已初始化的 `capture_start` 起保留欠交付日，有通过校验的窗口不重抓，继续未完成发布 |
+| `scripts/check_collection_health.sh` | 计划每 5 分钟运行；Radar 超过 20 分钟无完成采集或共同来源失败、AIHOT 完整 UTC 日到期 2 小时未交付时告警，复用 im-notify 状态去重/恢复 |
+
+后两个脚本要求显式 `AIHOT_CAPTURE_WORKTREE` 指向获准的干净运行树；supervisor 状态位于 `data/collection-state`，日志在 `logs/collection-supervisor/aihot.log` 与 `health.log`。新状态须先执行 `scripts/collection_supervisor.py --state-dir <状态目录> init --capture-start <启用日T00:00:00+00:00>`；启用日由生产切换确定，不借初始化回填旧缺口。已有状态拒绝重新初始化，以免忘记欠交付日。此命令及新 cron 尚未在生产启用，生产 cron/env 修改仍须另行审批。
+
+新格式为 `capture_v2` / `window_v3` / `report_v3`，RSS/OpenAPI 补充探针失败保留诊断，不阻断可用 API/SSR。校验和 freeze 支持新格式；旧 `slice` 明确拒绝 `capture_v2`，本次不扩展它。旧格式语义保持不变；已交付窗口合法达到 30 天保留期不作假缺口，每次健康检查不逐窗扫描全树 hash。
+
+实现审查首轮两条 HIGH（同轮重试前重查已有窗口、补充 OpenAPI Date 倒序只记诊断）已修复，独立 reviewer 两问复核放行，无新增 findings。最终本地定向结果为 7 个测试文件 537 passed、1 deselected（54.38 秒），shell 78 项断言通过；覆盖有限重试成功/耗尽/超时子进程组终止、HTTP 暂时与永久错误、补充探针 404/异常日期降级及 API/SSR 失败严格拒绝、8 worker 提取互斥与 7 类真实文本输出等价。ruff 指出的单项 `Callable` import 已机械移至 `collections.abc`。唯一排除项在基线 `371d21a` 复现，错误码期望 `output_root_invalid`、实际 `git_checkout_invalid`，去向见 [testing.md](../issues/testing.md)。这些是本地验证，不能外推为真实 cron、新格式远端发布或通知已启用及验收，也不证明未来永不中断。
+
+主线程 09-17 只读取数：`claude_youtube` 于 03:15Z 返回 200/15 条，03:30Z 与 03:45Z 返回 404。这是上游间歇失败，不删除来源；重试是否恢复及连续完整窗口仍须据后续 raw 实测。共享 parser 的 native 崩溃归因仍为假设，没有确定性 native 复现。
+
+数据发布另被 Git 安全扫描阻塞。主线程重跑确认 52 个 `grafana-api-key` 命中均来自公开分页 `canonical_query.cursor`，解码为字段键 `a,c,i,k,v` 的 base64 JSON；等待用户授权精确修复误报，不改 raw、不使用 `--no-verify`、不关闭 scanner。`captures/daily` 数据 push 只沿用 [c7d4](../adr/20260913-c7d4-let-the-daily-capture-push-its-own-data.md) 授权，应用 push 未获授权。
+
+本次未声称真实新格式 capture 发布、cron 重试、通知投递/恢复或长期连续性成功；这些仍由主线程取得运行证据后补记。没有历史回填、网站数据删除或应用 push。决定及取舍见 [b8e2](../adr/20260917-b8e2-recover-continuous-raw-capture.md)。

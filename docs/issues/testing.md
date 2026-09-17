@@ -31,3 +31,7 @@
 
 **未做**：没有逐条诊断根因。第 7 与第 8 条看起来与本机出网 / playwright 环境耦合，
 若确实如此，它们在 CI 或另一台机器上的读数可能不同——本轮没有第二台机器上的读数。
+
+### 2026-09-17：第 2 项的基线复现与本次去向
+
+持续采集恢复任务在基线 `371d21a` 再次复现 `tests/test_aihot_dataset.py::test_capture_writer_refuses_non_repo_root_and_existing_capture`：断言期望 `output_root_invalid`，实际得到 `git_checkout_invalid`。本次定向回归仅排除此单项，不能把排除后的结果称为该文件全量通过。该问题继续归本测试基线债，本轮不修旧测试；未来修复需对齐非仓根路径的错误码契约与断言，不能仅为变绿放宽检查。

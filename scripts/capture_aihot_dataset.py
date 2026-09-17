@@ -28,6 +28,7 @@ def _parser() -> argparse.ArgumentParser:
     capture.add_argument("--end", required=True)
     capture.add_argument("--output-root", type=Path, default=Path("benchmarks/aihot"))
     capture.add_argument("--fill-missing", action="store_true", help="Publish only missing complete UTC days as v2; validate existing windows.")
+    capture.add_argument("--resilient", action="store_true", help="Publish capture v2/windows v3; RSS/OpenAPI failures are diagnostics, while API/SSR validation remains required.")
 
     slice_command = subcommands.add_parser("slice", help="Create a deterministic offline JSONL slice.")
     slice_command.add_argument("--capture", required=True)
@@ -74,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for subject in args.window:
                 validate_persisted_artifact(args.output_root, subject)
                 payload = json.loads((args.output_root / subject).read_bytes())
-                if payload.get("artifact_type") not in {"aihot_window_v1", "aihot_window_v2"}:
+                if payload.get("artifact_type") not in {"aihot_window_v1", "aihot_window_v2", "aihot_window_v3"}:
                     raise DatasetContractError("window_invalid", "freeze requires window manifests")
                 paths.add(str(PurePosixPath(subject).parent))
                 paths.add(str(PurePosixPath(payload["capture"]["path"]).parent))
@@ -94,6 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 end=args.end,
                 output_root=args.output_root,
                 **({"fill_missing": True} if args.fill_missing else {}),
+                **({"resilient": True} if args.resilient else {}),
             )
             print(f"Capture published locally: {result.capture_path}")
             print("Validated windows:")

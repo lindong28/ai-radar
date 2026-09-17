@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260917-b8e2](./20260917-b8e2-recover-continuous-raw-capture.md) | 恢复后续 raw 采集：提取互斥、版本化补充探针、有界重试与独立健康检查 | accepted；实施与生产验收待完成 | 2026-09-17 |
 | [20260916-74b2](./20260916-74b2-release-db-sync-lock-on-process-exit.md) | DB sync 用内核锁消除重启后的永久阻塞，日志裁剪共用锁 | accepted | 2026-09-16 |
 | [20260916-e3a8](./20260916-e3a8-decouple-collection-from-processing.md) | 采集独立于 AI 处理，以事务性 outbox 可靠交接；仅本地实现 | accepted | 2026-09-16 |
 | [20260916-d362](./20260916-d362-defer-busy-outbox-cleanup.md) | 已确认 outbox 清理争锁时延后，继续主库导入 | accepted | 2026-09-16 |

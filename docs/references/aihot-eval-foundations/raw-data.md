@@ -1,6 +1,6 @@
 # 原始数据与建题准入
 
-> [Developer] · Mutable snapshot · 2026-09-16 · 简化设计；实际合格窗口与题量未核定。总览见 [README](README.md)。
+> [Developer] · Mutable snapshot · 2026-09-17 · 简化设计；实际合格窗口与题量未核定。总览见 [README](README.md)。
 
 ## 需要保留的两份数据
 
@@ -10,6 +10,8 @@
 | AIHOT 原始页面/API/SSR 证据及参考值 | 全部动态/精选成员集合，以及可见分数、分类、标签、标题、摘要、推荐理由 | API 字段须能对应网站可观察值；明确空值与未观察到分开 |
 
 Radar raw 位于 `data/raw-capture/runs/`，AIHOT 参照位于 `benchmarks/aihot`。它们可以保存比评测所需更多的数据；派生题集时筛选范围，不删除网站数据。T5 和旧评测 runs 不能作为这次 raw 或参考答案，当前业务库与采集 outbox 也不能补上未归档的历史输入。
+
+raw 不按 prefilter 判定、评分、新闻是否在 AIHOT 出现或是否入选精选预筛；共同来源的全部过滤前候选都须保留。过滤本身是优化对象，先过滤再留档会丢失它应判断的负例与漏收样本。微信专用页仍不作为本次评测目标，采集层可以保留网站所需数据；评测排除不构成停止采集或删除数据的授权。
 
 [归档实现](../../../src/airadar/fetcher/raw_capture.py) 与 [采集运维说明](../../operations/continuous-eval-data.md) 是现有数据入口。整轮 freeze 只复制归档，不等于已经筛出了合格评测数据。
 
