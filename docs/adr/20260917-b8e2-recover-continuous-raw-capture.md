@@ -1,6 +1,6 @@
 # ADR-20260917-b8e2：恢复后续原始数据持续采集，以有限重试和独立健康检查暴露中断
 
-- Status: accepted（决定已通过 L1 独立审查；实施与生产验收待完成）
+- Status: accepted（决定与本地实现审查通过；已批准并安装调度，新日窗与连续性待验收）
 - Date: 2026-09-17
 - Related: [独立采集与 outbox](./20260916-e3a8-decouple-collection-from-processing.md)、[过滤前输入留档](./20260915-1cc7-retain-continuous-prefilter-inputs.md)、[每日 capture 数据推送授权](./20260913-c7d4-let-the-daily-capture-push-its-own-data.md)
 
@@ -34,10 +34,26 @@
 
 待主线程取得的验证包括：提取互斥的实际作用与耗时、真实新格式 capture、实际 cron 重试、告警去重与恢复、长期连续性。当前不声称上述验证完成；运行证据取得后由主线程同步 [持续采集运维入口](../operations/continuous-eval-data.md)。
 
-## 2026-09-17 实施中状态
+## 2026-09-17 启用前实施记录
 
 本地已实现 collector supervisor、AIHOT 小时入口和五分钟健康检查入口；生产仍用原代码，新调度未安装。`capture_v2` / `window_v3` 已接入校验与 freeze；旧 `slice` 明确拒绝 `capture_v2`，本次不扩展切片范围。完整 prefilter 输入留档保持不预筛。
 
 实现审查首轮提出两条 HIGH：同轮 AIHOT 重试应重新检查已有窗口以免重复抓取；补充 OpenAPI response Date 倒序应降为诊断。两项修复后，独立 reviewer 两问复核放行，无新增 findings。最终本地定向结果为 7 个测试文件合计 537 passed、1 deselected（54.38 秒），shell 78 项断言通过；覆盖有限重试成功/耗尽/超时子进程组终止、HTTP 暂时与永久错误、补充探针 404/异常日期降级及 API/SSR 失败严格拒绝、8 worker 提取互斥与 7 类真实文本输出等价。ruff 指出的单项 `Callable` import 已机械移至 `collections.abc`。排除项已在 `371d21a` 复现并留在 [测试基线债](../issues/testing.md)。这些读数不代表真实 cron、新格式远端发布或通知已启用及验收，也不证明未来永不中断。
 
 数据发布被 Git 安全扫描阻塞：主线程重跑得到 52 个 `grafana-api-key` 命中，均位于公开分页 `canonical_query.cursor`，解码为字段键 `a,c,i,k,v` 的 base64 JSON。当前未修改 raw、未跳过扫描或关闭 scanner，等待用户授权精确修复误报。生产 cron/env 启用仍须独立许可；未进行历史回填、网站数据删除或应用 push。最终实现验证与运行状态以运维入口后续记录为准。
+
+## 2026-09-17 获批启用与当前边界
+
+用户随后明确答复「批准启用」「授权精确修复」，上节的待授权状态由本节更新。本地 main 已快进到 `6eeb9dc`；AIHOT 独立 runtime 使用该源码，运行树 parent pin 为 `ee9ac71`，数据来自远端 `97f5ed0`。macmini/lindong 已安装 AIHOT `7 * * * *`、health `*/5`，Radar 保留 `*/15`，其他 cron 未改；主树原有 precompute WIP 哈希前后一致。
+
+状态起点为 `2026-09-17T00:00:00+00:00`、`delivered_days=[]`。真实 AIHOT 入口于 06:10:46Z—06:10:56Z 退出 0，因尚无到期日未请求新 raw，不计新日窗成功；首个完整 UTC 日最早在本地 09-18 08:00 后到期。06:10:30Z 健康检查对 `claude_youtube` 触发真实告警，im-notify 返回 `alert sent via feishu`；06:11:43Z 独立演练 key 验证故障发送、重复不改 `sent_at`、恢复发送，未确认手机收件。
+
+scanner 精确修复已授权，隔离 worker 实施中、尚未集成；数据发布仍未取得成功读数。自动调度后续运行、新日窗发布和长期连续性仍待验收，不据入口退出或发送回执作扩大结论。未补历史或改网站数据，具体运行入口、状态与配置备份位置见 [运维说明](../operations/continuous-eval-data.md)。
+
+### 同日最终现场补记
+
+上述 scanner 待集成状态已更新：harness 修复 `4c9be51f` 合入其 main，新 runtime 的 pre-commit 使用 canonical hook。实际旧 capture 暂存数据验证为 `rawFindingCount=52`、`publicCursorCount=52`、`effectiveFindingCount=0`、`indexUnchanged=true`，未改 raw 或绕过扫描。修复决定见 harness 仓 `docs/adr/20260917-2f6a-grafana-public-cursor-classification.md`；worker 测试 19/19、main cursor 测试 7/7，仅代表该修复的局部验证，不代表新日窗发布。
+
+代码 `6eeb9dc` 的真实 14:15 自动周期完成三次尝试，分别保存 4,199、4,183、4,183 条 raw；第一轮仅微信专用源失败，后两轮另有 `claude_youtube` 失败。第三轮于 06:28:08.593133Z 完成，supervisor 于 06:28:09Z 退出 1；06:30:00.844320Z 下一自动周期启动并进入 fetch，证明本次锁释放后仍可继续，未将失败记为全源成功。health 于 06:20 自动发送恢复、06:25 再次发送故障通知。
+
+完整 prefilter 输入仍不按成员或分数过滤，重试保留前次 raw。YouTube RSS 的间歇 404/500 仍为外部故障，继续按计划重试、告警；没有全源无缺口或连续多日验收结论。AIHOT 手动入口 exit 0 只覆盖无欠账及发布核验路径；09-17 完整 UTC 日在本地 09-18 08:00 结束，08:07 小时任务可采集，10:00 起仍未交付则进入晚到告警条件。新格式完整日与远端发布仍待实际到期运行验证。

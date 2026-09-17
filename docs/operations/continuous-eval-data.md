@@ -2,7 +2,7 @@
 
 > 新采集配置已于 2026-09-15 获用户批准并启用；真实首轮读数见末节。旧 T5 实验不是新数据来源；过去未留原始输入的窗口不能据业务数据库补成完整候选全集。
 
-> 2026-09-17 的恢复修复尚未启用：现有生产调度仍运行原代码，新增小时 AIHOT 与五分钟健康检查入口未安装。当前实施与发布边界见本页末节，不将前两日的启用读数外推为此次修复验收。
+> 2026-09-17 的恢复修复已获批准并安装调度：AIHOT 每小时第 7 分钟、健康检查每 5 分钟，Radar 保留每 15 分钟。首个新完整日窗、远端发布和连续性尚待验收；当前实际读数见本页末节。
 
 ## 两条采集链
 
@@ -49,9 +49,11 @@ PYTHONPATH=src uv run python scripts/raw_capture.py --root data/raw-capture cove
 
 Radar 冻结：`scripts/raw_capture.py --root data/raw-capture freeze --run RUN_ID --destination data/frozen/SET_ID`，可重复 `--run`，复制并验证全部 304 依赖。该命令只保证所选 run 的依赖完整；必须先通过上面的窗口审计，才可将整窗称为完整评测集。冻结目录不得放在 rolling `runs/` 里面。
 
-AIHOT 冻结：`scripts/capture_aihot_dataset.py freeze --output-root benchmarks/aihot --window windows/START--END/manifest.json --destination data/frozen-aihot/SET_ID`，可重复 `--window`；每个窗口和其完整 capture 都复制并重新验证。冻结位置不能在 rolling captures/windows 内，现有目的地拒绝覆盖。冻结副本仍需备份；本地复制不等于已远端持久化。
+AIHOT 冻结：`scripts/capture_aihot_dataset.py freeze --output-root "$AIHOT_CAPTURE_WORKTREE/benchmarks/aihot" --window windows/START--END/manifest.json --destination data/frozen-aihot/SET_ID`，可重复 `--window`；`AIHOT_CAPTURE_WORKTREE` 必须显式配置为与当前 cron 相同的运行树，不能默认取主树 submodule。每个窗口和其完整 capture 都复制并重新验证。冻结位置不能在 rolling captures/windows 内，现有目的地拒绝覆盖。冻结副本仍需备份；本地复制不等于已远端持久化。
 
 ## 保留、告警与启用边界
+
+本节关于 AIHOT 频次不变、`run-or-alert` 包裹及“不额外建立常驻监控”的描述是 2026-09-15 启用时的历史快照；调度与监控现况已由本页「2026-09-17 持续采集恢复修复（已安装调度）」替代。原有保留与冻结规则继续适用。
 
 采用用户选择的滚动 30 天＋冻结集长期保留。Radar `retention-preview --days 30` 只列旧且不再被近期 run 引用的候选；`prune --days 30 --apply` 才删除。近期 304 引用的更早 payload 保留，实际体积可能超过严格 30 天。存在未完成 run 时先不清理，避免把不明确依赖删掉。冻结资产不在清理目标中。本轮未运行任何真实 prune。
 
@@ -109,17 +111,17 @@ Radar 首轮在旧 pipeline 结束后持同一 pipeline 排他锁运行真实 `.
 
 此时持续运行机制为 macOS cron daemon 下 lindong 的用户 crontab，不依赖本 session 子进程；不是另起一个 agent 后台任务。原始输入位于主树 `data/raw-capture/runs/`，投递队列位于 `data/ingestion.db`。本次没有额外手动启动评分/精选调用，AIHOT 调度未在本次改动；完整评测窗口仍须未来按两侧交集审计、来源核对并冻结，不能承诺等七天就自动得到七天合格集。
 
-## 2026-09-17 持续采集恢复修复（待启用）
+## 2026-09-17 持续采集恢复修复（已安装调度）
 
 用户要求修复后续持续采集，不回填历史缺口。Radar 留档继续保存完整 prefilter 输入，不以 prefilter、评分、AIHOT 是否出现或精选结果预筛。评测只取共同来源；`wx_wechat2rss` 属微信专用来源，不计入共同来源健康检查，但不因此停止网站采集或删除其数据。
 
 | 本地入口 | 行为与启用边界 |
 |---|---|
 | `collector.sh` → `scripts/collection_supervisor.py` | 总预算 14 分钟，最多尝试 3 次，间隔 15 秒；网络仍并发，trafilatura 提取互斥，既有 pipeline/outbox 双锁不变 |
-| `scripts/collect_aihot_supervised.sh` | 计划每小时运行；独立 job 锁、40 分钟预算；从已初始化的 `capture_start` 起保留欠交付日，有通过校验的窗口不重抓，继续未完成发布 |
-| `scripts/check_collection_health.sh` | 计划每 5 分钟运行；Radar 超过 20 分钟无完成采集或共同来源失败、AIHOT 完整 UTC 日到期 2 小时未交付时告警，复用 im-notify 状态去重/恢复 |
+| `scripts/collect_aihot_supervised.sh` | 已安装每小时第 7 分钟调度；独立 job 锁、40 分钟预算；从已初始化的 `capture_start` 起保留欠交付日，有通过校验的窗口不重抓，继续未完成发布 |
+| `scripts/check_collection_health.sh` | 已安装每 5 分钟调度；Radar 超过 20 分钟无完成采集或共同来源失败、AIHOT 完整 UTC 日到期 2 小时未交付时告警，复用 im-notify 状态去重/恢复 |
 
-后两个脚本要求显式 `AIHOT_CAPTURE_WORKTREE` 指向获准的干净运行树；supervisor 状态位于 `data/collection-state`，日志在 `logs/collection-supervisor/aihot.log` 与 `health.log`。新状态须先执行 `scripts/collection_supervisor.py --state-dir <状态目录> init --capture-start <启用日T00:00:00+00:00>`；启用日由生产切换确定，不借初始化回填旧缺口。已有状态拒绝重新初始化，以免忘记欠交付日。此命令及新 cron 尚未在生产启用，生产 cron/env 修改仍须另行审批。
+后两个脚本要求显式 `AIHOT_CAPTURE_WORKTREE` 指向获准的干净运行树；supervisor 状态位于 `data/collection-state`，日志在 `logs/collection-supervisor/aihot.log` 与 `health.log`。新状态通过 `scripts/collection_supervisor.py --state-dir <状态目录> init --capture-start <启用日T00:00:00+00:00>` 初始化；启用日由生产切换确定，不借初始化回填旧缺口。已有状态拒绝重新初始化，以免忘记欠交付日。本机已获批准并初始化，实际起点与调度见下文；其他环境的生产 cron/env 修改仍须相应审批。
 
 新格式为 `capture_v2` / `window_v3` / `report_v3`，RSS/OpenAPI 补充探针失败保留诊断，不阻断可用 API/SSR。校验和 freeze 支持新格式；旧 `slice` 明确拒绝 `capture_v2`，本次不扩展它。旧格式语义保持不变；已交付窗口合法达到 30 天保留期不作假缺口，每次健康检查不逐窗扫描全树 hash。
 
@@ -127,6 +129,30 @@ Radar 首轮在旧 pipeline 结束后持同一 pipeline 排他锁运行真实 `.
 
 主线程 09-17 只读取数：`claude_youtube` 于 03:15Z 返回 200/15 条，03:30Z 与 03:45Z 返回 404。这是上游间歇失败，不删除来源；重试是否恢复及连续完整窗口仍须据后续 raw 实测。共享 parser 的 native 崩溃归因仍为假设，没有确定性 native 复现。
 
-数据发布另被 Git 安全扫描阻塞。主线程重跑确认 52 个 `grafana-api-key` 命中均来自公开分页 `canonical_query.cursor`，解码为字段键 `a,c,i,k,v` 的 base64 JSON；等待用户授权精确修复误报，不改 raw、不使用 `--no-verify`、不关闭 scanner。`captures/daily` 数据 push 只沿用 [c7d4](../adr/20260913-c7d4-let-the-daily-capture-push-its-own-data.md) 授权，应用 push 未获授权。
+主线程独立统计 09-17 截至 06:01Z 开始的 25 个完成轮：`claude_youtube` HTTP 200 × 10、404 × 11、500 × 4，该时点最新成功为 03:15Z 的 15 条。独立只读诊断中，无条件直接 GET RSS 仍返回 404，同一 channel 页面返回 200 且包含 Claude 标题（读取于 15 秒截断）；未取得经验证的同身份替代 RSS。该来源仍间歇失败（后续 06:15 轮成功、随后两轮再失败，见末节）：保留 source ID 和来源，每 15 分钟新轮继续尝试；5xx、429、transport 故障执行单请求重试，404 不即时重试。不把来源失败当作完整数据，也不声称全源无缺口。
 
-本次未声称真实新格式 capture 发布、cron 重试、通知投递/恢复或长期连续性成功；这些仍由主线程取得运行证据后补记。没有历史回填、网站数据删除或应用 push。决定及取舍见 [b8e2](../adr/20260917-b8e2-recover-continuous-raw-capture.md)。
+数据发布曾被 Git 安全扫描误报阻塞。用户授权后，harness 精确修复 `4c9be51f` 已合入其 main，新 runtime 的 pre-commit 使用该 canonical hook。实际旧 capture 暂存数据验证为 `rawFindingCount=52`、`publicCursorCount=52`、`effectiveFindingCount=0`、`indexUnchanged=true`：52 项均为公开分页 `canonical_query.cursor`（base64 JSON 字段键 `a,c,i,k,v`），未改 raw、未使用 `--no-verify`、未关闭 scanner。worker 测试 19/19、main cursor 测试 7/7 是局部修复读数，不能替代新日窗发布验收。决策在 harness 仓 `docs/adr/20260917-2f6a-grafana-public-cursor-classification.md`。`captures/daily` 数据 push 只沿用 [c7d4](../adr/20260913-c7d4-let-the-daily-capture-push-its-own-data.md) 授权，应用 push 未获授权。
+
+### 本机启用与首轮实际读数
+
+用户明确「批准启用」后，本地 main 快进到 `6eeb9dc`。AIHOT 自有运行树为 `/Users/lindong/research/ai-radar-worktrees/continuous-capture-runtime-20260917`，源码 `6eeb9dc`、独立 parent pin `ee9ac71`、数据来自远端 `97f5ed0`。macmini/lindong 实际 crontab 已更新为 AIHOT `7 * * * *`、health `*/5`，Radar 保留 `*/15`；其他 cron 未变。前后备份在 `.local/capture-reliability-20260917/crontab.before` 与 `crontab.after`。原 main 的 precompute WIP 哈希前后一致。
+
+`data/collection-state/aihot.json` 已初始化为 `capture_start=2026-09-17T00:00:00+00:00`、`delivered_days=[]`。手动真实入口从 06:10:46Z 到 06:10:56Z，exit 0；只覆盖无欠账及发布核验路径，未请求新 raw，不作为新日窗通过。首个激活 UTC 日 09-17 在本地 09-18 08:00 结束，08:07 小时任务可采集，10:00 起仍未交付则进入晚到告警条件；须由实际到期运行取得新窗口及发布读数。
+
+最新采集资产的实际读取入口是上述 runtime 的 `benchmarks/aihot`，远端发布权威是 `origin/captures/daily`，远端状态须实查 exact ref。主线程只读核对 `/Users/lindong/research/ai-radar/benchmarks/aihot` 仍为 `76f62cf`；主树 gitlink 是代码 pin，不是实时数据指针，不会随新运行树自动更新。后续评测、校验与冻结须使用实际采集根并核对发布状态；本次不移动他人主树数据 submodule HEAD，也不建立自动覆盖 main 指针的机制。
+
+06:10:30Z 真实健康检查对 `claude_youtube` 告警，im-notify 返回 `alert sent via feishu`。06:11:43Z 使用独立演练 key 验证故障发送、重复不改变 `sent_at`、恢复发送；这证明该次发送端与去重/恢复路径，不代表用户手机已收到，手机收件未确认。
+
+### 真实自动周期、有限重试与健康状态变化
+
+06:15 周期来自 macOS cron 的实际进程链 `PID 352 → 66144 → sh → venv python supervisor`，`radar.json` 于 06:15:02.643Z 启动，源码为 `6eeb9dc`。同周期三次尝试均保存 raw，后一次不覆盖前一次：
+
+| 尝试 | raw 与完成读数 | 来源边界 |
+|---|---|---|
+| 1 | `20260917T061551.881479Z-059ce4b0`，06:15:51.882Z—06:19:06.312Z，4,199 条 / 161 源；主线程 `read_run` 哈希与行数验证通过 | 仅 `wx_wechat2rss`（WechatOnly）失败，共同评测来源该轮全成功；collect 仍 exit 1，不能称整轮成功 |
+| 2 | 06:20:00Z 开始的 raw，4,183 条 | `claude_youtube` 与 `wx_wechat2rss` 失败 |
+| 3 | `20260917T062451.632059Z-af4203ec`，06:28:08.593133Z 完成，4,183 条；主线程 `read_run` 完整性验证通过 | 同上两源失败；文件完整性不等于所有来源成功 |
+
+supervisor 于 06:28:09Z 耗尽三次尝试、退出 1；下一自动周期于 06:30:00.844320Z 启动并进入 fetch，证明此次锁已释放、跨轮仍可继续。没有把第三轮失败吞成成功，也没有因重试丢掉第一份 raw。health 在 06:20:01Z 依据当时共同来源恢复更新 `incident=false` 并自动发送恢复通知，06:25 再次发现来源失败并真实发送告警；手机收件仍未确认。
+
+YouTube RSS 间歇 404/500 仍是实际外部故障，继续按既定频次及错误分类重试、告警，不改 source ID、不删除来源、不把失败当完整。以上覆盖一个自动周期的三次尝试、下一周期启动及健康状态变化，不是全源正常或连续多日验收。真实 AIHOT 新格式完整日发布与长期连续性仍待到期运行；没有历史回填、网站数据删除或应用 push。决定及取舍见 [b8e2](../adr/20260917-b8e2-recover-continuous-raw-capture.md)。
