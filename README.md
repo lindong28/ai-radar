@@ -203,6 +203,8 @@ uv run python scripts/probe_x_source.py --source x_openai --db <全新临时数�
 
 ### AIHOT 私有基准集
 
+已认可的四对象简化评测设计及后续建题、计分、判官与归档入口见 [AIHOT 评测实施说明](docs/references/aihot-eval-implementation.md)。当前只有设计文档和指标定义，尚未冻结新题集或运行新体系；下文既有 capture 能力不等于新评测已接通。
+
 AIHOT benchmark 数据位于 private submodule `benchmarks/aihot`；主仓只保存工具、冻结 schema 和 gitlink，不保存 AIHOT raw、JSONL、标题或 URL 内容。使用者须先取得 AI Radar 主仓，并让用于 Git submodule 的 GitHub SSH 身份获得 `lindong28/ai-radar-data` 读取权限，再递归克隆；已有 checkout 可单独初始化该 submodule：
 
 ```bash

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-featured-members",
+  "metrics": [
+    {
+      "task": null,
+      "metric_name": "precision",
+      "unit": "ratio",
+      "direction": "higher",
+      "definition": "|C∩R| / |C|；C 为固定候选池和预测分经规则选出的唯一成员，R 为完整 AIHOT 精选集合。C 为空时N/A；失败不能冒充成功空集。",
+      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+    },
+    {
+      "task": null,
+      "metric_name": "recall",
+      "unit": "ratio",
+      "direction": "higher",
+      "definition": "|C∩R| / |R|；R 为同窗共同来源完整精选集合，缺 Radar raw 的参考成员仍在分母。R 为空时N/A；参考或执行不完整不能报完整成绩。",
+      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+    }
+  ]
+}

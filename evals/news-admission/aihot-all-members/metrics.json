@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-all-members",
+  "metrics": [
+    {
+      "task": null,
+      "metric_name": "precision",
+      "unit": "ratio",
+      "direction": "higher",
+      "definition": "|C∩R| / |C|；C 为同窗共同来源的候选准入唯一新闻集合，R 为完整 AIHOT 全部动态集合。C 为空时未定义（N/A）；有未完成输出时不得冒充完整题集成绩。",
+      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+    },
+    {
+      "task": null,
+      "metric_name": "recall",
+      "unit": "ratio",
+      "direction": "higher",
+      "definition": "|C∩R| / |R|；R 中缺少 Radar raw 的新闻仍在分母。R 为空时未定义（N/A）；R 不完整或候选执行不完整时不得宣称完整成绩。",
+      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-enrichment",
+  "metrics": [
+    {
+      "task": "category",
+      "metric_name": "accuracy",
+      "unit": "ratio",
+      "direction": "higher",
+      "definition": "正确类别题数 / 固定分类题数；先冻结类别对应关系，未知参考不入题。候选失败或缺字段计不一致，题数为0时N/A。",
+      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+    },
+    {
+      "task": "tags",
+      "metric_name": "exact_set_accuracy",
+      "unit": "ratio",
+      "direction": "higher",
+      "definition": "候选标签集合与参考集合完全相同的题数 / 固定标签题数；忽略顺序但不删多余标签。明确空参考可入题，未知参考排除；候选失败或缺字段计不一致，题数为0时N/A。",
+      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+    }
+  ]
+}

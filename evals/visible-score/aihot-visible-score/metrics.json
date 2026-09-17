@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-visible-score",
+  "metrics": [
+    {
+      "task": null,
+      "metric_name": "mae",
+      "unit": "visible_score_point",
+      "direction": "lower",
+      "definition": "Σ|候选可见分−AIHOT参考可见分| / N；N 为固定评分题数，预测与参考必须使用相同可见分量纲。N=0 或任何题预测未完成时完整 MAE 未定义，不删失败题或补0；单位为该题库冻结的可见分值单位。",
+      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+    }
+  ]
+}

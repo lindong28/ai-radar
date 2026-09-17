@@ -50,7 +50,8 @@
 | [wechat-discovery-evidence.md](references/wechat-discovery-evidence.md) | 公众号后台发现与微信读书只读 canary 的历史证据台账 [Developer]：两者同属一条替代计划，随该计划整体停止推进（读书 canary 是这条线的探路支，不是独立路线）；权威结论见 [061-wechat-discovery](adr/061-deprecate-wechat-admin-discovery-line.md)，本档只留取证读数 |
 | [wechat-sources.md](references/wechat-sources.md) | 旧 WeWe RSS 微信源历史 recipe [User]（当前 checkout 不可直接执行；完整 package 须从 `29ca189^` 恢复并迁移 v2 contract；仓内待发布语义为 Wechat2RSS 主动抓取、Mp2RSS paused） |
 | [aihot-approximation-metrics.md](references/aihot-approximation-metrics.md) | 衡量「与 AIHOT 近似度」的**达标线与指标索引** [Developer]：这条工作线的单一入口；当前归档记录锚 `623728b`，13 窗 / 190 条参照精选、2/5 类进 95% CI、TV 0.163；序列共 3 行但只有两个可比身份，尚不能读成同口径改善趋势；含目标原文、数据边界、五条轴处置与重开条件、量具纪律、逐条拟合指标及轮次接续 |
-| [评测与迭代前置定义](references/aihot-eval-foundations/README.md) | 按用户反馈精简为收录、可见评分、字段富化、精选成员四对象；待审设计，不代表已实施 |
+| [AIHOT 简化评测实施入口](references/aihot-eval-implementation.md) | 已认可四对象设计的施工导航：来源/窗口冻结、四个 benchmark、七个指标定义、文本判官待设计及三层归档；新体系尚未实施 |
+| [评测与迭代前置定义](references/aihot-eval-foundations/README.md) | 按用户反馈精简为收录、可见评分、字段富化、精选成员四对象；保留设计快照，认可后的实施状态见上项 |
 | [逐对象三层设计 HTML 报告](references/aihot-eval-foundations/index.html) | 四对象的原始数据、题集、最小 L1/L2/L3；确定性指标优先，文本判官、题量与阈值未定处显式标记 |
 | [原始数据与准入](references/aihot-eval-foundations/raw-data.md) | 共同来源/连续窗口、排除微信专用与 T5、原始输入/页面参照、版本配对及题集派生边界 |
 | [对象、指标与建题](references/aihot-eval-foundations/objects-and-metrics.md) | 四对象的输入输出、最小指标、分母、从 raw 建题方法与共用三层约束；不另设最终页面评测对象 |
