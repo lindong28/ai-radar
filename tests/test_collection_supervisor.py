@@ -3,12 +3,14 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import signal
 import sqlite3
 import sys
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -86,6 +88,131 @@ def test_timeout_terminates_grandchild(tmp_path):
         time.sleep(0.05)
     else:
         pytest.fail('collector descendant survived its deadline')
+
+
+@pytest.mark.parametrize('denied_signal', [signal.SIGTERM, signal.SIGKILL])
+def test_cleanup_accepts_permission_race_only_after_group_disappears(monkeypatch, denied_signal):
+    ticks = iter(i * 0.25 for i in range(100))
+    monkeypatch.setattr(supervisor.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(supervisor.time, 'sleep', lambda _: None)
+    denied = False
+    confirmed = False
+
+    def killpg(pid, sig):
+        nonlocal denied, confirmed
+        assert pid == 12345
+        if sig == denied_signal:
+            denied = True
+            raise PermissionError('injected exit race')
+        if sig == 0 and denied:
+            confirmed = True
+            raise ProcessLookupError('group disappeared')
+
+    monkeypatch.setattr(supervisor.os, 'killpg', killpg)
+    process = SimpleNamespace(pid=12345, poll=lambda: 0, wait=lambda **_: 0)
+    supervisor.terminate_group(process)
+    assert denied and confirmed
+
+
+def test_cleanup_does_not_swallow_persistent_permission_failure(monkeypatch):
+    ticks = iter(i * 0.25 for i in range(100))
+    monkeypatch.setattr(supervisor.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(supervisor.time, 'sleep', lambda _: None)
+
+    def denied(*_):
+        raise PermissionError('persistent permission failure')
+
+    monkeypatch.setattr(supervisor.os, 'killpg', denied)
+    process = SimpleNamespace(pid=12345, poll=lambda: 0, wait=lambda **_: 0)
+    with pytest.raises(PermissionError):
+        supervisor.terminate_group(process)
+
+
+@pytest.mark.parametrize('ignore_term', [False, True])
+def test_successful_leader_still_cleans_descendant(tmp_path, ignore_term):
+    marker = tmp_path / 'ready'
+    child = ('import signal,time,pathlib,os; '
+             f'signal.signal(signal.SIGTERM, signal.{"SIG_IGN" if ignore_term else "SIG_DFL"}); '
+             f'pathlib.Path({str(marker)!r}).write_text(str(os.getpid())); time.sleep(5)')
+    parent = ('import subprocess,sys,time,pathlib; '
+              f'subprocess.Popen([sys.executable,"-c",{child!r}]); '
+              f'p=pathlib.Path({str(marker)!r}); '
+              '\nwhile not p.exists(): time.sleep(0.01)')
+    assert supervisor.run_bounded([sys.executable, '-c', parent], budget=6, attempts=1, delay=0) == 0
+    pid = int(marker.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_cleanup_failure_restores_handlers(monkeypatch):
+    original = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+
+    def fail(_):
+        raise PermissionError('injected cleanup failure')
+
+    monkeypatch.setattr(supervisor, 'terminate_group', fail)
+    try:
+        with pytest.raises(PermissionError):
+            supervisor.run_bounded([sys.executable, '-c', 'pass'], budget=3, attempts=1, delay=0)
+        assert {sig: signal.getsignal(sig) for sig in original} == original
+    finally:
+        for sig, handler in original.items():
+            signal.signal(sig, handler)
+
+
+@pytest.mark.parametrize('kind', ['radar', 'aihot'])
+def test_internal_failure_is_durable_and_retry_start_is_not_recovery(tmp_path, monkeypatch, kind):
+    path = tmp_path / f'{kind}.json'
+    state = {'last_exit': 70, 'last_success_at': 'earlier',
+             'capture_start': '2026-09-17T00:00:00+00:00', 'delivered_days': []}
+    supervisor.save(path, state)
+
+    def fail(*_, **__):
+        assert supervisor.read(path)['last_exit'] == 70
+        raise PermissionError('fixture secret must not appear in output')
+
+    monkeypatch.setattr(supervisor, 'run_bounded', fail)
+    args = SimpleNamespace(kind=kind, state_dir=tmp_path, aihot_root=tmp_path,
+                           command=['unused'], budget=1, attempts=1, delay=0)
+    assert supervisor.run_job(args) == 70
+    saved = supervisor.read(path)
+    assert saved['last_exit'] == 70
+    assert saved['last_finished_at'] >= saved['last_started_at']
+    assert saved['last_success_at'] == 'earlier'
+    monkeypatch.setattr(supervisor, 'run_bounded', lambda *_, **__: 0)
+    monkeypatch.setattr(supervisor, 'now', lambda: datetime(2026, 9, 17, 12, tzinfo=UTC))
+    assert supervisor.run_job(args) == 0
+    assert supervisor.read(path)['last_exit'] == 0
+    assert supervisor.read(path)['last_success_at'] != 'earlier'
+
+
+@pytest.mark.parametrize('kind,code,expected', [('radar', 70, 1), ('radar', 1, 0),
+                                             ('aihot', 70, 1), ('aihot', 1, 1), ('aihot', 0, 0)])
+def test_health_entrypoint_observes_supervisor_failures(tmp_path, monkeypatch, capsys, kind, code, expected):
+    instant = datetime(2026, 9, 17, 12, tzinfo=UTC)
+    for collector in ('radar', 'aihot'):
+        supervisor.save(tmp_path / f'{collector}.json', {
+            'last_exit': code if collector == kind else 0,
+            'last_started_at': instant.isoformat(), 'last_finished_at': instant.isoformat(),
+            'capture_start': '2026-09-17T00:00:00+00:00', 'delivered_days': []})
+    monkeypatch.setattr(supervisor, 'now', lambda: instant)
+    monkeypatch.setattr(supervisor, 'radar_problems', lambda *_: [])
+    monkeypatch.setattr(sys, 'argv', ['supervisor', '--state-dir', str(tmp_path),
+                                    'health', '--radar-root', str(tmp_path)])
+    assert supervisor.main() == expected
+    output = capsys.readouterr().out
+    assert ('监督' in output) == bool(expected)
+
+
+@pytest.mark.parametrize('kind,age,expected', [('radar', 1141, True), ('radar', 100, False),
+                                            ('aihot', 2701, True), ('aihot', 100, False)])
+def test_unfinished_supervisor_deadline(kind, age, expected):
+    from datetime import timedelta
+
+    instant = datetime(2026, 9, 17, 12, tzinfo=UTC)
+    state = {'last_exit': 0, 'last_started_at': (instant - timedelta(seconds=age)).isoformat(),
+             'last_finished_at': (instant - timedelta(days=1)).isoformat()}
+    assert bool(supervisor.supervisor_problems(kind, state, instant)) is expected
 
 
 def test_midnight_does_not_forget_previous_missing_day():

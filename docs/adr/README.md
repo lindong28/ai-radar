@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260917-8b86](./20260917-8b86-wait-for-collector-process-groups.md) | 有界等待采集进程组退出，监督失败纳入现有告警 | accepted；实际入口启用待许可 | 2026-09-17 |
 | [20260917-b8e2](./20260917-b8e2-recover-continuous-raw-capture.md) | 恢复后续 raw 采集：提取互斥、版本化补充探针、有界重试与独立健康检查 | accepted；已批准并安装调度，新日窗与连续性待验收 | 2026-09-17 |
 | [20260916-74b2](./20260916-74b2-release-db-sync-lock-on-process-exit.md) | DB sync 用内核锁消除重启后的永久阻塞，日志裁剪共用锁 | accepted | 2026-09-16 |
 | [20260916-e3a8](./20260916-e3a8-decouple-collection-from-processing.md) | 采集独立于 AI 处理，以事务性 outbox 可靠交接；仅本地实现 | accepted | 2026-09-16 |

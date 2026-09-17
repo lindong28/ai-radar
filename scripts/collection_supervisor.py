@@ -35,21 +35,38 @@ def read(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
+def wait_group_gone(process: subprocess.Popen[Any], timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        process.poll()  # Reap the leader, but do not confuse it with the whole group.
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass  # Not proof of disappearance; only ESRCH establishes that.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.05, remaining))
+
+
 def terminate_group(process: subprocess.Popen[Any]) -> None:
     # Each command owns a new session; never signal the caller's process group.
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    process.wait()
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            process.poll()
+            return
+        except PermissionError:
+            # macOS can return EPERM during group exit. Persistent denial is fatal.
+            if wait_group_gone(process, 2):
+                return
+            raise
+        if wait_group_gone(process, 2):
+            return
+    raise TimeoutError('collector process group did not exit after SIGKILL')
 
 
 def run_bounded(command: list[str], *, budget: float, attempts: int, delay: float,
@@ -68,7 +85,6 @@ def run_bounded(command: list[str], *, budget: float, attempts: int, delay: floa
         previous_handlers = {}
 
         def interrupted(signum: int, _frame: Any) -> None:
-            terminate_group(process)
             raise SystemExit(128 + signum)
 
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -79,9 +95,11 @@ def run_bounded(command: list[str], *, budget: float, attempts: int, delay: floa
             except subprocess.TimeoutExpired:
                 code = 124
         finally:
-            terminate_group(process)
-            for sig, handler in previous_handlers.items():
-                signal.signal(sig, handler)
+            try:
+                terminate_group(process)
+            finally:
+                for sig, handler in previous_handlers.items():
+                    signal.signal(sig, handler)
         if code == 0:
             return 0
         if attempt + 1 < attempts and deadline - time.monotonic() > delay:
@@ -144,25 +162,49 @@ def run_job(args: argparse.Namespace) -> int:
         state = read(path) if path.exists() else {}
         if args.kind == 'aihot' and not state.get('capture_start'):
             raise ValueError('AIHOT must be explicitly initialized with --capture-start')
-        state.update(last_started_at=now().isoformat(), last_exit=None)
+        # last_exit remains the previous terminal result until this attempt finishes.
+        state.update(last_started_at=now().isoformat())
         save(path, state)
-        environment_factory = (lambda: aihot_environment(state, args.aihot_root, now())) if args.kind == 'aihot' else None
-        code = run_bounded(args.command, budget=args.budget, attempts=args.attempts,
-                           delay=args.delay, environment_factory=environment_factory)
-        state.update(last_finished_at=now().isoformat(), last_exit=code)
-        if code == 0:
-            state['last_success_at'] = now().isoformat()
-            if args.kind == 'aihot':
-                from airadar.eval.aihot_dataset import validate_persisted_artifact
-                for day in expected_days(state['capture_start'], now()):
-                    if day in state['delivered_days'] or not (args.aihot_root / window_path(day)).is_file():
-                        continue
-                    validate_persisted_artifact(args.aihot_root, window_path(day))
-                    state['delivered_days'].append(day)
-        save(path, state)
+        code = 70
+        try:
+            environment_factory = (lambda: aihot_environment(state, args.aihot_root, now())) if args.kind == 'aihot' else None
+            result = run_bounded(args.command, budget=args.budget, attempts=args.attempts,
+                                 delay=args.delay, environment_factory=environment_factory)
+            if result == 0:
+                if args.kind == 'aihot':
+                    from airadar.eval.aihot_dataset import validate_persisted_artifact
+                    delivered = list(state['delivered_days'])
+                    for day in expected_days(state['capture_start'], now()):
+                        if day in delivered or not (args.aihot_root / window_path(day)).is_file():
+                            continue
+                        validate_persisted_artifact(args.aihot_root, window_path(day))
+                        delivered.append(day)
+                    state['delivered_days'] = delivered
+                state['last_success_at'] = now().isoformat()
+            code = result
+        except Exception as error:
+            print(f'采集监督异常（{type(error).__name__}）；终态记为70，独立健康检查负责告警。', flush=True)
+        finally:
+            state.update(last_finished_at=now().isoformat(), last_exit=code)
+            save(path, state)
         print('本轮采集命令完成；归档完整性另由健康检查确认。' if code == 0 else
               f'本轮采集失败（退出码 {code}）；已留存数据保留，下个调度重试。', flush=True)
         return code
+
+
+def supervisor_problems(kind: str, state: dict[str, Any], instant: datetime) -> list[str]:
+    label = 'AIHOT' if kind == 'aihot' else 'Radar'
+    code = state.get('last_exit')
+    if code == 70 or (kind == 'aihot' and code not in (None, 0)):
+        return [f'{label} 上次采集监督失败（退出码 {code}）；等待后续完成恢复']
+    started = state.get('last_started_at')
+    finished = state.get('last_finished_at')
+    if started and (not finished or datetime.fromisoformat(started) > datetime.fromisoformat(finished)):
+        # Existing execution budget plus one health-check interval, not a new cadence.
+        limit = (2400 if kind == 'aihot' else 840) + 300
+        if (instant - datetime.fromisoformat(started)).total_seconds() > limit:
+            return [f'{label} 采集监督超过执行预算仍未记录终态；请检查监督日志']
+    return []
 
 
 def radar_problems(root: Path, instant: datetime, sources_path: Path | None = None) -> list[str]:
@@ -263,6 +305,8 @@ def main() -> int:
     ):
         try:
             by_collector[label] = check()
+            state_path = args.state_dir / f'{label.lower()}.json'
+            by_collector[label].extend(supervisor_problems(label.lower(), read(state_path), now()))
         except Exception as error:
             by_collector[label] = [f'{label} 归档健康状态无法核实（{type(error).__name__}）']
         problems.extend(by_collector[label])
