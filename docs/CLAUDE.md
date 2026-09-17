@@ -29,6 +29,10 @@
 | [20260916-e3a8](adr/20260916-e3a8-decouple-collection-from-processing.md) | Decision | 独立采集、过滤前 raw 与事务性 outbox；已获批启用，读数见 operations |
 | [20260916-d362](adr/20260916-d362-defer-busy-outbox-cleanup.md) | Decision | 已确认队列副本清理争锁时延后，不阻塞后续导入 |
 
+### docs/evaluations/ [Developer]
+
+[README.md](evaluations/README.md) 是新四对象体系入口；对象 design/status 在 objects/，执行与存储在 workflow.md / assets.md，题库在 benchmarks/，假设及人读台账在 experiments/，报告模板在 reports/。根 runs/experiments 才是逐轮机器资产，不混入文档目录。旧近似度实验不作为此体系的达标线。
+
 ### docs/operations/ [User]
 
 运维入口——系统在跑什么、怎么管理、怎么验证。

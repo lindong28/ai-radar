@@ -3,20 +3,20 @@
   "benchmark_slug": "aihot-featured-members",
   "metrics": [
     {
-      "task": null,
+      "task": "*",
       "metric_name": "precision",
-      "unit": "ratio",
+      "unit": "fraction",
       "direction": "higher",
-      "definition": "|C∩R| / |C|；C 为固定候选池和预测分经规则选出的唯一成员，R 为完整 AIHOT 精选集合。C 为空时N/A；失败不能冒充成功空集。",
-      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+      "definition": "预测精选中属于 AIHOT 精选的比例",
+      "source": "evals/_shared/metrics.py"
     },
     {
-      "task": null,
+      "task": "*",
       "metric_name": "recall",
-      "unit": "ratio",
+      "unit": "fraction",
       "direction": "higher",
-      "definition": "|C∩R| / |R|；R 为同窗共同来源完整精选集合，缺 Radar raw 的参考成员仍在分母。R 为空时N/A；参考或执行不完整不能报完整成绩。",
-      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+      "definition": "AIHOT 精选被预测精选覆盖的比例",
+      "source": "evals/_shared/metrics.py"
     }
   ]
 }

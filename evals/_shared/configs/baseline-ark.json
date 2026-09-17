@@ -1,0 +1,13 @@
+{
+  "models": {
+    "prefilter": "deepseek-v4-flash",
+    "score": "deepseek-v4-flash",
+    "enrich": "deepseek-v4-pro"
+  },
+  "judge_model": "deepseek-v4-flash-ga-260731",
+  "transport_identity": {
+    "provider": "ark",
+    "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3"
+  },
+  "selection": {}
+}

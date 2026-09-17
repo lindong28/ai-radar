@@ -12,7 +12,11 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
 - Use `uv run` for Python commands so tools run inside the project environment.
 - When running focused pytest commands that touch the database, set `AI_RADAR_DB` to a temporary path to avoid collisions with local services.
 
-## 对齐 AIHOT：达标线与迭代机制 (BINDING)
+## 新 AIHOT 四对象评测入口 (BINDING)
+
+2026-09-17 起本次获批的精简体系以 [docs/evaluations/README.md](docs/evaluations/README.md) 为实施、数据版本、指标及迭代入口，执行 `eval-workflows iterate-eval-system`。O1 按新闻自身时间（无则抓取时间）±12小时匹配建 prefilter 题，采集不完整的未匹配题不作负例。旧 T5 与下面旧工作线的类别占比、k/5、历史达标门不作为新体系验收条件。新体系不自动修改生产或获准 push。
+
+## 旧 AIHOT 工作线：达标线与迭代机制 (BINDING，仅旧实验)
 
 本仓的长期目标之一是**在用户可见的指标上足够接近 AIHOT**。判据与回路在
 [docs/references/aihot-approximation-metrics.md](docs/references/aihot-approximation-metrics.md)（897 行）。

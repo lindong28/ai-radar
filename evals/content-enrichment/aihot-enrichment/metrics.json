@@ -3,20 +3,44 @@
   "benchmark_slug": "aihot-enrichment",
   "metrics": [
     {
-      "task": "category",
-      "metric_name": "accuracy",
-      "unit": "ratio",
+      "task": "*",
+      "metric_name": "category_accuracy",
+      "unit": "fraction",
       "direction": "higher",
-      "definition": "正确类别题数 / 固定分类题数；先冻结类别对应关系，未知参考不入题。候选失败或缺字段计不一致，题数为0时N/A。",
-      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+      "definition": "分类精确一致率",
+      "source": "evals/_shared/metrics.py"
     },
     {
-      "task": "tags",
-      "metric_name": "exact_set_accuracy",
-      "unit": "ratio",
+      "task": "*",
+      "metric_name": "tags_exact_set_accuracy",
+      "unit": "fraction",
       "direction": "higher",
-      "definition": "候选标签集合与参考集合完全相同的题数 / 固定标签题数；忽略顺序但不删多余标签。明确空参考可入题，未知参考排除；候选失败或缺字段计不一致，题数为0时N/A。",
-      "source": "../../../docs/references/aihot-eval-foundations/objects-and-metrics.md"
+      "definition": "标签集合完全一致率，忽略顺序",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "title_mean_score",
+      "unit": "0-2",
+      "direction": "higher",
+      "definition": "标题相近度判官平均分；未校验不采信",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "summary_mean_score",
+      "unit": "0-2",
+      "direction": "higher",
+      "definition": "摘要相近度判官平均分；未校验不采信",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "reason_mean_score",
+      "unit": "0-2",
+      "direction": "higher",
+      "definition": "推荐理由相近度判官平均分；未校验不采信",
+      "source": "evals/_shared/metrics.py"
     }
   ]
 }
