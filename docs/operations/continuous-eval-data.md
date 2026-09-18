@@ -36,7 +36,7 @@ Radar 仅在 `AI_RADAR_RAW_CAPTURE_DIR` 非空时留档。它挂在真实 fetch/
 
 ## 完整性与冻结
 
-以下命令只做本地原始资产检查，不调用 LLM。时间必须显式带时区；UTC 日窗口不等于 UTC+8 自然日，评测取本地日必须裁到两侧均完整的交集。
+以下命令检查采集过程覆盖与原始资产，不调用 LLM。时间必须显式带时区；UTC 日窗口不等于 UTC+8 自然日。评测数据是否足够按[逐对象数据充分性](../evaluations/benchmarks/object-datasets.md#data-sufficiency)判断，不统一裁成四对象均满足的交集。
 
 ```sh
 PYTHONPATH=src uv run python scripts/raw_capture.py --root data/raw-capture coverage \
@@ -45,9 +45,9 @@ PYTHONPATH=src uv run python scripts/raw_capture.py --root data/raw-capture cove
   --source SOURCE_ID --json
 ```
 
-日期、启用时刻、来源和频次均为示例，必须替换为已批准调度及来源启用区间。每个来源配置/启用集合一致的区间分别审计。没有 started 的调度槽判缺轮；started 未完成、来源失败、正文哈希损坏或 304 依赖缺失均不完整。该结论只覆盖指定来源与系统抓取输入，不承诺源站所有曾发布文章。正常 pipeline 忙而跳过的槽同样不是完整原始采集，不能用网站运行正常替代完整性验收。
+日期、启用时刻、来源和频次均为示例，必须替换为已批准调度及来源启用区间。每个来源配置/启用集合一致的区间分别审计。没有 started 的调度槽判缺轮；started 未完成、来源失败、正文哈希损坏或 304 依赖缺失均不能通过该过程／资产检查。正常 pipeline 忙而跳过的槽同样是过程缺口，不能用网站运行正常替代。过程缺口不能直接换算为不可用新闻数；恢复、补采后的内容是否足够评测，须按上面逐对象口径另判。哈希损坏、依赖缺失仍须解决，不能因来源已恢复就把损坏资产当有效输入；过程检查通过也不承诺源站所有曾发布文章均已收齐。
 
-Radar 冻结：`scripts/raw_capture.py --root data/raw-capture freeze --run RUN_ID --destination data/frozen/SET_ID`，可重复 `--run`，复制并验证全部 304 依赖。该命令只保证所选 run 的依赖完整；必须先通过上面的窗口审计，才可将整窗称为完整评测集。冻结目录不得放在 rolling `runs/` 里面。
+Radar 冻结：`scripts/raw_capture.py --root data/raw-capture freeze --run RUN_ID --destination data/frozen/SET_ID`，可重复 `--run`，复制并验证全部 304 依赖。该命令只保证所选 run 的依赖完整，不证明整个窗口的候选内容完整；“对象窗口完整”依逐对象口径判断，“采集过程连续”依上面的窗口审计判断。旧 v1 建题器仍有自己的 coverage 硬门，本说明不改变代码校验，也不授权篡改覆盖标记。冻结目录不得放在 rolling `runs/` 里面。
 
 AIHOT 冻结：`scripts/capture_aihot_dataset.py freeze --output-root "$AIHOT_CAPTURE_WORKTREE/benchmarks/aihot" --window windows/START--END/manifest.json --destination data/frozen-aihot/SET_ID`，可重复 `--window`；`AIHOT_CAPTURE_WORKTREE` 必须显式配置为与当前 cron 相同的运行树，不能默认取主树 submodule。每个窗口和其完整 capture 都复制并重新验证。冻结位置不能在 rolling captures/windows 内，现有目的地拒绝覆盖。冻结副本仍需备份；本地复制不等于已远端持久化。
 

@@ -8,6 +8,8 @@
 
 用户已认可逐对象独立建题，入口为[建题与扩展操作](benchmarks/object-datasets.md)。O2/O3 的当前规则在 `benchmarks/<target>/<benchmark>/aihot-original-v3/README.md`：仅缺少 Radar raw 时可显式接入 AIHOT 原标题与绑定原文；O1 不补这种仅可见正例，O4 本轮不扩题并保留连续完整候选组要求。四份 `object-specific-v2/README.md` 保留历史规则及适用边界。原始档案共享，但不先取符合所有对象条件的交集。新数据按 `<target>/<benchmark>/<version>` 存储；旧 v1 路径不迁移。下文 2026-09-17 的共同窗口、双侧完整性和全池实跑均为历史 v1 说明，不能作为所有独立对象的入题条件。
 
+判断原始数据能否使用，先按[数据充分性口径](benchmarks/object-datasets.md#data-sufficiency)分别核各对象所需的输入、参照与候选组。恢复／补采后的内容足够可以使用；“连续窗口”不等于要求每次计划抓取都成功。
+
 v2 建题/校验与 v1 全池推理分开：新脚本不改网站算法，旧 runner 明确拒绝 v2。逐条评分映射与精选阈值的运行适配状态见各建题说明；题库完成不等于新推理链完成。
 
 后续扩题默认用 `build --base <既有版本>`，可重复传入多个 v1/v2 版本：合并冻结的原始输入和 AIHOT 证据，去重后按当前逐对象规则重验，输出不可覆盖的新版本与逐题变化清单。旧题库只用于比较，不能直接拼 cases 或把版本题数相加。完整命令与 added/retained/updated/removed 口径见[扩展操作](benchmarks/object-datasets.md#后续-session-默认合并去重按当前设计检查有效性)。
