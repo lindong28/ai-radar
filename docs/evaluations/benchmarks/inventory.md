@@ -1,5 +1,41 @@
 # 题库库存
 
+## 2026-09-18 21:20 +08 输入截止：按当前充分性口径更新
+
+本轮依据用户“基于收集到的数据更新每个评测对象的题目集”的要求，使用已提交的 `572f6ee` 建题代码及当前来源契约，完成 O1/O2/O3 的②题集重建，版本 `20260918-refresh-2120`；O4 核查后未扩展，原因见下。不运行①推理、③判官或④质量指标，⑤本轮未跑，不改变 L3 规则。这不是新的模型拟合成绩。
+
+输入合并 `20260918-merged-v2` 与 `20260918-aihot-original-v3` 的冻结证据，加上 Radar raw run 起始时间 `[2026-09-15T14:45:00Z,2026-09-18T13:20:00Z)`；只消费已完成、校验有效的归档，不等待进行中的轮次。AIHOT 沿用已完成的 9/05—9/14、9/17 UTC 日窗及 9/17 07:00—12:00 UTC interval。本轮不产生新的抓取。原始来源/URL 去重、内容版本冲突与逐字段判定均沿现有脚本，O2/O3 的 AIHOT 原文权限由 base 继承，不将这些输入混入 O1/O4。
+
+| 对象 | 更新后总题数 | 相对 base 去重并集：新增 / 保留 / 更新 / 移出 |
+| --- | --- | --- |
+| O1 新闻准入 | 主集 8,073（574 正、7,499 负）；另有仅召回 74 | 570 / 7,563 / 14 / 0（含补充题） |
+| O2 可见评分 | 2,711 | 8 / 2,685 / 18 / 11 |
+| O3 内容富化 | 2,711 条新闻，9,401 字段题 | 24 / 9,306 / 71 / 46（字段题） |
+| O4 精选规则 | 保留 `20260918-merged-v2` 的 113 道局部阈值题（3 正、110 负）；本轮新增完整候选组为 0 | 本轮不重建、不新增 |
+
+O3 分别为：分类 1,218、标签 2,711、标题 2,711、摘要 2,675、推荐理由 86。评分从 2,714 净减 3，富化从 9,423 净减 22；移出的 11 道评分题和 46 道字段题均由 `changes.jsonl.reasons` 与 `excluded.jsonl` 确认为原始／参考版本歧义，未按模型表现删题。O1 新增主集 564、补充集 6，另有 14 条从仅召回转为主集，因此主集净增 578，不能把 578 称为全新新闻数。
+
+新 evidence 保留 14,470 个 Radar 来源/URL 原始身份（此前 10,830）、495 份 raw manifest；失败／错误记录 8,608 条，既不是缺失新闻数，也不是不可用题数。O1 主集覆盖来源从 83 增至 124，O2/O3 各从 133 增至 135；dev/regression 分别为 O1 6,481/1,592、O2/O3 各 2,179/532。O1 最早新闻发布时间扩至 `2026-08-31T20:36:53Z`，O2/O3 仍为 `2026-09-03T11:00:00Z`；这些是新闻时间，不是连续抓取的起点。准入另有 6,323 个原始身份因逐题 AIHOT ±12h 参照覆盖不足保持未知，不当负例。
+
+O4 按完整候选组要求另行核查：最新已完成的 AIHOT 9/17 UTC 日窗内有 383 个共同来源新闻身份，在本轮冻结 Radar 原始池中仅 167 个有配对，216 个没有 raw；有配对的 167 个中另有 57 个原始多版本。此读数来自该日窗原件、当前来源契约及新 evidence/raw-inputs.jsonl 的同来源/URL 对齐，不是由失败轮数推断缺新闻，也不把缺 raw 算作 prefilter 假阴性。现有原件不足以据此构造该窗可靠的完整候选组；因此不把零散配对题扩作精选全池题。已有 113 道 pointwise-threshold 题作为原冻结版本保留，不宣称已用新证据重验或代表完整池；历史 v1 五小时实验也不冒充本轮新增。O4 的扩展受所需原始候选及版本证据缺口限制。
+
+本轮三份新题库和沿用 O4 叶子都已通过项目 `load_dataset` 冻结摘要、路径、身份与计数校验；它只证明这些资产符合各自声明的版本，不证明对象质量或整个采集过程连续。旧版本及历史成绩不覆盖；不以固定 dev/regression 划分宣称这些新闻从未参与过任何历史调参。
+
+复用实际命令（在 AI Radar 根运行，换新版本名及后续输入截止时间；题库仍在本机，不用 DGX）：
+
+```bash
+PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260918-merged-v2 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-visible-score/20260918-aihot-original-v3 \
+  --raw-root /Users/lindong/research/ai-radar/data/raw-capture \
+  --start 2026-09-15T14:45:00Z --end 2026-09-18T13:20:00Z \
+  --target news-admission --target visible-score --target content-enrichment \
+  --version 20260918-refresh-2120 \
+  --contract-path /Users/lindong/research/ai-radar/tests/fixtures/aihot_sources.json
+```
+
+下一次 O1/O2/O3 扩展只需以新版本任一叶子为 `--base`，即可继承本批三个对象及自包含的全部证据；新增原始范围和已完成 AIHOT 参照按[共用说明](object-datasets.md)追加。O4 沿其原版本与完整候选组要求处理，不从上述命令省略 `--target` 来默认混入零散精选题。
+
 ## 2026-09-18：仅评分与富化接入 AIHOT 历史原文
 
 已实际运行离线建题 CLI，以 `20260918-merged-v2` 为 base，加入 9/05—9/14 共 10 个已完成 UTC 日窗，显式 `--aihot-inputs` 授权当次全部参照（包含 base 继承的参照）作为 O2/O3 原文候选，仅输出这两个对象的 `20260918-aihot-original-v3`。新版本路径为 `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<benchmark>/20260918-aihot-original-v3/`；未重新采集、未调用模型，不是新的拟合成绩。
