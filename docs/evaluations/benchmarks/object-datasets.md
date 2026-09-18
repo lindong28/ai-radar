@@ -97,10 +97,11 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 
 ```bash
 PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
-  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260918-merged-v2 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260918-substantive-v4-r1 \
   --raw-root /absolute/path/to/data/raw-capture \
   --start 2026-09-18T00:00:00Z --end 2026-09-19T00:00:00Z \
   --reference /absolute/path/to/new-aihot-window/manifest.json \
+  --target news-admission --target visible-score --target content-enrichment \
   --version 20260919-extended-v2
 ```
 
@@ -108,9 +109,9 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 
 | 环节 | 固定语义 |
 | --- | --- |
-| 原始身份 | 同来源＋规范化 URL 合并；保留每种不同原始内容。仅 fetched_at 不同不制造正文版本，代表记录取最早观察；不得按拟合效果选正文 |
-| 题目身份 | 对象＋case_id＋字段；O3 五字段分别计题；dev/regression 沿用 URL 固定划分 |
-| 当前有效性 | 按当前来源契约、完整参照证据及各对象规则重新建题；O1 仍区分主集、仅召回补充集和未知，O2/O3/O4 仍排除原始/身份多版本歧义，字段参考冲突只排该字段 |
+| 原始身份 | 同来源＋规范化 URL 合并；X 使用推文 ID，保留所有不同原始载荷。载荷不同不等于实质内容不同，版本规则见下节；代表记录取最早观察，不按拟合效果挑正文 |
+| 题目身份 | 对象＋case_id＋字段；O3 五字段分别计题；dev/regression 按身份 URL 固定划分，X 别名不得跨 split |
+| 当前有效性 | 按当前来源契约、完整参照证据及各对象规则重新建题；O1 仍区分主集、仅召回补充集和未知；其它对象只排除各自相关的实质内容／参考身份歧义，字段参考冲突只排该字段 |
 | 旧题处理 | 可保留、更新、移出，也可把原来未知的新闻新增为题；不会为了累加数量恢复当前无效的旧题。移出只发生在新版本，旧题库和旧成绩不修改 |
 | 原始数据保留 | 当前不入题、来源暂时不在范围的已冻结输入仍留在新版本 evidence；不以 prefilter/scorer 结果筛原始数据，不补造旧 T5 或缺失输入 |
 
@@ -160,7 +161,24 @@ validate 校验问题集和冻结证据的字节摘要、对象/版本路径、�
 
 合并后 `inventory.windows` 保留输入时间段，`window` 只是最早到最晚的包络，不证明中间连续。`unique_raw_news` 是冻结的来源/URL 身份数，`eligible_source_raw_news` 是当前来源范围内的身份数，均不是有效题数。紧凑旧档案无法恢复重叠版本的精确抓取观察总数，故合并后的 `raw_observations=null`，逐新闻 observations 只为下界，不累加成精确总数；采集连续性仍须独立审计，不能靠 run_count 或题数宣称无断档。
 
-Radar 配对对象 O2/O3/O4 取同来源、同 URL 且所选范围仅有一个原始内容版本；O2/O3 的 AIHOT fallback 另按上节执行。遇到多版本先排除，不能以标签更好匹配为由挑正文。跨站正文一致性不可直接证明；manifest 明示此限制。多参照的同字段冲突不按“最新最好”择一；只排除冲突字段，避免用消歧假设污染参考。
+### 实质内容版本与 URL 身份（2026-09-18 用户修订）
+
+规则由 `evals/_shared/identity.py` 维护，manifest 以 `identity_policy=same-source-x-post-id-substantive-v1` 和 `identity_builder_sha256` 标明执行口径。此处替代旧的“除 fetched_at 外任何字段不同都算版本不同”，不追改旧冻结题库。
+
+| 变化／对象 | 处理 |
+| --- | --- |
+| X URL 写法 | 同一来源下，x.com / twitter.com 的账号路径、i/web/status 路径、分享查询参数及 photo/video 尾缀，按同一个数字推文 ID 配对、去重和分 split；题目 input.url 按来源契约输出 `https://x.com/<handle>/status/<id>`。原始 URL 仍在冻结证据里 |
+| 其它 URL | 保留既有身份边界，不泛化删除 query、不跨域猜正文相等、不跨来源合并转载 |
+| 仅 published_at / fetched_at 变化 | 不构成内容多版本；原时间仍保留，O1 的 ±12h 匹配和精选时效用途照常读取，不将补采倒填为历史已到达 |
+| 仅 HTML 或 extra 中来源标签变化 | 不构成内容多版本，正文比较使用 content_text；若提取出的正文也变化，仍按正文变化处理 |
+| 标题排版／标点 | 比较时统一 NFC、全角 ASCII、空白、引号及常见分隔／句末标点；不改模型所见原标题。数字、小数点、负号、上标、`!=` 等运算符和实际文字差异仍保留，不用模糊语义匹配吞掉实质差异 |
+| O2 评分 | 比较新闻身份、规范化标题、完整 content_text 和 author；不截断正文来躲开变化 |
+| O3 富化 | 比较新闻身份、规范化标题和完整 content_text；不读取 author 的富化输入不因作者字段变化连带排除 |
+| O4 局部阈值题 | 与评分的内容版本判据一致，时间字段仍保留；此规则不证明候选组完整，也不扩充 AIHOT-only 样本 |
+
+Radar 配对对象要求各自仅有一个实质输入版本，且配对的 AIHOT item ID 唯一；AIHOT 原文 fallback 使用同一实质内容判据，代表记录也取最早观察。真正多版本仍排除，不能按参考答案挑一个正文。多参照同字段的参考值冲突不按“最新最好”择一，只排该字段。跨站原文完全一致仍不可直接证明。
+
+历史 `--base` 先验证原冻结 key 和摘要，再按新身份重建；历史题在 changes 中也按规范身份对齐，不把 URL 别名改写计成“删一题、加一题”。X 的历史 split 可能随规范身份迁移，比较模型候选必须重新使用同版题库，不能混用旧 split 或把它声称为从未调参的 holdout。旧题库只保留在独立历史版本目录供复现，移出的题不留在新版本 cases 中；日后扩题必须指定当前版本，而非直接拼旧 cases。
 
 ## 执行边界与后续接线
 

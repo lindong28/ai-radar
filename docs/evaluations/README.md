@@ -14,6 +14,8 @@ v2 建题/校验与 v1 全池推理分开：新脚本不改网站算法，旧 ru
 
 后续扩题默认用 `build --base <既有版本>`，可重复传入多个 v1/v2 版本：合并冻结的原始输入和 AIHOT 证据，去重后按当前逐对象规则重验，输出不可覆盖的新版本与逐题变化清单。旧题库只用于比较，不能直接拼 cases 或把版本题数相加。完整命令与 added/retained/updated/removed 口径见[扩展操作](benchmarks/object-datasets.md#后续-session-默认合并去重按当前设计检查有效性)。
 
+2026-09-18 URL/版本修订：X 别名按同来源推文 ID 配对；只以评测对象相关的实质内容变化判多版本，不再因 published_at、HTML、来源标签或标题标点变化排题。规则与迁移边界见[实质性规则](benchmarks/object-datasets.md#实质内容版本与-url-身份2026-09-18-用户修订)，当前版本及精确题数以[库存](benchmarks/inventory.md)顶部为准。
+
 | 对象 | 代码与指标入口 | 优化维度 |
 | --- | --- | --- |
 | news-admission | [aihot-all-members](../../evals/news-admission/aihot-all-members/README.md) | prefilter 通过集合 precision / recall |

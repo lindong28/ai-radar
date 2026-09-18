@@ -6,7 +6,7 @@
 
 prefilter 的通过集合；precision / recall，确定性集合比较，不需要 LLM 判官。
 
-1. 取原始预过滤新闻，按共同来源 + URL 去重，固定最早观察到的输入，不先运行 prefilter、评分或精选。
+1. 取原始预过滤新闻，按共同来源 + 规范身份 URL 去重，固定最早观察到的输入，不先运行 prefilter、评分或精选。X 别名按推文 ID 合并，见[实质性规则](../../../object-datasets.md#实质内容版本与-url-身份2026-09-18-用户修订)，避免将已经出现的 AIHOT 正例误判负例。
 2. 每题时间 t 优先取 published_at，缺失才用原始 fetched_at；只在 AIHOT 的开放区间 (t−12h, t+12h) 匹配同来源、同 URL。
 3. 主集要求 AIHOT 两次完整终态遍历的有效覆盖包含整个区间，且区间内成员 ID 集合稳定；正例与负例都应用这一要求。不再要求 Radar 在整个24小时内所有来源/轮次无缺口。
 4. 有匹配为 member=true；无匹配且参照完整为 false。参照不完整却有已见正例，进入 recall-only.jsonl；无匹配且不完整则写 excluded.jsonl，不当负例。

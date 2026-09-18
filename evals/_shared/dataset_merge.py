@@ -8,7 +8,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from .assets import BENCHMARKS, digest, file_digest, load_dataset, read_json, read_jsonl
-from .dataset import news_key, timestamp
+from .dataset import news_key as legacy_news_key
+from .dataset import timestamp
+from .identity import news_key
 
 
 def observation_order(row):
@@ -29,7 +31,8 @@ def add_observation(records, row):
 def merge_records(destination, incoming):
     for key, record in incoming.items():
         for row in record["variants"].values():
-            if key != news_key(row["raw"]["source_id"], row["raw"]["url"]):
+            raw = row["raw"]
+            if key not in {news_key(raw["source_id"], raw["url"]), legacy_news_key(raw["source_id"], raw["url"])}:
                 raise ValueError("frozen raw identity mismatch")
             merged = add_observation(destination, row)
             # Compact v2 archives cannot recover exact overlapping poll counts.
@@ -124,7 +127,8 @@ def question_entries(rows, target, group="main"):
             value = row["reference"][field]
             if field == "tags":
                 value = sorted(set(value))
-            yield (row["case_id"], field), {"group": group,
+            key = news_key(row["input"]["source_id"], row["input"]["url"])
+            yield (key, field), {"group": group,
                 "input_sha256": digest(row["input"]), "reference_sha256": digest(value)}
 
 

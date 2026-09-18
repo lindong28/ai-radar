@@ -33,7 +33,8 @@ from .assets import (
     write_json,
     write_jsonl,
 )
-from .dataset import news_key, raw_content_hash, reference_pass_items, resolve_sources, split_for, timestamp
+from .dataset import raw_content_hash, reference_pass_items, resolve_sources, timestamp
+from .identity import input_url, news_key, split_for, substantive_hash
 from .interval import validate_interval
 
 FIELDS = {"score": "aihot_score_0_to_100", "category": "aihot_category_slug", "tags": "tags",
@@ -142,8 +143,8 @@ def collect_raw(root: Path, start: str, end: str, sources: dict) -> tuple[dict, 
 def base_case(key: str, record: dict, sources: dict) -> dict:
     observations = list(record["variants"].values())
     first = min(observations, key=lambda o: (timestamp(o["observed_at"]), o["raw_run"], digest(o["raw"])))
-    raw = first["raw"]
-    source = sources[raw["source_id"]]
+    source = sources[first["raw"]["source_id"]]
+    raw = {**first["raw"], "url": input_url(first["raw"]["url"], source)}
     return {"case_id": key, "split": split_for(raw["url"]),
             "input": {**raw, "case_id": key, "item_id": key, "tier": source["tier"],
                       "source_kind": source["kind"], "source_name": source["name"],
@@ -253,10 +254,7 @@ def construct(records: dict, references: list[Reference], contract: dict, source
                 excluded["news-admission"].append({"case_id": key, "reason": group, **evidence})
         if key not in paired:
             continue
-        # Fetched timestamps may vary without changing the actual model input body.
-        versions = {"aihot"} if from_aihot else {digest({k: v for k, v in o["raw"].items() if k != "fetched_at"})
-                    for o in records[key]["variants"].values()}
-        if len(versions) != 1 or len({i["id"] for _, i in paired[key]}) != 1:
+        if len({i["id"] for _, i in paired[key]}) != 1:
             for target in BENCHMARKS:
                 if target != "news-admission" and not (from_aihot and target == "featured-members"):
                     excluded[target].append({"case_id": key, "reason": "ambiguous_raw_or_reference_version"})
@@ -275,6 +273,12 @@ def construct(records: dict, references: list[Reference], contract: dict, source
                 excluded[target].append({"case_id": key, "field": field, "reason": "conflicting_reference_values"})
         for target, fields in (("visible-score", ("score",)), ("content-enrichment", ENRICHMENT),
                                ("featured-members", ("featured",))):
+            if from_aihot and target == "featured-members":
+                continue
+            if not from_aihot and len({substantive_hash(o["raw"], target)
+                                      for o in records[key]["variants"].values()}) != 1:
+                excluded[target].append({"case_id": key, "reason": "ambiguous_raw_or_reference_version"})
+                continue
             available = {f: labels[f] for f in fields if f in labels}
             if available:
                 row = copy.deepcopy(case)
@@ -389,12 +393,14 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
                     "window": inventory["window"], "files": files, "shared_evidence": os.path.relpath(evidence, leaf),
                     "evidence_files": evidence_files, "builder_sha256": file_digest(Path(__file__)),
                     "merge_builder_sha256": file_digest(Path(__file__).with_name("dataset_merge.py")),
+                    "identity_builder_sha256": file_digest(Path(__file__).with_name("identity.py")),
+                    "identity_policy": "same-source-x-post-id-substantive-v1",
                     "rebuild": {"raw_root": str(raw_root.resolve()) if raw_root else None,
                                 "references": [str(Path(p).resolve()) for p in references or []],
                                 "bases": [str(Path(p).resolve()) for p in bases or []],
                                 "start": start, "end": end, "targets": targets, "contract_path": str(contract_path.resolve())},
-                    "reference_manifests": [r.key for r in refs], "split_policy": "URL hash modulo 5: 0 regression, otherwise dev",
-                    "pairing_limit": "same source/url and one observed raw version; cross-site body equality is not observable"}
+                    "reference_manifests": [r.key for r in refs], "split_policy": "identity URL hash modulo 5: 0 regression, otherwise dev; X aliases share one split",
+                    "pairing_limit": "same source/canonical URL and one target-relevant content version; cross-site body equality is not observable"}
         if allowed_inputs:
             # This policy travels with the evidence bundle, even on an O1/O4 sibling.
             manifest["aihot_input_references"] = sorted(allowed_inputs)
@@ -403,7 +409,7 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
             manifest["rebuild"]["aihot_inputs"] = aihot_inputs
         if target in {"visible-score", "content-enrichment"} and allowed_inputs:
             manifest["policy"] = "object-specific-aihot-original-v3"
-            manifest["pairing_limit"] = "same source/url; Radar raw preferred, otherwise one identity-bound AIHOT original version; not a continuous candidate pool"
+            manifest["pairing_limit"] = "same source/canonical URL; Radar raw preferred, otherwise one substantive identity-bound AIHOT original version; not a continuous candidate pool"
             counts["input_origins"] = dict(Counter(c["provenance"].get("input_origin", "radar-raw") for c in cases[target]))
         write_json(leaf / "manifest.json", manifest)
         load_dataset(leaf, target)

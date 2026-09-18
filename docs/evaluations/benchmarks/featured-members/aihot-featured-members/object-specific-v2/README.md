@@ -6,6 +6,8 @@
 
 ## L1：对象、题目与计分
 
+2026-09-18 URL/版本修复使用原 `20260918-merged-v2` 冻结窗口重建，当前版本为 `20260918-substantive-o4-v4-r1`；配对与实质性口径见[共用规则](../../../object-datasets.md#实质内容版本与-url-身份2026-09-18-用户修订)。这只恢复同一证据中被误排的局部题，不加入 AIHOT-only 输入、不声称形成完整池。
+
 条件在 AIHOT 已收录新闻上的本地精选规则；成员 precision / recall，不需要 LLM 判官。
 
 1. 取 AIHOT 已收录、有同来源同 URL 原始输入、且 aihot_selected 为显式 true/false 的新闻；不要求 AIHOT 数值分数或富化字段齐全。

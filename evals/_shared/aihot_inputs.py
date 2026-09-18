@@ -8,7 +8,8 @@ import gzip
 from html.parser import HTMLParser
 
 from .assets import digest
-from .dataset import raw_content_hash, split_for
+from .dataset import raw_content_hash, timestamp
+from .identity import input_url, split_for, substantive_hash
 
 
 class OriginalBody(HTMLParser):
@@ -110,6 +111,9 @@ def original_input(ref, item, source):
 
 def fallback_case(key, pairs, references, source, allowed):
     """Require a single input version; never rescue an ambiguous Radar input."""
+    def order(pair):
+        return timestamp(pair[1]["observed_at"]), pair[1]["reference"], digest(pair[0])
+
     variants, reasons = {}, set()
     for ref_id, item in pairs:
         if ref_id not in allowed:
@@ -119,11 +123,15 @@ def fallback_case(key, pairs, references, source, allowed):
         except ValueError as exc:
             reasons.add(str(exc))
             continue
-        identity = digest({k: v for k, v in raw.items() if k != "fetched_at"})
-        variants.setdefault(identity, (raw, provenance))
+        identity = substantive_hash(raw, "visible-score")
+        previous = variants.get(identity)
+        candidate = (raw, provenance)
+        if previous is None or order(candidate) < order(previous):
+            variants[identity] = candidate
     if len(variants) != 1:
         return None, "ambiguous_aihot_original_version" if variants else ",".join(sorted(reasons)) or "missing_raw"
     raw, provenance = next(iter(variants.values()))
+    raw = {**raw, "url": input_url(raw["url"], source)}
     return {"case_id": key, "split": split_for(raw["url"]), "reference": {}, "provenance": provenance,
             "input": {**raw, "case_id": key, "item_id": key, "tier": source["tier"],
                       "source_kind": source["kind"], "source_name": source["name"],
