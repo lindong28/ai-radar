@@ -270,7 +270,8 @@ def construct(records: dict, references: list[Reference], contract: dict, source
     return cases, excluded, supplemental
 
 
-def build(*, raw_root: Path, references: list[Path], start: str, end: str, version: str,
+def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
+          start: str | None = None, end: str | None = None, version: str, bases: list[Path] | None = None,
           targets: list[str] | None = None, data_root: Path = DEFAULT_DATA_ROOT,
           contract_path: Path = ROOT / "tests/fixtures/aihot_sources.json") -> dict:
     slug(version)
@@ -281,15 +282,45 @@ def build(*, raw_root: Path, references: list[Path], start: str, end: str, versi
     leaves = {t: data_root / t / BENCHMARKS[t] / version for t in targets}
     if any(leaf.exists() for leaf in leaves.values()):
         raise FileExistsError("dataset version already exists; choose a new version")
-    refs = list({ref.key: ref for ref in map(read_reference, references)}.values())
+    from .dataset_merge import changes_for, merge_records, read_bases
+
+    if any(v is not None for v in (raw_root, start, end)) and not all(v is not None for v in (raw_root, start, end)):
+        raise ValueError("new raw input requires --raw-root, --start and --end together")
+    if not bases and raw_root is None:
+        raise ValueError("provide --base or new raw input (--raw-root, --start, --end)")
+    records, ref_map, manifests, windows, failures, parents, lineage = read_bases(bases or [])
+    for ref in map(read_reference, references or []):
+        ref_map.setdefault(ref.key, ref)
+    refs = list(ref_map.values())
     refs.sort(key=lambda ref: ref.key)
     if not refs:
         raise ValueError("at least one validated AIHOT reference is required")
     contract = read_json(contract_path)
-    mapped, unmapped = resolve_sources([i for ref in refs for i in ref.items], contract)
+    mapped, unmapped = resolve_sources([i for ref in refs for i in ref.items], contract, allow_empty=bool(bases))
     sources = {source["slug"]: source for source in mapped.values()}
-    records, inventory, manifests = collect_raw(raw_root, start, end, sources)
-    cases, excluded, supplemental = construct(records, refs, contract, sources)
+    if raw_root is not None:
+        fresh, inventory, new_manifests = collect_raw(raw_root, start, end, sources)
+        merge_records(records, fresh)
+        for run, payload in new_manifests.items():
+            if run in manifests and manifests[run] != payload:
+                raise ValueError(f"conflicting raw run manifests: {run}")
+            manifests[run] = payload
+        windows.append(inventory["window"])
+        failures.extend(inventory["source_failures"])
+    if bases:
+        windows = sorted({digest(w): w for w in windows}.values(), key=lambda w: timestamp(w["start_inclusive"]))
+        inventory = {"window": {"start_inclusive": min((w["start_inclusive"] for w in windows), key=timestamp),
+                     "end_exclusive": max((w["end_exclusive"] for w in windows), key=timestamp)},
+                     "windows": windows, "unique_raw_news": len(records), "run_count": len(manifests),
+                     "raw_observations": None,
+                     "observation_count_scope": "per-news observations are lower bounds; overlapping compact archives cannot yield an exact poll total",
+                     "source_failures": list({digest(f): f for f in failures}.values())}
+    scoped = {k: r for k, r in records.items() if next(iter(r["variants"].values()))["raw"]["source_id"] in sources}
+    cases, excluded, supplemental = construct(scoped, refs, contract, sources)
+    for key in sorted(records.keys() - scoped.keys()):
+        for target in BENCHMARKS:
+            excluded[target].append({"case_id": key, "reason": "source_out_of_scope"})
+    inventory["eligible_source_raw_news"] = len(scoped)
     # Compact, self-contained evidence: preserve all distinct input payloads,
     # not millions of identical poll rows. Original producer manifests remain.
     owner = leaves[targets[0]]
@@ -299,6 +330,8 @@ def build(*, raw_root: Path, references: list[Path], start: str, end: str, versi
     write_json(evidence / "raw-manifests.json", manifests)
     write_json(evidence / "inventory.json", inventory)
     write_json(evidence / "sources.json", {"contract": contract, "matched": mapped, "unmapped": unmapped})
+    if bases:
+        write_json(evidence / "parents.json", lineage)
     for ref in refs:
         for name, content in ref.files.items():
             ds._validate_relative_path(name)
@@ -316,6 +349,11 @@ def build(*, raw_root: Path, references: list[Path], start: str, end: str, versi
             write_jsonl(leaf / "recall-only.jsonl", supplemental)
         if target == "content-enrichment":
             write_json(leaf / "field-subsets.json", {f: [r["case_id"] for r in cases[target] if f in r["reference"]] for f in ENRICHMENT})
+        change_counts = None
+        if bases:
+            changes, change_counts = changes_for(target, parents, cases[target], supplemental, excluded[target])
+            write_jsonl(leaf / "changes.jsonl", changes)
+            write_json(leaf / "merge-summary.json", change_counts)
         files = {p.name: file_digest(p) for p in sorted(leaf.iterdir()) if p.is_file()}
         counts = {"main": len(cases[target]), "excluded": len(excluded[target]),
                   "exclusion_reasons": dict(Counter(r["reason"] for r in excluded[target])),
@@ -327,13 +365,18 @@ def build(*, raw_root: Path, references: list[Path], start: str, end: str, versi
                     "policy": "object-specific-v2", "evaluation_mode": "pointwise-threshold" if target == "featured-members" else "pointwise",
                     "window": inventory["window"], "files": files, "shared_evidence": os.path.relpath(evidence, leaf),
                     "evidence_files": evidence_files, "builder_sha256": file_digest(Path(__file__)),
-                    "rebuild": {"raw_root": str(raw_root.resolve()), "references": [str(r.path) for r in refs],
+                    "merge_builder_sha256": file_digest(Path(__file__).with_name("dataset_merge.py")),
+                    "rebuild": {"raw_root": str(raw_root.resolve()) if raw_root else None,
+                                "references": [str(Path(p).resolve()) for p in references or []],
+                                "bases": [str(Path(p).resolve()) for p in bases or []],
                                 "start": start, "end": end, "targets": targets, "contract_path": str(contract_path.resolve())},
                     "reference_manifests": [r.key for r in refs], "split_policy": "URL hash modulo 5: 0 regression, otherwise dev",
                     "pairing_limit": "same source/url and one observed raw version; cross-site body equality is not observable"}
         write_json(leaf / "manifest.json", manifest)
         load_dataset(leaf, target)
         outputs[target] = {"path": str(leaf), **counts}
+        if change_counts is not None:
+            outputs[target]["merge"] = change_counts
     return {"version": version, "datasets": outputs, "inventory": {k: v for k, v in inventory.items() if k != "source_failures"},
             "source_failure_count": len(inventory["source_failures"]), "model_calls": 0}
 
@@ -342,11 +385,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     create = sub.add_parser("build", help="build immutable independent object question sets, offline")
-    create.add_argument("--raw-root", type=Path, required=True)
-    create.add_argument("--reference", type=Path, action="append", required=True,
+    create.add_argument("--base", dest="bases", type=Path, action="append",
+                        help="existing v1/v2 dataset leaf or manifest; repeat to merge versions, revalidate frozen inputs")
+    create.add_argument("--raw-root", type=Path)
+    create.add_argument("--reference", type=Path, action="append",
                         help="repeat for interval roots or published daily window manifest paths")
-    create.add_argument("--start", required=True, help="inclusive raw run start, timezone required")
-    create.add_argument("--end", required=True, help="exclusive raw run start, timezone required")
+    create.add_argument("--start", help="inclusive new raw run start, timezone required")
+    create.add_argument("--end", help="exclusive new raw run start, timezone required")
     create.add_argument("--version", required=True)
     create.add_argument("--target", dest="targets", choices=list(BENCHMARKS), action="append")
     create.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)

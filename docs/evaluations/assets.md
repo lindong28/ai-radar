@@ -6,6 +6,8 @@
 
 新建题默认采用 [object-specific-v2](benchmarks/object-datasets.md)：题库路径改为 `<target>/<benchmark>/<version>`，共享证据随本次第一个目标落盘，不强绑 O1。紧凑原始输入、完整 AIHOT 引用证据与逐轮原件的区别见该说明。下表题库一行与文末全池约束仅描述已有 v1，历史数据与运行资产不迁移；v2 的逐对象运行适配尚未在本轮建设。
 
+`--base` 合并版仍使用 schema2，每个叶子附 `merge-summary.json`（相对父版本去重并集的变化计数）与 `changes.jsonl`（字段级身份、输入/参考摘要、主集/补充集归属、移出原因）；共享 evidence/parents.json 记录直接父版本路径和 SHA。所有文件纳入 manifest 字节校验。新 evidence 保留完整合并后的紧凑输入及参照，不依赖祖先仍在线；合并不修改旧资产、不复制旧成绩，也不把重叠抓取观察次数相加。
+
 | 资产 | 唯一落点与产生时机 |
 | --- | --- |
 | 评测题（输入集） | `~/research/video-eval-arena/data/benchmarks/ai-radar/<benchmark>/<target>/<version>/`；build 生成 cases/manifest，输入与 reference 分离；原始全观察及两侧证据保留在该版本 news-admission 叶子，共享引用与校验和绑定 |

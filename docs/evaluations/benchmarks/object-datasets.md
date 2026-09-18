@@ -30,7 +30,41 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 
 默认生成四个对象。只建一个或几个时重复 `--target visible-score` 等；可显式传 `--data-root` 与 `--contract-path`。版本 slug 只允许小写字母、数字、点、下划线、横杠。任一目标版本已存在就退出，不覆盖历史。
 
-扩大题库：增加新的已完成 AIHOT manifest 参数、扩大 Radar 时间范围，使用新的 --version，重跑同一命令。它是从所选档案重算一个新版本，不是在旧题上原位追加；新增参照可能解决未知项，也可能暴露标签冲突，因此题数不保证单调增加。复制旧 manifest.rebuild 的输入参数，再加新范围即可；旧数据与旧成绩仍可复查。完全相同的输入重建为另一个版本，cases 内容应相同，生成时刻和版本元数据会不同。
+## 后续 session 默认：合并＋去重＋按当前设计检查有效性
+
+扩展题库使用可重复的 `--base`，不能把各版本题数相加，也不能直接拼接 `cases.jsonl`。脚本先校验旧版本冻结资产，从中读取过滤前原始输入（包括当时未入题的新闻）和 AIHOT 原始参照，与本次新增原始数据合并，然后调用当前四对象建题规则。旧题仅用于计算变化，不直接作为新版本参考答案的权威。
+
+仅合并已有版本、不增加采集数据：
+
+```bash
+PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/aihot-all-members/news-admission/20260917-0700-1200-v1 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260918-object-v2-r1 \
+  --version 20260918-merged-v2
+```
+
+日后扩展时，以最近一次合并后的版本作为 base，再提供新增 Radar 范围与已完成 AIHOT 参照。以下新增路径、日期和版本名须替换为实际值：
+
+```bash
+PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260918-merged-v2 \
+  --raw-root /absolute/path/to/data/raw-capture \
+  --start 2026-09-18T00:00:00Z --end 2026-09-19T00:00:00Z \
+  --reference /absolute/path/to/new-aihot-window/manifest.json \
+  --version 20260919-extended-v2
+```
+
+`--base` 接受 schema1/schema2 的任一对象叶子目录或其 manifest，并自动读取该题库根下同数据版本的所有现存对象兄弟叶子；`--target` 只控制输出对象，不限制这些历史证据。只补 AIHOT 参照时可省略 raw 三参数；补 raw 时 `--raw-root/--start/--end` 必须一起给。重复传入同版、重叠版本或“合并版＋其祖先”不会重复计题。无 `--base` 仍是从指定原始档案开始的新建，不自动扫描目录挑最新版本。
+
+| 环节 | 固定语义 |
+| --- | --- |
+| 原始身份 | 同来源＋规范化 URL 合并；保留每种不同原始内容。仅 fetched_at 不同不制造正文版本，代表记录取最早观察；不得按拟合效果选正文 |
+| 题目身份 | 对象＋case_id＋字段；O3 五字段分别计题；dev/regression 沿用 URL 固定划分 |
+| 当前有效性 | 按当前来源契约、完整参照证据及各对象规则重新建题；O1 仍区分主集、仅召回补充集和未知，O2/O3/O4 仍排除原始/身份多版本歧义，字段参考冲突只排该字段 |
+| 旧题处理 | 可保留、更新、移出，也可把原来未知的新闻新增为题；不会为了累加数量恢复当前无效的旧题。移出只发生在新版本，旧题库和旧成绩不修改 |
+| 原始数据保留 | 当前不入题、来源暂时不在范围的已冻结输入仍留在新版本 evidence；不以 prefilter/scorer 结果筛原始数据，不补造旧 T5 或缺失输入 |
+
+完全相同的证据和当前规则重建，题目内容应相同；生成时刻、版本和变化报告可不同。新增证据可能补足未知，也可能暴露冲突，所以“累积原始证据”不等于“有效题数只能增加”。规则升级仍走设计变更，不在扩展数据时悄悄改规则。
 
 ## 输出与校验
 
@@ -42,11 +76,14 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
     excluded.jsonl
     recall-only.jsonl       # 仅 O1
     field-subsets.json     # 仅 O3，各字段的 case_id
+    merge-summary.json     # 给了 --base 才有：去重后的题目变化计数
+    changes.jsonl          # 给了 --base 才有：逐题/字段 before、after、状态、移出原因
     evidence/              # 本次第一个目标持有，其它叶子相对引用
       raw-inputs.jsonl
       raw-manifests.json
       inventory.json
       sources.json
+      parents.json         # 给了 --base 才有：直接输入版本路径及 manifest SHA
       aihot/<reference-digest>/...
 ```
 
@@ -61,11 +98,17 @@ validate 校验问题集和冻结证据的字节摘要、对象/版本路径、�
 
 每条 cases 包含 case_id、split、input、reference、provenance。input 是过滤前新闻与必要来源元数据，reference 才是 AIHOT 标签。按来源/URL 固定身份；同 URL 在各对象、各版本使用相同 split，不把重复新闻随机拆到两边。O3 用 field-subsets.json 选字段，不将缺值当错误或空值。排除记录按题/字段记录，因此 excluded 数不一定等于独立新闻数。
 
+每次扩展后，后续 agent 应逐对象读取 `merge-summary.json` 和 manifest.counts，遇到 updated/removed 时查 `changes.jsonl`，然后运行 validate。`added` 才是相对所有 base 去重并集的新增题；`retained` 是输入、参考、主集/补充集身份均相同；`updated` 是该身份仍在但上述内容发生变化，或旧版本间存在不同状态；`removed` 是按当前规则不再入题。`previous_unique_questions + added - removed = current_unique_questions`，后者也等于 `added + retained + updated`。`duplicate_parent_questions` 是历史各叶子计题次数减去身份并集大小，不是新闻去重数。O1 的变化摘要包含仅召回补充题，主集数量必须另读 manifest.counts.main；O3 摘要按字段题数，不是新闻行数。跨对象相加只能叫评测任务数，不能叫独立新闻数。
+
 ## 规模、版本与原始证据
 
 每轮先通过现有 read_run 校验压缩原件及逐源计数，304 需验证并解析 payload_ref；失败来源/未完成轮次记录在 inventory，不让它们拖掉其它来源的已取得原始新闻。已完成轮次的损坏则中止，不静默删除。串行扫描共享本机磁盘，每次只展开一轮压缩包；内存随独立输入版本而不是重复抓取总行数增长。重复抓取只变 fetched_at 时保留最早观察的原始记录及次数，不复制每轮同一正文。原始采集档案本身不被修改。
 
 冻结的是去重复后的原始输入版本、逐轮生产者 manifest、来源契约和必要 AIHOT 原页，不是完整 Radar 抓取档案副本。它足够复查这批题实际输入/参考，完整轮次重放仍使用原始 raw-capture。manifest 保留重建参数和 builder SHA；重建原始题时须使用相同代码/契约/采集档案，不能用现在的来源配置冒充旧配置。
+
+合并版冻结合并后的原始输入与全部使用到的 AIHOT 参照，因此下次扩展只需该版及其共享 evidence，不依赖最早的采集目录或祖先题库仍在线；parents/rebuild 的原路径是溯源，不是下次扩展的必需读取路径。`manifest.rebuild.bases` 记录直接输入版本，`builder_sha256` 和 `merge_builder_sha256` 分别标识建题/合并模块。按当前规则重验与原样复现旧规则是两件事。
+
+合并后 `inventory.windows` 保留输入时间段，`window` 只是最早到最晚的包络，不证明中间连续。`unique_raw_news` 是冻结的来源/URL 身份数，`eligible_source_raw_news` 是当前来源范围内的身份数，均不是有效题数。紧凑旧档案无法恢复重叠版本的精确抓取观察总数，故合并后的 `raw_observations=null`，逐新闻 observations 只为下界，不累加成精确总数；采集连续性仍须独立审计，不能靠 run_count 或题数宣称无断档。
 
 配对对象 O2/O3/O4 取同来源、同 URL 且所选范围仅有一个原始内容版本；遇到多版本先排除，不能以标签更好匹配为由挑正文。AIHOT 不提供完整原文时，跨站正文一致性不可直接证明；manifest 明示此限制。多参照的同字段冲突不按“最新最好”择一；只排除冲突字段，避免用消歧假设污染参考。
 

@@ -21,9 +21,8 @@ cases.jsonl 的 reference 只有 member。recall-only.jsonl 是独立补充集�
 - 权威建题逻辑：[object_datasets.py](../../../../../../evals/_shared/object_datasets.py)，命令入口：[build_eval_datasets.py](../../../../../../scripts/build_eval_datasets.py)。
 - 指标定义及旧执行入口：[aihot-all-members](../../../../../../evals/news-admission/aihot-all-members/README.md)。
 - 数据位置：`~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/<version>/`。文档不存大题库；不使用 DGX。
-- 生成本对象：共享命令增加 `--target news-admission`；省略 --target 时生成四个对象。重建、增量扩窗、多参照、校验及失败恢复见[共用操作说明](../../../object-datasets.md)。
+- 生成本对象：共享命令增加 `--target news-admission`；省略 --target 时生成四个对象。后续扩展用可重复的 `--base` 合并旧版冻结原始证据及新增数据，去重后按本页规则重验；不直接拼旧题，旧版本保持不变。命令、逐题变更计数、校验及失败恢复见[共用操作说明](../../../object-datasets.md)。
 
 ## L3：最小可信边界
 
 同来源与 URL 配对不等于已证明跨站正文完全一致。保留原始正文、版本摘要、来源契约、AIHOT 原页及逐题 provenance；无法消歧的版本不猜。输入和参考分离，同 URL 固定 dev/regression；新数据产新版本，旧版本不覆盖。只比较同题集版本的候选，不将题数增加当效果提升。建题可用不代表推理已接线或对象质量达标。
-

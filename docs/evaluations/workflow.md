@@ -6,6 +6,8 @@
 
 执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、任意带时区 raw 时间范围和不可覆盖的新版本。日窗无需重抓成小时窗；O2/O3/O4 无全日连续性条件，O1 不再以 Radar 全来源24小时完整性决定负例。v2 暂不接下文旧全池 run，不能把新建题命令与旧运行命令直接串接。
 
+扩展已有题库必须显式传 `--base <旧版任一对象叶子>`（多版可重复），再给新增原始范围/参照，使用新 `--version`。脚本合并证据、去重并按当前规则重建，不原地追加。完成后逐对象查 `merge-summary.json`、`changes.jsonl` 和 manifest.counts，并运行 validate；说明本版总题数与其中 added，而不是称整版为新增。更换题库版本不迁移旧模型成绩，比较仍须同题同尺。
+
 ## 历史 v1：共同窗口与全池运行
 
 1. `capture --start <UTC> --end <UTC> --output <new-directory>` 捕获已关闭窗口。API 连续两次终态遍历须稳定，SSR 标签须有证据。失败产物保留，不冒充成功快照；不修改已有每日采集调度。
