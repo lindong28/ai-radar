@@ -1,5 +1,7 @@
 # 内容富化建题 · object-specific-v2
 
+> 历史规则保留：2026-09-18 起，输入来源限制由 [aihot-original-v3](../aihot-original-v3/README.md) 部分替代；旧版本和以下历史设计正文不改写。
+
 > [Developer] · 用户于 2026-09-18 认可逐对象独立建题；这是建题规则版本，不是评测成绩。数据版本由 --version 独立命名。
 
 ## L1：对象、题目与计分

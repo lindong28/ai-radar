@@ -21,6 +21,7 @@
 | 文件 | 性质 | 说明 |
 |---|---|---|
 | [architecture.md](architecture.md) | Mutable snapshot | 系统模块结构、分层、数据流、数据库设计、Web 层、关键抽象 |
+| [20260918-7d0e](adr/20260918-7d0e-expand-score-and-enrichment-from-aihot-originals.md) | Decision | 仅评分/富化接入 AIHOT 绑定原文，准入/精选保持保守扩题边界 |
 | [20260917-8b86](adr/20260917-8b86-wait-for-collector-process-groups.md) | Decision | 采集进程组退出竞态与监督失败告警修复；已获批启用，19:58 真实入口结束 |
 | [20260917-b8e2](adr/20260917-b8e2-recover-continuous-raw-capture.md) | Decision | 后续 raw 持续采集恢复；已批准并安装调度，新日窗与连续性待验收 |
 | [20260916-74b2](adr/20260916-74b2-release-db-sync-lock-on-process-exit.md) | Decision | DB sync 重启遗留锁根因、内核互斥与迁移边界 |
@@ -33,7 +34,7 @@
 
 [README.md](evaluations/README.md) 是新四对象体系入口；对象 design/status 在 objects/，执行与存储在 workflow.md / assets.md，题库在 benchmarks/，假设及人读台账在 experiments/，报告模板在 reports/。根 runs/experiments 才是逐轮机器资产，不混入文档目录。旧近似度实验不作为此体系的达标线。
 
-[逐对象建题与扩展](evaluations/benchmarks/object-datasets.md) 是 2026-09-18 起新题库入口；四份设计位于 `evaluations/benchmarks/<target>/<benchmark>/object-specific-v2/README.md`，分别覆盖准入、可见评分、富化字段、精选成员，并链接离线脚本及旧执行器适用边界。
+[逐对象建题与扩展](evaluations/benchmarks/object-datasets.md) 是 2026-09-18 起新题库入口；四份历史设计位于 `evaluations/benchmarks/<target>/<benchmark>/object-specific-v2/README.md`。评分的 [aihot-original-v3](evaluations/benchmarks/visible-score/aihot-visible-score/aihot-original-v3/README.md) 与富化的 [aihot-original-v3](evaluations/benchmarks/content-enrichment/aihot-enrichment/aihot-original-v3/README.md) 只放宽这两个对象的输入来源；准入和精选不随之扩充。入口链接离线脚本、复用命令及旧执行器适用边界。
 
 ### docs/operations/ [User]
 

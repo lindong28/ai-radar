@@ -213,40 +213,58 @@ def usable(field: str, value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def construct(records: dict, references: list[Reference], contract: dict, sources: dict) -> tuple[dict, dict, list]:
+def construct(records: dict, references: list[Reference], contract: dict, sources: dict,
+              aihot_input_references=()) -> tuple[dict, dict, list]:
+    from .aihot_inputs import fallback_case
+
     cases = {t: [] for t in BENCHMARKS}
     excluded = {t: [] for t in BENCHMARKS}
     supplemental = []
     index = AdmissionIndex(references, contract, sources)
     paired = defaultdict(list)
+    source_for = {}
+    ref_by_key = {ref.key: ref for ref in references}
     for ref in references:
         mapped, _ = resolve_sources(ref.items, contract, allow_empty=True)
         for item in ref.items:
             source = mapped.get(item["upstream_publisher_name"])
             if source and source["slug"] in sources:
-                paired[news_key(source["slug"], item["original_url"])].append((ref.key, item))
-    for key in sorted(records):
-        case = base_case(key, records[key], sources)
-        group, evidence = index.label(case)
-        if group in {"main", "recall-only"}:
-            labeled = copy.deepcopy(case)
-            labeled["reference"] = {"member": bool(evidence["matched_aihot_ids"])}
-            labeled["provenance"]["admission"] = evidence
-            (cases["news-admission"] if group == "main" else supplemental).append(labeled)
+                key = news_key(source["slug"], item["original_url"])
+                paired[key].append((ref.key, item))
+                source_for[key] = source
+    keys = records.keys() | paired.keys() if aihot_input_references else records.keys()
+    for key in sorted(keys):
+        from_aihot = key not in records
+        if from_aihot:
+            case, reason = fallback_case(key, paired[key], ref_by_key, source_for[key], aihot_input_references)
+            if case is None:
+                for target in ("visible-score", "content-enrichment"):
+                    excluded[target].append({"case_id": key, "reason": reason})
+                continue
         else:
-            excluded["news-admission"].append({"case_id": key, "reason": group, **evidence})
+            case = base_case(key, records[key], sources)
+            group, evidence = index.label(case)
+            if group in {"main", "recall-only"}:
+                labeled = copy.deepcopy(case)
+                labeled["reference"] = {"member": bool(evidence["matched_aihot_ids"])}
+                labeled["provenance"]["admission"] = evidence
+                (cases["news-admission"] if group == "main" else supplemental).append(labeled)
+            else:
+                excluded["news-admission"].append({"case_id": key, "reason": group, **evidence})
         if key not in paired:
             continue
         # Fetched timestamps may vary without changing the actual model input body.
-        versions = {digest({k: v for k, v in o["raw"].items() if k != "fetched_at"})
+        versions = {"aihot"} if from_aihot else {digest({k: v for k, v in o["raw"].items() if k != "fetched_at"})
                     for o in records[key]["variants"].values()}
         if len(versions) != 1 or len({i["id"] for _, i in paired[key]}) != 1:
             for target in BENCHMARKS:
-                if target != "news-admission":
+                if target != "news-admission" and not (from_aihot and target == "featured-members"):
                     excluded[target].append({"case_id": key, "reason": "ambiguous_raw_or_reference_version"})
             continue
         labels = {}
         for field, observed in FIELDS.items():
+            if from_aihot and field == "featured":
+                continue
             values = {digest(sorted(set(item[observed])) if field == "tags" else item[observed]): item[observed]
                       for _, item in paired[key]
                       if usable(field, item.get(observed))}
@@ -265,7 +283,7 @@ def construct(records: dict, references: list[Reference], contract: dict, source
                 cases[target].append(row)
     for key in sorted(paired.keys() - records.keys()):
         for target in BENCHMARKS:
-            if target != "news-admission":
+            if target != "news-admission" and (target == "featured-members" or not aihot_input_references):
                 excluded[target].append({"case_id": key, "reason": "missing_raw"})
     return cases, excluded, supplemental
 
@@ -273,7 +291,7 @@ def construct(records: dict, references: list[Reference], contract: dict, source
 def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
           start: str | None = None, end: str | None = None, version: str, bases: list[Path] | None = None,
           targets: list[str] | None = None, data_root: Path = DEFAULT_DATA_ROOT,
-          contract_path: Path = ROOT / "tests/fixtures/aihot_sources.json") -> dict:
+          contract_path: Path = ROOT / "tests/fixtures/aihot_sources.json", aihot_inputs: bool = False) -> dict:
     slug(version)
     targets = list(dict.fromkeys(targets or BENCHMARKS))
     if set(targets) - BENCHMARKS.keys():
@@ -286,13 +304,18 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
 
     if any(v is not None for v in (raw_root, start, end)) and not all(v is not None for v in (raw_root, start, end)):
         raise ValueError("new raw input requires --raw-root, --start and --end together")
-    if not bases and raw_root is None:
+    if not bases and raw_root is None and not (aihot_inputs and references):
         raise ValueError("provide --base or new raw input (--raw-root, --start, --end)")
     records, ref_map, manifests, windows, failures, parents, lineage = read_bases(bases or [])
     for ref in map(read_reference, references or []):
         ref_map.setdefault(ref.key, ref)
     refs = list(ref_map.values())
     refs.sort(key=lambda ref: ref.key)
+    allowed_inputs = {key for manifest, _ in parents.values() for key in manifest.get("aihot_input_references", [])}
+    if aihot_inputs:
+        allowed_inputs.update(ref_map)
+    if allowed_inputs - ref_map.keys():
+        raise ValueError("base is missing an authorized AIHOT input reference")
     if not refs:
         raise ValueError("at least one validated AIHOT reference is required")
     contract = read_json(contract_path)
@@ -307,16 +330,16 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
             manifests[run] = payload
         windows.append(inventory["window"])
         failures.extend(inventory["source_failures"])
-    if bases:
+    if bases or raw_root is None:
         windows = sorted({digest(w): w for w in windows}.values(), key=lambda w: timestamp(w["start_inclusive"]))
         inventory = {"window": {"start_inclusive": min((w["start_inclusive"] for w in windows), key=timestamp),
-                     "end_exclusive": max((w["end_exclusive"] for w in windows), key=timestamp)},
+                     "end_exclusive": max((w["end_exclusive"] for w in windows), key=timestamp)} if windows else None,
                      "windows": windows, "unique_raw_news": len(records), "run_count": len(manifests),
                      "raw_observations": None,
                      "observation_count_scope": "per-news observations are lower bounds; overlapping compact archives cannot yield an exact poll total",
                      "source_failures": list({digest(f): f for f in failures}.values())}
     scoped = {k: r for k, r in records.items() if next(iter(r["variants"].values()))["raw"]["source_id"] in sources}
-    cases, excluded, supplemental = construct(scoped, refs, contract, sources)
+    cases, excluded, supplemental = construct(scoped, refs, contract, sources, allowed_inputs)
     for key in sorted(records.keys() - scoped.keys()):
         for target in BENCHMARKS:
             excluded[target].append({"case_id": key, "reason": "source_out_of_scope"})
@@ -372,6 +395,16 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
                                 "start": start, "end": end, "targets": targets, "contract_path": str(contract_path.resolve())},
                     "reference_manifests": [r.key for r in refs], "split_policy": "URL hash modulo 5: 0 regression, otherwise dev",
                     "pairing_limit": "same source/url and one observed raw version; cross-site body equality is not observable"}
+        if allowed_inputs:
+            # This policy travels with the evidence bundle, even on an O1/O4 sibling.
+            manifest["aihot_input_references"] = sorted(allowed_inputs)
+            manifest["aihot_input_scope"] = ["visible-score", "content-enrichment"]
+            manifest["original_input_builder_sha256"] = file_digest(Path(__file__).with_name("aihot_inputs.py"))
+            manifest["rebuild"]["aihot_inputs"] = aihot_inputs
+        if target in {"visible-score", "content-enrichment"} and allowed_inputs:
+            manifest["policy"] = "object-specific-aihot-original-v3"
+            manifest["pairing_limit"] = "same source/url; Radar raw preferred, otherwise one identity-bound AIHOT original version; not a continuous candidate pool"
+            counts["input_origins"] = dict(Counter(c["provenance"].get("input_origin", "radar-raw") for c in cases[target]))
         write_json(leaf / "manifest.json", manifest)
         load_dataset(leaf, target)
         outputs[target] = {"path": str(leaf), **counts}
@@ -390,6 +423,8 @@ def main():
     create.add_argument("--raw-root", type=Path)
     create.add_argument("--reference", type=Path, action="append",
                         help="repeat for interval roots or published daily window manifest paths")
+    create.add_argument("--aihot-inputs", action="store_true",
+                        help="authorize frozen AIHOT original titles/bodies as O2/O3-only fallback; inherited by --base")
     create.add_argument("--start", help="inclusive new raw run start, timezone required")
     create.add_argument("--end", help="exclusive new raw run start, timezone required")
     create.add_argument("--version", required=True)

@@ -2,7 +2,7 @@
 
 > [Developer] · 2026-09-17 已认可设计及本轮澄清。当前进度见 [status](status.md)。
 
-2026-09-18 已认可的[逐对象独立建题规则](../../benchmarks/featured-members/aihot-featured-members/object-specific-v2/README.md)覆盖本页旧题库准入条件。下文保留 v1 推理/指标语义；新题库与旧全池执行器的边界以新版说明为准。
+2026-09-18 的[逐条 threshold 题库](../../benchmarks/featured-members/aihot-featured-members/object-specific-v2/README.md)仅测局部阈值，不覆盖本页完整池对象。用户最新要求精选继续保守寻找连续时间窗口中的完整候选组，本次 AIHOT-only 原文扩题不包含 O4；下文 v1 完整池语义保留。
 
 ## 对象与边界
 

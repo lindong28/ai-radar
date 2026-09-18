@@ -2,9 +2,9 @@
 
 > [Developer] · 新体系运行手册。统一 CLI：`PYTHONPATH=src:. uv run python -m evals._shared.cli --help`。后续 agent 使用 `eval-workflows iterate-eval-system` 接续，不重复建设体系。
 
-## 新数据默认：独立建题 v2
+## 新数据默认：逐对象独立建题
 
-执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、任意带时区 raw 时间范围和不可覆盖的新版本。日窗无需重抓成小时窗；O2/O3/O4 无全日连续性条件，O1 不再以 Radar 全来源24小时完整性决定负例。v2 暂不接下文旧全池 run，不能把新建题命令与旧运行命令直接串接。
+执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、任意带时区 raw 时间范围和不可覆盖的新版本。O2/O3 无全日连续性条件，并可显式用 `--aihot-inputs` 接入 AIHOT 原标题与绑定原文；O1 沿原候选池规则，不补这种仅有正例的数据。O4 本次不扩题，完整池规则继续要求连续窗口的完整候选组；已有 v2 pointwise-threshold 仅作局部用途。独立题库暂不接下文旧全池 run，不能把新建题命令与旧运行命令直接串接。
 
 扩展已有题库必须显式传 `--base <旧版任一对象叶子>`（多版可重复），再给新增原始范围/参照，使用新 `--version`。脚本合并证据、去重并按当前规则重建，不原地追加。完成后逐对象查 `merge-summary.json`、`changes.jsonl` 和 manifest.counts，并运行 validate；说明本版总题数与其中 added，而不是称整版为新增。更换题库版本不迁移旧模型成绩，比较仍须同题同尺。
 
