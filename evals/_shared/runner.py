@@ -35,6 +35,8 @@ OBJECTS = dict(zip(BENCHMARKS, ("O1", "O2", "O3", "O4"), strict=True))
 
 def dataset_paths(primary: Path) -> dict[str, Path]:
     manifest, _ = load_dataset(primary)
+    if manifest["schema_version"] != 1:
+        raise ValueError("object-specific v2 datasets are not a shared pool; use their documented pointwise adapters")
     base = primary.resolve().parents[2]
     return {target: base / benchmark / target / manifest["version"] for target, benchmark in BENCHMARKS.items()}
 

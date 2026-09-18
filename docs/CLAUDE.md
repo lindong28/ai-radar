@@ -33,6 +33,8 @@
 
 [README.md](evaluations/README.md) 是新四对象体系入口；对象 design/status 在 objects/，执行与存储在 workflow.md / assets.md，题库在 benchmarks/，假设及人读台账在 experiments/，报告模板在 reports/。根 runs/experiments 才是逐轮机器资产，不混入文档目录。旧近似度实验不作为此体系的达标线。
 
+[逐对象建题与扩展](evaluations/benchmarks/object-datasets.md) 是 2026-09-18 起新题库入口；四份设计位于 `evaluations/benchmarks/<target>/<benchmark>/object-specific-v2/README.md`，分别覆盖准入、可见评分、富化字段、精选成员，并链接离线脚本及旧执行器适用边界。
+
 ### docs/operations/ [User]
 
 运维入口——系统在跑什么、怎么管理、怎么验证。

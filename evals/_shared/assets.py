@@ -36,7 +36,9 @@ def read_json(path: Path) -> Any:
 
 
 def read_jsonl(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    # JSONL records end at physical newlines, not Unicode prose separators.
+    with path.open(encoding="utf-8") as stream:
+        return [json.loads(line) for line in stream if line.strip()]
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -79,9 +81,12 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
         raise ValueError("unknown target/benchmark pairing")
     if target is not None and target != selected:
         raise ValueError("dataset belongs to another target")
-    if path.parts[-3:] != (manifest["benchmark"], selected, manifest["version"]):
-        raise ValueError("dataset must use <benchmark>/<target>/<version> hierarchy")
-    if manifest.get("schema_version") != 1:
+    schema = manifest.get("schema_version")
+    hierarchy = ((manifest["benchmark"], selected, manifest["version"]) if schema == 1 else
+                 (selected, manifest["benchmark"], manifest["version"]))
+    if path.parts[-3:] != hierarchy:
+        raise ValueError("dataset directory differs from its declared hierarchy")
+    if schema not in {1, 2}:
         raise ValueError("unsupported dataset schema")
     if "cases.jsonl" not in manifest["files"]:
         raise ValueError("questions are not bound to dataset identity")
@@ -89,7 +94,8 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
         candidate = (path / name).resolve()
         if not candidate.is_relative_to(path) or file_digest(candidate) != expected:
             raise ValueError(f"dataset integrity mismatch: {name}")
-    evidence = Path(manifest["shared_evidence"])
+    evidence = (Path(manifest["shared_evidence"]) if schema == 1 else
+                path / manifest["shared_evidence"]).resolve()
     for name, expected in manifest["evidence_files"].items():
         candidate = (evidence / name).resolve()
         if not candidate.is_relative_to(evidence.resolve()) or file_digest(candidate) != expected:

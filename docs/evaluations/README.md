@@ -4,6 +4,12 @@
 
 本体系衡量同窗、共同来源的全部动态成员、可见分数、富化字段与精选成员。不评事实身份、内容组织、排序、去重质量、微信独有解读；身份匹配只服务正确计数。
 
+## 当前建题默认（2026-09-18）
+
+用户已认可逐对象独立建题，入口为[建题与扩展操作](benchmarks/object-datasets.md)，四个对象各有 `benchmarks/<target>/<benchmark>/object-specific-v2/README.md`。原始档案共享，但不再先取符合所有对象条件的交集。新数据按 `<target>/<benchmark>/<version>` 存储；旧 v1 路径不迁移。下文 2026-09-17 的共同窗口、双侧完整性和全池实跑均为历史 v1 说明，不能作为 v2 入题条件。
+
+v2 建题/校验与 v1 全池推理分开：新脚本不改网站算法，旧 runner 明确拒绝 v2。逐条评分映射与精选阈值的运行适配状态见各建题说明；题库完成不等于新推理链完成。
+
 | 对象 | 代码与指标入口 | 优化维度 |
 | --- | --- | --- |
 | news-admission | [aihot-all-members](../../evals/news-admission/aihot-all-members/README.md) | prefilter 通过集合 precision / recall |

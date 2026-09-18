@@ -4,6 +4,8 @@
 
 ## L2 数据资产
 
+新建题默认采用 [object-specific-v2](benchmarks/object-datasets.md)：题库路径改为 `<target>/<benchmark>/<version>`，共享证据随本次第一个目标落盘，不强绑 O1。紧凑原始输入、完整 AIHOT 引用证据与逐轮原件的区别见该说明。下表题库一行与文末全池约束仅描述已有 v1，历史数据与运行资产不迁移；v2 的逐对象运行适配尚未在本轮建设。
+
 | 资产 | 唯一落点与产生时机 |
 | --- | --- |
 | 评测题（输入集） | `~/research/video-eval-arena/data/benchmarks/ai-radar/<benchmark>/<target>/<version>/`；build 生成 cases/manifest，输入与 reference 分离；原始全观察及两侧证据保留在该版本 news-admission 叶子，共享引用与校验和绑定 |

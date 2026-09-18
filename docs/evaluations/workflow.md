@@ -2,7 +2,11 @@
 
 > [Developer] · 新体系运行手册。统一 CLI：`PYTHONPATH=src:. uv run python -m evals._shared.cli --help`。后续 agent 使用 `eval-workflows iterate-eval-system` 接续，不重复建设体系。
 
-## 第一次与新增数据
+## 新数据默认：独立建题 v2
+
+执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、任意带时区 raw 时间范围和不可覆盖的新版本。日窗无需重抓成小时窗；O2/O3/O4 无全日连续性条件，O1 不再以 Radar 全来源24小时完整性决定负例。v2 暂不接下文旧全池 run，不能把新建题命令与旧运行命令直接串接。
+
+## 历史 v1：共同窗口与全池运行
 
 1. `capture --start <UTC> --end <UTC> --output <new-directory>` 捕获已关闭窗口。API 连续两次终态遍历须稳定，SSR 标签须有证据。失败产物保留，不冒充成功快照；不修改已有每日采集调度。
 2. `build --raw-root <raw-capture> --reference <capture-directory> --version <new-slug>` 冻结共同来源、完整采集窗和逐题参考。缺 cadence/source 拒绝冻结；O1 按新闻时间 ±12 小时单独选题，未确定新闻不当负例。版本存在即拒绝覆盖。

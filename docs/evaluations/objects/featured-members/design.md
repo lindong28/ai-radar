@@ -2,6 +2,8 @@
 
 > [Developer] · 2026-09-17 已认可设计及本轮澄清。当前进度见 [status](status.md)。
 
+2026-09-18 已认可的[逐对象独立建题规则](../../benchmarks/featured-members/aihot-featured-members/object-specific-v2/README.md)覆盖本页旧题库准入条件。下文保留 v1 推理/指标语义；新题库与旧全池执行器的边界以新版说明为准。
+
 ## 对象与边界
 
 完整候选池及固定预测分/类别 → 确定性选择规则 → 精选成员。空归档初态显式固定；不重建历史生产归档。
