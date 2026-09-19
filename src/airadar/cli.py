@@ -69,7 +69,11 @@ from .fetcher.wechat import (
     WeChatBrowserUnavailable,
     inspect_wechat_browser_executable,
 )
-from .interpret.runner import run_interpret
+from .interpret.runner import (
+    INTERPRET_CONCURRENCY_DEFAULT,
+    INTERPRET_CONCURRENCY_MAX,
+    run_interpret,
+)
 from .performance.journey_monitor import (
     DEFAULT_ALERT_STATE_PATH,
     DEFAULT_EVIDENCE_DIR,
@@ -1208,6 +1212,7 @@ def _interpret(args: argparse.Namespace) -> int:
             limit=args.limit,
             assistant_root=args.assistant_root,
             user=args.user,
+            concurrency=args.concurrency,
         )
     if summary.skipped:
         print(f"interpret skipped=true message={summary.message}")
@@ -2671,6 +2676,15 @@ def build_parser() -> argparse.ArgumentParser:
     interpret_parser.add_argument("--limit", type=int)
     interpret_parser.add_argument("--assistant-root")
     interpret_parser.add_argument("--user")
+    interpret_parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        choices=range(1, INTERPRET_CONCURRENCY_MAX + 1),
+        metavar=f"[1-{INTERPRET_CONCURRENCY_MAX}]",
+        help=f"Articles interpreted at once (default {INTERPRET_CONCURRENCY_DEFAULT}). "
+        "Each one is an upstream model call, so raising this spends quota faster.",
+    )
 
     eval_parser = subparsers.add_parser("eval")
     eval_parser.add_argument("--date")

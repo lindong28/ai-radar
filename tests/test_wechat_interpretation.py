@@ -6,6 +6,7 @@ import logging
 import re
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -2905,3 +2906,225 @@ def test_interpret_runner_rejects_path_shaped_slug(
     assert (summary.processed, summary.errors) == (0, 1)
     assert "unsafe slug" in row["error"]
     assert "SECRET SUMMARY" not in (row["summary_md"] or "")
+
+
+def _seed_runner_db_many(tmp_path: Path, count: int) -> Path:
+    """Runner DB holding ``count`` interpretable WeChat items."""
+    db_path = tmp_path / "runner-many.db"
+    migrate(db_path)
+    conn = _connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO sources (
+          id, name, url, tier, enabled, kind, homepage_url, icon_url, meta_json, synced_at
+        )
+        VALUES (
+          'wx_mp2rss', '微信公众号（Mp2RSS 合集）', 'https://feed.example/rss', 'T2', 1,
+          'wechat', 'https://mp.weixin.qq.com/', '/wechat-icon.svg', '{}', '2026-06-02T00:00:00Z'
+        )
+        """
+    )
+    for index in range(count):
+        conn.execute(
+            """
+            INSERT INTO items (
+              id, source_id, url, title, author, published_at, fetched_at,
+              content_text, content_html, content_hash, extra_json
+            )
+            VALUES (?, 'wx_mp2rss', ?, ?, '机器之心', ?, '2026-06-02T10:01:00Z',
+                    '这是一篇足够长的微信正文，用来喂给 summarize-article。', NULL, ?, '{}')
+            """,
+            (
+                f"item-{index}",
+                f"https://mp.weixin.qq.com/s/test-{index}",
+                f"测试文章 {index}",
+                f"2026-06-02T10:{index:02d}:00Z",
+                f"h-item-{index}",
+            ),
+        )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _concurrent_interpret_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    items: int,
+    concurrency: int | None,
+    shared_title: bool = False,
+) -> dict[str, Any]:
+    """Interpret ``items`` articles, reporting overlap and what each row kept.
+
+    ``shared_title`` makes every article produce the same batch slug, which is
+    how the external summarizer names its output files: that is the input that
+    turns a shared scratch directory into one article's summary stored against
+    another's row.
+    """
+    import threading
+
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db_many(tmp_path, items)
+    assistant_root = _assistant_root(tmp_path)
+    batch_root = assistant_root / "tmp" / "summary_agent"
+
+    state_lock = threading.Lock()
+    in_flight = 0
+    peak = 0
+    kb_slugs: list[str] = []
+
+    def _batch_slug(cmd: list[str]) -> str:
+        # The real summarizer derives its file names from the article title, so
+        # same-titled articles collide; mirror that rather than the item id.
+        input_path = Path(cmd[cmd.index("--input") + 1])
+        title = input_path.read_text(encoding="utf-8").splitlines()[0].removeprefix("# ").strip()
+        if shared_title:
+            return "shared-title"
+        return re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower() or "article"
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal in_flight, peak
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            with state_lock:
+                in_flight += 1
+                peak = max(peak, in_flight)
+            try:
+                time.sleep(0.2)  # long enough that a serial runner cannot overlap two
+            finally:
+                with state_lock:
+                    in_flight -= 1
+            out_dir = batch_root / "default"
+            if "--output-dir" in cmd:
+                candidate = Path(cmd[cmd.index("--output-dir") + 1])
+                out_dir = candidate if candidate.is_absolute() else assistant_root / candidate
+            out_dir.mkdir(parents=True, exist_ok=True)
+            slug = _batch_slug(cmd)
+            article_id = Path(cmd[cmd.index("--input") + 1]).stem
+            # Written unconditionally, exactly as the real summarizer does.
+            (out_dir / f"{slug}_summary.md").write_text(
+                SUMMARY_MD.replace("这是一篇关于 agent 工程实践的文章，摘要可直接放在卡片上。", f"SUMMARY OF {article_id}"),
+                encoding="utf-8",
+            )
+            (out_dir / f"{slug}_article.md").write_text(f"# {article_id}\n", encoding="utf-8")
+            (out_dir / f"{slug}_meta.json").write_text(json.dumps({"slug": slug}), encoding="utf-8")
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "batch_dir": str(out_dir),
+                        "result": {
+                            "slug": slug,
+                            "save_decision": True,
+                            "save_reason": "有实践价值",
+                            "recommendation": "值得一看",
+                            "tags": ["Agent"],
+                            "model": "fake-model",
+                            "llm_metadata": {"criteria_reason_source": "json"},
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        if "--save-from-batch" in cmd:
+            with state_lock:
+                kb_slugs.append(cmd[cmd.index("--save-from-batch") + 1])
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {"saved": True, "embedding_updated": True, "summary_file_path": "/kb/x_output.md"}
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(
+            conn,
+            assistant_root=assistant_root,
+            tmp_root=tmp_path / "tmp",
+            concurrency=concurrency,
+        )
+        rows = conn.execute("SELECT item_id, slug, summary_md, abstract FROM wechat_interpretations").fetchall()
+    return {
+        "summary": summary,
+        "peak": peak,
+        "rows": [dict(row) for row in rows],
+        "kb_slugs": kb_slugs,
+    }
+
+
+def test_interpret_runs_articles_concurrently_without_crossing_articles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent articles keep their own summary, slug and knowledge-base name.
+
+    Every article here produces the same batch slug, so anything the workers
+    share -- a scratch directory, a slug still unclaimed at resolution time --
+    shows up as one article's text stored against another's row, or as two
+    articles saved into the knowledge base under one name. Neither surfaces as
+    an error, so the assertions read the stored rows and the save commands
+    rather than the run's own summary.
+    """
+    probe = _concurrent_interpret_probe(
+        tmp_path, monkeypatch, items=6, concurrency=None, shared_title=True
+    )
+
+    assert probe["summary"].processed == 6
+    assert probe["summary"].errors == 0
+    assert probe["peak"] > 1, "summarize calls never overlapped; the runner is still serial"
+    for row in probe["rows"]:
+        assert f"SUMMARY OF {row['item_id']}" in row["summary_md"], (
+            f"{row['item_id']} stored another article's summary: {row['summary_md'][:80]!r}"
+        )
+        assert f"SUMMARY OF {row['item_id']}" in row["abstract"]
+    db_slugs = [row["slug"] for row in probe["rows"]]
+    assert len(set(db_slugs)) == 6, f"duplicate slugs stored: {db_slugs}"
+    assert len(set(probe["kb_slugs"])) == len(probe["kb_slugs"]) == 6, (
+        f"articles shared a knowledge-base slug: {probe['kb_slugs']}"
+    )
+
+
+def test_interpret_concurrency_one_keeps_articles_serial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control: the same probe reports no overlap when forced serial."""
+    probe = _concurrent_interpret_probe(
+        tmp_path, monkeypatch, items=4, concurrency=1, shared_title=True
+    )
+
+    assert probe["summary"].processed == 4
+    assert probe["peak"] == 1
+    assert len({row["slug"] for row in probe["rows"]}) == 4
+    assert len(set(probe["kb_slugs"])) == 4
+    for row in probe["rows"]:
+        assert f"SUMMARY OF {row['item_id']}" in row["summary_md"]
+
+
+def test_interpret_gives_each_article_its_own_batch_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scratch directory is per article, not per second.
+
+    The summarizer's default is a timestamp with one-second granularity, so
+    without an explicit directory a batch of concurrent articles shares one.
+    """
+    _concurrent_interpret_probe(tmp_path, monkeypatch, items=4, concurrency=None, shared_title=True)
+    batch_root = tmp_path / "ai-assistant" / "tmp" / "summary_agent"
+    directories = sorted(path.name for path in batch_root.iterdir() if path.is_dir())
+
+    assert len(directories) == 4, f"articles shared a batch directory: {directories}"
+    assert all(name.startswith("radar-item-") for name in directories), directories

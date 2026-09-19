@@ -517,3 +517,21 @@ review 另外指出（未逐条复核，但机制清楚）：
 - **测试不隔离**：直接跑生产脚本、不设 `AI_RADAR_DB`、不设 timeout——**闸一旦回归（断言本该变红的那一刻），测试自己会对生产库发起一次 500 项 enrich**。
 
 **结论**：enrich 支持不是「加个参数」，要重做按 stage 分的退出语义、窗口默认、`--v2`、真正的 flock、以及对称的 busy_timeout。在那之前，**手工回填只能自己排 `.pipeline.flock`**（本 session 用 `fcntl.flock` 排过一次，可行但要等——pipeline 每 15 分钟一轮、单轮 20–40 分钟，间隙很窄）。
+
+## [open] 2026-09-19：微信解读并发化后的残留项（外审 H2/H4/H5/H6 与撤回的 H1）
+
+- Type: reliability · Priority: low · Discovered: `fix(interpret): interpret articles concurrently` 的两轮外审
+
+并发解读（`INTERPRET_CONCURRENCY_DEFAULT = 8`）已修掉两个阻塞缺陷（共用暂存目录导致跨文章串稿、slug 分配非占位导致知识库同名覆盖）。以下经外审确认为非阻塞，本轮未做：
+
+| 项 | 内容 | 为什么本轮不做 |
+|---|---|---|
+| H1 | runner 请求了 `--output-dir` 但不核对回传的 `batch_dir` 是否就是它要的那个。`_confined` 只答「在不在 root 内」。若摘要器将来改成「接受该参数但忽略它」，跨文章串稿会静默回归 | 加这条核对会让 10 个既有测试的假摘要器失败（它们都不回显请求目录），连带修改面过大。当前不可达：摘要器用严格 `parse_args`，不认识该参数的旧版本会以 exit 2 显式失败 |
+| H2 | `save_decision=False` 的文章不进 save 锁，其数据库 slug 可能抢走另一篇已写入知识库的名字，该行带 `kb_synced=1` 却指向知识库里不存在的条目 | 需要同批次同名文章且模型给出不同 `save_decision`。`_index_entry_for_slug`（唯一把 radar slug 映射到知识库条目的函数）全仓无调用点，`/wechat/<slug>` 走数据库列且仍唯一 |
+| H4 | 知识库写入阶段被锁串行化为 1，且 `--concurrency` 抬不动它。一次挂起的写入最多可占住全局锁 900 秒并挡住所有 worker | 这是修 slug 竞态的代价，且不劣于改动前的全串行基线。昂贵的摘要调用仍并行 |
+| H5 | 暂存目录名改为确定性的 `radar-<item_id>`，手工运行与 cron 轮次撞到同一篇时必然同名（此前只在时间戳相同才撞） | 同一篇文章的两次摘要互相覆盖，不是跨文章污染；`_save_interpretation` 按 `item_id` upsert |
+| H6 | `_path_safe_item_id` 非单射（`a/b` 与 `ab` 同名） | 实测 4707 个真实 item id 零碰撞：它们是 `sha1(...)[:16]`，该函数在其上是恒等映射 |
+
+另两条与并发无关、外审顺带查出的独立项：`db.get_conn` 在非 WAL 库上先设 `journal_mode` 后设 `busy_timeout`（生产库已是 WAL，不可达）；`shared/llm/client.py` 对 `data/ark-breaker.json` 非原子写入（失败方向为 fail-open，解读走 DeepSeek 不是主路径）。
+
+中断一次运行会给至多 8 篇在飞文章各记一次失败并递增 `error_retry_count`（串行时只影响 1 篇）；`ERROR_RETRY_MAX` 为 8，当前 3 条错误行全部停在 `error_retry_count=0`。

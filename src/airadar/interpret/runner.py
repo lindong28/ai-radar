@@ -8,7 +8,10 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +33,15 @@ from ..wechat_text import (
 )
 
 DEFAULT_INTERPRET_USER = "default"
+# Articles interpreted at once. Each one is dominated by external subprocess
+# calls (summarize, KB save), so the loop is I/O-bound and was measured at
+# ~115s per article when serial. Raising this trades against the summary
+# agent's upstream model quota, not local CPU.
+INTERPRET_CONCURRENCY_DEFAULT = 8
+# Ceiling for the operator-facing knob. Every worker holds one upstream model
+# call, and the shared client has no rate-limit backoff, so an unbounded value
+# turns a provider refusal into per-article errors that burn retry budget.
+INTERPRET_CONCURRENCY_MAX = 16
 ERROR_RETRY_MAX = 8
 ERROR_RETRY_BASE_MINUTES = 15
 DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
@@ -216,6 +228,12 @@ def _run_json(cmd: list[str], *, cwd: Path, callsite_id: str) -> dict[str, Any]:
         if isinstance(payload, dict):
             return payload
     raise ValueError(f"subprocess did not return JSON: {stdout[:500]}")
+
+
+def _path_safe_item_id(value: object) -> str:
+    """Item id reduced to characters safe to splice into a directory name."""
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "", str(value))[:64]
+    return cleaned or hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
 
 
 def _write_input_file(tmp_root: Path, row: sqlite3.Row) -> Path:
@@ -708,6 +726,7 @@ def _summarize_item(
     tmp_root: Path,
     row: sqlite3.Row,
     slug_resolver: Callable[[str], str] | None = None,
+    save_gate: AbstractContextManager[Any] | None = None,
 ) -> dict[str, Any]:
     input_path = _write_input_file(tmp_root, row)
     # Skip the lookup itself, not just its answer: `_run_json` runs with
@@ -770,6 +789,16 @@ def _summarize_item(
                     "saved": False,
                 }
 
+    # One batch directory per article. The summarizer's own default is
+    # tmp/summary_agent/<YYYYMMDD_HHMMSS>, chosen at process start with
+    # one-second granularity, and inside it the file names come from the
+    # article title -- so articles summarized at the same moment share a
+    # directory and two with the same title overwrite each other's summary
+    # file. The runner then reads whichever survived, storing one article's
+    # summary against the other's row with no error raised. Relative, so it
+    # resolves under the assistant root that `cwd=root` sets, which
+    # `_confined` requires of the batch_dir that comes back.
+    requested_batch_dir = f"tmp/summary_agent/radar-{_path_safe_item_id(row['id'])}"
     summarize_cmd = [
         str(summarize_script),
         "--input",
@@ -780,6 +809,8 @@ def _summarize_item(
         SUMMARY_AGENT_INTERPRET_MODEL,
         "--temperature",
         "0",
+        "--output-dir",
+        requested_batch_dir,
     ]
     recovered_after_criteria_retry = False
     try:
@@ -833,57 +864,63 @@ def _summarize_item(
     save_decision = bool(result.get("save_decision"))
     kb_synced = False
     if save_decision:
-        if slug_resolver is not None:
-            slug = slug_resolver(slug)
-        meta = _patch_batch_meta(_meta_path(batch_dir, batch_slug), row, result)
-        save_slug = slug
-        if save_slug != batch_slug:
-            _copy_batch_files_for_slug(batch_dir, batch_slug, save_slug)
-            meta["slug"] = save_slug
-        save_cmd = [
-            str(run_script),
-            "--save-from-batch",
-            save_slug,
-            "--user",
-            user,
-            "--batch-dir",
-            str(batch_dir),
-            "--meta-json",
-            json.dumps(meta, ensure_ascii=False),
-        ]
-        try:
-            save_payload = _run_json(save_cmd, cwd=root, callsite_id="interpret.runner.save_from_batch")
-            _require_complete_kb_save(save_payload)
-        except subprocess.CalledProcessError as exc:
-            duplicate_slug = _duplicate_slug_from_save_error(exc)
-            if not duplicate_slug:
-                raise
-            retry_seed = f"{_slug_seed(duplicate_slug)}-radar-{str(row['id'])[:8]}"
-            retry_slug = (
-                slug_resolver(retry_seed)
-                if slug_resolver is not None
-                else _kb_unique_slug(root, user, duplicate_slug, str(row["id"]))
-            )
-            _copy_batch_files_for_slug(batch_dir, save_slug, retry_slug)
-            meta["slug"] = retry_slug
-            retry_payload = _run_json(
-                [
-                    str(run_script),
-                    "--save-from-batch",
-                    retry_slug,
-                    "--user",
-                    user,
-                    "--batch-dir",
-                    str(batch_dir),
-                    "--meta-json",
-                    json.dumps(meta, ensure_ascii=False),
-                ],
-                cwd=root,
-                callsite_id="interpret.runner.save_from_batch_retry",
-            )
-            _require_complete_kb_save(retry_payload)
-            slug = retry_slug
-        kb_synced = True
+        # Resolving the slug and writing the KB under it is one step.
+        # Resolution only reads -- nothing claims the name until the save
+        # lands -- so concurrent workers each see the same name free and
+        # save over one another, leaving the losing article's file under
+        # the winner's index entry.
+        with save_gate if save_gate is not None else nullcontext():
+            if slug_resolver is not None:
+                slug = slug_resolver(slug)
+            meta = _patch_batch_meta(_meta_path(batch_dir, batch_slug), row, result)
+            save_slug = slug
+            if save_slug != batch_slug:
+                _copy_batch_files_for_slug(batch_dir, batch_slug, save_slug)
+                meta["slug"] = save_slug
+            save_cmd = [
+                str(run_script),
+                "--save-from-batch",
+                save_slug,
+                "--user",
+                user,
+                "--batch-dir",
+                str(batch_dir),
+                "--meta-json",
+                json.dumps(meta, ensure_ascii=False),
+            ]
+            try:
+                save_payload = _run_json(save_cmd, cwd=root, callsite_id="interpret.runner.save_from_batch")
+                _require_complete_kb_save(save_payload)
+            except subprocess.CalledProcessError as exc:
+                duplicate_slug = _duplicate_slug_from_save_error(exc)
+                if not duplicate_slug:
+                    raise
+                retry_seed = f"{_slug_seed(duplicate_slug)}-radar-{str(row['id'])[:8]}"
+                retry_slug = (
+                    slug_resolver(retry_seed)
+                    if slug_resolver is not None
+                    else _kb_unique_slug(root, user, duplicate_slug, str(row["id"]))
+                )
+                _copy_batch_files_for_slug(batch_dir, save_slug, retry_slug)
+                meta["slug"] = retry_slug
+                retry_payload = _run_json(
+                    [
+                        str(run_script),
+                        "--save-from-batch",
+                        retry_slug,
+                        "--user",
+                        user,
+                        "--batch-dir",
+                        str(batch_dir),
+                        "--meta-json",
+                        json.dumps(meta, ensure_ascii=False),
+                    ],
+                    cwd=root,
+                    callsite_id="interpret.runner.save_from_batch_retry",
+                )
+                _require_complete_kb_save(retry_payload)
+                slug = retry_slug
+            kb_synced = True
     return {
         "slug": slug,
         "recommendation": result.get("recommendation") or _recommendation_from_summary(summary_md),
@@ -984,51 +1021,57 @@ def _audit_criteria_reason_fallback(
     )
 
 
-def run_interpret(
-    conn: sqlite3.Connection,
+def _main_db_path(conn: sqlite3.Connection) -> str:
+    """Filesystem path behind ``conn``'s main schema; "" for an in-memory database."""
+    for row in conn.execute("PRAGMA database_list").fetchall():
+        if row[1] == "main":
+            return str(row[2] or "")
+    return ""
+
+
+def _process_row(
+    row: sqlite3.Row,
     *,
-    backfill: bool = False,
-    limit: int | None = None,
-    assistant_root: str | Path | None = None,
-    user: str | None = None,
-    tmp_root: str | Path | None = None,
-) -> InterpretSummary:
-    del backfill  # Successful rows are always skipped and errored rows retry on their own backoff schedule; backfill selects the same scope.
-    if not _env_flag_enabled("AI_RADAR_ENABLE_INTERPRET"):
-        return InterpretSummary(skipped=True, message=DISABLED_MESSAGE)
+    conn: sqlite3.Connection,
+    db_lock: threading.Lock,
+    save_gate: AbstractContextManager[Any],
+    root: Path,
+    summarize_script: Path,
+    run_script: Path,
+    interpret_user: str,
+    tmp_path: Path,
+) -> bool:
+    """Interpret one article. True when stored, False when the error was recorded.
 
-    root = _assistant_root(assistant_root)
-    if root is None:
-        return InterpretSummary(skipped=True, message=MISSING_ROOT_MESSAGE)
+    ``db_lock`` serialises every ``conn`` touch so this body can run on several
+    threads at once. Slug allocation and the insert are taken under a single
+    acquisition on purpose: ``wechat_interpretations.slug`` has no uniqueness
+    constraint, so two workers that each found the same slug free would both
+    store it.
+    """
 
-    ready, message = _preflight(root)
-    if not ready:
-        print(message)
-        return InterpretSummary(skipped=True, message=message)
-
-    summarize_script, run_script = _summary_agent_scripts(root)
-    interpret_user = _interpret_user(user)
-    tmp_path = Path(tmp_root) if tmp_root is not None else db.PROJECT_ROOT / "tmp" / "interpret"
-    rows = _candidate_rows(conn, limit=limit)
-    processed = 0
-    errors = 0
-    for row in rows:
-        try:
-            result = _summarize_item(
-                root=root,
-                summarize_script=summarize_script,
-                run_script=run_script,
-                user=interpret_user,
-                tmp_root=tmp_path,
-                row=row,
-                slug_resolver=lambda base_slug: _unique_slug_across_radar_and_kb(
-                    conn,
-                    root,
-                    interpret_user,
-                    base_slug,
-                    str(row["id"]),
-                ),
+    def _resolve_slug(base_slug: str) -> str:
+        with db_lock:
+            return _unique_slug_across_radar_and_kb(
+                conn,
+                root,
+                interpret_user,
+                base_slug,
+                str(row["id"]),
             )
+
+    try:
+        result = _summarize_item(
+            root=root,
+            summarize_script=summarize_script,
+            run_script=run_script,
+            user=interpret_user,
+            tmp_root=tmp_path,
+            row=row,
+            slug_resolver=_resolve_slug,
+            save_gate=save_gate,
+        )
+        with db_lock:
             slug = _unique_slug(conn, str(result["slug"]), row["id"])
             if result.get("slug") != slug:
                 result = {**result, "slug": slug}
@@ -1057,11 +1100,93 @@ def run_interpret(
                 criteria_reason_source=criteria_reason_source,
                 interpret_user=interpret_user,
             )
-            if result.get("recovered_after_criteria_retry"):
-                print(f"interpret item={row['id']} recovered after one immediate retry: missing criteria_reason")
-            processed += 1
-        except Exception as exc:  # noqa: BLE001 - per-item fail-safe is the contract.
+        if result.get("recovered_after_criteria_retry"):
+            print(f"interpret item={row['id']} recovered after one immediate retry: missing criteria_reason")
+        return True
+    except Exception as exc:  # noqa: BLE001 - per-item fail-safe is the contract.
+        with db_lock:
             _record_error(conn, row, exc)
-            errors += 1
-            print(f"interpret item={row['id']} error={exc}")
+        print(f"interpret item={row['id']} error={exc}")
+        return False
+
+
+def run_interpret(
+    conn: sqlite3.Connection,
+    *,
+    backfill: bool = False,
+    limit: int | None = None,
+    assistant_root: str | Path | None = None,
+    user: str | None = None,
+    tmp_root: str | Path | None = None,
+    concurrency: int | None = None,
+) -> InterpretSummary:
+    del backfill  # Successful rows are always skipped and errored rows retry on their own backoff schedule; backfill selects the same scope.
+    if not _env_flag_enabled("AI_RADAR_ENABLE_INTERPRET"):
+        return InterpretSummary(skipped=True, message=DISABLED_MESSAGE)
+
+    root = _assistant_root(assistant_root)
+    if root is None:
+        return InterpretSummary(skipped=True, message=MISSING_ROOT_MESSAGE)
+
+    ready, message = _preflight(root)
+    if not ready:
+        print(message)
+        return InterpretSummary(skipped=True, message=message)
+
+    summarize_script, run_script = _summary_agent_scripts(root)
+    interpret_user = _interpret_user(user)
+    tmp_path = Path(tmp_root) if tmp_root is not None else db.PROJECT_ROOT / "tmp" / "interpret"
+    rows = _candidate_rows(conn, limit=limit)
+    workers = INTERPRET_CONCURRENCY_DEFAULT if concurrency is None else int(concurrency)
+    workers = max(1, min(workers, len(rows)))
+    db_path = _main_db_path(conn)
+    db_lock = threading.Lock()
+    save_gate = threading.Lock()
+
+    def _run_one(row: sqlite3.Row, row_conn: sqlite3.Connection) -> bool:
+        return _process_row(
+            row,
+            conn=row_conn,
+            db_lock=db_lock,
+            save_gate=save_gate,
+            root=root,
+            summarize_script=summarize_script,
+            run_script=run_script,
+            interpret_user=interpret_user,
+            tmp_path=tmp_path,
+        )
+
+    if workers == 1 or not db_path:
+        # Caller's connection, caller's thread. Also the path for an in-memory
+        # database, which a second connection cannot reach.
+        outcomes = [_run_one(row, conn) for row in rows]
+    else:
+        # A connection per article, opened and closed on the thread that uses
+        # it: sqlite3 connections default to check_same_thread=True, so the
+        # caller's cannot be shared and a worker's cannot be closed from here.
+        # Connecting costs microseconds against an article's subprocess calls.
+        # db_lock still serialises the writes across those connections.
+        def _worker(row: sqlite3.Row) -> bool:
+            try:
+                worker_conn = db.get_conn(db_path)
+            except (sqlite3.Error, OSError) as exc:
+                # Outside _process_row's per-item fail-safe, so contain it here:
+                # letting it out of pool.map cancels every queued article and
+                # discards the summary of everything already paid for. OSError
+                # is the likely one: get_conn mkdirs first, and going from one
+                # subprocess to eight is how this process runs out of handles.
+                print(f"interpret item={row['id']} error=cannot open database: {exc}")
+                return False
+            try:
+                return _run_one(row, worker_conn)
+            finally:
+                worker_conn.close()
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="interpret") as pool:
+            outcomes = list(pool.map(_worker, rows))
+
+    processed = sum(1 for stored in outcomes if stored)
+    errors = len(outcomes) - processed
     return InterpretSummary(processed=processed, errors=errors, message=f"processed={processed} errors={errors}")
+
+
