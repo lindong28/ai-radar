@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from admin_auth import TEST_ADMIN_HEADERS as ADMIN_HEADERS
 from fastapi.testclient import TestClient
 
 from airadar import cli
@@ -15,8 +16,6 @@ from airadar.db import migrate
 from airadar.llm_usage import migrate_usage_db
 from airadar.pricing import PricingCatalog, get_pricing
 from airadar.web.app import create_app
-
-ADMIN_HEADERS = {"Cf-Access-Jwt-Assertion": "test"}
 
 
 def _stale_catalog_with_fresh_supplements(tmp_path: Path) -> PricingCatalog:

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-19（安全审查加固）
+
+- Changed: `/admin`、`/admin/usage` 与 `/api/v1/admin/*` 改为共享密钥鉴权——`.env` 设 `AI_RADAR_ADMIN_TOKEN`，请求带 `X-Admin-Token`（或 `Authorization: Bearer`）；未配置时所有远程请求 403。此前只要请求带任意 `Cf-Access-Jwt-Assertion` 头就能进入，该头现已无效。
+- Removed: `/docs`、`/redoc`、`/openapi.json` 不再提供。
+- Fixed: 首页 / 全部动态 / 微信 / 精选页面的 `limit`、`page` 参数越界（`0`、负数、超上限）返回 422 而不是 500 或全量取数；搜索词只含引号时不再 500；搜索词长度上限 200。
+- Fixed: 采集时丢弃 `<link>` 不是 http(s) 的 feed 条目（此前 `javascript:` 等链接会入库并渲染成可点链接）；微信正文抓取只对 `mp.weixin.qq.com` 打开浏览器；作者字段入库前去除 HTML。
+- Changed: 依赖升级修复已知漏洞（starlette 1.6.0、json-repair 0.63.4、soupsieve 2.9.2、lxml 6.1.3、lxml-html-clean 0.4.5、anyio 4.14.2）；仓库启用 Dependabot 与 `SECURITY.md`。
+- Changed（部署模板）：nginx 加安全响应头、隐藏版本、封 `/docs`；systemd serve 单元加沙箱指令；wechat2rss 镜像按 digest 钉住；DB 同步 SSH 改 `StrictHostKeyChecking=accept-new`。生效需重新部署，见 [ADR-20260919-a3c1](docs/adr/20260919-a3c1-harden-public-surface-after-security-review.md)。
+
 ## 2026-09-18（评测 URL 配对与实质内容版本修复）
 
 - 建题按同来源 X 推文 ID 统一 URL 身份，兼容历史冻结 key；配对、去重、split 和变更统计使用同一身份，避免 URL 写法差异制造错误负例。

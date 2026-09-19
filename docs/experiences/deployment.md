@@ -68,8 +68,8 @@
 
 ## 2026-08-18 Lighthouse 实例的 metadata app-id 不是控制台归属账号
 
-- Problem: 排查新加坡图片代理主机时，从主机 metadata 读到 `app-id 1301555531`，与手头控制台账号 `AppId 1424748107` 不符，据此断言「这台机属于另一个腾讯云账号、需要换登录」。同时 CVM `DescribeInstances` 返回 0 台实例，被当作佐证。两个读数都被误读。
-- Solution: 两台主机都是 **Lighthouse（轻量应用服务器）** 实例（`webserver-singapore` = `lhins-3nxwyynb` / `43.153.216.193`，`webserver-china` = `111.229.134.9`），跑在腾讯托管 VPC 里——metadata 里的 app-id 是**底层资源账号**，不是控制台归属账号；用个人微信登录即在同一账号下看到两台机器。`DescribeInstances` 全 0 也是同因：Lighthouse 不在 CVM 命名空间，要用 Lighthouse 的接口查。
+- Problem: 排查新加坡图片代理主机时，从主机 metadata 读到 `app-id 1301555531`，与手头控制台账号 `AppId <TENCENT_APP_ID>` 不符，据此断言「这台机属于另一个腾讯云账号、需要换登录」。同时 CVM `DescribeInstances` 返回 0 台实例，被当作佐证。两个读数都被误读。
+- Solution: 两台主机都是 **Lighthouse（轻量应用服务器）** 实例（`webserver-singapore` = `<LIGHTHOUSE_INSTANCE_ID>` / `<SG_PROXY_IP>`，`webserver-china` = `<ORIGIN_IP>`），跑在腾讯托管 VPC 里——metadata 里的 app-id 是**底层资源账号**，不是控制台归属账号；用个人微信登录即在同一账号下看到两台机器。`DescribeInstances` 全 0 也是同因：Lighthouse 不在 CVM 命名空间，要用 Lighthouse 的接口查。
 - Applies when: 判断一台腾讯云主机归谁、或某个云 API 返回空列表时——先确认实例类型（Lighthouse / CVM）再解释读数。空列表与 app-id 不符都会伪装成「账号不对」，把人推向换登录这条昂贵且方向错误的处置。
 
 ## 2026-08-20 WeWe RSS 路线已退役，且本文早先两条条目引用的文件从未入 git

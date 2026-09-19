@@ -20,7 +20,7 @@ from .categories import (
 )
 from .pagination import VersionedTotalCache, clamp_page
 from .request_db import conn_from_request
-from .search import search_id_subquery, source_match_expression
+from .search import SEARCH_QUERY_MAX_LENGTH, search_id_subquery, source_match_expression
 
 router = APIRouter()
 
@@ -33,6 +33,7 @@ _timeline_total_cache = VersionedTotalCache(maxsize=64)
 # and left the manifest builder's parallel predicate behind, which shipped a
 # manifest expecting a disabled-source item and quarantined the sync round.
 TIMELINE_SOURCE_VISIBILITY_CLAUSES = ("s.enabled=1", "COALESCE(s.kind, 'feed') != 'wechat'")
+TIMELINE_CHANNELS = frozenset({"x", "news", "firstParty"})
 
 _PREFILTER_SCORING_CLAUSE = """
 EXISTS (
@@ -204,8 +205,14 @@ def timeline(
     page: int = Query(default=1, ge=1),
     channel: str | None = None,
     category: str | None = None,
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
 ) -> dict[str, object]:
+    # Unknown channel values are not filters, and they must not become cache
+    # keys either: every distinct string would otherwise cost a full COUNT and
+    # evict the real entries from the total cache.
+    channel = channel if channel in TIMELINE_CHANNELS else None
+    # Plain-function callers that omit `q` pass the Query descriptor through.
+    q = q if isinstance(q, str) else None
     params: list[object] = []
     where_clauses: list[str] = list(TIMELINE_SOURCE_VISIBILITY_CLAUSES)
     search_subquery, search_params = search_id_subquery(q)

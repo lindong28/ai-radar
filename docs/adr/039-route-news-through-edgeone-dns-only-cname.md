@@ -8,7 +8,7 @@
 
 Mac mini 可见 Chrome 的首次冷访问显示，`https://news.aiplanet.live/wechat` 的连接耗时约 3075ms、TTFB 约 3133ms、FCP 约 3500ms；同条件 AIHOT 首页约为 933ms、1130ms、1492ms。连接复用后，AI Radar 的 `/wechat` TTFB 约 108ms、FCP 约 288ms；直连源站的热请求中，应用处理通常只有 24–26ms。读数把主要空白等待定位在首次连接网络路径，而不是数据库、SSR 或浏览器端渲染。
 
-当前 `news.aiplanet.live` 以 DNS-only A 记录直连 `111.229.134.9`，权威 TTL 为 300 秒。AIHOT 使用 EdgeOne CNAME，响应可观察到 EdgeOne 缓存命中。用户选择腾讯云 EdgeOne 直连接入，并购买个人版 1 个月套餐；套餐提供 50GB 安全加速流量、300 万次请求、1 个站点与 200 个子域名，自动续费关闭。
+当前 `news.aiplanet.live` 以 DNS-only A 记录直连 `<ORIGIN_IP>`，权威 TTL 为 300 秒。AIHOT 使用 EdgeOne CNAME，响应可观察到 EdgeOne 缓存命中。用户选择腾讯云 EdgeOne 直连接入，并购买个人版 1 个月套餐；套餐提供 50GB 安全加速流量、300 万次请求、1 个站点与 200 个子域名，自动续费关闭。
 
 ## 考虑过的方案
 
@@ -22,7 +22,7 @@ Mac mini 可见 Chrome 的首次冷访问显示，`https://news.aiplanet.live/we
 
 保留 Cloudflare 作为 `aiplanet.live` 的权威 DNS，在 EdgeOne 中以 CNAME 模式创建 `aiplanet.live` 站点，只添加 `news.aiplanet.live` 为加速域名。用户明确选择一个月试运行同时覆盖中国大陆与境外，因此站点使用 EdgeOne `global` 可用区；该区域决定的是 `news.aiplanet.live` 的加速流量范围，不恢复已经退役的裸域 `aiplanet.live`。Cloudflare 上的 `news.aiplanet.live` 必须设置为 **DNS-only CNAME**，目标值为 EdgeOne 为该加速域名分配的专属 CNAME；禁止启用 Cloudflare 代理，目标链路是 `client → EdgeOne → origin`。
 
-源站保持 `111.229.134.9`，固定使用 HTTPS 443 回源，并使用 `news.aiplanet.live` 作为 Host 与 SNI。EdgeOne 全局强制 HTTPS 使用 301；部署收敛后一条全局设置已经在公开域名及四个当前 Edge IP 上对普通路径、带随机 query 的路径和未知路径返回正确 301，因此不再叠加 per-host 重定向规则，也不通过改变回源协议间接依赖源站跳转。
+源站保持 `<ORIGIN_IP>`，固定使用 HTTPS 443 回源，并使用 `news.aiplanet.live` 作为 Host 与 SNI。EdgeOne 全局强制 HTTPS 使用 301；部署收敛后一条全局设置已经在公开域名及四个当前 Edge IP 上对普通路径、带随机 query 的路径和未知路径返回正确 301，因此不再叠加 per-host 重定向规则，也不通过改变回源协议间接依赖源站跳转。
 
 缓存采用保守边界：全站默认不缓存，仅精确 `/wechat` 与 `/api/v1/wechat` 遵从源站 `Cache-Control`；缓存键保留全部 query string。搜索请求继续由源站的 `private, no-store` 排除缓存，详情、admin、健康检查和其他 API 不因本决策获得缓存权限。
 
@@ -42,7 +42,7 @@ Mac mini 可见 Chrome 的首次冷访问显示，`https://news.aiplanet.live/we
 
 最终性能验收在用户的 MacBook 可见浏览器中执行，news 与 AIHOT 交替测试，每方至少 5 次真正冷连接。主判据是 `/wechat` 的 median FCP 与 TTFB 分别不超过 AIHOT 对照值的 110%；其他 `/wechat` 变体做功能与非回归验证，不为不存在的 AIHOT 对应页面制造代理指标。
 
-最终验收不达标时先区分相对部署前 EdgeOne 基线是回归还是改善：本次代码 deployment 的功能、视觉、缓存或冷访问性能回归按 ADR-042 的普通 revert 路径恢复；性能已有改善但仍高于 AIHOT 的 110% 时保留收益并继续优化。只有独立证据指向 EdgeOne/DNS 本身时，才另行决策并取得授权，把 Cloudflare 记录恢复为 DNS-only A `111.229.134.9`。提交 DNS 回切动作不等于用户侧已恢复；权威 TTL 为 300 秒，递归缓存与边缘传播窗口内必须继续从消费者入口观测，直到公开解析和真实请求都证明源站直连已恢复。
+最终验收不达标时先区分相对部署前 EdgeOne 基线是回归还是改善：本次代码 deployment 的功能、视觉、缓存或冷访问性能回归按 ADR-042 的普通 revert 路径恢复；性能已有改善但仍高于 AIHOT 的 110% 时保留收益并继续优化。只有独立证据指向 EdgeOne/DNS 本身时，才另行决策并取得授权，把 Cloudflare 记录恢复为 DNS-only A `<ORIGIN_IP>`。提交 DNS 回切动作不等于用户侧已恢复；权威 TTL 为 300 秒，递归缓存与边缘传播窗口内必须继续从消费者入口观测，直到公开解析和真实请求都证明源站直连已恢复。
 
 ## 作用域与未验证项
 

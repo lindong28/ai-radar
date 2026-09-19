@@ -14,7 +14,7 @@ from typing import cast
 from urllib.parse import urlencode
 
 import uvicorn
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -31,6 +31,7 @@ from .cors import configure_cors
 from .routes import admin, curated, health, hot_cache, items, media, sources, timeline
 from .routes import wechat as wechat_routes
 from .routes.request_db import conn_from_request
+from .routes.search import SEARCH_QUERY_MAX_LENGTH
 from .schemas import FeedItem
 
 STATIC_DIR = db.PROJECT_ROOT / "web" / "static"
@@ -601,7 +602,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         hot_cache.prewarm_hot_candidates(app.state.db_path)
         yield
 
-    app = FastAPI(title="AI Radar", version="0.1.0", lifespan=lifespan)
+    # No interactive API docs on a public read-only site: /docs, /redoc and
+    # /openapi.json only hand out a route map (they listed the admin routes
+    # before those were hidden from the schema).
+    app = FastAPI(
+        title="AI Radar",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.db_path = str(db.resolve_db_path(db_path))
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
     templates.env.policies["json.dumps_kwargs"] = {"ensure_ascii": False}
@@ -679,13 +690,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     # the API prefix. Registered before the "/" static mount so it wins.
     app.include_router(media.router)
 
+    # The HTML routes call the API handlers as plain functions, which skips
+    # the API routes' own Query(ge=..., le=...) validation. Declare the same
+    # bounds here: limit=0 divided by zero in clamp_page (a 500) and a
+    # negative limit reached SQLite as LIMIT -1, i.e. the whole table.
     @app.get("/", include_in_schema=False)
     def index_page(
         request: Request,
         category: str | None = None,
-        q: str | None = None,
-        page: int = 1,
-        limit: int = 40,
+        q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
+        page: int = Query(default=1, ge=1),
+        limit: int = Query(default=40, ge=1, le=100),
     ) -> HTMLResponse:
         payload = curated.curated(request, category=category, q=q, page=page, limit=limit)
         context = _preload_context(
@@ -717,11 +732,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def all_page(
         request: Request,
         cursor: str | None = None,
-        limit: int = 40,
-        page: int = 1,
+        limit: int = Query(default=40, ge=1, le=100),
+        page: int = Query(default=1, ge=1),
         channel: str | None = None,
         category: str | None = None,
-        q: str | None = None,
+        q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
     ) -> HTMLResponse:
         payload = timeline.timeline(
             request,
@@ -743,7 +758,12 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         )
 
     @app.get("/wechat", include_in_schema=False)
-    def wechat_page(request: Request, q: str | None = None, page: int = 1, limit: int = WECHAT_PAGE_LIMIT) -> HTMLResponse:
+    def wechat_page(
+        request: Request,
+        q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
+        page: int = Query(default=1, ge=1),
+        limit: int = Query(default=WECHAT_PAGE_LIMIT, ge=1, le=500),
+    ) -> HTMLResponse:
         with conn_from_request(request) as conn:
             data = wechat_routes.list_wechat_items(conn, q=q, page=page, limit=limit)
         return templates.TemplateResponse(
@@ -767,6 +787,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             {"item": item, "back_href": _wechat_back_href(page, q)},
         )
 
+    admin_headers = {"Cache-Control": admin.ADMIN_CACHE_CONTROL}
+
     @app.get("/admin", include_in_schema=False)
     def admin_page(request: Request) -> HTMLResponse:
         admin.require_admin_access(request)
@@ -777,12 +799,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 "metrics": admin.collect_admin_metrics(request),
                 "performance": admin.collect_performance_status(),
             },
+            headers=admin_headers,
         )
 
     @app.head("/admin", include_in_schema=False)
     def admin_head(request: Request) -> Response:
         admin.require_admin_access(request)
-        return Response(status_code=204)
+        return Response(status_code=204, headers=admin_headers)
 
     @app.get("/admin/usage", include_in_schema=False)
     def admin_usage_page(request: Request) -> HTMLResponse:
@@ -791,6 +814,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             request,
             "admin_usage.html",
             {"usage": admin.collect_admin_usage(request)},
+            headers=admin_headers,
         )
 
     @app.get("/daily", include_in_schema=False)
@@ -863,9 +887,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def curated_alias(
         request: Request,
         category: str | None = None,
-        q: str | None = None,
-        page: int = 1,
-        limit: int = 40,
+        q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
+        page: int = Query(default=1, ge=1),
+        limit: int = Query(default=40, ge=1, le=100),
     ) -> HTMLResponse:
         return index_page(request, category=category, q=q, page=page, limit=limit)
 

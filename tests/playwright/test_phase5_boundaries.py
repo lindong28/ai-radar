@@ -5,6 +5,7 @@ import re
 import time
 from urllib.parse import parse_qs, urlparse
 
+from admin_auth import TEST_ADMIN_HEADERS
 from playwright.sync_api import Page, expect
 
 PRELOAD_RE = re.compile(
@@ -173,7 +174,7 @@ def test_v18_unknown_tab_paths_return_404(page: Page, base_url: str) -> None:
     assert admin_response is not None
     assert admin_response.status == 403
 
-    page.set_extra_http_headers({"Cf-Access-Jwt-Assertion": "test"})
+    page.set_extra_http_headers(TEST_ADMIN_HEADERS)
     admin_response = page.goto(f"{base_url}/admin", wait_until="domcontentloaded")
     assert admin_response is not None
     assert admin_response.status == 200

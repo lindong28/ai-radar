@@ -33,7 +33,7 @@
 **运行边界**：
 
 - **Mac（上海 M4）**：开发迭代 + pipeline（抓取 / LLM 打分 / 写 `radar.db` 主库）。现有 launchd + cron 调度不动。
-- **服务器（Ubuntu 24.04, 111.229.134.9, 2C4G/3.6GiB）**：serve + `radar.db` 只读副本 + nginx，承载全部用户流量。
+- **服务器（Ubuntu 24.04, <ORIGIN_IP>, 2C4G/3.6GiB）**：serve + `radar.db` 只读副本 + nginx，承载全部用户流量。
 - **单向数据流**：Mac 主库 → 服务器副本。
 
 > **"服务器只读"是本 plan 要建立的性质，不是现状。** 当前服务器 serve 未设 `AI_RADAR_PRE_MIGRATED_DB`，每次启动都会跑 migration 并重写副本的全文索引。G=standard 的定档依赖"副本可从 Mac 重建、服务器不产生独有数据"，该依据只有在 P2 装上 pre-migrated 之后才成立。
@@ -234,7 +234,7 @@ DNS 读写权限**已实测**（建 TXT 记录成功并清理）。
                           │  https://news.aiplanet.live
                           ▼
               Cloudflare DNS（灰云 / DNS-only，不代理）
-                          │  A → 111.229.134.9
+                          │  A → <ORIGIN_IP>
                           ▼
         ┌─── 腾讯云上海 2C4G ────────────────────────────┐
         │  nginx :443 (Let's Encrypt) / :80 (ACME + 301) │
@@ -264,7 +264,7 @@ DNS 读写权限**已实测**（建 TXT 记录成功并清理）。
 
 已穷尽代办路径：无 `tccli`、无 `TENCENTCLOUD_SECRET_*`（全局搜过）；metadata API 不含防火墙管理；经用户授权附加 Chrome Dev（CDP 9222）后确认**控制台未登录**，需本人扫码。登录页已开在 Chrome Dev 标签 `tcfw`，登录后会自动跳到该实例防火墙页。**用户登录后 agent 可完成放行规则本身。**
 
-**Verify**：服务器临时监听 443，Mac 上 `curl --noproxy '*' -m 10 http://111.229.134.9:443/` 返回非 `000`。本 session 已用此法证实当前未放行（阴性对照成立）。
+**Verify**：服务器临时监听 443，Mac 上 `curl --noproxy '*' -m 10 http://<ORIGIN_IP>:443/` 返回非 `000`。本 session 已用此法证实当前未放行（阴性对照成立）。
 
 P0 不阻塞 P0b–P3。
 
@@ -445,7 +445,7 @@ commit 到工作分支，过 review-gate。**不自动整合进 main，不 push*
 #### P2-1 可追溯的发布链路
 
 - 服务器建 bare repo `~/ai-radar.git` + `post-receive`。
-- Mac：`git remote add tencent ubuntu@111.229.134.9:ai-radar.git`。
+- Mac：`git remote add tencent ubuntu@<ORIGIN_IP>:ai-radar.git`。
 - **post-receive 必须走 candidate 模式**（不是 `checkout -f` 到活动工作树）：先检出到隔离 candidate 目录、`uv sync`、跑验证，通过后才按 active release invariant 切换；失败恢复旧 SHA。
 - `data/` 与 `.env` 永不进入检出流程。
 - hook 写 `~/ai-radar/.deployed-sha`。
@@ -497,7 +497,7 @@ commit 到工作分支，过 review-gate。**不自动整合进 main，不 push*
 
 **顺序（DNS 必须先行——HTTP-01 挑战要求 Let's Encrypt 能通过申请域名的 80 端口取到 challenge，域名没解析到本机则 certbot 必定失败）**：
 
-1. **建 DNS**：Cloudflare `news` A → `111.229.134.9`，**proxied=false（灰云）**。橙云会把流量拽回跨洋边缘，正是要消除的根因。
+1. **建 DNS**：Cloudflare `news` A → `<ORIGIN_IP>`，**proxied=false（灰云）**。橙云会把流量拽回跨洋边缘，正是要消除的根因。
 2. **DNS readback**：权威 NS 与公共 resolver（1.1.1.1 / 8.8.8.8）均返回该 IP，再往下走。
 3. 装 **tracked 的 port-80 vhost**（含 `/.well-known/acme-challenge/` 显式 location），`nginx -t` → reload。
 4. **challenge 路径探针**：往 `/.well-known/acme-challenge/` 放一个测试文件，从公网 `curl http://news.aiplanet.live/.well-known/acme-challenge/<file>` 取得它，证明 HTTP-01 的路必然通——再去申请证书。
@@ -513,11 +513,11 @@ commit 到工作分支，过 review-gate。**不自动整合进 main，不 push*
 
 ```bash
 # 1. 正向：同一 IP/443 上正确 vhost 健康——先证明可达
-curl -sS --noproxy '*' --resolve news.aiplanet.live:443:111.229.134.9 \
+curl -sS --noproxy '*' --resolve news.aiplanet.live:443:<ORIGIN_IP> \
      -o /dev/null -w '%{http_code} %{time_total}\n' https://news.aiplanet.live/api/v1/healthz
 # 2. 反向：裸 IP 与任意 Host 均不返回站点（用 -k，使证书失败不被误当作拒绝证据）
-curl -sSk --noproxy '*' -o /dev/null -w '%{http_code}\n' https://111.229.134.9/
-curl -sSk --noproxy '*' -H 'Host: nonsense.example' -o /dev/null -w '%{http_code}\n' https://111.229.134.9/
+curl -sSk --noproxy '*' -o /dev/null -w '%{http_code}\n' https://<ORIGIN_IP>/
+curl -sSk --noproxy '*' -H 'Host: nonsense.example' -o /dev/null -w '%{http_code}\n' https://<ORIGIN_IP>/
 # 断言：均不含站点 sentinel / HTML / 2xx
 ```
 

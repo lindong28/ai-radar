@@ -1,6 +1,6 @@
 # 运维监控与告警 Runbook
 
-> Mutable snapshot. 面向 AI Radar 运维者：怎么看 `/admin`、怎么处理告警、怎么配置飞书与 Cloudflare Access。
+> Mutable snapshot. 面向 AI Radar 运维者：怎么看 `/admin`、怎么处理告警、怎么配置飞书与 admin token。
 >
 > 本目录（`docs/operations/`）是维护者产线 runbook，绑定具体实机拓扑；fork 部署路径见 [README](../../README.md)。
 
@@ -16,7 +16,7 @@
 - 用户旅程探针入口：`./run.sh performance-probe --help`（当前部署参数见下文）
 - 性能候选修复 CLI（启用仍受下文 gate 约束）：`./run.sh performance-remediate --help`
 
-`/admin` 和 `/admin/usage` 是运维面板，不挂公开导航。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**，仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行。**已知限制（本文其余各处只引用这一条，不复述）**：应用对公网请求只检查 `Cf-Access-Jwt-Assertion` 是否非空，**不验签**；这只有在请求先经过 Cloudflare Access 时才是有效边界。当前生产 `news.aiplanet.live` 直解腾讯源站、未经过 Cloudflare，2026-08-12 实测无 header 为 403、伪造 header 为 200，因此当前 admin 不能视为已认证入口；开放修复见 [deploy issue](../issues/deploy.md#open-2026-08-12当前生产-admin-入口绕过-cloudflare-access).
+`/admin` 和 `/admin/usage` 是运维面板，不挂公开导航。鉴权是共享密钥：`.env` 里的 `AI_RADAR_ADMIN_TOKEN`（≥16 字符；`read_value` 解析，即进程 env > 项目 `.env` > `~/.claude/.env`），请求带 `X-Admin-Token: <值>` 或 `Authorization: Bearer <值>`，应用侧用 `hmac.compare_digest` 常量时间比较；**未配置或过短时 fail-closed，所有远程请求 403**。本机 `127.0.0.1` / `::1` / `localhost` 的本地 bypass 默认**关闭**，仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL=1/true/yes` 时放行。2026-09-19 之前的守卫只判 `Cf-Access-Jwt-Assertion` 是否非空（伪造即 200，见 [closed issue](../issues/archive/closed.md)）；该 header 现已不再有任何意义，nginx 也会把客户端带来的这个头清空。三个 admin 路由不进 OpenAPI schema，`/docs`、`/redoc`、`/openapi.json` 已整体关闭。
 
 ## Dashboard 怎么看
 
@@ -338,55 +338,23 @@ plutil -p deploy/launchd/ai-radar-alert.plist \
 
 任一 webhook 缺失时，首先跑上面的无发送 preflight 确认是 `ALERT` 还是 `NOTIFICATION` key 缺失，然后补齐并重跑 `./install.sh alert`。如果两个 key 都在但运行时仍失败，检查 `~/.local/bin/im-notify` 可执行性、plist 中两个键名、`logs/alert-check.err.log` 的 `im-notify` 退出状态，并按 receipt 的 `channel=ALERT|NOTIFICATION` 判断故障通道。运行时 `im-notify` 不可执行、超时或非零退出时，firing 不会进入 cooldown，下轮会重试；本轮告警进程与状态持久化仍继续。不要为诊断而直接跑 `./run.sh admin alert-check`，当前状态如果恰好触发转换，它会发送真实生产消息。
 
-## Cloudflare Access
+## 验证 admin 鉴权
 
-Cloudflare Access 是经其代理部署时的公网鉴权边界；origin 侧只做存在性兜底（见文首「已知限制」）。当前生产没有经过 Cloudflare，本节是待恢复的目标拓扑，不是当前保护状态。
-
-### 控制台配置
-
-1. 打开 Cloudflare Zero Trust 控制台。
-2. 进入「Access」→「Applications」→「Add an application」→「Self-hosted」。
-3. 创建 `AI Radar Admin` application。
-4. Domain 填你的 `AI_RADAR_SITE_DOMAIN` 值。
-5. Path 至少覆盖：
-   - `/admin*`
-   - `/api/v1/admin*`
-6. 添加 policy，限制允许访问的用户身份，例如指定邮箱、邮箱域、或 Cloudflare Access group。
-7. 保存后，用无登录态浏览器或 curl 验证公网入口不再直接进入 dashboard。
-
-### 验证
-
-以下是完成 gate，不是当前生产已通过的检查。把 URL 换成实际生产 hostname 后，必须同时证明响应经过 Cloudflare edge、无凭证被拦截、伪造 origin 所信任的 header 也不能得到 `200`（为什么伪造 header 是必测项，见文首「已知限制」）；只看到无 header 的 `302/403` 会被当前直达 origin 的坏状态骗过：
+生产鉴权由 origin 自己完成（见文首），不依赖任何边缘代理。把 URL 换成实际生产 hostname 后，下面四条读数分别应为 `403 / 403 / 200 / 200`——第二条是伪造旧 header 的阴性对照，它必须被拒：
 
 ```bash
-(
-  set -e
-  public_admin="https://${AI_RADAR_SITE_DOMAIN}/admin"
-  headers="$(mktemp)"
-  trap 'rm -f "$headers"' EXIT
-  code="$(curl -sS -D "$headers" -o /dev/null -w '%{http_code}' "$public_admin")"
-  grep -qi '^cf-ray:' "$headers"
-  case "$code" in 302|403) ;; *) exit 1 ;; esac
-  fake_code="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Cf-Access-Jwt-Assertion: x' "$public_admin")"
-  test "$fake_code" != 200
-)
+public="https://${AI_RADAR_SITE_DOMAIN}"
+curl -sS -o /dev/null -w 'no_token=%{http_code}\n' "$public/api/v1/admin/metrics"
+curl -sS -o /dev/null -w 'legacy_cf_header=%{http_code}\n' -H 'Cf-Access-Jwt-Assertion: x' "$public/api/v1/admin/metrics"
+curl -sS -o /dev/null -w 'token_api=%{http_code}\n' -H "X-Admin-Token: $AI_RADAR_ADMIN_TOKEN" "$public/api/v1/admin/metrics"
+curl -sS -o /dev/null -w 'token_page=%{http_code}\n' -H "X-Admin-Token: $AI_RADAR_ADMIN_TOKEN" "$public/admin"
 ```
 
-origin 兜底可在当前本机 serve 端口 8010 直接验证（generic fork 改成自己的 serve 端口）：
+`/docs`、`/redoc`、`/openapi.json` 应为 404。
 
-```bash
-origin=http://127.0.0.1:8010
-curl -sS -o /dev/null -w 'origin_no_header_api=%{http_code}\n' "$origin/api/v1/admin/metrics"
-curl -sS -o /dev/null -w 'origin_fake_header_api=%{http_code}\n' -H 'Cf-Access-Jwt-Assertion: x' "$origin/api/v1/admin/metrics"
-curl -sS -o /dev/null -w 'origin_no_header_page=%{http_code}\n' "$origin/admin"
-curl -sS -o /dev/null -w 'origin_fake_header_page=%{http_code}\n' -H 'Cf-Access-Jwt-Assertion: x' "$origin/admin"
-```
+## Cloudflare Access（历史）
 
-预期依次为 `403 / 200 / 403 / 200`。
-
-预期读数中两个 `200` 正是文首「已知限制」的表现，不复述；剩余增强也在那里。
-
-安全注意：origin 的本地 bypass（放行 `127.0.0.1` / `::1` / `localhost`）已**默认关闭**——仅在显式设置 `AI_RADAR_ADMIN_ALLOW_LOCAL` 时生效，生产 serve 不设该变量，故即便未来 cloudflared 转发机制变化让公网请求在 origin 看起来像 `127.0.0.1`，也不会触发本地 bypass。公网无凭证访问 `/admin` 已验证为 403。
+Cloudflare Access 曾是设计中的公网鉴权边界，origin 只做 header 存在性兜底。当前生产走 EdgeOne、origin 自行验 token（见上节），本节只为解释旧文档里的引用而保留；控制台配置步骤与旧验证块已删除，不再是待恢复的目标拓扑。
 
 ## 常用命令
 

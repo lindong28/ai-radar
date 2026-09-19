@@ -35,6 +35,20 @@ ExecStart=@AI_RADAR_HOME@/.venv/bin/python3 -m airadar.cli serve --host 127.0.0.
 
 Restart=on-failure
 RestartSec=5
+
+# Sandboxing. The process reads the checkout and /etc/ai-radar, writes only
+# under its home (data/, logs) and binds one loopback port; nothing here
+# needs privilege escalation. ProtectHome is deliberately absent: the
+# checkout lives under the service user's home.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
 StandardOutput=append:@AI_RADAR_LOG_DIR@/serve-%i.log
 StandardError=append:@AI_RADAR_LOG_DIR@/serve-%i.err.log
 

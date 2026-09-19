@@ -52,7 +52,12 @@ PYTHON="${AI_RADAR_PYTHON:-$REPO_ROOT/.venv/bin/python3}"
 
 # Bypass any local proxy: the tunnel does not route to this host and the
 # resulting failure reads like a network outage rather than a proxy problem.
-SSH_OPTS="${AI_RADAR_SYNC_SSH_OPTS:--o ProxyCommand=none}"
+# StrictHostKeyChecking=accept-new: the operator's global ssh config sets it
+# to `no`, which would let a host-key change (re-imaged server, hijacked
+# route) go unnoticed while this script ships the database and triggers
+# `sudo systemctl` on the far side. accept-new still bootstraps a fresh
+# known_hosts entry; only a *changed* key aborts.
+SSH_OPTS="${AI_RADAR_SYNC_SSH_OPTS:--o ProxyCommand=none -o StrictHostKeyChecking=accept-new}"
 
 log()  { printf '[sync] %s\n' "$*"; }
 fail() { printf '[sync] ✗ %s\n' "$*" >&2; exit 1; }

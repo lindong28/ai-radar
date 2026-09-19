@@ -152,7 +152,7 @@ pipeline 在 egress preflight 后、fetch 前执行这项检查，非零立即�
 上海 serve → 本机 127.0.0.1:39148 → [SSH 隧道, 加密] → SG 127.0.0.1:39147 (tinyproxy) → pbs.twimg.com
 ```
 
-- 上海主机 systemd 服务 **`ai-radar-img-tunnel`**（`ssh -L 39148:127.0.0.1:39147 ubuntu@43.153.216.193`，`Restart=always`、开机自启）。用受限专用 key `~ubuntu/.ssh/sg_img_tunnel`，SG 侧 authorized_keys 前缀 `restrict,port-forwarding,permitopen="127.0.0.1:39147"`（纯隧道，无 shell）。
+- 上海主机 systemd 服务 **`ai-radar-img-tunnel`**（`ssh -L 39148:127.0.0.1:39147 ubuntu@<SG_PROXY_IP>`，`Restart=always`、开机自启）。用受限专用 key `~ubuntu/.ssh/sg_img_tunnel`，SG 侧 authorized_keys 前缀 `restrict,port-forwarding,permitopen="127.0.0.1:39147"`（纯隧道，无 shell）。
 - 上海 `.env` 的 `AI_RADAR_IMG_PROXY_URL` 指 `http://<user>:<pw>@127.0.0.1:39148`（tinyproxy 认证不变，只是 host:port 变本地隧道口）。
 - **SG 防火墙放行 39147 的入站规则（历史，已不承载流量）**：隧道化后流量走 SSH 22，该入站规则已不再被用到，可移除；留着无害。
 - 运维：`ssh tencent-webserver-china sudo systemctl status ai-radar-img-tunnel`；隧道断则 `journalctl -u ai-radar-img-tunnel`。
@@ -163,10 +163,10 @@ tinyproxy 本身（在 SG）不由本仓的 `install.sh` / `status.sh` 管理，
 |---|---|---|
 | 版本 / 服务 | tinyproxy 1.11.1，systemd `active` + `enabled`，`Restart=on-failure` | `Restart` 由 drop-in 显式设置——**默认是 `no`**，实测 `kill -9` 后服务停在 `failed` 不自愈；设置后验证 PID 979054 → 979086 自动重启 |
 | 端口 / 监听 | `Port 39147`，`Listen 0.0.0.0` | 现由 SSH 隧道经 SG 回环访问，实际到达的源是 `127.0.0.1`；绑 `0.0.0.0` 是历史（直连时代），可收窄到 `127.0.0.1` |
-| 入站 ACL | `Allow 111.229.134.9` + `Allow 127.0.0.1` | 隧道化后有效的是 **`Allow 127.0.0.1`**（SSH 转发在 SG 侧以回环发起）；`Allow 111.229.134.9`（历史，已不承载流量）随直连防火墙规则一并可清 |
+| 入站 ACL | `Allow <ORIGIN_IP>` + `Allow 127.0.0.1` | 隧道化后有效的是 **`Allow 127.0.0.1`**（SSH 转发在 SG 侧以回环发起）；`Allow <ORIGIN_IP>`（历史，已不承载流量）随直连防火墙规则一并可清 |
 | 认证 | `BasicAuth`，口令只存在于该机 `/etc/tinyproxy/.credpw`（600 root:root）与 serve 主机 `.env`（600） | 口令不进仓库、不进对话 |
 | 出站限制 | `ConnectPort 443` + `Filter` + `FilterDefaultDeny Yes` + `FilterType ere`，名单仅 `^pbs\.twimg\.com$` | 默认拒绝、逐条放行：即使凭据泄露，它也只能连这一个域名的 443 |
-| 云防火墙（历史） | 两台主机是 **Lighthouse（轻量应用服务器）** 实例，同属控制台账号 `AppId 1424748107`（`webserver-singapore` = `lhins-3nxwyynb` / `43.153.216.193`；`webserver-china` = `111.229.134.9`）。曾在 SG 实例防火墙加入站 `111.229.134.9/32 → TCP 39147 允许`（历史，已不承载流量：隧道化后不需要）。（查这两台机归属时的一条教训见 [experiences/deployment.md](../experiences/deployment.md) 2026-08-18 条目。） |
+| 云防火墙（历史） | 两台主机是 **Lighthouse（轻量应用服务器）** 实例，同属控制台账号 `AppId <TENCENT_APP_ID>`（`webserver-singapore` = `<LIGHTHOUSE_INSTANCE_ID>` / `<SG_PROXY_IP>`；`webserver-china` = `<ORIGIN_IP>`）。曾在 SG 实例防火墙加入站 `<ORIGIN_IP>/32 → TCP 39147 允许`（历史，已不承载流量：隧道化后不需要）。（查这两台机归属时的一条教训见 [experiences/deployment.md](../experiences/deployment.md) 2026-08-18 条目。） |
 
 **已知风险（已接受）**：tinyproxy 1.11.1 存在未修补的 CVE-2026-31842。接受依据是暴露面已收窄到单 IP + 认证 + 仅 CONNECT 443 + 单域名白名单，且该主机不承载其他服务。上游发版后应跟进升级。
 
@@ -261,7 +261,7 @@ EdgeOne 对 `news.aiplanet.live` 下的精确路径 `/style.css` 与 `/app.js` �
 ```
 AuthFailure.UnauthorizedOperation
 you are not authorized to perform operation (teo:ModifyL7AccRule)
-resource (qcs::teo:::zone/zone-3tqc1sj4x482) has no permission
+resource (qcs::teo:::zone/<EDGEONE_ZONE_ID>) has no permission
 ```
 
 调用在任何变更发生之前就被拒，事后读回确认线上规则与调用前**逐字相同**。所以规则变更只有两条路：在控制台改（ADR-039 本来就把控制台定为仓外权威），或先给该子账号加上 `teo:ModifyL7AccRule` ——后者会扩大这把密钥的爆炸半径，值不值得是一次单独的决定，不该顺手做。

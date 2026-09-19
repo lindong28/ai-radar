@@ -54,7 +54,7 @@ REMOTE_RECEIPT="${AI_RADAR_SYNC_REMOTE_RECEIPT:-ai-radar/data/accepted-snapshot.
 # noticed at the next cron sample -- worst case threshold + one cadence
 # (~16h), documented in ADR-013.
 FRESHNESS_MAX_AGE_MIN="${AI_RADAR_SYNC_FRESHNESS_MAX_AGE_MIN:-660}"
-SSH_OPTS="${AI_RADAR_SYNC_SSH_OPTS:--o ProxyCommand=none} -o BatchMode=yes"
+SSH_OPTS="${AI_RADAR_SYNC_SSH_OPTS:--o ProxyCommand=none -o StrictHostKeyChecking=accept-new} -o BatchMode=yes"
 LOG_MAX_BYTES="${AI_RADAR_SYNC_LOG_MAX_BYTES:-5242880}"
 
 # Keep the log bounded under the producer's lock. Its directory is permanent;

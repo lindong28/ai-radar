@@ -16,7 +16,12 @@
 services:
   wechat2rss:
     container_name: wechat2rss
-    image: "docker.xlab.app/ttttmr/wechat2rss:latest"
+    # Pinned by digest, not tag: this container holds the WeRead login state
+    # and the feed token, and it is pulled from a third-party mirror. Bump the
+    # digest deliberately (RUNBOOK "cutover" keeps the previous one for
+    # rollback); `docker image inspect --format '{{index .RepoDigests 0}}'`
+    # prints the digest of what is currently running.
+    image: "docker.xlab.app/ttttmr/wechat2rss@sha256:000c3243ebdc5d7edc30cb00e52981b600f02d11f85fefcec27e2226c208082f"
     env_file:
       - .env
     environment:

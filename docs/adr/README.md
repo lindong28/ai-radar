@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260919-a3c1](./20260919-a3c1-harden-public-surface-after-security-review.md) | 安全审查后加固公网面：origin 自验 admin token、采集入口白名单、请求边界、安全头与依赖升级 | accepted；生产生效待部署 + 服务器写入 token | 2026-09-19 |
 | [20260918-7d0e](./20260918-7d0e-expand-score-and-enrichment-from-aihot-originals.md) | 仅 O2/O3 以 AIHOT 原标题与绑定原文扩题，O1/O4 保持保守候选窗口 | accepted；已物化新 O2/O3 题库，读数见 inventory | 2026-09-18 |
 | [20260917-8b86](./20260917-8b86-wait-for-collector-process-groups.md) | 有界等待采集进程组退出，监督失败纳入现有告警 | accepted；已获批启用，实际入口退出 0 | 2026-09-17 |
 | [20260917-b8e2](./20260917-b8e2-recover-continuous-raw-capture.md) | 恢复后续 raw 采集：提取互斥、版本化补充探针、有界重试与独立健康检查 | accepted；已批准并安装调度，新日窗与连续性待验收 | 2026-09-17 |

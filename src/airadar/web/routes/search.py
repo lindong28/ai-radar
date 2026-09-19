@@ -5,6 +5,10 @@ from functools import lru_cache
 
 from opencc import OpenCC
 
+# Upper bound on a search query as accepted by every route that takes `q`.
+# There is no product use for longer queries, and the LIKE / FTS expansion
+# below grows with the input, so the bound is a cost cap, not a UX one.
+SEARCH_QUERY_MAX_LENGTH = 200
 SEARCH_WHITESPACE_RE = re.compile(r"[\s\u3000]+")
 SEARCH_TERM_RE = re.compile(r"[^\W_]+(?:[.+-][^\W_]+)*", re.UNICODE)
 SQL_SEARCH_WHITESPACE_REMOVALS = ("' '", "char(12288)", "char(9)", "char(10)", "char(13)")
@@ -111,7 +115,13 @@ def search_id_subquery(q: str | None) -> tuple[str | None, list[str]]:
     if not qs:
         return None, []
     if len(qs) >= 3:
-        fts_query = " OR ".join(phrase for variant in expand_st_variants(qs) if (phrase := fts_phrase_query(variant)))
+        phrases = [phrase for variant in expand_st_variants(qs) if (phrase := fts_phrase_query(variant))]
+        if not phrases:
+            # Only quotes / whitespace: the phrase collapses to nothing and
+            # `items_fts MATCH ''` is an FTS5 syntax error (a public 500).
+            # Treat it as "no query", which is what the input amounts to.
+            return None, []
+        fts_query = " OR ".join(phrases)
         normalized_qs = remove_search_whitespace(qs)
         if normalized_qs != qs and normalized_qs:
             like_subquery, like_params = _normalized_like_subquery_from_fts(like_patterns_for_query(qs))

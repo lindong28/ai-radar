@@ -16,6 +16,7 @@ from ..envelope import ok
 from .pagination import clamp_page
 from .request_db import conn_from_request
 from .search import (
+    SEARCH_QUERY_MAX_LENGTH,
     controlled_alias_terms,
     expand_st_variants,
     fts_phrase_query,
@@ -302,9 +303,10 @@ def get_wechat_detail(conn: sqlite3.Connection, slug: str) -> dict[str, Any]:
 @router.get("/wechat")
 def wechat(
     request: Request,
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=500),
 ) -> dict[str, object]:
+    q = q if isinstance(q, str) else None
     with conn_from_request(request) as conn:
         return ok(list_wechat_items(conn, q=q, page=page, limit=limit))

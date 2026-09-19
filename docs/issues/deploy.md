@@ -107,12 +107,6 @@ repo-owned 的 DB sync、performance-remediate 与 Wechat2RSS healthcheck cron�
 
 闭合时应给 pipeline cron 增加能绑定 canonical checkout 的稳定身份，并让 install/status/uninstall 共用同一解析规则；迁移须保留无关 crontab 条目，并能区分当前树、其它树与无法读取 crontab 三种状态。
 
-## [open] 2026-08-12：当前生产 admin 入口绕过 Cloudflare Access
-
-- Type: security boundary · Priority: high · Discovered: 20260810 LLM cost plan 的 full docs-sync 终审
-
-`news.aiplanet.live` 当前 DNS 直解腾讯服务器、响应没有 Cloudflare headers。应用层只检查 `Cf-Access-Jwt-Assertion` 是否非空；2026-08-12 从公网实测 `/admin` 无 header 为 403、伪造 `Cf-Access-Jwt-Assertion: x` 为 200。因此 Cloudflare Access 不是当前请求路径上的真实边界，未登录者可自行构造该 header 越过存在性检查。闭合需把生产 hostname 重新置于可信认证代理之后，或在 origin 做可验证的 JWT/origin-token 校验；完成前不得把 admin 称为已认证入口。
-
 ## [open] 2026-08-10：sync-db-cron.sh receipt-staleness fallback 文案与分类
 
 - Type: cli-output · Priority: medium（review 判级） · Discovered: 2026-08-10, U4a 对抗审

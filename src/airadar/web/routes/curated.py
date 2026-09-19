@@ -9,6 +9,7 @@ from ..envelope import ok
 from . import curated_archive, curated_digest, daily_metrics, hot_cache
 from .categories import CATEGORY_TAGS
 from .request_db import conn_from_request
+from .search import SEARCH_QUERY_MAX_LENGTH
 
 router = APIRouter()
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -42,10 +43,13 @@ def curated(
     run_id: str | None = None,
     date: str | None = None,
     category: str | None = None,
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
     limit: int = Query(default=40, ge=1, le=100),
     page: int = Query(default=1, ge=1),
 ) -> dict[str, object]:
+    # The HTML routes (and tests) call this handler as a plain function; when
+    # they omit `q`, the default is FastAPI's Query descriptor, not None.
+    q = q if isinstance(q, str) else None
     selected_date = _normalized_date(date)
     normalized_category = category if category in CATEGORY_TAGS else None
     with conn_from_request(request) as conn:

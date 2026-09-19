@@ -2,6 +2,13 @@
 
 > Append-only archive for resolved or wontfix issues. Entries moved from a domain file retain their historical evidence; issues discovered and resolved within one plan are recorded here directly with terminal evidence.
 
+## [resolved] 2026-08-12：当前生产 admin 入口绕过 Cloudflare Access（closed 2026-09-19）
+
+- Type: security boundary · Priority: high · Discovered: 20260810 LLM cost plan 的 full docs-sync 终审
+
+`news.aiplanet.live` 当前 DNS 直解腾讯服务器、响应没有 Cloudflare headers。应用层只检查 `Cf-Access-Jwt-Assertion` 是否非空；2026-08-12 从公网实测 `/admin` 无 header 为 403、伪造 `Cf-Access-Jwt-Assertion: x` 为 200。因此 Cloudflare Access 不是当前请求路径上的真实边界，未登录者可自行构造该 header 越过存在性检查。闭合需把生产 hostname 重新置于可信认证代理之后，或在 origin 做可验证的 JWT/origin-token 校验；完成前不得把 admin 称为已认证入口。
+- Resolution (2026-09-19)：2026-09-19 全项目安全审查再次从公网实测伪造 `Cf-Access-Jwt-Assertion: x` 即得到 `/admin`、`/admin/usage` 与 `/api/v1/admin/metrics` 的 200。守卫改为校验 `AI_RADAR_ADMIN_TOKEN`（`X-Admin-Token` / Bearer，`hmac.compare_digest`，未配置或 <16 字符时 fail-closed 403），旧 header 不再有任何效力；nginx `location /` 另加 `proxy_set_header Cf-Access-Jwt-Assertion ""` 清空客户端带来的该头。三个 admin 路由 `include_in_schema=False`，`/docs`、`/redoc`、`/openapi.json` 关闭。回归测试 `tests/test_admin_routes.py`（含伪造旧 header 与错误 token 的阴性对照、未配置 fail-closed）；决策见 [ADR-20260919-a3c1](../../adr/20260919-a3c1-harden-public-surface-after-security-review.md)。生产生效需部署代码并在服务器 `.env` 写入 token，完成前公网读数仍是旧状态。
+
 ## [resolved] interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态（closed 2026-09-05）
 
 - Type: reliability / egress attestation · Priority: high · Discovered: 2026-09-05 production interpret recovery

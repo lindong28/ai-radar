@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import struct_time
@@ -45,6 +47,19 @@ def _published_at(entry: Any) -> str:
     return utc_now()
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+AUTHOR_MAX_LENGTH = 200
+
+
+def _clean_author(value: object) -> str | None:
+    """feedparser does not sanitize ``author``; it is stored as-is and later
+    used as a dedup key and a WeChat account key. Reduce it to bounded plain
+    text before it gets anywhere near the database."""
+    text = _TAG_RE.sub(" ", html.unescape(str(value or "")))
+    text = " ".join(text.split())[:AUTHOR_MAX_LENGTH].strip()
+    return text or None
+
+
 def _raw_content(entry: Any) -> str:
     contents = entry.get("content") or []
     if contents:
@@ -80,7 +95,7 @@ def parse_feed(source: SourceConfig, body: bytes) -> list[FetchedItem]:
                 source_id=source.slug,
                 url=url,
                 title=title,
-                author=entry.get("author") or entry.get("dc_creator"),
+                author=_clean_author(entry.get("author") or entry.get("dc_creator")),
                 published_at=_published_at(entry),
                 fetched_at=fetched_at,
                 content_text=content_text,

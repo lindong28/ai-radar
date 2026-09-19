@@ -8,6 +8,7 @@ import time
 from html import unescape
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -252,7 +253,24 @@ class WeChatScraper:
             self.playwright = None
 
 
+WECHAT_ARTICLE_HOST = "mp.weixin.qq.com"
+SCRAPABLE_SCHEMES = {"http", "https"}
+
+
+def is_scrapable_wechat_url(url: str) -> bool:
+    """Only mp.weixin.qq.com article pages may be opened in the headless
+    browser. ``items.url`` comes from feeds we do not control; navigating an
+    arbitrary URL would execute its JavaScript on the collector host."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme.lower() in SCRAPABLE_SCHEMES and (parts.hostname or "").lower() == WECHAT_ARTICLE_HOST
+
+
 def scrape_article(url: str) -> ArticleResult:
+    if not is_scrapable_wechat_url(url):
+        return {"success": False, "url": url, "error": "refused: not an mp.weixin.qq.com article URL"}
     scraper = WeChatScraper()
     try:
         return scraper.fetch_article(url)

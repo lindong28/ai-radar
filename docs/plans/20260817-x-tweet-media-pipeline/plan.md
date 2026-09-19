@@ -54,11 +54,11 @@
 | 主机 | 角色 | `pbs.twimg.com` | 备注 |
 |---|---|---|---|
 | macmini | 抓取 / LLM / DB 同步源 | 经本地 tunnel 代理 200 | pipeline 由 `*/15 * * * * /Users/lindong/research/ai-radar/pipeline.sh` 从**主 checkout** 跑 |
-| 腾讯上海 `111.229.134.9` | serve 公网 | **000 / 超时**，进程无代理变量 | 国内 CDN（qpic.cn）可达 |
+| 腾讯上海 `<ORIGIN_IP>` | serve 公网 | **000 / 超时**，进程无代理变量 | 国内 CDN（qpic.cn）可达 |
 | `tencent-webserver-sg` | 目前**几乎空闲**（只有 sshd + 本地 DNS） | **200 / 41ms / 254KB，直连无需代理** | 出口 SG；2GB 内存、42GB 可用盘；ufw inactive |
 
 - 上海 → SG **内网 `10.3.0.5` 不可达**（不同 VPC：上海内网 `10.0.0.15`，SG `10.3.0.5`）；**公网可达，RTT ~92ms**，`:22` 可达。
-- **上海主机的出口 IP == 入口 IP == `111.229.134.9`**（实测：机内 `curl ipinfo.io/ip` 返回该值，而本地网卡是私网 `10.0.0.15`，即弹性 IP 做 1:1 NAT）。**防火墙规则按 `111.229.134.9` 写是对的**——若它在 NAT 网关后出口是别的地址，规则会静默挡掉一切，故此处已先验证。
+- **上海主机的出口 IP == 入口 IP == `<ORIGIN_IP>`**（实测：机内 `curl ipinfo.io/ip` 返回该值，而本地网卡是私网 `10.0.0.15`，即弹性 IP 做 1:1 NAT）。**防火墙规则按 `<ORIGIN_IP>` 写是对的**——若它在 NAT 网关后出口是别的地址，规则会静默挡掉一切，故此处已先验证。
 - 上海直连 twimg 的失效形态是**挂起 8 秒后 `000`**（实测），不是快速失败。这是 Phase 0「缺配置时不得回退直连」那条的依据。
 - 现有 `/img?url=` 同源代理（`src/airadar/web/routes/media.py`）已是成熟组件：host allowlist 兼作 SSRF 防护、失败返回 404 让前端 `onerror` 干净隐藏、响应带 `public, max-age=604800, immutable`。它用 `httpx.get`，**未关闭 `trust_env`**。
 - 图片经 EdgeOne 边缘缓存，上海→SG 这一跳**每张图只发生一次**。
@@ -85,12 +85,12 @@
 |---|---|
 | Port | `39147`（非默认口） |
 | Listen | `0.0.0.0` |
-| Allow | `111.229.134.9`（上海出口 IP，已验证 = 入口 IP）+ `127.0.0.1`（供本机自检/健康探测） |
+| Allow | `<ORIGIN_IP>`（上海出口 IP，已验证 = 入口 IP）+ `127.0.0.1`（供本机自检/健康探测） |
 | BasicAuth | 用户 `airadar`，密码在 SG 的 `/etc/tinyproxy/.credpw`（600 root:root），**已同步写入上海 `/home/ubuntu/ai-radar/.env` 的 `AI_RADAR_IMG_PROXY_URL`（600）** |
 | ConnectPort | `443`（杜绝任意端口跳板） |
 | Filter | `/etc/tinyproxy/filter`，`FilterDefaultDeny Yes`，`FilterType ere`；**只放行 `^pbs\.twimg\.com$`**（初版含 `^[a-z0-9-]+\.twimg\.com$` 单层通配，经评审指出过宽后收紧；实测 `video.twimg.com` 现被拒、`pbs.twimg.com` 仍 200。若将来 redirect 证明确需其它域，逐个加） |
 | Restart | `Restart=on-failure` / `RestartSec=3s`，经 systemd drop-in 配置。**readback 抓到一处假陈述**：本 plan 初版写了该策略但实际从未配过，包自带 unit 是 `Restart=no`；`kill -9` 后服务停在 `failed` 不自愈。补配后重测：杀 PID 979054 → 自动起为 979086、状态 `active`，**这次是实测通过的** |
-| ufw | `22/tcp` 对全网；`39147/tcp` 仅 `111.229.134.9`；default deny incoming。**按「先 allow 22、最后 enable」的顺序执行，已验证新建 SSH 连接正常** |
+| ufw | `22/tcp` 对全网；`39147/tcp` 仅 `<ORIGIN_IP>`；default deny incoming。**按「先 allow 22、最后 enable」的顺序执行，已验证新建 SSH 连接正常** |
 
 ### ⚠️ 未修复的已知漏洞（A2 必须记录）
 
@@ -98,13 +98,13 @@
 
 但 **`CVE-2026-31842` 未修复**（2026-04-07 发布，CNA 评 CVSS 8.7 HIGH，影响 tinyproxy ≤ 1.11.3，Ubuntu changelog 里没有它）：`is_chunked_transfer()` 用 `strcmp` 大小写敏感地比对 `Transfer-Encoding`，攻击者发 `Transfer-Encoding: Chunked` 可造成请求解析失同步 → 后端 worker 耗尽型 DoS，或绕过基于 body 的检查。
 
-**本部署的实际暴露面**（不是"不要紧"，是有具体边界）：触发它需要能连到代理端口，而该端口经 ufw + 云安全组只对 `111.229.134.9` 开放（已实测第三方被拒），且需 BasicAuth；我们自己只发无 body 的 GET，也不做 body 检查。**用户已于 2026-08-18 裁决：接受该残余风险**，理由是触发它需连到只对我们自己一台主机开放且需认证的端口，而其危害（后端连接挂住）的"后端"就是 twimg 本身；换代理软件的运维成本高于该残余风险。**跟进义务**：发行版出修复时升级；`docs/operations/services.md` 里要记这一笔，使接手者不必重新调查。
+**本部署的实际暴露面**（不是"不要紧"，是有具体边界）：触发它需要能连到代理端口，而该端口经 ufw + 云安全组只对 `<ORIGIN_IP>` 开放（已实测第三方被拒），且需 BasicAuth；我们自己只发无 body 的 GET，也不做 body 检查。**用户已于 2026-08-18 裁决：接受该残余风险**，理由是触发它需连到只对我们自己一台主机开放且需认证的端口，而其危害（后端连接挂住）的"后端"就是 twimg 本身；换代理软件的运维成本高于该残余风险。**跟进义务**：发行版出修复时升级；`docs/operations/services.md` 里要记这一笔，使接手者不必重新调查。
 
-**V-0 行为验收（在 SG 本机经 loopback 跑，绕过安全组）全部通过**：正确凭据取 twimg = `200`；错误凭据 = 断连；`example.com` = 被拒；`video.twimg.com` = `400`（twimg 自己返回，证明子域过滤没写过窄）。**第三方主机（macmini）连 `43.153.216.193:39147` 被拒**，证明 IP 锁生效。
+**V-0 行为验收（在 SG 本机经 loopback 跑，绕过安全组）全部通过**：正确凭据取 twimg = `200`；错误凭据 = 断连；`example.com` = 被拒；`video.twimg.com` = `400`（twimg 自己返回，证明子域过滤没写过窄）。**第三方主机（macmini）连 `<SG_PROXY_IP>:39147` 被拒**，证明 IP 锁生效。
 
 ### ⛔ 剩余阻塞：腾讯安全组（需控制台，agent 无权限）
 
-上海 → `43.153.216.193:39147` 在 **TCP 层不通**。定位到 SG 侧云安全组的证据链（每条都能区分真假，不是"看起来像"）：
+上海 → `<SG_PROXY_IP>:39147` 在 **TCP 层不通**。定位到 SG 侧云安全组的证据链（每条都能区分真假，不是"看起来像"）：
 
 | 检查 | 读数 | 排除了什么 |
 |---|---|---|
@@ -115,11 +115,11 @@
 
 四条合起来只剩一个位置：**SG 侧的云安全组入站规则**。本机与 SG 均无 `tccli` 或云凭据，agent 改不了。
 
-**需要在腾讯云控制台为 `tencent-webserver-sg` 的安全组添加一条入站规则**：来源 `111.229.134.9/32`，协议 TCP，端口 `39147`，允许。
+**需要在腾讯云控制台为 `tencent-webserver-sg` 的安全组添加一条入站规则**：来源 `<ORIGIN_IP>/32`，协议 TCP，端口 `39147`，允许。
 
 加完后从上海重跑 V-0.1 即可（`.env` 已就位）：
 ```bash
-ssh ubuntu@111.229.134.9 'set -a; . /home/ubuntu/ai-radar/.env; set +a; \
+ssh ubuntu@<ORIGIN_IP> 'set -a; . /home/ubuntu/ai-radar/.env; set +a; \
   curl -s -o /dev/null -w "%{http_code}\n" --max-time 20 -x "$AI_RADAR_IMG_PROXY_URL" \
   https://pbs.twimg.com/media/HP7L9v_WMAA9Rfz.jpg'
 ```
@@ -133,11 +133,11 @@ ssh ubuntu@111.229.134.9 'set -a; . /home/ubuntu/ai-radar/.env; set +a; \
 
 1. **绑定与端口**：非默认端口；不要 8080/3128 这类会被批量扫的。
 2. **双重防护**（用户决策）：
-   - 腾讯安全组 + ufw **只放行 `111.229.134.9`** 访问该端口；
+   - 腾讯安全组 + ufw **只放行 `<ORIGIN_IP>`** 访问该端口；
    - **且**代理本身开基本认证。
    - 两者各自覆盖对方的失效面：只锁 IP → 上海换 IP 时静默全变破图且排查方向不直观；只加认证 → 端口仍暴露在公网供爆破。
 3. **上游限制**：代理配置里限制可访问的目标域为 `pbs.twimg.com`（及必要的 twimg 子域）——即便代理凭据泄露，它也不能被当作通用跳板。这是把 SSRF/滥用面收窄到本任务实际需要的范围。
-4. **不得先 `ufw enable` 再加规则**：该机 ufw 当前 inactive 且**只有 22 端口对外**，顺序错了会把自己锁在门外。先 `allow 22`，再 `allow from 111.229.134.9 to any port <PORT>`，最后 enable。
+4. **不得先 `ufw enable` 再加规则**：该机 ufw 当前 inactive 且**只有 22 端口对外**，顺序错了会把自己锁在门外。先 `allow 22`，再 `allow from <ORIGIN_IP> to any port <PORT>`，最后 enable。
 5. **常驻**：systemd unit，开机自启，`Restart=on-failure`。
 
 **凭据交接**：代理的用户名/密码由用户自己写进上海那台的 gitignored `.env`（变量名 `AI_RADAR_IMG_PROXY_URL`，形如 `http://user:pass@<sg-host>:<port>`），**不要贴进对话**。

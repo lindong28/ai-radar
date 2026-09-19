@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from admin_auth import TEST_ADMIN_HEADERS as ADMIN_HEADERS
 from fastapi.testclient import TestClient
 
 from airadar.admin import cost_audit
@@ -15,8 +16,6 @@ from airadar.llm_usage import DerivedCost, LlmUsageRecord, migrate_usage_db, rec
 from airadar.pricing import PricingCatalog, PricingEntry, get_pricing
 from airadar.stage_common import insert_evaluation
 from airadar.web.app import create_app
-
-ADMIN_HEADERS = {"Cf-Access-Jwt-Assertion": "test"}
 
 
 def _catalog(tmp_path: Path):  # noqa: ANN202

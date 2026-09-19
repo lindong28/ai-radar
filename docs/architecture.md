@@ -504,8 +504,8 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 | `/daily` | `web/static/daily.html` | 日报（支持 `?date=` 或 `/daily/YYYY-MM-DD`） |
 | `/about` | `web/templates/about.html` | 关于页 Jinja2 模板；`/about.html` 308 重定向到此路由 |
 | `/curated` | `web/templates/index.html` | 首页别名——直接复用 `index_page()` 同一渲染（同样支持 `category`/`q`/`page`/`limit`），不是重定向；`/curated.html` 则 308 重定向到 `/` |
-| `/admin` | `web/templates/admin.html` | 内部运维 dashboard；需 Cloudflare Access 或显式本地 bypass |
-| `/admin/usage` | `web/templates/admin_usage.html` | 内部 LLM 成本最小视图：窗口总额三态、来源单价、未定价清单与 cache 采集覆盖；需 Cloudflare Access 或显式本地 bypass，不挂公开导航 |
+| `/admin` | `web/templates/admin.html` | 内部运维 dashboard；需 `AI_RADAR_ADMIN_TOKEN`（`X-Admin-Token` / Bearer，常量时间比较，未配置即 403）或显式本地 bypass；不进 OpenAPI schema |
+| `/admin/usage` | `web/templates/admin_usage.html` | 内部 LLM 成本最小视图：窗口总额三态、来源单价、未定价清单与 cache 采集覆盖；鉴权同 `/admin`，不挂公开导航 |
 | `/item.html` | `web/static/item.html` | 单条详情页（StaticFiles 隐式提供） |
 
 ### SSR preload contract

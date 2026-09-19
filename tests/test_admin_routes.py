@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from admin_auth import TEST_ADMIN_HEADERS, TEST_ADMIN_TOKEN
 from fastapi.testclient import TestClient
 
 from airadar.db import migrate
@@ -97,7 +98,7 @@ def _seed_usage_db(tmp_path: Path) -> Path:
     return db_path
 
 
-def test_admin_metrics_requires_cloudflare_access_header(tmp_path: Path) -> None:
+def test_admin_metrics_requires_admin_token(tmp_path: Path) -> None:
     app = create_app(_seed_admin_db(tmp_path))
     app.state.pipeline_log_dir = str(tmp_path / "logs")
     app.state.access_log_paths = []
@@ -105,13 +106,87 @@ def test_admin_metrics_requires_cloudflare_access_header(tmp_path: Path) -> None
 
     assert client.get("/api/v1/admin/metrics").status_code == 403
 
-    response = client.get("/api/v1/admin/metrics", headers={"Cf-Access-Jwt-Assertion": "test"})
+    response = client.get("/api/v1/admin/metrics", headers=TEST_ADMIN_HEADERS)
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
     assert payload["data"]["timezone"] == "Asia/Shanghai"
     assert payload["data"]["pipeline"]["stages"]["scoring"]["processed"] == 1
+
+
+def test_admin_token_accepted_as_bearer_authorization(tmp_path: Path) -> None:
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app)
+
+    response = client.get("/api/v1/admin/metrics", headers={"Authorization": f"Bearer {TEST_ADMIN_TOKEN}"})
+
+    assert response.status_code == 200
+
+
+def test_admin_rejects_wrong_token_and_legacy_cloudflare_header(tmp_path: Path) -> None:
+    # The pre-2026-09-19 guard let any non-empty Cf-Access-Jwt-Assertion in.
+    # Production never had a Cloudflare Access edge, so that header is just a
+    # string anyone can type; it must not unlock anything any more.
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app)
+
+    assert client.get("/api/v1/admin/metrics", headers={"Cf-Access-Jwt-Assertion": "anything"}).status_code == 403
+    assert client.get("/admin", headers={"Cf-Access-Jwt-Assertion": "anything"}).status_code == 403
+    assert client.get("/api/v1/admin/metrics", headers={"X-Admin-Token": TEST_ADMIN_TOKEN + "x"}).status_code == 403
+    assert client.get("/api/v1/admin/metrics", headers={"X-Admin-Token": ""}).status_code == 403
+    assert client.get("/api/v1/admin/metrics", headers={"Authorization": "Basic abc"}).status_code == 403
+
+
+@pytest.mark.parametrize("configured", ["", "   ", "short"])
+def test_admin_fails_closed_when_no_usable_token_is_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+) -> None:
+    # Unset / blank / too short all mean "not configured": nobody gets in,
+    # including a client that happens to send the same short string.
+    monkeypatch.setattr("airadar.web.routes.admin.read_value", lambda key: configured)
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app)
+
+    assert client.get("/api/v1/admin/metrics", headers=TEST_ADMIN_HEADERS).status_code == 403
+    assert client.get("/api/v1/admin/metrics", headers={"X-Admin-Token": configured}).status_code == 403
+
+
+def test_admin_responses_are_never_shared_cacheable(tmp_path: Path) -> None:
+    # A token-authenticated 200 must not be stored by any shared cache in
+    # front of the origin; the public-path middleware leaves these routes
+    # alone, so the handlers have to say it themselves.
+    app = create_app(_seed_admin_db(tmp_path))
+    app.state.pipeline_log_dir = str(tmp_path / "logs")
+    app.state.access_log_paths = []
+    client = TestClient(app)
+
+    for path in ("/admin", "/admin/usage", "/api/v1/admin/metrics", "/api/v1/admin/performance"):
+        response = client.get(path, headers=TEST_ADMIN_HEADERS)
+        assert response.status_code == 200, path
+        assert response.headers["Cache-Control"] == "private, no-store", path
+    head = client.head("/admin", headers=TEST_ADMIN_HEADERS)
+    assert head.headers["Cache-Control"] == "private, no-store"
+
+
+def test_admin_routes_are_hidden_from_the_openapi_schema_and_docs_are_off(tmp_path: Path) -> None:
+    app = create_app(_seed_admin_db(tmp_path))
+    client = TestClient(app)
+
+    assert client.get("/openapi.json").status_code == 404
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    admin_paths = [route.path for route in app.routes if "/admin" in getattr(route, "path", "")]
+    assert admin_paths, "admin routes must still be registered"
+    assert all(not getattr(route, "include_in_schema", True) for route in app.routes if "/admin" in route.path)
 
 
 def test_admin_metrics_blocks_loopback_without_dev_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,14 +212,16 @@ def test_admin_metrics_allows_loopback_with_dev_override(tmp_path: Path, monkeyp
     assert response.json()["success"] is True
 
 
-def test_admin_metrics_allows_cloudflare_header_from_loopback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_admin_metrics_allows_token_from_loopback_without_dev_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("AI_RADAR_ADMIN_ALLOW_LOCAL", raising=False)
     app = create_app(_seed_admin_db(tmp_path))
     app.state.pipeline_log_dir = str(tmp_path / "logs")
     app.state.access_log_paths = []
     client = TestClient(app, client=("127.0.0.1", 50000))
 
-    response = client.get("/api/v1/admin/metrics", headers={"Cf-Access-Jwt-Assertion": "test"})
+    response = client.get("/api/v1/admin/metrics", headers=TEST_ADMIN_HEADERS)
 
     assert response.status_code == 200
     assert response.json()["success"] is True
@@ -166,7 +243,7 @@ def test_admin_page_renders_four_dashboard_sections(tmp_path: Path) -> None:
     app.state.access_log_paths = []
     client = TestClient(app)
 
-    response = client.get("/admin", headers={"Cf-Access-Jwt-Assertion": "test"})
+    response = client.get("/admin", headers=TEST_ADMIN_HEADERS)
 
     assert response.status_code == 200
     assert "用户量" in response.text
@@ -191,20 +268,20 @@ def test_admin_performance_route_is_read_only_shared_status(
     client = TestClient(app)
 
     assert client.get("/api/v1/admin/performance").status_code == 403
-    response = client.get("/api/v1/admin/performance", headers={"Cf-Access-Jwt-Assertion": "test"})
+    response = client.get("/api/v1/admin/performance", headers=TEST_ADMIN_HEADERS)
 
     assert response.status_code == 200
     assert response.json()["data"] == expected
 
 
-def test_admin_head_probe_uses_same_cloudflare_access_guard(tmp_path: Path) -> None:
+def test_admin_head_probe_uses_same_admin_token_guard(tmp_path: Path) -> None:
     app = create_app(_seed_admin_db(tmp_path))
     app.state.pipeline_log_dir = str(tmp_path / "logs")
     app.state.access_log_paths = []
     client = TestClient(app)
 
     assert client.head("/admin").status_code == 403
-    assert client.head("/admin", headers={"Cf-Access-Jwt-Assertion": "test"}).status_code == 204
+    assert client.head("/admin", headers=TEST_ADMIN_HEADERS).status_code == 204
 
 
 def test_admin_usage_route_requires_admin_access_and_renders_usage(
@@ -234,8 +311,8 @@ def test_admin_usage_route_requires_admin_access_and_renders_usage(
     assert client.get("/admin/usage").status_code == 403
     assert client.get("/api/v1/admin/usage").status_code == 403
 
-    page = client.get("/admin/usage", headers={"Cf-Access-Jwt-Assertion": "test"})
-    api = client.get("/api/v1/admin/usage", headers={"Cf-Access-Jwt-Assertion": "test"})
+    page = client.get("/admin/usage", headers=TEST_ADMIN_HEADERS)
+    api = client.get("/api/v1/admin/usage", headers=TEST_ADMIN_HEADERS)
 
     assert page.status_code == 200
     assert "LLM 已记录用量" in page.text
@@ -339,7 +416,7 @@ def test_admin_usage_page_flags_unreviewed_fuzzy_matches(
     monkeypatch.setattr("airadar.admin.usage.get_pricing", lambda: pricing)
     client = TestClient(create_app(main_db_path))
 
-    page = client.get("/admin/usage", headers={"Cf-Access-Jwt-Assertion": "test"})
+    page = client.get("/admin/usage", headers=TEST_ADMIN_HEADERS)
 
     assert page.status_code == 200
     assert "deepseek/deepseek-v4-flash" in page.text

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from admin_auth import TEST_ADMIN_TOKEN
 from playwright.sync_api import Browser, Page, sync_playwright
 
 from airadar import db
@@ -322,6 +323,9 @@ def _serve_environment(session_db: Path) -> dict[str, str]:
         **os.environ,
         "AI_RADAR_DB": str(session_db.resolve()),
         "TZ": "Asia/Shanghai",
+        # The serve subprocess does not see the in-process autouse fixture
+        # that sets this for TestClient tests; pin the same value explicitly.
+        "AI_RADAR_ADMIN_TOKEN": TEST_ADMIN_TOKEN,
     }
 
 

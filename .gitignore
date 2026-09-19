@@ -1,8 +1,24 @@
-# Database
+# Database (live DB plus the sync-chain replicas: .snapshot / .shipping and
+# their -shm/-wal sidecars are multi-GB production copies that `data/*.db`
+# does not match)
 data/*.db
 data/*.db-shm
 data/*.db-wal
 data/*.db.bak*
+data/*.db.snapshot
+data/*.db.snapshot-shm
+data/*.db.snapshot-wal
+data/*.db.shipping
+data/*.db.shipping.*
+data/*.db.incoming
+# Runtime state written by the collector / pipeline / alerting
+data/raw-capture/
+data/recovery/
+data/collection-state/
+data/ark-breaker.json
+data/pricing-notification-state.json
+data/*.lock
+data/.sync.lock/
 data/alert-events.jsonl
 data/alert-events.lock
 data/alert-state.json
@@ -63,11 +79,23 @@ deploy/wechat2rss/data/
 # Human-eval / labeling tooling and served bundles (never committed).
 /.label-serve/
 
-# Execution-plan workspace (audit trail is promoted to docs/plans/ after completion)
-/plans/
+# Local scratch: session handoffs, ad-hoc notes, review output. None of it is
+# product material and some of it quotes private conversations.
+/handoffs/
+/tmp/
+/.local/
+/1.txt
+/screenshot-*.png
+
+# Collector runtime state (kernel flock anchor + activity generation)
+.collector.flock
+.collector.activity
 
 # Immutable offline evaluation assets; definitions and result interpretation are tracked.
 /runs/
 /experiments/
 /human-evals/
-/.local/
+
+# Execution-plan workspace (audit trail is promoted to docs/plans/ after completion).
+# tests/test_repository_hygiene.py requires this to be the last rule in the file.
+/plans/

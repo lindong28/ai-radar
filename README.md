@@ -47,7 +47,7 @@ DEEPSEEK_API_KEY=sk-xxx
 
 其他配置项都有可用的默认值，第一次本地试跑不用动（部署到公网前再按下文「站点身份与最小配置」改）。X 信源要 `X_BEARER_TOKEN`；微信抓取配置可以先不填，此时本 checkout 不会主动抓取微信新文，已有数据库里的历史微信文章仍可查看。待发布的来源角色与恢复要求见下文「信源」。
 
-下面两个变量 `.env.example` **未收录，需要时手动新增**：`AI_RADAR_PUBLIC_URL`（公网站点地址，只被 `performance-probe` 用作 public 视角的测量目标，未设置时探针只测 origin）、`AI_RADAR_ADMIN_ALLOW_LOCAL`（设为 `1`/`true`/`yes` 时允许来自 `127.0.0.1`、`::1`、`localhost` 的请求直接访问 `/admin`，本地开发用；不设置则 `/admin` 要求请求带 Cloudflare Access header）。出网 selector 不从 `.env` 读取代理地址；不要再配置 `AI_RADAR_PROXY_FILE`。
+`AI_RADAR_PUBLIC_URL` 在 `.env.example` **未收录，需要时手动新增**（公网站点地址，只被 `performance-probe` 用作 public 视角的测量目标，未设置时探针只测 origin）。`AI_RADAR_ADMIN_ALLOW_LOCAL`（设为 `1`/`true`/`yes` 时允许来自 `127.0.0.1`、`::1`、`localhost` 的请求直接访问 `/admin`，本地开发用；不设置则 `/admin` 要求请求带正确的 `AI_RADAR_ADMIN_TOKEN`，见「运维监控」）已作为注释项收录在 `.env.example`。出网 selector 不从 `.env` 读取代理地址；不要再配置 `AI_RADAR_PROXY_FILE`。
 
 ### 3. 初始化数据库
 
@@ -345,7 +345,7 @@ curl -sf "${public_url%/}/api/v1/healthz" && echo public_ok
 
 ### 运维监控
 
-公网 `/admin` 需要一层边缘访问控制（Cloudflare Access application + policy 之类）。**origin 只检查 Access header 存在、不验签**，所以这条边界必须由边缘提供；当前维护者实例的已知限制记在 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 同时配置 `FEISHU_GENERAL_ALERT_WEBHOOK`（page → `ALERT`）与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`（notice → `NOTIFICATION`）。具体步骤及无真实发送的配置 preflight 见同一份 runbook。
+`/admin`、`/admin/usage` 与 `/api/v1/admin/*` 由共享密钥保护：在 `.env` 设 `AI_RADAR_ADMIN_TOKEN`（至少 16 字符），请求带 `X-Admin-Token: <值>`（或 `Authorization: Bearer <值>`）。未配置时这些入口对所有远程请求返回 403；本地开发可另设 `AI_RADAR_ADMIN_ALLOW_LOCAL` 放行回环地址。`/docs`、`/redoc`、`/openapi.json` 已关闭。运维细节见 [`docs/operations/monitoring-alerting.md`](docs/operations/monitoring-alerting.md)。飞书告警需要从 `ai-agent-config` 安装 `im-notify`，并在项目 `.env` 或 `~/.claude/.env` 同时配置 `FEISHU_GENERAL_ALERT_WEBHOOK`（page → `ALERT`）与 `FEISHU_GENERAL_NOTIFICATION_WEBHOOK`（notice → `NOTIFICATION`）。具体步骤及无真实发送的配置 preflight 见同一份 runbook。
 
 ### 边缘缓存与前端资源版本串
 
