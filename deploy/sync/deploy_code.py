@@ -246,14 +246,19 @@ class CodeDeploy:
         # file smaller than expected" -- so start each materialize clean.
         if index.exists():
             index.unlink()
-        # Deletions before checkout so a file<->directory swap does not block it.
-        if base:
-            self._apply_deletions(base, sha, tree, env)
+        # read-tree (index only, no -u) BEFORE any live deletion: it is git's
+        # own validation of the target tree (it rejects `..`, `.git`, and other
+        # invalid paths). Deleting first would drop live files and then fail,
+        # leaving the tree half-updated for a commit that was never going to
+        # check out.
         # -c core.bare=false: the source is a bare repo; GIT_WORK_TREE lets
         # these commands operate on a worktree, and being explicit avoids any
         # "must be run in a work tree" refusal on hosts whose git is stricter.
         if not self.r.ok("git", "-c", "core.bare=false", "read-tree", sha, env=env):
             raise DeployError(f"could not read tree {sha} into the deploy index")
+        # Deletions before checkout so a file<->directory swap does not block it.
+        if base:
+            self._apply_deletions(base, sha, tree, env)
         if not self.r.ok("git", "-c", "core.bare=false", "checkout-index", "-f", "-a", env=env):
             raise DeployError(f"could not check out {sha} into {tree}")
 
@@ -266,36 +271,64 @@ class CodeDeploy:
         "data/sources.toml",
         "data/wechat-discovery.toml",
     })
+    # Directories whose CONTENTS are live state -- and whose root paths are
+    # equally live: a commit that tracks `data` itself (as a file, symlink, or
+    # gitlink) makes `checkout-index -f` replace the whole directory
+    # (typechange dir->file is `remove_subtree`), taking both slot databases
+    # with it. Measured against a real bare repo in the 2026-09-19 review.
+    _RUNTIME_ROOTS = frozenset({"data", "logs", ".venv"})
+    # Exact files: the secrets file and the release identity written by this
+    # deployer (tracking them would let a commit rewrite what "deployed" means).
+    _RUNTIME_FILES = frozenset({".env", ".deployed-sha", ".git-deploy-index"})
+    _SYMLINK_MODE = "120000"
+    _GITLINK_MODE = "160000"
 
     @classmethod
     def _is_runtime_owned(cls, path: str) -> bool:
         if path in cls._RUNTIME_ALLOW:
             return False
-        return (
-            path == ".env"
-            or path.startswith(".venv/")
-            or path.startswith("logs/")
-            or path.startswith("data/")
-        )
+        if path in cls._RUNTIME_FILES or path in cls._RUNTIME_ROOTS:
+            return True
+        return any(path.startswith(root + "/") for root in cls._RUNTIME_ROOTS)
 
-    def _tree_entries(self, sha: str, env: dict) -> dict[str, tuple[str, str]]:
+    @staticmethod
+    def _symlink_target_escapes(link_path: str, target: str) -> bool:
+        """True when a tracked symlink at `link_path` would resolve outside the
+        repository root. Absolute targets always escape; relative ones are
+        normalized against the link's own directory."""
+        if not target or target.startswith("/"):
+            return True
+        joined = os.path.normpath(os.path.join(os.path.dirname(link_path), target))
+        return joined == ".." or joined.startswith("../")
+
+    def _tree_entries(self, sha: str, env: dict) -> dict[str, tuple[str, str, str]]:
         res = self.r.run("git", "-c", "core.bare=false", "ls-tree", "-r",
                          "-z", sha, env=env)
         if res.returncode != 0:
             raise DeployError(
                 f"could not list tree {sha}: {(res.stderr or res.stdout)[-200:]}"
             )
-        entries: dict[str, tuple[str, str]] = {}
+        entries: dict[str, tuple[str, str, str]] = {}
         for record in res.stdout.split("\0"):
             if not record:
                 continue
             try:
                 header, path = record.split("\t", 1)
-                mode, object_type, _object_id = header.split(" ", 2)
+                mode, object_type, object_id = header.split(" ", 2)
             except ValueError as exc:
                 raise DeployError(f"could not parse tree entry for {sha}") from exc
-            entries[path] = (mode, object_type)
+            entries[path] = (mode, object_type, object_id)
         return entries
+
+    def _symlink_target(self, object_id: str, env: dict) -> str:
+        res = self.r.run("git", "-c", "core.bare=false", "cat-file", "blob",
+                         object_id, env=env)
+        if res.returncode != 0:
+            raise DeployError(
+                f"could not read symlink target {object_id}: "
+                f"{(res.stderr or res.stdout)[-200:]}"
+            )
+        return res.stdout
 
     def _guard_runtime_paths(
         self, sha: str, tree: Path, base: str | None, env: dict
@@ -310,10 +343,41 @@ class CodeDeploy:
                 "checkout would overwrite (live state git cannot restore): "
                 + ", ".join(offenders[:10])
             )
+        # Non-regular entries. A symlink or gitlink AT a runtime root is
+        # already an offender above; this is the belt for the braces -- and
+        # covers a symlink anywhere whose target would point outside the repo
+        # (checkout writes the link; anything that later walks through it
+        # walks out of the tree) or into a runtime-owned path. Gitlinks are
+        # refused everywhere: checkout-index cannot materialize a submodule,
+        # so such a tree can never be a complete release.
+        special = sorted(
+            path
+            for path, (mode, _type, _oid) in entries.items()
+            if mode in (self._SYMLINK_MODE, self._GITLINK_MODE)
+            and (path in self._RUNTIME_ROOTS or mode == self._GITLINK_MODE)
+        )
+        if special:
+            raise DeployError(
+                "refusing to deploy: symlink/gitlink entries on runtime roots "
+                "or submodule entries cannot be deployed: " + ", ".join(special[:10])
+            )
+        escaping = []
+        for path, (mode, _type, oid) in sorted(entries.items()):
+            if mode != self._SYMLINK_MODE:
+                continue
+            target = self._symlink_target(oid, env)
+            resolved = os.path.normpath(os.path.join(os.path.dirname(path), target))
+            if self._symlink_target_escapes(path, target) or self._is_runtime_owned(resolved):
+                escaping.append(f"{path} -> {target}")
+        if escaping:
+            raise DeployError(
+                "refusing to deploy: tracked symlinks must stay inside the repo "
+                "and off runtime-owned paths: " + ", ".join(escaping[:10])
+            )
         invalid_configs = sorted(
             path
             for path, entry in entries.items()
-            if path in self._RUNTIME_ALLOW and entry != ("100644", "blob")
+            if path in self._RUNTIME_ALLOW and entry[:2] != ("100644", "blob")
         )
         if invalid_configs:
             raise DeployError(

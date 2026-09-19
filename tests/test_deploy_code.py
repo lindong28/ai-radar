@@ -546,12 +546,347 @@ def test_materialize_refuses_commit_that_tracks_a_runtime_path(tmp_path) -> None
 def test_runtime_owned_classification() -> None:
     owned = dc.CodeDeploy._is_runtime_owned
     for p in (".env", ".venv/bin/python3", "logs/serve.log",
-              "data/radar-8000.db", "data/anything.db"):
+              "data/radar-8000.db", "data/anything.db",
+              # H1 (2026-09-19 review): the roots THEMSELVES. `data` tracked
+              # as a file/symlink makes checkout-index -f remove the whole
+              # live directory; the prefix test alone said False here.
+              "data", "logs", ".venv",
+              # release identity written by the deployer, not by commits
+              ".deployed-sha", ".git-deploy-index"):
         assert owned(p), f"{p} must be runtime-owned"
     for p in ("data/sources.toml", "data/aihot_retirements.json",
               "data/wechat-discovery.toml", ".env.example", ".python-version",
-              "src/airadar/db.py", "deploy/sync/deploy_code.py"):
+              "src/airadar/db.py", "deploy/sync/deploy_code.py",
+              "database", "datafile.txt", "logstash/x", ".venvrc"):
         assert not owned(p), f"{p} must NOT be runtime-owned"
+
+
+def test_symlink_target_escape_classification() -> None:
+    escapes = dc.CodeDeploy._symlink_target_escapes
+    assert escapes("data", "/etc")
+    assert escapes("x", "../outside")
+    assert escapes("a/b/link", "../../../etc/passwd")
+    assert escapes("link", "")
+    assert not escapes("a/b/link", "../../inside")
+    assert not escapes("link", "src/airadar")
+    assert not escapes("a/link", "../b")
+
+
+def _seed_live_runtime(home: Path) -> dict[Path, bytes]:
+    """Live state that a runtime-root takeover would destroy; returns the
+    expected bytes so a test can prove it survived untouched."""
+    files = {
+        home / "data" / "radar-8000.db": b"slot 8000 database",
+        home / "data" / "nginx" / "ai-radar-active-upstream.conf": b"upstream x {}",
+        home / ".venv" / "marker": b"venv",
+        home / "logs" / "serve.log": b"log",
+    }
+    for path, payload in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    return files
+
+
+def _src_repo(tmp_path: Path) -> tuple[Path, str]:
+    src = tmp_path / "src"
+    src.mkdir()
+    _git(src, "init", "-q")
+    _git(src, "config", "user.email", "t@example.com")
+    _git(src, "config", "user.name", "t")
+    (src / "keep.txt").write_text("v\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "c1")
+    return src, _git(src, "rev-parse", "HEAD")
+
+
+def _bare_and_deployer(tmp_path: Path, src: Path) -> tuple[Path, dc.CodeDeploy]:
+    bare = tmp_path / "bare.git"
+    _git(tmp_path, "clone", "--bare", "-q", str(src), str(bare))
+    home = tmp_path / "home"
+    (home / "data").mkdir(parents=True)
+    return home, dc.CodeDeploy(_make_cfg(tmp_path, bare, home))
+
+
+def _assert_untouched(files: dict[Path, bytes]) -> None:
+    for path, payload in files.items():
+        assert not path.is_symlink(), f"{path} was replaced by a symlink"
+        assert path.read_bytes() == payload, f"{path} was clobbered"
+
+
+@pytest.mark.parametrize(
+    ("label", "make_offender"),
+    [
+        ("regular file at data", lambda src: (src / "data").write_text("not a dir\n")),
+        ("symlink data -> /etc", lambda src: (src / "data").symlink_to("/etc")),
+        ("symlink .venv -> /tmp", lambda src: (src / ".venv").symlink_to("/tmp")),
+        ("symlink logs -> /private/tmp", lambda src: (src / "logs").symlink_to("/private/tmp")),
+    ],
+)
+def test_materialize_refuses_runtime_root_takeover(tmp_path, label, make_offender) -> None:
+    """H1 regression (the reviewer's bare-repo reproduction, 2026-09-19): a
+    commit tracking `data` / `.venv` / `logs` themselves made materialize
+    succeed and delete the live directories (two slot databases included).
+    Must be REFUSED before any live write."""
+    src, c1 = _src_repo(tmp_path)
+    make_offender(src)
+    _git(src, "add", "-f", "-A")
+    _git(src, "commit", "-qm", label)
+    c2 = _git(src, "rev-parse", "HEAD")
+    home, d = _bare_and_deployer(tmp_path, src)
+    live = _seed_live_runtime(home)
+    idx = home / ".git-deploy-index"
+
+    d.materialize(c1, home, idx, base=None)
+    _assert_untouched(live)
+    with pytest.raises(dc.DeployError, match="refusing to deploy"):
+        d.materialize(c2, home, idx, base=c1)
+    _assert_untouched(live)
+    assert (home / "data").is_dir() and not (home / "data").is_symlink()
+    assert (home / ".venv").is_dir() and not (home / ".venv").is_symlink()
+
+
+def test_materialize_refuses_gitlink_entry(tmp_path) -> None:
+    """A gitlink (mode 160000) at `data` -- checkout would turn the live
+    directory into an empty submodule mount. Refused."""
+    src, c1 = _src_repo(tmp_path)
+    _git(src, "update-index", "--add", "--cacheinfo", f"160000,{c1},data")
+    _git(src, "commit", "-qm", "gitlink at data")
+    c2 = _git(src, "rev-parse", "HEAD")
+    assert "160000 commit" in _git(src, "ls-tree", c2)
+    _git(src, "update-index", "--force-remove", "data")
+    _git(src, "update-index", "--add", "--cacheinfo", f"160000,{c1},vendor/lib")
+    _git(src, "commit", "-qm", "gitlink elsewhere")
+    c3 = _git(src, "rev-parse", "HEAD")
+    home, d = _bare_and_deployer(tmp_path, src)
+    live = _seed_live_runtime(home)
+    idx = home / ".git-deploy-index"
+
+    d.materialize(c1, home, idx, base=None)
+    with pytest.raises(dc.DeployError, match="runtime-owned"):
+        d.materialize(c2, home, idx, base=c1)
+    # Not on a runtime root, still refused: checkout-index cannot materialize
+    # a submodule, so the tree could never be a complete release.
+    with pytest.raises(dc.DeployError, match="submodule"):
+        d.materialize(c3, home, idx, base=c1)
+    assert not (home / "vendor").exists()
+    _assert_untouched(live)
+
+
+def test_materialize_refuses_symlink_escaping_repo_root(tmp_path) -> None:
+    """A tracked symlink anywhere whose target resolves outside the repo (or
+    onto a runtime-owned path) is refused, even though its own path is not
+    runtime-owned."""
+    src, c1 = _src_repo(tmp_path)
+    (src / "src").mkdir()
+    (src / "src" / "evil").symlink_to("../../etc")
+    _git(src, "add", "-f", "-A")
+    _git(src, "commit", "-qm", "escaping symlink")
+    c2 = _git(src, "rev-parse", "HEAD")
+    (src / "src" / "evil").unlink()
+    (src / "src" / "evil").symlink_to("../data/radar-8000.db")
+    _git(src, "add", "-f", "-A")
+    _git(src, "commit", "-qm", "symlink into runtime data")
+    c3 = _git(src, "rev-parse", "HEAD")
+    (src / "src" / "evil").unlink()
+    (src / "src" / "evil").symlink_to("../keep.txt")
+    _git(src, "add", "-f", "-A")
+    _git(src, "commit", "-qm", "harmless in-tree symlink")
+    c4 = _git(src, "rev-parse", "HEAD")
+    home, d = _bare_and_deployer(tmp_path, src)
+    live = _seed_live_runtime(home)
+    idx = home / ".git-deploy-index"
+
+    d.materialize(c1, home, idx, base=None)
+    with pytest.raises(dc.DeployError, match="must stay inside the repo"):
+        d.materialize(c2, home, idx, base=c1)
+    with pytest.raises(dc.DeployError, match="must stay inside the repo"):
+        d.materialize(c3, home, idx, base=c1)
+    assert not (home / "src" / "evil").exists()
+    _assert_untouched(live)
+    d.materialize(c4, home, idx, base=c1)  # in-tree symlink is fine
+    assert (home / "src" / "evil").is_symlink()
+    assert (home / "src" / "evil").read_text() == "v\n"
+
+
+def test_materialize_validates_tree_before_deleting_live_files(tmp_path) -> None:
+    """L4: a tree git itself rejects (here: an entry named `.git`) must fail
+    at read-tree BEFORE _apply_deletions removes anything from the live tree.
+    Before the reorder, src/a.py was already gone when read-tree refused."""
+    src, _ = _src_repo(tmp_path)
+    (src / "src").mkdir()
+    (src / "src" / "a.py").write_text("print(1)\n")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "c2")
+    c2 = _git(src, "rev-parse", "HEAD")
+    home, d = _bare_and_deployer(tmp_path, src)
+    bare = d.cfg.bare
+    idx = home / ".git-deploy-index"
+    d.materialize(c2, home, idx, base=None)
+    assert (home / "src" / "a.py").exists()
+
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=bare, input="x\n",
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    bad_tree = subprocess.run(
+        ["git", "mktree"], cwd=bare, input=f"100644 blob {blob}\t.git\n",
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    with pytest.raises(dc.DeployError, match="could not read tree"):
+        d.materialize(bad_tree, home, idx, base=c2)
+    assert (home / "src" / "a.py").read_text() == "print(1)\n", (
+        "live file deleted before the target tree was validated"
+    )
+    assert (home / "keep.txt").exists()
+
+
+def test_read_tree_precedes_deletions_in_live_update(deployer) -> None:
+    d, r = deployer
+    seed_deployed(d, "oldsha")
+    d.deploy("newsha")
+    read_tree = next(
+        i for i, c in enumerate(r.calls)
+        if c.startswith("git -c core.bare=false read-tree newsha") and f"[tree={d.cfg.home}]" in c
+    )
+    deletions = next(
+        i for i, c in enumerate(r.calls)
+        if "--diff-filter=D -z oldsha newsha" in c and f"[tree={d.cfg.home}]" in c
+    )
+    assert read_tree < deletions, "target tree must be validated before live deletions"
+
+
+# --- schema gate: table names from the database are interpolated into
+# `PRAGMA table_info(...)`; anything outside the identifier alphabet fails the
+# gate rather than being inspected (L3). ---
+
+_sg_spec = importlib.util.spec_from_file_location(
+    "schema_gate", REPO_ROOT / "deploy" / "sync" / "schema_gate.py"
+)
+sg = importlib.util.module_from_spec(_sg_spec)
+_sg_spec.loader.exec_module(sg)
+
+
+def test_schema_gate_refuses_non_identifier_table_names() -> None:
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE items(id INTEGER, title TEXT)")
+    assert sg._tables_and_columns(conn) == {"items": {"id", "title"}}
+    conn.execute('CREATE TABLE "weird name; --"(x)')
+    with pytest.raises(sg.SchemaGateError, match="unexpected name"):
+        sg._tables_and_columns(conn)
+
+
+# --- pre-receive: real git, real ssh signatures. The bare repo's hook must
+# refuse an unsigned tip, accept a tip signed by an allowed key, and refuse a
+# non-fast-forward / non-main ref. ---
+
+PRE_RECEIVE = REPO_ROOT / "deploy" / "server" / "pre-receive"
+
+
+def _isolated_git_env(tmp_path: Path) -> dict[str, str]:
+    """No user/system git config: the developer's own signing setup must not
+    leak into what the hook is being tested against."""
+    import os
+    empty = tmp_path / "empty-gitconfig"
+    empty.write_text("")
+    return {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_GLOBAL": str(empty),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_SSH_COMMAND": "false",  # nothing here may reach the network
+    }
+
+
+def _run(argv: list[str], cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+
+
+def test_pre_receive_requires_allowed_signature_and_fast_forward(tmp_path) -> None:
+    import shutil
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen not available")
+    env = _isolated_git_env(tmp_path)
+
+    key = tmp_path / "signing-key"
+    if _run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], tmp_path, env).returncode:
+        pytest.skip("ssh-keygen cannot generate an ed25519 key here")
+    keytype, keydata = (key.with_suffix(".pub")).read_text().split()[:2]
+    allowed = tmp_path / "allowed_signers"
+    allowed.write_text(f'deployer namespaces="git" {keytype} {keydata}\n')
+
+    bare = tmp_path / "bare.git"
+    assert _run(["git", "init", "-q", "--bare", str(bare)], tmp_path, env).returncode == 0
+    hook = bare / "hooks" / "pre-receive"
+    shutil.copyfile(PRE_RECEIVE, hook)
+    hook.chmod(0o755)
+    for k, v in (
+        ("ai-radar.allowedSignersFile", str(allowed)),
+        ("receive.denyNonFastForwards", "true"),
+        ("receive.denyDeletes", "true"),
+        ("receive.fsckObjects", "true"),
+    ):
+        assert _run(["git", "config", k, v], bare, env).returncode == 0
+
+    work = tmp_path / "work"
+    assert _run(["git", "init", "-q", "-b", "main", str(work)], tmp_path, env).returncode == 0
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+        _run(["git", "config", k, v], work, env)
+    (work / "a.txt").write_text("1\n")
+    _run(["git", "add", "a.txt"], work, env)
+    assert _run(["git", "commit", "-qm", "unsigned"], work, env).returncode == 0
+
+    # 1. unsigned tip -> refused
+    push = _run(["git", "push", str(bare), "main"], work, env)
+    assert push.returncode != 0, push.stderr
+    assert "not signed by a key" in push.stderr, push.stderr
+    assert _run(["git", "rev-parse", "--verify", "-q", "refs/heads/main"], bare, env).returncode != 0
+
+    # 2. signed by the allowed key -> accepted
+    sign = ["-c", "gpg.format=ssh", "-c", f"user.signingkey={key}"]
+    signed = _run(["git", *sign, "commit", "-q", "-S", "--amend", "--no-edit"], work, env)
+    if signed.returncode != 0 and "ssh-keygen" in signed.stderr:
+        pytest.skip(f"ssh signing unsupported here: {signed.stderr.strip()[-200:]}")
+    assert signed.returncode == 0, signed.stderr
+    push = _run(["git", "push", str(bare), "main"], work, env)
+    assert push.returncode == 0, push.stderr
+    tip = _run(["git", "rev-parse", "main"], work, env).stdout.strip()
+    assert _run(["git", "rev-parse", "refs/heads/main"], bare, env).stdout.strip() == tip
+
+    # 3. signed but not a fast-forward -> refused by the hook (it runs before
+    #    receive.denyNonFastForwards, so the message is the hook's)
+    _run(["git", "reset", "-q", "--hard", "HEAD~0"], work, env)
+    _run(["git", "checkout", "-q", "--orphan", "rewrite"], work, env)
+    (work / "a.txt").write_text("rewritten\n")
+    _run(["git", "add", "a.txt"], work, env)
+    assert _run(["git", *sign, "commit", "-q", "-S", "-m", "rewrite"], work, env).returncode == 0
+    push = _run(["git", "push", "--force", str(bare), "rewrite:main"], work, env)
+    assert push.returncode != 0
+    assert "not a fast-forward" in push.stderr, push.stderr
+    assert _run(["git", "rev-parse", "refs/heads/main"], bare, env).stdout.strip() == tip
+
+    # 4. a signed tip on any other ref -> refused; main only
+    push = _run(["git", "push", str(bare), "rewrite:refs/heads/feature"], work, env)
+    assert push.returncode != 0
+    assert "refs/heads/main only" in push.stderr, push.stderr
+
+    # 5. deleting main -> refused
+    push = _run(["git", "push", str(bare), ":refs/heads/main"], work, env)
+    assert push.returncode != 0
+    assert "deleting refs/heads/main" in push.stderr, push.stderr
+    assert _run(["git", "rev-parse", "refs/heads/main"], bare, env).stdout.strip() == tip
+
+    # 6. allowed_signers missing -> fail closed even for a signed fast-forward
+    _run(["git", "checkout", "-q", "main"], work, env)
+    (work / "b.txt").write_text("2\n")
+    _run(["git", "add", "b.txt"], work, env)
+    assert _run(["git", *sign, "commit", "-q", "-S", "-m", "second"], work, env).returncode == 0
+    allowed.rename(allowed.with_suffix(".moved"))
+    push = _run(["git", "push", str(bare), "main"], work, env)
+    assert push.returncode != 0
+    assert "allowed signers file" in push.stderr, push.stderr
+    allowed.with_suffix(".moved").rename(allowed)
+    assert _run(["git", "push", str(bare), "main"], work, env).returncode == 0
 
 
 def test_materialize_accepts_versioned_data_configs(tmp_path) -> None:

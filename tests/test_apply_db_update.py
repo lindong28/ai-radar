@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -586,6 +587,46 @@ def test_rejected_snapshot_is_quarantined_and_release_untouched(deploy) -> None:
     assert Path(evidence["base"]).exists()
     assert journal_state(d) == "quarantined"
     assert "8000" in d.cfg.active_conf.read_text()
+
+
+def test_quarantine_retention_keeps_only_newest_n(deploy) -> None:
+    """M3 (2026-09-19 review): quarantine grew without bound -- each rejected
+    snapshot parks a ~GB base plus candidate and nothing ever pruned. After a
+    quarantine only the newest `quarantine_keep` directories survive, the one
+    just written always among them."""
+    d, _ = deploy
+    d.cfg.quarantine_keep = 2
+    old_dirs: list[Path] = []
+    for index, name in enumerate(("a" * 64, "b" * 64, "c" * 64)):
+        path = d.cfg.quarantine_dir / name
+        path.mkdir(parents=True)
+        (path / "base.deadbeef.db").write_bytes(b"old evidence")
+        stamp = 1_000_000 + index  # a < b < c by mtime; all older than "now"
+        os.utime(path, (stamp, stamp))
+        old_dirs.append(path)
+
+    sqlite3.connect(d.cfg.incoming).execute("CREATE TABLE junk(x)")
+    with pytest.raises(adu.ApplyError, match="manifest"):
+        d.apply()
+
+    _failure, failure_path = failure_record(d)
+    current = failure_path.parent
+    assert current.exists(), "the quarantine just written must survive"
+    assert failure_path.exists()
+    assert not old_dirs[0].exists(), "oldest quarantine must be pruned"
+    assert not old_dirs[1].exists(), "second-oldest must be pruned with keep=2"
+    assert old_dirs[2].exists(), "newest previous quarantine stays (keep=2 incl. current)"
+    assert journal_state(d) == "quarantined"
+
+
+def test_quarantine_retention_is_read_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_RADAR_QUARANTINE_KEEP", raising=False)
+    assert adu.Config.from_env().quarantine_keep == adu.QUARANTINE_KEEP == 2
+    monkeypatch.setenv("AI_RADAR_QUARANTINE_KEEP", "5")
+    assert adu.Config.from_env().quarantine_keep == 5
+    monkeypatch.setenv("AI_RADAR_QUARANTINE_KEEP", "0")
+    with pytest.raises(ValueError, match="AI_RADAR_QUARANTINE_KEEP"):
+        adu.Config.from_env()
 
 
 def test_prepared_recovery_is_by_hash_not_position(deploy) -> None:

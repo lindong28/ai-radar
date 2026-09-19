@@ -117,6 +117,11 @@ from build_fts_manifest import (  # noqa: E402
 )
 
 FULL_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+# Quarantine directories kept after each new quarantine (the new one included).
+# Each holds a ~GB base plus candidate; without a cap a few consecutive
+# rejections fill the disk, and a full disk fails the next apply AND its
+# journal write. Overridable via AI_RADAR_QUARANTINE_KEEP in server.env.
+QUARANTINE_KEEP = 2
 VERIFIER_ID_RE = re.compile(r"fts-apply-v[1-9][0-9]*")
 # Retry checkpoints intentionally use a semantic version instead of an
 # inferred code hash: the verifier closure includes this module, airadar.db,
@@ -215,6 +220,7 @@ class Config:
     http_probe_timeout_s: int = 30
     http_probe_interval_s: float = 1.0
     nginx_rollback_drain_s: float = 90.0
+    quarantine_keep: int = QUARANTINE_KEEP
 
     @classmethod
     def from_env(cls) -> Config:
@@ -283,6 +289,7 @@ class Config:
             nginx_rollback_drain_s=_env_nonnegative_float(
                 "AI_RADAR_NGINX_ROLLBACK_DRAIN_S", 90.0
             ),
+            quarantine_keep=_env_positive_int("AI_RADAR_QUARANTINE_KEEP", QUARANTINE_KEEP),
         )
 
     def slot_db(self, port: str) -> Path:
@@ -1791,6 +1798,37 @@ class Deploy:
             failure_path=str(paths["failure"]),
             failure_sha256=failure_sha256,
         )
+        # After the journal is durable: retention never decides the outcome
+        # of the quarantine, it only bounds what earlier ones cost on disk.
+        self._prune_quarantine(keep_dir=paths["failure"].parent)
+
+    def _prune_quarantine(self, *, keep_dir: Path) -> list[Path]:
+        """Keep the newest `quarantine_keep` quarantine directories (the one
+        just written always among them); rmtree the rest. Returns removed."""
+        keep = self.cfg.quarantine_keep
+        try:
+            candidates = [
+                path for path in self.cfg.quarantine_dir.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            ]
+        except OSError as exc:
+            log(f"quarantine retention: cannot list {self.cfg.quarantine_dir}: {exc}")
+            return []
+        others = [path for path in candidates if path != keep_dir]
+        # Newest first by directory mtime (a new failure record updates it);
+        # name breaks ties so the order is deterministic.
+        others.sort(key=lambda path: (path.stat().st_mtime, path.name), reverse=True)
+        survivors = others[: max(keep - 1, 0)]
+        removed: list[Path] = []
+        for path in others[len(survivors):]:
+            try:
+                shutil.rmtree(path)
+            except OSError as exc:
+                log(f"quarantine retention: could not remove {path}: {exc}")
+                continue
+            removed.append(path)
+            log(f"quarantine retention: removed {path} (keeping {keep} newest)")
+        return removed
 
     def _validate_quarantined_entry(self, entry: Mapping[str, Any]) -> None:
         if entry.get("journal_schema_version") != 2:

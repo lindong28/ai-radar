@@ -360,6 +360,29 @@ alert 的双通道配置、无发送 preflight，以及「`./run.sh admin alert-
 
 pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再手动 `launchctl bootstrap` launchd plist（暂未做成脚本——cron 是当前生产选择）。
 
+## 代码部署的验签
+
+服务器 bare repo（`~/ai-radar.git`）的 `hooks/pre-receive`（仓内 [deploy/server/pre-receive](../../deploy/server/pre-receive)，由 `deploy/server/install-server.sh` 安装并设 `receive.denyNonFastForwards` / `receive.denyDeletes` / `receive.fsckObjects`）对每次 push 做三件事，任一不满足整次 push 被拒、`post-receive` 不会跑：只接受 `refs/heads/main`；不接受删除与非快进；tip commit 必须能用 `git verify-commit` 对上 `/etc/ai-radar/allowed_signers` 里的 SSH 签名 key。签名 key 与部署用的 SSH key **必须是两把**——它防的是部署 key 泄露后一次 push 就在服务器以 `ubuntu` 跑代码，Mac 整机被控不在它的射程内。
+
+- **服务器侧 `allowed_signers`**（root:root 0644，运维手工放置，installer 只检查存在并提示；文件缺失时所有 push 被拒）。每行一把 key：
+
+  ```
+  <principal> namespaces="git" ssh-ed25519 AAAA...
+  ```
+
+  `<principal>` 任意标识（如邮箱），只用于日志；`namespaces="git"` 不能省——git 用 `git` namespace 签名，缺了就验不过。
+- **Mac 侧只对本仓生效的三行**（先 `ssh-keygen -t ed25519 -f ~/.ssh/ai-radar-commit-signing` 生成专用 key）：
+
+  ```bash
+  git config gpg.format ssh
+  git config user.signingkey ~/.ssh/ai-radar-commit-signing.pub
+  git config commit.gpgsign true
+  ```
+
+  按 [ADR-042](../adr/042-isolate-production-deploy-commit-from-local-main.md) 生产 commit 是在 `tencent/main` 上复放出来的，复放（cherry-pick / commit）时同样受 `commit.gpgsign` 约束，所以不必单独处理。
+- **验证**：`git log --show-signature -1` 本地应打印 `Good "git" signature for <principal> with ED25519 key ...`（需要本地也有一份同格式的 allowed_signers 并 `git config gpg.ssh.allowedSignersFile <路径>`，否则显示 `No principal matched`——那只是本地没配验签文件，不代表服务器会拒）。
+- **被拒时的形态**：push 输出里出现 `remote: pre-receive: REFUSED: ...` 后跟 `! [remote rejected] main -> main (pre-receive hook declined)`，原因逐条是 `is not signed by a key in /etc/ai-radar/allowed_signers`（未签名或 key 不在名单）、`is not a fast-forward of`（本地 rebase 过）、`accepts pushes to refs/heads/main only`、`deleting refs/heads/main is not allowed`、`allowed signers file ... is missing or unreadable`（服务器侧文件没放）。push 被拒时服务器什么都没变，修好后重推即可。
+
 ## 相关参考
 
 - [README.md §服务](../../README.md#服务) — 用户视角的脚本入口表

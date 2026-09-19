@@ -27,6 +27,10 @@ AI_RADAR_HOME="${AI_RADAR_HOME:-$REPO_ROOT}"
 AI_RADAR_LOG_DIR="${AI_RADAR_LOG_DIR:-$AI_RADAR_HOME/logs}"
 AI_RADAR_LOCAL_BIN="${AI_RADAR_LOCAL_BIN:-$HOME/.local/bin}"
 AI_RADAR_UV="${AI_RADAR_UV:-$(command -v uv || echo "$HOME/.local/bin/uv")}"
+# The bare repo the Mac pushes to; its pre-receive hook is the only point that
+# can refuse a push, so it is installed and configured here, idempotently.
+AI_RADAR_BARE="${AI_RADAR_BARE:-$HOME/ai-radar.git}"
+ALLOWED_SIGNERS="$CONFIG_DIR/allowed_signers"
 
 log() { printf '%s\n' "$*"; }
 fail() { printf '✗ %s\n' "$*" >&2; exit 1; }
@@ -145,12 +149,41 @@ ensure_active_upstream() {
   chmod o+x "$AI_RADAR_HOME" "$AI_RADAR_HOME/data" "$(dirname "$real")" 2>/dev/null || true
 }
 
+install_receive_hooks() {
+  # Signature verification on push. The allowed-signers file is operator
+  # data, not repo data: root-owned in /etc/ai-radar, one line per trusted
+  # signing key (`<principal> namespaces="git" <keytype> <key>`). Only its
+  # presence is checked here; a missing file makes pre-receive refuse every
+  # push (fail closed), which is the intended state until the operator
+  # provisions it.
+  if [[ ! -d "$AI_RADAR_BARE" ]] || ! git -C "$AI_RADAR_BARE" rev-parse --is-bare-repository >/dev/null 2>&1; then
+    log "WARNING: bare repo '$AI_RADAR_BARE' not found (set AI_RADAR_BARE); pre-receive NOT installed"
+    return 0
+  fi
+  local hook="$AI_RADAR_BARE/hooks/pre-receive"
+  install -m 0755 "$REPO_ROOT/deploy/server/pre-receive" "$hook.tmp.$$"
+  mv -f "$hook.tmp.$$" "$hook"
+  git -C "$AI_RADAR_BARE" config ai-radar.allowedSignersFile "$ALLOWED_SIGNERS"
+  git -C "$AI_RADAR_BARE" config receive.denyNonFastForwards true
+  git -C "$AI_RADAR_BARE" config receive.denyDeletes true
+  git -C "$AI_RADAR_BARE" config receive.fsckObjects true
+  log "installed $hook (signed, fast-forward-only pushes to main)"
+  if [[ -r "$ALLOWED_SIGNERS" ]]; then
+    log "allowed signers: $ALLOWED_SIGNERS ($(grep -c 'namespaces="git"' "$ALLOWED_SIGNERS" || true) key line(s))"
+  else
+    log "WARNING: $ALLOWED_SIGNERS is missing -- every push will be refused until it exists."
+    log "  create it as root (0644 root:root), one line per signing key:"
+    log "    <principal> namespaces=\"git\" ssh-ed25519 AAAA..."
+  fi
+}
+
 main() {
   require_linux_systemd
   preflight
   ensure_config
   install_units
   ensure_active_upstream
+  install_receive_hooks
   log "done. next: fill $CONFIG_DIR/server.env, then start a serve slot:"
   log "  sudo systemctl enable --now ai-radar-serve@${SERVE_PORTS[0]}"
 }

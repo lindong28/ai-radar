@@ -35,6 +35,7 @@ cosmetic difference.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 import tempfile
@@ -42,12 +43,24 @@ from pathlib import Path
 
 from airadar import db as adb
 
+# PRAGMA table_info takes a bare identifier, so the table name read from the
+# database is interpolated into SQL. Every table this code creates matches
+# this; anything else is not a schema this code knows, and the gate refuses
+# rather than inspect it.
+_TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class SchemaGateError(RuntimeError):
+    pass
+
 
 def _tables_and_columns(conn: sqlite3.Connection) -> dict[str, set[str]]:
     out: dict[str, set[str]] = {}
     for (name,) in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
     ):
+        if not _TABLE_NAME_RE.match(name):
+            raise SchemaGateError(f"refusing to inspect table with unexpected name {name!r}")
         cols = {row[1] for row in conn.execute(f"PRAGMA table_info({name})")}
         out[name] = cols
     return out
@@ -106,7 +119,11 @@ def main() -> int:
     if len(sys.argv) != 2:
         print("usage: schema_gate.py <active-db-path>", file=sys.stderr)
         return 2
-    problems = check(Path(sys.argv[1]))
+    try:
+        problems = check(Path(sys.argv[1]))
+    except SchemaGateError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     if problems:
         print("; ".join(problems), file=sys.stderr)
         return 1

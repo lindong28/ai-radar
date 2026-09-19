@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# pre-receive: the only hook that can REFUSE a push (post-receive cannot fail
+# it, githooks(5)). This bare repo serves one branch, and a push to it runs
+# code on the server (candidate `uv sync`, `import airadar.cli`, the schema
+# gate, then the timers) -- so every accepted tip must be signed by a key the
+# operator listed, not merely delivered by whoever holds the deploy SSH key.
+#
+# Per ref update on stdin (`<old> <new> <ref>`):
+#   refs/heads/main  must be (1) not a deletion, (2) a fast-forward of the
+#                    current tip (a first push, old = all zeros, is let
+#                    through), and (3) `git verify-commit <new>` must succeed
+#                    against the SSH allowed-signers file. The tip's signature
+#                    covers the whole tree, so verifying <new> alone is enough.
+#   anything else    refused.
+#
+# allowed_signers path: the bare repo's own config `ai-radar.allowedSignersFile`
+# when set (install-server.sh sets it; tests point it at a temp file), else
+# /etc/ai-radar/allowed_signers. Never taken from the environment -- the
+# pushing client would otherwise be choosing which keys are trusted.
+set -euo pipefail
+
+ZERO=0000000000000000000000000000000000000000
+DEFAULT_ALLOWED_SIGNERS=/etc/ai-radar/allowed_signers
+
+allowed_signers="$(git config --get ai-radar.allowedSignersFile || true)"
+allowed_signers="${allowed_signers:-$DEFAULT_ALLOWED_SIGNERS}"
+
+refuse() {
+  echo "pre-receive: REFUSED: $*" >&2
+  exit 1
+}
+
+while read -r old new ref; do
+  [[ "$ref" == "refs/heads/main" ]] \
+    || refuse "$ref: this repository accepts pushes to refs/heads/main only"
+  [[ "$new" != "$ZERO" ]] \
+    || refuse "deleting refs/heads/main is not allowed"
+  if [[ "$old" != "$ZERO" ]] && ! git merge-base --is-ancestor "$old" "$new"; then
+    refuse "refs/heads/main: ${new:0:12} is not a fast-forward of ${old:0:12}"
+  fi
+  [[ -r "$allowed_signers" ]] \
+    || refuse "allowed signers file $allowed_signers is missing or unreadable; no commit can be verified"
+  if ! git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$allowed_signers" \
+       verify-commit "$new" >/dev/null 2>&1; then
+    refuse "refs/heads/main: commit ${new:0:12} is not signed by a key in $allowed_signers"
+  fi
+done
