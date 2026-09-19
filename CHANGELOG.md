@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-20（准入专业流短分享实验）
+
+- 增加两个显式离线prompt候选，测试专业AI信息流短分享与商业主题边界；不改变gold、生产prompt或采集逻辑。
+- 已完成269题开发与冻结后新300题对照。C10 precision 87.59%、recall 94.07%，尚未达到双>90%；失败均补齐，未用成功子集替代完整分母。复用方式、资产与剩余预算见[对象状态](docs/evaluations/news-admission/status.md)及[运行入口](evals/news-admission/aihot-observed-membership/README.md)。
+
 ## 2026-09-19（准入引用上下文实验）
 
 - 离线 prefilter 评测新增显式 `--quote-context`：只接入冻结 Radar 归档中、题目观测时点之前的单跳引用原文；缺失或冲突不补造、不删题，默认关闭，不修改 gold 或生产。

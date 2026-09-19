@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260920-91bd](./20260920-91bd-test-prefilter-professional-sharing.md) | 离线测试专业流短分享及投资商业主次边界；累计8000次调用，不改gold | accepted for experiment | 2026-09-20 |
 | [20260919-7ac2](./20260919-7ac2-test-prefilter-archived-quote-context.md) | 离线测试已有引用帖原文上下文；保持 gold 和生产，沿用双90累计6000次预算 | accepted for experiment | 2026-09-19 |
 | [20260919-9365](./20260919-9365-publish-admission-time-label-proposal.md) | 仅出版新闻准入时间标注修订草案；新 benchmark 与 gold 变更待审核 | accepted for proposal publication only | 2026-09-19 |
 | [20260919-b7e2](./20260919-b7e2-second-security-round-deploy-chain-credentials-csp.md) | 第二轮安全审查：部署链验签与根路径保护、凭据面 allowlist、读时 URL 门、CSP 迁移 | accepted；部分 supersede ADR-003（只加载声明键）；CSP 强制待一周 Report-Only 后切换 | 2026-09-19 |
