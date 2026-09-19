@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#10151c">
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');var s=null;try{s=localStorage.getItem("ai-radar:theme");}catch(e){}var t=(s==="dark"||s==="light"||s==="system")?s:"system";var d=t==="dark"||(t==="system"&&(typeof matchMedia!=="function"||matchMedia("(prefers-color-scheme: dark)").matches));r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;if(m)m.setAttribute("content",d?"#10151c":"#f4f5f6");})();</script>
     <title>AI Radar · 微信文章解读</title>
-    <link rel="modulepreload" href="/app.js?v=20260817-aihot-8384e5c7">
+    <link rel="modulepreload" href="/app.js?v=20260817-aihot-33b1dc91">
     <style data-inline-stylesheet="wechat">
 {% include "_wechat_inline_style.css" %}
     </style>
   </head>
-  <body>
+  <body data-init="initWechat">
     <aside id="app-sidebar" class="sidebar" aria-label="主导航">
       <button type="button" class="sidebar-close" aria-label="关闭导航">×</button>
       <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
@@ -79,7 +79,7 @@
                   <a class="source-link" href="{{ item.url or '#' }}" target="_blank" rel="noopener noreferrer">
                     <span class="source-icon">
                       {% if item.avatar_url %}
-                        <img class="source-avatar" src="{{ item.avatar_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">
+                        <img class="source-avatar" src="{{ item.avatar_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
                       {% endif %}
                       <span class="source-initial">{{ (item.author or "?")[:1] }}</span>
                     </span>
@@ -112,9 +112,6 @@
       {{ preload | tojson | safe }}
     </script>
 {% include "_mobile_tabbar.html" %}
-    <script type="module" async>
-      import { initWechat } from "/app.js?v=20260817-aihot-8384e5c7";
-      initWechat();
-    </script>
+    <script type="module" src="/app.js?v=20260817-aihot-33b1dc91" async></script>
   </body>
 </html>

@@ -22,7 +22,7 @@
                 <a class="source-link" href="{{ item.source_homepage_url }}" target="_blank" rel="noopener noreferrer">
                   <span class="source-icon">
                     {% if item.source_icon_url %}
-                      <img class="source-avatar" src="{{ item.source_icon_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">
+                      <img class="source-avatar" src="{{ item.source_icon_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
                     {% endif %}
                     <span class="source-initial">{{ item.source_initial }}</span>
                   </span>
@@ -45,7 +45,7 @@
               <div class="x-media x-media-count-{{ item.x_media | length }}">
                 {% for asset in item.x_media %}
                   <a class="x-media-link" href="{{ asset.url }}" target="_blank" rel="noopener noreferrer" aria-label="查看大图：{{ item.title or '查看媒体' }}">
-                    <img class="x-media-img" src="{{ asset.url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.x-media-link').hidden=true">
+                    <img class="x-media-img" src="{{ asset.url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
                   </a>
                 {% endfor %}
               </div>

@@ -8,7 +8,7 @@
     <title>AI Radar · 关于</title>
     <link rel="stylesheet" href="/style.css?v=20260817-aihot-03fc77b5">
   </head>
-  <body>
+  <body data-init="initAbout">
     <aside id="app-sidebar" class="sidebar" aria-label="主导航">
       <button type="button" class="sidebar-close" aria-label="关闭导航">×</button>
       <a class="sidebar-brand" aria-label="AI Radar" href="/"><span class="brand-logo brand-logo-sidebar" aria-label="AI RADAR"><span class="brand-logo-ai">AI</span><span class="brand-logo-orbit" aria-hidden="true"><span class="brand-logo-orbit-core"></span></span><span class="brand-logo-hot">RADAR</span></span></a>
@@ -125,9 +125,6 @@
       </div>
     </main>
 {% include "_mobile_tabbar.html" %}
-    <script type="module">
-      import { initAbout } from "/app.js?v=20260817-aihot-8384e5c7";
-      initAbout();
-    </script>
+    <script type="module" src="/app.js?v=20260817-aihot-33b1dc91"></script>
   </body>
 </html>

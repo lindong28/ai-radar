@@ -50,9 +50,12 @@ def html_files() -> list[Path]:
 
 
 # A reference is something that makes the browser *fetch* the asset. Two forms do that
-# here, and both must be covered -- app.js is reached almost entirely through the second:
+# here, and both must be covered. Every page now loads app.js through the first
+# (`<script type="module" src="/app.js?v=...">`, since CSP forbids the inline import
+# block); the second is kept so an inline `import` cannot slip back in unversioned:
 #
 #   <link rel="modulepreload" href="/app.js?v=...">     attribute
+#   <script type="module" src="/app.js?v=...">          attribute
 #   import { initAbout } from "/app.js?v=...";          ES module specifier
 #
 # Prose that merely names the file (a Jinja comment saying the SSR markup must match

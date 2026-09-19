@@ -42,28 +42,63 @@ def _read(name: str) -> str:
 
 
 def _app_import_names(html: str) -> set[str]:
-    matches = re.finditer(
-        r'import\s*\{(?P<names>[^}]+)\}\s*from\s*["\']/app\.js(?:\?[^"\']*)?["\']',
-        html,
-    )
-    imported_names = {
-        name.strip()
-        for match in matches
-        for name in match.group("names").split(",")
-    }
-    assert imported_names, "app.js module import not found"
+    """The initializers a page asks app.js to run.
+
+    Pages used to name them in an inline `import { ... } from "/app.js"` block;
+    under a CSP without script-src 'unsafe-inline' that block cannot execute,
+    so they are now declared as `<body data-init="initA,initB">` and dispatched
+    by app.js's bootstrapPage(). The page must also actually load the module
+    through `<script type="module" src="/app.js?v=...">`, or the attribute is
+    inert.
+    """
+    body = re.search(r"<body\b[^>]*\bdata-init\s*=\s*[\"'](?P<names>[^\"']+)[\"']", html)
+    assert body, "<body data-init> not found"
+    assert re.search(r'<script\s+type="module"\s+src="/app\.js\?v=[^"]+"', html), "app.js module <script src> not found"
+    imported_names = {name.strip() for name in body.group("names").split(",") if name.strip()}
+    assert imported_names, "data-init names no initializer"
     return imported_names
 
 
-def test_app_import_names_collects_multiple_module_imports() -> None:
+def test_app_import_names_reads_body_data_init() -> None:
     html = """
-    <script type="module">
-      import { initCurated } from "/app.js?v=one";
-      import { initTimeline, paginationState } from '/app.js?v=two';
-    </script>
+    <body class="daily-page" data-init="initClientNavigation, initTimeline">
+    <script type="module" src="/app.js?v=one"></script>
+    </body>
     """
 
-    assert _app_import_names(html) == {"initCurated", "initTimeline", "paginationState"}
+    assert _app_import_names(html) == {"initClientNavigation", "initTimeline"}
+
+
+def test_pages_bootstrap_without_inline_script_or_event_handlers() -> None:
+    """CSP script-src 'self' + one FOUC hash: every page must be free of the
+    two inline forms it cannot express -- an inline `<script type="module">`
+    bootstrap and on*= event attributes -- and every data-init name must be an
+    initializer app.js exports (bootstrapPage throws on an unknown name)."""
+    js = _read("app.js")
+    exported = set(re.findall(r"^export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", js, re.MULTILINE))
+    pages = sorted(STATIC.glob("*.html")) + sorted(TEMPLATES.glob("*.html"))
+    assert len(pages) >= 14
+    for path in pages:
+        if path.name.startswith("admin"):
+            continue  # token-gated admin pages are outside the public CSP's audience
+        # Comments are not markup the browser acts on (same masking as bump_frontend_assets.py).
+        html = re.sub(r"<!--.*?-->|\{#.*?#\}", "", path.read_text(encoding="utf-8"), flags=re.S)
+        assert '<script type="module">' not in html, path
+        assert '<script type="module" async>' not in html, path
+        assert not re.search(r"<[a-z]+[^>]*\son(?:load|error|click)\s*=", html), path
+        # Non-executable JSON preload blocks aside, the only inline <script> left is the FOUC guard.
+        inline = re.findall(r"<script(?![^>]*\bsrc=)(?![^>]*application/json)[^>]*>(.*?)</script>", html, re.S)
+        if path.name.startswith("_"):
+            assert inline == [], path  # partials carry no <head>, so no FOUC guard and nothing else inline
+            continue
+        assert len(inline) == 1 and inline[0].startswith("(function(){var r=document.documentElement"), path
+        assert _app_import_names(html) <= exported, path
+
+    # The delegated replacement for the deleted on*= attributes: no <img> template
+    # literal carries one any more (prose in comments may still name them).
+    assert not re.search(r"<img[^>]*\son(?:load|error)=", js)
+    assert 'document.addEventListener("load"' in js and 'document.addEventListener("error"' in js
+    assert "settleCompletedImages(document)" in js
 
 
 def test_static_pages_have_compact_mobile_chrome_without_sidebar_drawer() -> None:
@@ -158,7 +193,7 @@ def test_wechat_ssr_mobile_date_uses_the_shared_two_part_contract() -> None:
 def test_daily_page_declares_date_controls_and_fallback_banner() -> None:
     html = _read("daily.html")
 
-    assert '<body class="daily-page">' in html
+    assert '<body class="daily-page" data-init="initDaily">' in html
     assert "daily-overrides-20260514c.css" not in html
     assert 'class="daily-shell"' in html
     assert 'class="daily-layout"' in html
@@ -1000,9 +1035,11 @@ def test_x_media_container_collapses_when_every_image_failed() -> None:
 
     .item-row is a column flex with gap:8px, so a zero-height .x-media is still
     a flex item and still eats a gap: measured 87.7px (no media) vs 95.7px (all
-    images failed). The collapse rule and the onerror handler are two halves of
-    one mechanism — if onerror moved to hiding the <img>, the selector would
+    images failed). The collapse rule and the error handler are two halves of
+    one mechanism — if the handler moved to hiding the <img>, the selector would
     stop matching and the gap would come back silently, so assert they agree.
+    The handler is the delegated one in app.js (CSP forbids inline onerror), so
+    both the CSR and the SSR markup must render the class it dispatches on.
     """
     css = _read("style.css")
     js = _read("app.js")
@@ -1013,5 +1050,9 @@ def test_x_media_container_collapses_when_every_image_failed() -> None:
     assert "display: none;" in collapse
 
     # The half that produces the [hidden] the selector keys off.
+    failed = js.split("function imageFailed(img)", 1)[1].split("\n}\n", 1)[0]
+    assert 'img.classList.contains("x-media-img")' in failed
+    assert 'img.closest(".x-media-link")' in failed and "link.hidden = true" in failed
     for markup in (js, prepaint):
-        assert "this.closest('.x-media-link').hidden=true" in markup
+        assert 'class="x-media-img"' in markup
+        assert not re.search(r"<img[^>]*\sonerror=", markup)

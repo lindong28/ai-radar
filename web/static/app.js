@@ -416,7 +416,7 @@ function authorHandle(value) {
 function sourceLine(item, selected = false, compactMobile = false) {
   const homepage = item.source_homepage_url || item.url || "#";
   const icon = safeCssUrl(sourceAvatarUrl(item));
-  const img = !compactMobile && icon ? `<img class="source-avatar" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
+  const img = !compactMobile && icon ? `<img class="source-avatar" src="${esc(icon)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "";
   const sourceIcon = compactMobile ? "" : `<span class="source-icon">${img}<span class="source-initial">${esc(sourceInitial(item))}</span></span>`;
   const author = !compactMobile && item.author && item.source_kind !== "wechat" ? `<span class="source-author">${esc(authorHandle(item.author))}</span>` : "";
   const selectedBadge = selected ? '<span class="timeline-selected-badge">精选</span>' : "";
@@ -447,7 +447,7 @@ function xMedia(item) {
   const label = `查看大图：${itemTitleText(item) || "查看媒体"}`;
   const images = assets.map((asset) => `
     <a class="x-media-link" href="${esc(asset.url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(label)}">
-      <img class="x-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.x-media-link').hidden=true">
+      <img class="x-media-img" src="${esc(asset.url)}" alt="" loading="lazy" referrerpolicy="no-referrer">
     </a>`).join("");
   return `<div class="x-media x-media-count-${assets.length}">${images}</div>`;
 }
@@ -941,7 +941,7 @@ function bindResponsiveTimeline(container, rerender) {
 function wechatCard(item) {
   const tags = Array.isArray(item.tags) ? item.tags.slice(0, 5) : [];
   const avatar = safeCssUrl(item.avatar_url || WECHAT_FALLBACK_ICON);
-  const img = avatar ? `<img class="source-avatar" src="${esc(avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="this.nextElementSibling.hidden=true" onerror="this.hidden=true">` : "";
+  const img = avatar ? `<img class="source-avatar" src="${esc(avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "";
   const source = item.author || "微信公众号";
   const recommendation = item.recommendation ? `<span class="hot-pill">${esc(item.recommendation)}</span>` : "";
   const origin = item.url ? `<a class="wechat-card-origin" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">原文 <span aria-hidden="true">↗</span></a>` : "";
@@ -2219,7 +2219,7 @@ export function renderDailyReport(container, items, activeDate) {
       const articles = sectionItems.map((item) => {
         const title = itemTitleText(item);
         const source = dailySourceParts(item);
-        const avatar = source.avatar ? `<img class="daily-source-avatar" src="${esc(safeCssUrl(source.avatar))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true">` : "";
+        const avatar = source.avatar ? `<img class="daily-source-avatar" src="${esc(safeCssUrl(source.avatar))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "";
         const opinionBadge = item.is_opinion ? '<span class="role-tag">观点</span>' : "";
         return `<article class="daily-article" data-published-date="${esc(itemDateBucket(item))}" data-opinion="${item.is_opinion ? "true" : "false"}">
           <h3 class="daily-article-title"><a href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(title)}</a></h3>
@@ -2882,3 +2882,124 @@ export function initBackToTop() {
     // the button would simply stop appearing, with nothing logged.
   }, { passive: true });
 }
+
+/* ---------- image fallbacks (was inline onload/onerror) ----------
+ *
+ * The <img> markup used to carry `onload="this.nextElementSibling.hidden=true"
+ * onerror="this.hidden=true"` (source avatars) and
+ * `onerror="this.closest('.x-media-link').hidden=true"` (X media). Inline
+ * event handlers are script-src 'unsafe-inline' under CSP, so the same three
+ * effects now live here, dispatched by class from one document-level listener.
+ *
+ * `load` and `error` do not bubble, hence the capture phase. And the SSR
+ * prepaint can finish loading its images before this module (deferred) has
+ * attached the listener -- those events are gone for good -- so the initial
+ * document is scanned once for images that are already `complete`:
+ * naturalWidth > 0 is a load, naturalWidth === 0 is an error (a lazy image
+ * that has not started yet reports complete === false and is left to the
+ * listener). initMediaLightbox reads `link.hidden` on .x-media-link, so the
+ * X-media failure must keep hiding the link, not the <img>.
+ */
+
+function imageLoaded(img) {
+  if (img.classList.contains("source-avatar")) {
+    const initial = img.nextElementSibling;
+    if (initial) initial.hidden = true;
+  }
+}
+
+function imageFailed(img) {
+  if (img.classList.contains("source-avatar") || img.classList.contains("daily-source-avatar")) {
+    img.hidden = true;
+    return;
+  }
+  if (img.classList.contains("x-media-img")) {
+    const link = img.closest(".x-media-link");
+    if (link) link.hidden = true;
+  }
+}
+
+function settleCompletedImages(root) {
+  for (const img of root.querySelectorAll("img.source-avatar, img.daily-source-avatar, img.x-media-img")) {
+    if (!img.complete) continue;
+    if (img.naturalWidth > 0) imageLoaded(img);
+    else imageFailed(img);
+  }
+}
+
+export function initImageFallbacks() {
+  if (document.documentElement.dataset.imageFallbacks === "on") return;
+  document.documentElement.dataset.imageFallbacks = "on";
+  const isImg = (target) => target instanceof HTMLImageElement;
+  document.addEventListener("load", (event) => {
+    if (isImg(event.target)) imageLoaded(event.target);
+  }, true);
+  document.addEventListener("error", (event) => {
+    if (isImg(event.target)) imageFailed(event.target);
+  }, true);
+  settleCompletedImages(document);
+}
+
+/* ---------- /hot: bounded auto-reload while the candidate cache warms ----------
+ *
+ * Was an inline <script> in hot.html. Total delay is 30 s, covering the worst
+ * cold start (the keeper polls every 10 s at most, plus one hydration measured
+ * at 3.5-6.1 s) with slack so the last reload does not land the instant before
+ * the data does. The attempt count lives in sessionStorage to rule out a reload
+ * loop, and is cleared as soon as the page is ready -- otherwise the next
+ * genuine cold start would inherit a nearly spent budget.
+ */
+const HOT_RELOAD_KEY = "ai-radar:hot-reload";
+const HOT_RELOAD_DELAYS_MS = [3000, 5000, 8000, 14000];
+
+export function initHotAutoReload() {
+  const preparing = document.querySelector("[data-hot-preparing]");
+  try {
+    if (!preparing) {
+      sessionStorage.removeItem(HOT_RELOAD_KEY);
+      return;
+    }
+    const attempt = parseInt(sessionStorage.getItem(HOT_RELOAD_KEY) || "0", 10) || 0;
+    if (attempt >= HOT_RELOAD_DELAYS_MS.length) return;
+    sessionStorage.setItem(HOT_RELOAD_KEY, String(attempt + 1));
+    setTimeout(() => location.reload(), HOT_RELOAD_DELAYS_MS[attempt]);
+  } catch {
+    /* sessionStorage unavailable: give up on auto-reload, the page can still be refreshed by hand */
+  }
+}
+
+/* ---------- page bootstrap ----------
+ *
+ * Every page used to end in an inline `<script type="module">` that imported
+ * its initializers from /app.js and called them. Under a CSP whose script-src
+ * has no 'unsafe-inline' that block cannot run, and hashing it is a dead end
+ * because it embeds the `?v=` that every asset bump rewrites. So the page now
+ * loads this module with `<script type="module" src="/app.js?v=...">` and
+ * names its initializers in `<body data-init="initA,initB">`; they run here in
+ * that order, exactly as the inline block called them. Only the names in
+ * PAGE_INITS are callable -- the attribute is not a path to arbitrary code.
+ *
+ * Guarded on `document`: tests/js imports this module under node.
+ */
+const PAGE_INITS = {
+  initAbout,
+  initBookmarks,
+  initClientNavigation,
+  initCurated,
+  initDaily,
+  initHotAutoReload,
+  initItem,
+  initNavigationOnly,
+  initTimeline,
+  initWechat,
+};
+
+export function bootstrapPage(body = document.body) {
+  const names = String(body?.dataset?.init || "").split(",").map((name) => name.trim()).filter(Boolean);
+  const unknown = names.filter((name) => !Object.prototype.hasOwnProperty.call(PAGE_INITS, name));
+  if (unknown.length) throw new Error(`data-init names unknown initializers: ${unknown.join(", ")}`);
+  initImageFallbacks();
+  for (const name of names) PAGE_INITS[name]();
+}
+
+if (typeof document !== "undefined" && document.body?.dataset?.init) bootstrapPage();
