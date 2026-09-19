@@ -30,7 +30,9 @@ _LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 # `//user:pass@host` — the egress proxy URL's shape. It is never passed to
 # _fail deliberately, but `content_type` is copied from an upstream response
 # header, and a proxy answering 407 chooses that header's value.
-_CREDENTIALS = re.compile(r"//[^/@\s]*:[^/@\s]*@")
+# The userinfo part excludes ':' so the two character classes cannot both
+# claim a run of colons (quadratic backtracking on a long input).
+_CREDENTIALS = re.compile(r"//[^/@\s:]*:[^/@\s]*@")
 _LOG_VALUE_MAX = 64
 
 

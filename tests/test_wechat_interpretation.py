@@ -1165,7 +1165,7 @@ def test_interpret_runner_saves_worth_reading_result_and_patches_kb_meta(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "test-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "test-slug_meta.json").write_text(
@@ -1255,7 +1255,7 @@ def test_interpret_runner_rejects_incomplete_fresh_kb_save(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "test-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "test-slug_meta.json").write_text("{}", encoding="utf-8")
@@ -1311,7 +1311,7 @@ def test_interpret_runner_rejects_invalid_reason_source_before_kb_save(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     save_calls = 0
 
@@ -1377,7 +1377,7 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     monkeypatch.setenv("AI_RADAR_DB", str(db_path))
     monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "usage-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "usage-slug_meta.json").write_text("{}", encoding="utf-8")
@@ -1497,7 +1497,7 @@ def test_interpret_runner_retries_missing_criteria_reason_once_and_recovers(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "retry-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     summarize_calls = 0
@@ -1778,7 +1778,7 @@ def test_interpret_runner_skips_kb_for_not_worth_reading(
     monkeypatch.setenv("AI_RADAR_DB", str(db_path))
     monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db_path))
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "skip-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     save_calls = 0
@@ -1858,7 +1858,7 @@ def test_interpret_runner_reuses_kb_check_url_hit_without_llm(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    kb_summary = tmp_path / "kb-existing_output.md"
+    kb_summary = assistant_root / "kb-existing_output.md"
     kb_summary.write_text(SUMMARY_MD, encoding="utf-8")
     index_path = assistant_root / "data" / "summary_agent" / "default" / "index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1928,7 +1928,7 @@ def test_interpret_runner_falls_back_when_kb_summary_file_missing(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "fallback-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     summarize_calls = 0
@@ -1940,7 +1940,7 @@ def test_interpret_runner_falls_back_when_kb_summary_file_missing(
                 cmd,
                 0,
                 stdout=json.dumps(
-                    {"found": True, "slug": "missing", "summary_file_path": str(tmp_path / "missing.md")},
+                    {"found": True, "slug": "missing", "summary_file_path": str(assistant_root / "missing.md")},
                     indent=2,
                     ensure_ascii=False,
                 ),
@@ -1992,7 +1992,7 @@ def test_interpret_runner_retries_concurrent_duplicate_kb_slug_with_unique_slug(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "existing-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "existing-slug_article.md").write_text("# 测试文章\n\n正文", encoding="utf-8")
@@ -2113,7 +2113,7 @@ def test_interpret_runner_uses_one_slug_for_kb_local_and_audit(
         conn.commit()
 
     assistant_root = _assistant_root(tmp_path)
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "existing-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "existing-slug_article.md").write_text("# 测试文章\n\n正文", encoding="utf-8")
@@ -2682,9 +2682,9 @@ def test_interpret_runner_reuses_a_complete_legacy_wechat_url_cache_hit(
         seed.execute("UPDATE items SET url=? WHERE id='item-1'", (long_url,))
         title = seed.execute("SELECT title FROM items WHERE id='item-1'").fetchone()["title"]
         seed.commit()
-    other_summary = tmp_path / "someone-elses_output.md"
+    other_summary = assistant_root / "someone-elses_output.md"
     other_summary.write_text(SUMMARY_MD, encoding="utf-8")
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "fresh-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "fresh-slug_meta.json").write_text(
@@ -2769,9 +2769,9 @@ def test_interpret_runner_rejects_a_cached_hit_for_a_different_article(
     _enable_interpret(monkeypatch)
     db_path = _seed_runner_db(tmp_path)
     assistant_root = _assistant_root(tmp_path)
-    other_summary = tmp_path / "someone-elses_output.md"
+    other_summary = assistant_root / "someone-elses_output.md"
     other_summary.write_text(SUMMARY_MD, encoding="utf-8")
-    batch_dir = tmp_path / "batch"
+    batch_dir = assistant_root / "batch"
     batch_dir.mkdir()
     (batch_dir / "fresh-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
     (batch_dir / "fresh-slug_meta.json").write_text(
@@ -2835,3 +2835,73 @@ def test_interpret_runner_rejects_a_cached_hit_for_a_different_article(
 
     assert summarize_calls == 1, "a hit naming another article must not short-circuit summarization"
     assert "两个数字都是真的" not in row["slug"]
+
+
+def _fake_summarize_run(batch_dir: Path, slug: str) -> Any:
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "--check-url" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"found": False}), stderr="")
+        if "summarize.sh" in str(cmd[0]):
+            payload = {
+                "ok": True,
+                "batch_dir": str(batch_dir),
+                "result": {
+                    "slug": slug,
+                    "save_decision": False,
+                    "save_reason": "x",
+                    "recommendation": "值得一看",
+                    "tags": [],
+                    "model": "fake-model",
+                    "llm_metadata": {"criteria_reason_source": "json"},
+                },
+            }
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload, ensure_ascii=False), stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    return fake_run
+
+
+def test_interpret_runner_rejects_batch_dir_outside_assistant_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "ok-slug_summary.md").write_text(SUMMARY_MD, encoding="utf-8")
+    monkeypatch.setattr(subprocess, "run", _fake_summarize_run(outside, "ok-slug"))
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT error, summary_md FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    assert (summary.processed, summary.errors) == (0, 1)
+    assert "batch_dir escapes" in row["error"]
+    assert row["summary_md"] == ""
+
+
+def test_interpret_runner_rejects_path_shaped_slug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from airadar.interpret.runner import run_interpret
+
+    _enable_interpret(monkeypatch)
+    db_path = _seed_runner_db(tmp_path)
+    assistant_root = _assistant_root(tmp_path)
+    batch_dir = assistant_root / "batch"
+    batch_dir.mkdir()
+    (assistant_root / "leak_summary.md").write_text("SECRET SUMMARY", encoding="utf-8")
+    monkeypatch.setattr(subprocess, "run", _fake_summarize_run(batch_dir, "../leak"))
+
+    with _connect(db_path) as conn:
+        summary = run_interpret(conn, backfill=True, assistant_root=assistant_root, tmp_root=tmp_path / "tmp")
+        row = conn.execute("SELECT error, summary_md FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
+
+    assert (summary.processed, summary.errors) == (0, 1)
+    assert "unsafe slug" in row["error"]
+    assert "SECRET SUMMARY" not in (row["summary_md"] or "")

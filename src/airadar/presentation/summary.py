@@ -12,7 +12,7 @@ from ..enrich.normalizers.production_enrich_provider_output_v2 import topic_tags
 from ..enrich.schema import EnrichOutput
 from ..enrich.schema_v2 import EnrichOutputV2
 from ..topics import topic_tags
-from .media import _visible_media_assets, proxy_image_url
+from .media import _visible_media_assets, proxy_image_url, public_url
 from .related import related_discussions
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -125,11 +125,11 @@ def item_summary(
         "source_id": row["source_id"],
         "source_name": row["source_name"],
         "source_kind": source_kind,
-        "source_homepage_url": row["source_homepage_url"] if "source_homepage_url" in row_keys else None,
+        "source_homepage_url": public_url(row["source_homepage_url"] if "source_homepage_url" in row_keys else None),
         "source_icon_url": proxy_image_url(row["source_icon_url"] if "source_icon_url" in row_keys else None),
         "author_avatar_url": proxy_image_url(row["author_avatar_url"] if "author_avatar_url" in row_keys else None),
         "tier": row["tier"],
-        "url": row["url"],
+        "url": public_url(row["url"]),
         "title": row["title"],
         "title_zh": enrichment.title_zh if enrichment else row["title"],
         "author": row["author"],

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import nh3
 from fastapi import APIRouter, HTTPException, Query, Request
 from markdown_it import MarkdownIt
 
-from ...presentation.media import proxy_image_url
+from ...presentation.media import proxy_image_url, public_url
 from ...presentation.summary import json_loads
 from ...wechat_archive import wechat_visibility_sql
 from ...wechat_text import normalize_wechat_title
@@ -83,7 +83,7 @@ def _detail_url(slug: str, page: int | None = None, q: str | None = None) -> str
     if page and page > 1:
         params.append(("page", page))
     suffix = f"?{urlencode(params)}" if params else ""
-    return f"/wechat/{slug}{suffix}"
+    return f"/wechat/{quote(slug, safe='')}{suffix}"
 
 
 def _item_from_row(row: sqlite3.Row, *, page: int | None = None, q: str | None = None) -> dict[str, Any]:
@@ -95,7 +95,7 @@ def _item_from_row(row: sqlite3.Row, *, page: int | None = None, q: str | None =
         "author": row["author"] or row["source_name"],
         "avatar_url": proxy_image_url(row["avatar_url"]),
         "published_at": row["published_at"],
-        "url": row["url"],
+        "url": public_url(row["url"]),
         "detail_url": _detail_url(str(row["slug"]), page, q),
         "recommendation": row["recommendation"],
     }

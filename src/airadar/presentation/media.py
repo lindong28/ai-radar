@@ -8,9 +8,10 @@ from urllib.parse import quote, urlparse
 
 CURATED_MEDIA_FULL_RANK_LIMIT = 12
 CURATED_MEDIA_PREVIEW_RANK_LIMIT = 13
-# qpic.cn: hotlink-blocked but reachable from the serve host.
+# qpic.cn / qlogo.cn: hotlink-blocked but reachable from the serve host (article
+# images and account avatars respectively).
 # pbs.twimg.com: reachable only through the egress proxy (see routes/media.py).
-PROXY_IMAGE_HOST_SUFFIXES = ("qpic.cn", "pbs.twimg.com")
+PROXY_IMAGE_HOST_SUFFIXES = ("qpic.cn", "qlogo.cn", "pbs.twimg.com")
 _LAZY_SRC_ATTRS = ("data-src", "data-original", "data-lazy-src")
 
 
@@ -36,6 +37,19 @@ def _safe_media_url(value: str) -> str | None:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
     return value
+
+
+def public_url(value: object) -> str | None:
+    """A stored URL as it may be rendered into an href, or None.
+
+    Ingestion drops non-http(s) links since 2026-09-19, but rows written before
+    that (and any future path that forgets) are still in the table, and the
+    templates and app.js only HTML-escape -- they do not check the scheme. One
+    read-time gate here covers every sink.
+    """
+    if not value:
+        return None
+    return _safe_media_url(str(value).strip())
 
 
 def image_url_needs_proxy(url: str) -> bool:

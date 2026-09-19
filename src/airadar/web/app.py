@@ -776,8 +776,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def wechat_detail_page(
         request: Request,
         slug: str,
-        q: str | None = None,
-        page: int | None = None,
+        q: str | None = Query(default=None, max_length=SEARCH_QUERY_MAX_LENGTH),
+        page: int | None = Query(default=None, ge=1),
     ) -> HTMLResponse:
         with conn_from_request(request) as conn:
             item = wechat_routes.get_wechat_detail(conn, slug)

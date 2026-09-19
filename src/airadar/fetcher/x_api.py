@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..egress import selector_httpx_client
 from ..runtime_env import read_value
@@ -16,6 +17,7 @@ X_MAX_RESULTS_PER_SOURCE = 5
 X_TWEET_FIELDS = "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets"
 X_EXPANSIONS = "attachments.media_keys"
 X_MEDIA_FIELDS = "media_key,type,url,preview_image_url,width,height,alt_text"
+X_MEDIA_HOSTS = frozenset({"pbs.twimg.com", "video.twimg.com"})
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,12 @@ def _media_still_url(entry: dict[str, Any]) -> str | None:
     """
     kind = str(entry.get("type") or "")
     url = entry.get("url") if kind == "photo" else entry.get("preview_image_url")
-    return str(url) if isinstance(url, str) and url.startswith("https://") else None
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return None
+    # The value is stored and later rendered; only X's own media CDN belongs
+    # there, whatever the API response says.
+    host = (urlsplit(url).hostname or "").lower()
+    return url if host in X_MEDIA_HOSTS else None
 
 
 def _post_media(post: dict[str, Any], media_index: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:

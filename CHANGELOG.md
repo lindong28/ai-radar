@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-19（第二轮安全加固）
+
+- Changed: 文章链接、来源主页链接、微信文章链接在输出前统一只保留 http(s)，其余（历史遗留的非 http 值）不再作为可点链接输出；微信头像只接受腾讯图片域并走 `/img` 代理；X 推文媒体只接受 X 自己的 CDN 域。
+- Changed: 页面脚本从内联块改为外部引用、图片加载回调改为事件委托，为强制 CSP 做准备（nginx 先以第二条 Report-Only 双发一周）。
+- Fixed: `/wechat/{slug}` 的搜索词与页码参数加边界；发布时间为空的微信详情页不再 500。
+- Changed（运维）：进程启动只加载本项目声明的环境变量键，不再把共享 `~/.claude/.env` 里的全部键载入；解读子进程只继承基础变量与本项目自己的 LLM 提供商键；外部 summarizer 返回的路径必须落在 `AI_ASSISTANT_ROOT` 内，子进程 900 秒超时。
+- Changed（部署）：代码部署拒绝把 `data` / `logs` / `.venv` / `.env` 等运行时路径 track 成文件、symlink 或 gitlink 的候选 commit；`quarantine/` 只保留最近 2 份；服务器 bare repo 新增 pre-receive 验签（SSH commit 签名 + `allowed_signers`），未签名或非快进的推送被拒。生效与配置见 [ADR-20260919-b7e2](docs/adr/20260919-b7e2-second-security-round-deploy-chain-credentials-csp.md) 与 [services.md「代码部署的验签」](docs/operations/services.md)。
+- Changed（配置）：`data/sources.toml` 的 URL 只展开"整个 URL 就是一个 `${VAR}`"的占位符，嵌入式引用会被拒绝加载。
+
 ## 2026-09-19（新闻准入双90%离线优化）
 
 - 独立 prefilter 评测支持按旧run排除已见题，再以同一seed抽取新回归题；候选可使用原始回复关系和正文状态，不向模型暴露参考答案。使用方式见[运行入口](evals/news-admission/aihot-prefilter/README.md)。

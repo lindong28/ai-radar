@@ -57,7 +57,7 @@
           </div>
           <h1>{{ item.title }}</h1>
           <div class="wechat-detail-meta">
-            <time datetime="{{ item.published_at }}">{{ item.published_at[:10] }}</time>
+            {% if item.published_at %}<time datetime="{{ item.published_at }}">{{ item.published_at[:10] }}</time>{% endif %}
             {% if item.recommendation %}<span>{{ item.recommendation }}</span>{% endif %}
           </div>
           <div class="tags">

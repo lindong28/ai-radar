@@ -373,6 +373,12 @@ def open_external_url(
 ) -> Any:
     owned_request = request if isinstance(request, urllib.request.Request) else urllib.request.Request(request)
     request_url = owned_request.full_url
+    # urllib's default opener also speaks file:// and ftp://; a loopback
+    # hostname (file://localhost/etc/passwd) would take the direct path and
+    # read a local file. This exit is for http(s) only.
+    scheme = urlsplit(request_url).scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"open_external_url only accepts http(s) URLs, got scheme {scheme!r}")
     loopback = is_loopback_url(request_url)
     selected_policy = policy or (None if loopback else require_selector_policy())
     proxy_authority: str | None = None

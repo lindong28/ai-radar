@@ -33,6 +33,10 @@ ArticleResult = dict[str, Any]
 ROUND_HEAD_IMG_RE = re.compile(r"round_head_img\s*[=:]\s*(['\"])(.*?)\1", re.S)
 MMBIZ_HTTP_PREFIX = "http://mmbiz.qpic.cn"
 MMBIZ_HTTPS_PREFIX = "https://mmbiz.qpic.cn"
+# Avatars are only ever served from Tencent's image CDNs. The regex that finds
+# them scans the whole article HTML, so anything else is content the author
+# (or an injected script) put there, not WeChat's own account header.
+AVATAR_HOST_SUFFIXES = ("qpic.cn", "qlogo.cn")
 
 
 class WeChatBrowserUnavailable(RuntimeError):
@@ -80,9 +84,15 @@ def normalize_wechat_avatar_url(value: object) -> str | None:
         url = f"https:{url}"
     if url.startswith(MMBIZ_HTTP_PREFIX):
         url = f"{MMBIZ_HTTPS_PREFIX}{url[len(MMBIZ_HTTP_PREFIX):]}"
-    if url.startswith(("https://", "http://")):
-        return url
-    return None
+    if not url.startswith(("https://", "http://")):
+        return None
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return None
+    if not any(host == suffix or host.endswith("." + suffix) for suffix in AVATAR_HOST_SUFFIXES):
+        return None
+    return url
 
 
 def extract_round_head_img(html: str) -> str | None:

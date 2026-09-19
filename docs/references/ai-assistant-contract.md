@@ -155,7 +155,7 @@ For a new article, `summarize.sh` must return:
 
 Recognized fields:
 
-- `batch_dir`: absolute path or path relative to `$AI_ASSISTANT_ROOT`.
+- `batch_dir`: absolute path or path relative to `$AI_ASSISTANT_ROOT`; either form must resolve to a location under `$AI_ASSISTANT_ROOT` (symlinks resolved), otherwise AI Radar records the article as an error. The same confinement applies to `summary_file_path` in `--check-url` hits (an escaping path is treated as no hit), and `result.slug` must match `[0-9A-Za-z一-鿿_-]{1,200}` because it is spliced into file names.
 - `result.slug`: base slug. AI Radar may normalize it for WeChat title artifacts or uniqueness.
 - `result.save_decision`: true means save back to the external KB and show the article on `/wechat`.
 - `result.save_reason`, `result.recommendation`, `result.tags`, `result.model` or `result.model_name`: metadata copied into `wechat_interpretations`.

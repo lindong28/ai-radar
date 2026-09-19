@@ -18,13 +18,19 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from ..fetcher.dedup import content_hash
-from ..interpret.runner import _abstract_from_summary, _recommendation_from_summary, _safe_tags
+from ..interpret.runner import (
+    _abstract_from_summary,
+    _recommendation_from_summary,
+    _safe_tags,
+    _subprocess_env_source,
+)
 from ..wechat_archive import (
     ARCHIVE_SOURCE_ID,
     ensure_archive_source,
     public_source_sql,
     wechat_visibility_sql,
 )
+from ..wechat_text import wechat_slug_seed
 
 CATALOG_SCHEMA_VERSION = 1
 CATALOG_ORIGIN = "ai_assistant_kb_archive"
@@ -99,7 +105,7 @@ def load_catalog(assistant_root: Path, user: str) -> CatalogSnapshot:
     run_script = assistant_root / "agents" / "summary-agent" / "run.sh"
     if not run_script.is_file() or not os.access(run_script, os.X_OK):
         raise FileNotFoundError(f"summary-agent run.sh is missing or not executable: {run_script}")
-    env = dict(os.environ)
+    env = _subprocess_env_source()
     env.pop("VIRTUAL_ENV", None)
     env["UV_OFFLINE"] = "1"
     completed = subprocess.run(
@@ -246,7 +252,10 @@ def _insert_article(
     canonical_url = _canonical_url(str(record["canonical_url"]))
     kb_slug = str(record["kb_slug"]).strip()
     item_id = "kb-" + hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()[:24]
-    slug = _unique_slug(conn, kb_slug)
+    # The catalog slug is the KB's identifier, not a URL segment; the public
+    # detail URL is built from what we store, so keep it to the same character
+    # set every other wechat slug goes through.
+    slug = _unique_slug(conn, wechat_slug_seed(kb_slug))
     extra = {
         "origin": CATALOG_ORIGIN,
         "import_run_id": run_id,

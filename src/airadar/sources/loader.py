@@ -21,6 +21,7 @@ LOGGER = logging.getLogger(__name__)
 # source. A paused optional source may retain that unresolved placeholder as an
 # inert identity so reloads preserve its visibility state without fetching it.
 ENV_PLACEHOLDER_RE = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
+ENV_REFERENCE_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,23 @@ class SourceConfig:
     required_env: str | None = None
     wechat_only: bool = False
     public_url_override: str | None = None
+
+
+def _expand_url_placeholder(raw_url: str) -> str:
+    """Expand a URL that is exactly one ``${VAR}`` reference; leave anything else alone.
+
+    The whole-URL form is the documented way to keep a private feed address
+    out of the tracked config. ``os.path.expandvars`` on the full string also
+    expanded references embedded in an otherwise literal URL, which let one
+    config line splice any key from the process environment into an outbound
+    request (``?k=${DEEPSEEK_API_KEY}``). An embedded reference is now left
+    verbatim, so the existing "references an unset env var" check refuses it.
+    """
+    placeholder = ENV_PLACEHOLDER_RE.match(raw_url)
+    if placeholder is None:
+        return raw_url
+    value = os.environ.get(placeholder.group(1), "")
+    return value if value else raw_url
 
 
 def _validate_http_url(slug: str, label: str, url: str | None) -> str | None:
@@ -71,7 +89,7 @@ def _validate_source(
         raise ValueError(f"invalid paused for {slug}: must be boolean")
     paused = paused_raw
     raw_url = url
-    url = os.path.expandvars(raw_url)
+    url = _expand_url_placeholder(raw_url)
     placeholder = ENV_PLACEHOLDER_RE.match(raw_url)
     raw_kind = str(raw.get("kind", "feed"))
     unresolved_paused_placeholder = (
@@ -87,9 +105,30 @@ def _validate_source(
     )
     if unresolved_paused_placeholder:
         url = raw_url
-    if "${" in url and not unresolved_paused_placeholder:
+    unset_refs = [name for name in ENV_REFERENCE_RE.findall(raw_url) if not os.environ.get(name, "").strip()]
+    if unset_refs and not unresolved_paused_placeholder:
         raise ValueError(
             f"source {url_field} for {slug} references an unset env var: {raw[url_field]!r}"
+        )
+    if raw_kind == "wechat" and schema_version >= 2:
+        # Structural check before the embedded-reference refusal: a malformed
+        # optional declaration is a config bug and is reported as such.
+        declared_env = str(raw["required_env"]) if raw.get("required_env") is not None else None
+        if (
+            raw.get("optional") is not True
+            or raw.get("wechat_only") is not True
+            or raw.get("public_url_override") is None
+            or placeholder is None
+            or placeholder.group(1) != declared_env
+        ):
+            raise ValueError(f"invalid optional WeChat configuration for {slug}")
+    if "${" in url and not unresolved_paused_placeholder:
+        # The variable exists but the URL is not a whole-URL placeholder:
+        # splicing an env value into a literal URL is exactly the shape that
+        # exfiltrates a key (`?k=${DEEPSEEK_API_KEY}`), so it is refused.
+        raise ValueError(
+            f"source {url_field} for {slug} embeds an env reference; only a whole-URL "
+            f"${{VAR}} placeholder is expanded: {raw[url_field]!r}"
         )
     parsed = urlparse(url)
     if not unresolved_paused_placeholder and (
@@ -114,16 +153,6 @@ def _validate_source(
     wechat_only = bool(raw.get("wechat_only", False)) if schema_version >= 2 else False
     override_raw = raw.get("public_url_override") if schema_version >= 2 else None
     public_url_override = _validate_http_url(slug, "public_url_override", str(override_raw) if override_raw is not None else None)
-    if kind == "wechat" and schema_version >= 2:
-        placeholder = ENV_PLACEHOLDER_RE.match(str(raw[url_field]))
-        if (
-            not optional
-            or not wechat_only
-            or public_url_override is None
-            or placeholder is None
-            or placeholder.group(1) != required_env
-        ):
-            raise ValueError(f"invalid optional WeChat configuration for {slug}")
     if schema_version >= 2 and kind == "x":
         adapter = meta.get("adapter")
         if adapter is None:

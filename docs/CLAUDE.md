@@ -21,6 +21,7 @@
 | 文件 | 性质 | 说明 |
 |---|---|---|
 | [architecture.md](architecture.md) | Mutable snapshot | 系统模块结构、分层、数据流、数据库设计、Web 层、关键抽象 |
+| [20260919-b7e2](adr/20260919-b7e2-second-security-round-deploy-chain-credentials-csp.md) | Decision | 第二轮安全审查：部署链 pre-receive 验签与运行时根路径保护、runtime_env 只加载声明键、读时 URL scheme 门、CSP 外置脚本迁移；CSP 强制待一周后切换 |
 | [20260919-c31a](adr/20260919-c31a-test-prefilter-standalone-input.md) | Decision | 离线测试 prefilter 原始回复关系、正文条件与准入构框 |
 | [20260919-bc72](adr/20260919-bc72-test-prefilter-hn-heat.md) | Decision | prefilter 双 >90% 目标下，仅离线测试 HN 热度条件，不改题库和生产 |
 | [20260919-e1d3](adr/20260919-e1d3-test-prefilter-direct-ai-impact.md) | Decision | 仅离线测试 prefilter 的AI直接影响范围；固定开发/回归，不改变生产 |

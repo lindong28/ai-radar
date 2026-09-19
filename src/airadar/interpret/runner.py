@@ -8,7 +8,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -104,14 +104,88 @@ def _json_loads(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
+# The summarizer is an external script; it gets the process basics, the
+# assistant root, and this project's own LLM provider keys -- not the rest of
+# the environment (X bearer token, EdgeOne keys, Feishu webhooks, admin token,
+# the image-proxy URL with its credentials, or anything another project put in
+# the shared dotenv).
+_SUBPROCESS_ENV_PASSTHROUGH = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "TMPDIR",
+        "TERM",
+        "AI_ASSISTANT_ROOT",
+        "AI_RADAR_ARK_BREAKER_STATE",
+        "AI_RADAR_ARK_BREAKER_COOLDOWN_SECONDS",
+        "AI_RADAR_ARK_THINKING",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_BASE_URL",
+        "ARK_API_KEY",
+        "ARK_BASE_URL",
+        "OPENAI_API_KEY",
+        "GLM_API_KEY",
+    }
+)
+_SUBPROCESS_ENV_PREFIXES = ("LC_", "UV_", "PYTHON", "XDG_")
+# A hung summarizer used to hold the pipeline flock forever; the per-item
+# error path already catches every Exception, so a TimeoutExpired just becomes
+# one failed article.
+SUBPROCESS_TIMEOUT_S = 900
+_BATCH_SLUG_RE = re.compile(r"[0-9A-Za-z一-鿿_-]{1,200}")
+_ERROR_SECRET_RE = re.compile(
+    r"(?i)((?:api[_-]?key|token|secret|password|authorization)\s*[=:]\s*(?:bearer\s+)?|\bbearer\s+)\S+"
+    r"|//[^/@\s:]*:[^/@\s]*@"
+)
+
+
+def _subprocess_env_source(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    source = os.environ if environ is None else environ
+    return {
+        key: value
+        for key, value in source.items()
+        if key in _SUBPROCESS_ENV_PASSTHROUGH or key.startswith(_SUBPROCESS_ENV_PREFIXES)
+    }
+
+
 def _subprocess_env(*, callsite_id: str) -> dict[str, str]:
     env = managed_subprocess_env(
         require_selector_policy(),
+        source=_subprocess_env_source(),
         callsite_id=callsite_id,
     )
     env.pop("VIRTUAL_ENV", None)
     env.setdefault("AI_RADAR_ARK_BREAKER_STATE", str(db.PROJECT_ROOT / "data" / "ark-breaker.json"))
     return env
+
+
+def _confined(root: Path, candidate: Path, label: str) -> Path:
+    """Resolve ``candidate`` and refuse anything outside ``root``.
+
+    ``batch_dir`` and ``summary_file_path`` come back from the external
+    summarizer as strings; without this, ``../`` or an absolute path in one of
+    them let a summary be read from (and meta written to) anywhere the
+    pipeline user can reach.
+    """
+    base = root.resolve()
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(base):
+        raise ValueError(f"{label} escapes {base}: {candidate}")
+    return resolved
+
+
+def _scrub_error(message: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        prefix = match.group(1)
+        return f"{prefix}<redacted>" if prefix else "//<redacted>@"
+
+    return _ERROR_SECRET_RE.sub(_replace, message)
 
 
 def _run_json(cmd: list[str], *, cwd: Path, callsite_id: str) -> dict[str, Any]:
@@ -122,6 +196,7 @@ def _run_json(cmd: list[str], *, cwd: Path, callsite_id: str) -> dict[str, Any]:
         text=True,
         capture_output=True,
         env=_subprocess_env(callsite_id=callsite_id),
+        timeout=SUBPROCESS_TIMEOUT_S,
     )
     stdout = (completed.stdout or "").strip()
     if not stdout:
@@ -308,7 +383,7 @@ def _read_summary_file(path: Path) -> str:
 
 def _path_from_ai_assistant(root: Path, value: str) -> Path:
     path = Path(value)
-    return path if path.is_absolute() else root / path
+    return _confined(root, path if path.is_absolute() else root / path, "summary_file_path")
 
 
 def _summary_agent_index_path(root: Path, user: str) -> Path:
@@ -568,6 +643,9 @@ def _record_error(conn: sqlite3.Connection, row: sqlite3.Row, error: BaseExcepti
     if isinstance(error, subprocess.CalledProcessError):
         stderr = error.stderr.decode("utf-8", errors="replace") if isinstance(error.stderr, bytes) else error.stderr
         message = stderr or str(error)
+    # stderr of an external script can echo its environment or a failing URL;
+    # the column is only read for null-ness, so redact before storing.
+    message = _scrub_error(message)
     previous = conn.execute(
         "SELECT error, error_retry_count FROM wechat_interpretations WHERE item_id=?",
         (row["id"],),
@@ -649,7 +727,9 @@ def _summarize_item(
         if summary_file:
             try:
                 summary_md = _read_summary_file(_path_from_ai_assistant(root, str(summary_file)))
-            except OSError:
+            except (OSError, ValueError):
+                # Missing file and a path outside the assistant root are the
+                # same thing here: not a reusable hit, fall through to the LLM.
                 summary_md = ""
             if summary_md:
                 raw_slug = str(hit.get("slug") or _slug_seed(Path(str(summary_file)).stem.removesuffix("_output")))
@@ -737,6 +817,10 @@ def _summarize_item(
         raise ValueError("summarize.sh JSON missing result object")
     _require_criteria_reason_source(result)
     batch_slug = str(result.get("slug") or _slug_seed(row["title"]))
+    # batch_slug is spliced into filesystem paths below (it is not the DB slug,
+    # which goes through _slug_seed); an unsafe value must not reach them.
+    if not _BATCH_SLUG_RE.fullmatch(batch_slug):
+        raise ValueError(f"summarize.sh returned an unsafe slug: {batch_slug[:80]!r}")
     slug = _result_slug_for_row(row, batch_slug)
     batch_dir_raw = summary_payload.get("batch_dir")
     if not batch_dir_raw:
@@ -744,6 +828,7 @@ def _summarize_item(
     batch_dir = Path(str(batch_dir_raw))
     if not batch_dir.is_absolute():
         batch_dir = root / batch_dir
+    batch_dir = _confined(root, batch_dir, "batch_dir")
     summary_md = _read_summary_file(_summary_path(batch_dir, batch_slug))
     save_decision = bool(result.get("save_decision"))
     kb_synced = False
