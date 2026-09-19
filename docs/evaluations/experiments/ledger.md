@@ -2,7 +2,26 @@
 
 > [Developer] · 真实运行台账，时间列为UTC。不同benchmark与题集版本分段，不跨身份相减。根 `experiments/<target>/<benchmark>/<version>/<date>/<time>/` 与 `runs/` 同分区。
 
+## 2026-09-19：aihot-observed-membership / v1（当前）
+
+gold 重建与模型对照分开。新主集 1,450（727 正、723 负），仅召回 880；冻结原始证据复用，不添加 AIHOT-only 正例。旧 `aihot-prefilter/v1` manifest SHA 未变。
+
+| UTC 轮次 | 用途 | 结果 |
+| --- | --- | --- |
+| 14-46-48 / 14-46-50 / 14-46-51 | C6/C7/C8 旧响应在相同 78 dev 输入上重评分 | P/R 各为 90.91/86.96、91.30/91.30、91.11/89.13%；0 API，是新 gold 诊断 |
+| 14-53-32 | 当前源码基线，未见回归 169 | TP65/FP44/FN14/TN46；P59.63/R82.28；169 次全成功 |
+| 14-53-51 → 14-59-47 | 冻结 C7，同一 169；恢复 1 次 TransportError | 首试169、补1；最终169有效，模型单独 P58.26/R84.81 |
+| 15-00-28 | 同 C7 加既有 raw policy，0 API | TP67/FP9/FN12/TN81；P88.16/R84.81；相对基线改善，但未达到双>90% |
+
+7 个 run；本轮 339 API 尝试，338 成功、1 失败，成功响应报告 376,891 tokens，失败 usage 未知、金额未定价。双90累计 5,587/6,000、余 413。基线／候选共享 8 槽（首轮各4，恢复仅1未完成题）；全部调用已结束。新169含79正90负、53来源、168 X / 1 Web、168不同标题及正文；与此前1200回归身份交集为0。开发78与回归169不合并验收。
+
+候选 prompt、policy 和169题身份已在 `runs/prefilter-dual90-preflight/observed-frozen-selection.json` 冻结。原件及 comparison/error-analysis/quote-context-audit-corrected/call-accounting 与 conclusion 位于 `runs/news-admission/aihot-observed-membership/v1/2026-09-19/15-00-28/`。首次引用可得性探针误读 raw 顶层、其文件标 invalid，修正探针展开 variants 并以12条当前帖子作阳性对照后才采用结论：9个被引用身份只有2个在当前冻结raw池可找到，且早于当前帖抓取。
+
+current compare.accepted=true 只表示同题两项改善，不代替双90绝对目标。生产 prompt 未改、未发布。下一步扩大引用输入需用户确认消费者契约；现有 regression 全已暴露，不能再冒称盲验。
+
 ## 2026-09-19：双90续轮 C6–C8（终态）
+
+本节为旧 gold 历史。当前 gold 重建后的轮次见下方新契约记录，不跨口径相减。
 
 用户追加3000次，双90批累计限额6000；此前C2–C5已用2620。题库v1、固定600 dev不变，第三批回归排除前两批共800题。C6实质AI能力边界：11-58-40首试600（594成功6失败）；12-07-17补6成功；12-08-12规则投影0新调用，TP73/FP11/FN7/TN509，P86.90%/R91.25%，未达标。该时点累计3226/6000。
 

@@ -33,12 +33,13 @@ def test_four_object_run_uses_distinct_o1_cases_and_preserves_queries(tmp_path, 
     evidence = data / "evidence"
     assets.write_json(evidence / "receipt.json", {"fixture": True})
     cases = [{"case_id": str(i), "input": {"case_id": str(i)}, "reference": {"member": True, "featured": False, "score": 80, "category": "ai-models"}, "split": "dev"} for i in range(2)]
-    for target, benchmark in assets.BENCHMARKS.items():
+    for target, benchmark in assets.benchmark_pairs():
         definition = assets.ROOT / "evals" / target / benchmark
         leaf = tmp_path / "evals" / target / benchmark
         for name in ("README.md", "evaluate.py", "metrics.json"):
             leaf.mkdir(parents=True, exist_ok=True)
             (leaf / name).write_bytes((definition / name).read_bytes())
+    for target, benchmark in assets.BENCHMARKS.items():
         selected = cases[:1] if target == "news-admission" else cases
         destination = data / benchmark / target / "v1"
         assets.write_jsonl(destination / "cases.jsonl", selected)

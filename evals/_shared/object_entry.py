@@ -8,14 +8,14 @@ from pathlib import Path
 from .assets import OBJECT_BENCHMARKS, load_dataset
 
 
-def main(*, target: str, argv=None) -> int:
+def main(*, target: str, argv=None, benchmark=None) -> int:
     parser = argparse.ArgumentParser(description="校验独立题库身份与文件完整性；不执行模型或计算成绩。")
     parser.add_argument("command", choices=["validate"])
     parser.add_argument("--dataset", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         manifest, cases = load_dataset(args.dataset.expanduser(), target)
-        if manifest["benchmark"] != OBJECT_BENCHMARKS[target]:
+        if manifest["benchmark"] != (benchmark or OBJECT_BENCHMARKS[target]):
             raise ValueError("请使用此入口对应的独立 benchmark，历史题库使用历史入口")
     except (OSError, ValueError, KeyError) as exc:
         print(f"题库校验未通过：{exc}；未运行模型评测。", file=sys.stderr)

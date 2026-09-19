@@ -14,7 +14,7 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
 
 ## 新 AIHOT 四对象评测入口 (BINDING)
 
-2026-09-17 起本次获批的精简体系以 [docs/evaluations/README.md](docs/evaluations/README.md) 为实施、数据版本、指标及迭代入口，执行 `eval-workflows iterate-eval-system`。O1 按新闻自身时间（无则抓取时间）±12小时匹配建 prefilter 题，AIHOT 参照覆盖不完整的未匹配题不作负例。旧 T5 与下面旧工作线的类别占比、k/5、历史达标门不作为新体系验收条件。新体系不自动修改生产或获准 push。
+2026-09-17 起本次获批的精简体系以 [docs/evaluations/README.md](docs/evaluations/README.md) 为实施、数据版本、指标及迭代入口，执行 `eval-workflows iterate-eval-system`。2026-09-19 用户批准 O1 [时间标注修订](docs/evaluations/news-admission/time-label-design.md)：新 `aihot-observed-membership` 以冻结 AIHOT 原始批次的同身份收录为 gold，不再用 ±12h 否决见证；主集正负均须有独立历史边界与充分稳定参照，日期 fallback 不作原文时间，未知不作负例。旧 `aihot-prefilter` 留存原义供复现。旧 T5 与下面旧工作线的类别占比、k/5、历史达标门不作为新体系验收条件。新体系不自动修改生产或获准 push。
 
 判断给定时间段的数据能否建题、扩题，或报告可用数据量之前，先读并遵循[按对象判断数据充分性](docs/evaluations/benchmarks/object-datasets.md#data-sufficiency)：按对象实际需要判断恢复、补采后的输入与参考是否足够，分别陈述单条／字段可用、对象窗口完整、采集过程连续，不能用采集失败轮数统一否决四对象，也不能仅凭恢复成功宣称整窗完整。
 

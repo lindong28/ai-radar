@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from .assets import (ROOT, archive_metrics, create_run, digest, file_digest, load_dataset,
+from .assets import (ROOT, OBSERVED_ADMISSION, archive_metrics, create_run, digest, file_digest, load_dataset,
                      read_json, read_jsonl, rebuild_index, utc_now, write_json, write_jsonl)
 from .metrics import score
 from .prefilter_eval import BENCHMARK, TARGET, prompt_context
@@ -40,7 +40,7 @@ def apply_policy(raw: dict, prediction: dict) -> dict:
 
 def project(source: Path, *, label: str, root: Path = ROOT) -> dict:
     old = read_json(source / "started.json")
-    if (old["target"], old["benchmark"]) != (TARGET, BENCHMARK):
+    if old["target"] != TARGET or old["benchmark"] not in {BENCHMARK, OBSERVED_ADMISSION}:
         raise ValueError("requires an independent prefilter run")
     dataset = Path(old["dataset"])
     _, pool = load_dataset(dataset, TARGET)
@@ -61,7 +61,7 @@ def project(source: Path, *, label: str, root: Path = ROOT) -> dict:
         if row["status"] == "ok" and row["output"]["member"] is not row["stage_results"]["prefilter"]["output"]["is_ai_related"]:
             raise ValueError("source output differs from model result")
     projected = [apply_policy(by_id[r["case_id"]]["input"], r) for r in predictions]
-    run, experiment = create_run(root, TARGET, old["version"], benchmark=BENCHMARK)
+    run, experiment = create_run(root, TARGET, old["version"], benchmark=old["benchmark"])
     identity = {"baseline": "hybrid-prefilter", "model_component": old["object_identity"],
                 "policy": POLICY, "policy_code_sha256": file_digest(Path(__file__)),
                 "context_code_sha256": file_digest(ROOT / "evals/_shared/prefilter_eval.py")}
@@ -72,7 +72,7 @@ def project(source: Path, *, label: str, root: Path = ROOT) -> dict:
                 "source_run": str(source.resolve()),
                 "source_predictions_sha256": file_digest(source / "predictions.jsonl"),
                 "scorer_identity": {p: file_digest(ROOT / p) for p in
-                    ("evals/_shared/metrics.py", "evals/news-admission/aihot-prefilter/metrics.json")},
+                    ("evals/_shared/metrics.py", f"evals/news-admission/{old['benchmark']}/metrics.json")},
                 "new_api_attempts": 0, "cost_usd": 0,
                 "cost_reason": "zero-call projection only; model cost belongs to source_run"}
     result = score("O1", cases, projected)

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-observed-membership",
+  "metrics": [
+    {"task": "*", "metric_name": "precision", "unit": "fraction", "direction": "higher", "definition": "主集预测通过题中，在冻结 AIHOT 原始批次观察到同身份收录的比例；不混入仅召回集", "source": "evals/_shared/metrics.py"},
+    {"task": "*", "metric_name": "recall", "unit": "fraction", "direction": "higher", "definition": "主集已观察到收录的题中预测通过的比例；不代表全部来源、全窗或未来收录", "source": "evals/_shared/metrics.py"}
+  ]
+}

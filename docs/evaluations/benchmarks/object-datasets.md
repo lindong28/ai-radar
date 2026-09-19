@@ -6,7 +6,7 @@
 
 | 对象 | 独立规则 |
 | --- | --- |
-| 新闻准入 | [news-admission / aihot-prefilter / v1](../news-admission/aihot-prefilter/v1/README.md) |
+| 新闻准入 | [news-admission / aihot-observed-membership / v1](../news-admission/aihot-observed-membership/v1/README.md) |
 | 可见评分 | [visible-score / aihot-score-pointwise / v1](../visible-score/aihot-score-pointwise/v1/README.md) |
 | 内容富化 | [content-enrichment / aihot-enrichment-fields / v1](../content-enrichment/aihot-enrichment-fields/v1/README.md) |
 | 精选成员 | [featured-members / aihot-featured-threshold / v1](../featured-members/aihot-featured-threshold/v1/README.md) |
@@ -23,7 +23,7 @@
 
 | 对象／用途 | 恢复、补采后如何判断 |
 | --- | --- |
-| O1 新闻准入 | 仍从 Radar 未过滤候选建题，不只补 AIHOT 可见正例。按既有规则，以新闻时间（缺失才取实际抓取时间）±12h 的 AIHOT 参照判定：主集仍需完整、稳定的参照覆盖，无匹配且覆盖不足不得作负例；参照覆盖不足但已见正例时，按既有规则单列仅召回集。Radar 候选缺口主要限制样本代表性及对整窗 precision/recall 的外推，不因少一次抓取而一刀切丢掉已取得且标签可靠的题；有已知候选缺口时不能称整窗完整。 |
+| O1 新闻准入 | 从 Radar 未过滤候选建题，不补 AIHOT-only 正例。2026-09-19 已批准的新契约以冻结原始批次同身份收录见证标正，不受 ±12h 否决。主集正负均需独立可靠历史下界至共同 H 的完整稳定参照；日期 fallback 不能当原文时间。资格不足但有见证仅召回，其余未知，不当负例。Radar 过程缺口不统一否决单题，但限制整窗外推。详见新 benchmark README；旧入口保持历史语义。 |
 | O2 新闻评分 | 逐条有可用原始输入和已观察到的 AIHOT 可见分即可按当前规则建题；缺 Radar raw 时沿已批准的 AIHOT 原标题＋绑定真实正文 fallback。恢复晚到不是自动排除理由，但输入版本、身份和参考分数须可对应，不能拿补采后的改写内容冒充所需旧版本。 |
 | O3 内容富化 | 与 O2 相同地核输入，再按 category/tags/title/summary/reason 各自的参考字段独立判断；缺一个字段不连带排除其它有效字段，缺失不补成空标签或空理由。已恢复的单条／字段可用，不要求其所在全天所有采集轮次无失败。 |
 | O4 精选全池规则 | 需要连续时间窗口中的完整候选组、参考成员及规则实际依赖的时点特征。评测窗口最终集合时，补采若已充分覆盖这些需要，可以使用；重放历史实时决策时，还须知道各条新闻当时是否已到达、当时的内容／特征版本及所需状态，不能把后补数据倒填成当时已知。现有 pointwise-threshold 子集不是完整池，不替代此判断。 |
@@ -44,10 +44,11 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
   --reference /absolute/path/to/aihot-reference/manifest.json \
   --reference /absolute/path/to/aihot/windows/START--END/manifest.json \
   --start 2026-09-15T14:45:00Z --end 2026-09-18T00:00:00Z \
+  --admission-benchmark aihot-observed-membership \
   --version v2
 ```
 
-路径是占位示例，时间必须带时区。`--start/--end` 选择 Radar run 的 started_at，左闭右开，允许非连续段；不是“新闻发布日期必须落入此区间”。AIHOT 每份参照使用它自己已验证的新闻窗口，O1 另外读取完整 API 遍历判断逐新闻 ±12h。多份 `--reference` 可重复传入：支持小时 interval 根/manifest，或标准 `windows/<window>/manifest.json` 日窗 v1/v2/v3；整个 archive 根不是输入。参照损坏、抓取未完成、游标链/标签证据错误会拒绝建题，不静默跳过。不要把 staging 目录当完成窗口。
+路径是占位示例，时间必须带时区。`--start/--end` 选择 Radar run 的 started_at，左闭右开，允许非连续段；不是“新闻发布日期必须落入此区间”。AIHOT 每份参照使用它自己已验证的新闻窗口；新 O1 另读冻结的全部 API 遍历确定已观察成员，以末两遍稳定性及历史覆盖判断主集资格，不再使用 ±12h。多份 `--reference` 可重复传入：支持小时 interval 根/manifest，或标准 `windows/<window>/manifest.json` 日窗 v1/v2/v3；整个 archive 根不是输入。参照损坏、抓取未完成、游标链/标签证据错误会拒绝建题，不静默跳过。不要把 staging 目录当完成窗口。CLI 为历史复现保留旧 benchmark 默认值，新建 O1 必须显式传上面的 `--admission-benchmark`。
 
 默认生成四个对象。只建一个或几个时重复 `--target visible-score` 等；可显式传 `--data-root` 与 `--contract-path`。新独立题库版本必须为 `v1`、`v2` 等正整数递增名称；先看各 benchmark 已有版本，选尚未使用的下一版。不同对象的版本序列独立，不要求同时升版。任一目标版本已存在就退出，不覆盖历史。
 
@@ -98,13 +99,14 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 
 ```bash
 PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
-  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-prefilter/v1 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-observed-membership/v1 \
   --base ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 \
   --base ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v1 \
   --raw-root /absolute/path/to/data/raw-capture \
   --start 2026-09-18T00:00:00Z --end 2026-09-19T00:00:00Z \
   --reference /absolute/path/to/new-aihot-window/manifest.json \
   --target news-admission --target visible-score --target content-enrichment \
+  --admission-benchmark aihot-observed-membership \
   --version v2
 ```
 
@@ -172,7 +174,7 @@ validate 校验问题集和冻结证据的字节摘要、对象/版本路径、�
 | --- | --- |
 | X URL 写法 | 同一来源下，x.com / twitter.com 的账号路径、i/web/status 路径、分享查询参数及 photo/video 尾缀，按同一个数字推文 ID 配对、去重和分 split；题目 input.url 按来源契约输出 `https://x.com/<handle>/status/<id>`。原始 URL 仍在冻结证据里 |
 | 其它 URL | 保留既有身份边界，不泛化删除 query、不跨域猜正文相等、不跨来源合并转载 |
-| 仅 published_at / fetched_at 变化 | 不构成内容多版本；原时间仍保留，O1 的 ±12h 匹配和精选时效用途照常读取，不将补采倒填为历史已到达 |
+| 仅 published_at / fetched_at 变化 | 不构成内容多版本；原时间仍保留。O1 新契约区分独立发布时间证据、真实到达及参照范围；旧 benchmark 仍读 ±12h，精选时效用途不变，不将补采倒填为历史已到达 |
 | 仅 HTML 或 extra 中来源标签变化 | 不构成内容多版本，正文比较使用 content_text；若提取出的正文也变化，仍按正文变化处理 |
 | 标题排版／标点 | 比较时统一 NFC、全角 ASCII、空白、引号及常见分隔／句末标点；不改模型所见原标题。数字、小数点、负号、上标、`!=` 等运算符和实际文字差异仍保留，不用模糊语义匹配吞掉实质差异 |
 | O2 评分 | 比较新闻身份、规范化标题、完整 content_text 和 author；不截断正文来躲开变化 |

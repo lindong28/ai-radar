@@ -1,6 +1,6 @@
-# 新闻准入：时间标注修订设计（待审核）
+# 新闻准入：时间标注修订设计（已批准）
 
-> [Developer] · 2026-09-19 · **仅设计，尚未启用。** 用户已授权修订设计，尚未批准改 gold、重建题库或追加模型调用。当前生效的仍是 [aihot-prefilter/v1](aihot-prefilter/v1/README.md)。出版边界见 [ADR](../../adr/20260919-9365-publish-admission-time-label-proposal.md)。
+> [Developer] · 2026-09-19 · 用户随后明确批准“继续修改 gold 和重建题库。记得更新文档。然后继续对 precision 和 recall 进行优化”。实施入口为 [aihot-observed-membership/v1](aihot-observed-membership/v1/README.md)，实际进度和读数见 [status](status.md)。此前仅出版的边界保留在 [ADR](../../adr/20260919-9365-publish-admission-time-label-proposal.md)，不再阻止本次已授权实施；模型调用仍遵守剩余预算。
 
 ## 1. 拟议目标：评准入，不把收录延迟当作拒收
 
@@ -65,9 +65,9 @@
 | L2 | 批次、raw、逐题输入、规范身份、标签证据与迁移去向可追溯；复用既有 builder／runner／scorer／归档链，不复制另一套系统。批准实施后才生成新题库与迁移统计。 |
 | L3 | 新语义与旧语义分开；候选和主集资格标签盲，输入与参考隔离；冻结截止不等于瞬时完整；旧实验不可改名充当新实验，改 gold 带来的分数变化不称模型优化。 |
 
-消费者必须重新理解 `member=false`，故建议新 benchmark **`news-admission/aihot-observed-membership/v1`**，而非旧 benchmark 的 v2。未来相同语义扩数据再递增 v2/v3；每版仍是完整去重快照。旧 `aihot-prefilter/v1` 保留供复现，不累计题数或混合成绩。拟议路径尚未创建、注册或成为默认入口。
+消费者必须重新理解 `member=false`，故使用新 benchmark **`news-admission/aihot-observed-membership/v1`**，而非旧 benchmark 的 v2。未来相同语义扩数据再递增 v2/v3；每版仍是完整去重快照。旧 `aihot-prefilter/v1` 保留供复现，不累计题数或混合成绩。建题显式指定 `--admission-benchmark aihot-observed-membership`；共享脚本的历史默认值不静默改义。
 
-## 6. 获批后的实施与验证范围（本轮不执行）
+## 6. 已批准的实施与验证范围
 
 1. 在共享建题实现中加入新标注方式、日期 provenance 与覆盖资格判断；新 benchmark 叶子复用既有执行和评分组件。同步项目入口、建题／扩展命令与新版本说明，旧入口仍可复现旧语义。
 2. **先零调用建题审计**：对选定全部原始候选按同一规则重验，不只修已见错误。列出主集正／负、仅召回、未知，以及旧→新标签和去向变化，按来源列覆盖损失；不能先许诺原 11,804 题都能留下。数据仍放 `~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/`，不上 DGX。
@@ -81,4 +81,4 @@
 
 本设计不把时间问题包装成全部根因：`buzzing_hn` 聚合子流与 AIHOT 实际输入范围是否一致仍有未验证部分；沿用冻结来源合同不等于证明私有 feed 一致。仅改时间标签不解决来源错配、真正内容误判或供应商拒答，也不保证双90。未来迟到／新证据造成标签变化时发布新快照，不改旧版；不凭空规定 48h/72h 成熟期。
 
-当前未知：新题量、各来源可证历史深度、真实日期缺失比例、迟到分布、新分数。这些由批准后的零调用迁移审计取得。**本轮交付的是可审核设计，不是已修好的题库；是否采纳归用户，获批实施后由 agent 建设。**
+实施结果由 [status](status.md) 和新版本 manifest 给出，包括题量、来源覆盖与重评分；迟到分布与 AIHOT 私有拒收规则仍不由本设计推定。未拿到原文时间证据的 raw 继续保存，不能为保住题数放宽资格。

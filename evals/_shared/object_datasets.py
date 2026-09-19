@@ -217,13 +217,15 @@ def usable(field: str, value: Any) -> bool:
 
 
 def construct(records: dict, references: list[Reference], contract: dict, sources: dict,
-              aihot_input_references=()) -> tuple[dict, dict, list]:
+              aihot_input_references=(), *, admission_benchmark="aihot-prefilter") -> tuple[dict, dict, list]:
     from .aihot_inputs import fallback_case
 
     cases = {t: [] for t in BENCHMARKS}
     excluded = {t: [] for t in BENCHMARKS}
     supplemental = []
-    index = AdmissionIndex(references, contract, sources)
+    from .admission_labels import BENCHMARK as observed_benchmark, ObservedAdmissionIndex
+    index = (ObservedAdmissionIndex(references, contract, sources) if admission_benchmark == observed_benchmark
+             else AdmissionIndex(references, contract, sources))
     paired = defaultdict(list)
     source_for = {}
     ref_by_key = {ref.key: ref for ref in references}
@@ -246,7 +248,7 @@ def construct(records: dict, references: list[Reference], contract: dict, source
                 continue
         else:
             case = base_case(key, records[key], sources)
-            group, evidence = index.label(case)
+            group, evidence = (index.label(case, records[key]) if admission_benchmark == observed_benchmark else index.label(case))
             if group in {"main", "recall-only"}:
                 labeled = copy.deepcopy(case)
                 labeled["reference"] = {"member": bool(evidence["matched_aihot_ids"])}
@@ -297,13 +299,18 @@ def construct(records: dict, references: list[Reference], contract: dict, source
 def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
           start: str | None = None, end: str | None = None, version: str, bases: list[Path] | None = None,
           targets: list[str] | None = None, data_root: Path = DEFAULT_DATA_ROOT,
-          contract_path: Path = ROOT / "tests/fixtures/aihot_sources.json", aihot_inputs: bool = False) -> dict:
+          contract_path: Path = ROOT / "tests/fixtures/aihot_sources.json", aihot_inputs: bool = False,
+          admission_benchmark: str = "aihot-prefilter") -> dict:
     dataset_version(version)
     targets = list(dict.fromkeys(targets or BENCHMARKS))
     if set(targets) - BENCHMARKS.keys():
         raise ValueError("unknown target")
     data_root = data_root.resolve()
-    leaves = {t: data_root / t / BENCHMARKS[t] / version for t in targets}
+    from .admission_labels import BENCHMARK as observed
+    if admission_benchmark not in {BENCHMARKS["news-admission"], observed}:
+        raise ValueError("unknown admission benchmark")
+    benchmarks = {**BENCHMARKS, "news-admission": admission_benchmark}
+    leaves = {t: data_root / t / benchmarks[t] / version for t in targets}
     if any(leaf.exists() for leaf in leaves.values()):
         raise FileExistsError("dataset version already exists; choose a new version")
     from .dataset_merge import changes_for, merge_records, read_bases
@@ -345,7 +352,8 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
                      "observation_count_scope": "per-news observations are lower bounds; overlapping compact archives cannot yield an exact poll total",
                      "source_failures": list({digest(f): f for f in failures}.values())}
     scoped = {k: r for k, r in records.items() if next(iter(r["variants"].values()))["raw"]["source_id"] in sources}
-    cases, excluded, supplemental = construct(scoped, refs, contract, sources, allowed_inputs)
+    cases, excluded, supplemental = construct(scoped, refs, contract, sources, allowed_inputs,
+                                              admission_benchmark=admission_benchmark)
     for key in sorted(records.keys() - scoped.keys()):
         for target in BENCHMARKS:
             excluded[target].append({"case_id": key, "reason": "source_out_of_scope"})
@@ -389,7 +397,7 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
                   "fields": {f: sum(f in c["reference"] for c in cases[target]) for f in FIELDS}}
         if target == "news-admission":
             counts.update(positive=sum(c["reference"]["member"] for c in cases[target]), recall_only=len(supplemental))
-        manifest = {"schema_version": 2, "target": target, "benchmark": BENCHMARKS[target], "version": version,
+        manifest = {"schema_version": 2, "target": target, "benchmark": benchmarks[target], "version": version,
                     "created_at": utc_now(), "case_count": len(cases[target]), "counts": counts,
                     "policy": "object-specific-v2", "evaluation_mode": "pointwise-threshold" if target == "featured-members" else "pointwise",
                     "window": inventory["window"], "files": files, "shared_evidence": os.path.relpath(evidence, leaf),
@@ -409,6 +417,16 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
             manifest["aihot_input_scope"] = ["visible-score", "content-enrichment"]
             manifest["original_input_builder_sha256"] = file_digest(Path(__file__).with_name("aihot_inputs.py"))
             manifest["rebuild"]["aihot_inputs"] = aihot_inputs
+        if target == "news-admission" and admission_benchmark == observed:
+            manifest["policy"] = "observed-membership-history-v1"
+            manifest["label_builder_sha256"] = file_digest(Path(__file__).with_name("admission_labels.py"))
+            manifest["rebuild"]["admission_benchmark"] = observed
+            manifest["negative_semantics"] = "not observed in frozen raw API batches; not explicit rejection or an instantaneous snapshot"
+            counts["sources"] = {s: {"main": sum(c["input"]["source_id"] == s for c in cases[target]),
+                "positive": sum(c["input"]["source_id"] == s and c["reference"]["member"] for c in cases[target]),
+                "recall_only": sum(c["input"]["source_id"] == s for c in supplemental),
+                "raw": sum(next(iter(r["variants"].values()))["raw"]["source_id"] == s for r in scoped.values())}
+                for s in sorted(sources)}
         if target in {"visible-score", "content-enrichment"} and allowed_inputs:
             manifest["policy"] = "object-specific-aihot-original-v3"
             manifest["pairing_limit"] = "same source/canonical URL; Radar raw preferred, otherwise one substantive identity-bound AIHOT original version; not a continuous candidate pool"
@@ -437,6 +455,8 @@ def main():
     create.add_argument("--end", help="exclusive new raw run start, timezone required")
     create.add_argument("--version", required=True, help="next input snapshot version: v1, v2, ...")
     create.add_argument("--target", dest="targets", choices=list(BENCHMARKS), action="append")
+    create.add_argument("--admission-benchmark", choices=["aihot-prefilter", "aihot-observed-membership"],
+                        default="aihot-prefilter", help="explicit admission label contract; legacy default is preserved")
     create.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     create.add_argument("--contract-path", type=Path, default=ROOT / "tests/fixtures/aihot_sources.json")
     validate = sub.add_parser("validate", help="verify questions and all frozen evidence hashes")

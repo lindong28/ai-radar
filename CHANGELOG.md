@@ -6,6 +6,13 @@
 - 同期 `/wechat` 的停更还叠加了 Wechat2RSS 许可证 9/16 到期（容器每分钟崩溃重启），已续费一年，续费沿用原激活码、无需改 `.env`。
 
 - 原始采集监督的「未收全来源」告警改为**连续 3 轮**未收到才报，单轮漏采不再推送。约 160 个源里每轮总有个别失败，按单轮报使它成为本机最吵的告警：`logs/collection-supervisor/health.log` 的 613 轮里有 84 次 incident 翻转（即 84 条推送），其中 97 个失败轮是 `claude_youtube` 一个源在 HTTP 200 与 404 之间来回。改为三轮后同一段历史只剩 20 次翻转，而其中每一次多轮 outage 仍然照报——包括打掉整批 `x_*` 源的那次 86 轮、以及一次 4 轮。代价是丢掉单轮瞬断，含两次「160 个源全部失败但下一轮即恢复」。计数按源独立、恢复即清零，状态存 `<state-dir>/radar-source-streaks.json`，只写当前失败的源。未传 streak 路径时不做去抖，消息也相应只说「本轮未收全」。
+
+## 2026-09-19（新闻准入 gold 修订）
+
+- 新增 `aihot-observed-membership` benchmark：同身份 AIHOT 收录见证不再因 ±12h 错位判负；主集正负按相同历史证据资格筛选，日期来源不明或覆盖不足不硬标负例。
+- 建题支持显式选择新契约，继续合并原始材料、去重及重验；旧题库/成绩保留原义。新增严格同输入的零调用重评分入口，区分 gold 修订与模型优化。
+- 命令、数据范围及最新实验结果见 [新题库文档](docs/evaluations/news-admission/aihot-observed-membership/v1/README.md) 与 [对象状态](docs/evaluations/news-admission/status.md)。不改变生产 prefilter 或采集配置。
+
 ## 2026-09-19（第二轮安全加固）
 
 - Changed: 文章链接、来源主页链接、微信文章链接在输出前统一只保留 http(s)，其余（历史遗留的非 http 值）不再作为可点链接输出；微信头像只接受腾讯图片域并走 `/img` 代理；X 推文媒体只接受 X 自己的 CDN 域。

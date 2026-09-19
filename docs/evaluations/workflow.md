@@ -4,6 +4,8 @@
 
 ## 新数据默认：逐对象独立建题
 
+O1 当前采用 [aihot-observed-membership](news-admission/aihot-observed-membership/v1/README.md)：建题必须显式指定 `--admission-benchmark aihot-observed-membership`，运行其同名 evaluate.py。下文旧 prefilter 入口仍可复现 ±12h 契约，不是当前 gold。`admission_rescore` 可按实际输入完全相等复用旧响应，保留旧对象身份与失败；这类结果仅为测量迁移诊断，不算模型优化或未见回归。
+
 先按[按对象判断数据充分性](benchmarks/object-datasets.md#data-sufficiency)确定给定时间段的数据足够哪些用途。采集 coverage 用于定位过程缺口，不是四对象统一入题门；恢复、补采的实际内容及其证据决定可用范围。
 
 执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、带时区 raw 时间范围和不可覆盖的新 vN。O2/O3 可显式用 `--aihot-inputs` 接入 AIHOT 原标题与绑定原文；O1 不补这种仅有正例的数据。O4 全池规则继续要求连续完整候选组；`aihot-featured-threshold` 仅作局部用途。逐 benchmark 的题集/字段和代码入口由[对象索引](README.md)定位。O1 的独立模型运行、抽样、恢复和归档命令见 [prefilter 执行入口](../../evals/news-admission/aihot-prefilter/README.md)；其余新叶子 CLI 仍仅做 validate，已有预测可用共享 metrics.score API。不接下文旧全池 run，不将建题命令与旧运行命令直接串接。

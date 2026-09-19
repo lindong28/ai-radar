@@ -65,11 +65,11 @@ def object_identity(config: dict, prompt: dict | None) -> dict:
 def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed: str,
              chat_factory, label: str, workers: int = 8, prompt: dict | None = None,
              smoke: bool = False, reuse: Path | None = None, root: Path = ROOT,
-             exclude_runs: tuple[Path, ...] = ()) -> dict:
+             exclude_runs: tuple[Path, ...] = (), benchmark: str = BENCHMARK) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
     manifest, pool = load_dataset(dataset, TARGET)
-    if manifest["benchmark"] != BENCHMARK:
+    if manifest["benchmark"] != benchmark:
         raise ValueError("this runner requires the independent prefilter benchmark")
     exclusions = [{"run": str(p.resolve()), "cases_sha256": file_digest(p / "cases.jsonl"),
                    "case_ids": [c["case_id"] for c in read_jsonl(p / "cases.jsonl")]}
@@ -86,7 +86,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     prompts = {c["case_id"]: {"system": prompt["system"], "user": template.render(**prompt_context(c["input"]))}
                for c in cases} if template else {}
     scorer_identity = {p: file_digest(ROOT / p) for p in
-                       ("evals/_shared/metrics.py", "evals/news-admission/aihot-prefilter/metrics.json")}
+                       ("evals/_shared/metrics.py", f"evals/news-admission/{benchmark}/metrics.json")}
     cached = {}
     if reuse is not None:
         old = read_json(reuse / "started.json")
@@ -97,8 +97,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
             row = read_json(path)
             if row["status"] == "ok" and row["case_id"] in old_cases:
                 cached[row["case_id"]] = (old_cases[row["case_id"]], row)
-    run, experiment = create_run(root, TARGET, manifest["version"], benchmark=BENCHMARK)
-    metadata = {"target": TARGET, "benchmark": BENCHMARK, "version": manifest["version"],
+    run, experiment = create_run(root, TARGET, manifest["version"], benchmark=benchmark)
+    metadata = {"target": TARGET, "benchmark": benchmark, "version": manifest["version"],
                 "label": label, "dataset": str(dataset.resolve()),
                 "dataset_manifest_sha256": file_digest(dataset / "manifest.json"),
                 "case_identity": digest(cases), "split": split, "smoke": smoke,
@@ -154,7 +154,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
             "metrics": result["metrics"], "elapsed_seconds": metadata["elapsed_seconds"]}
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, benchmark=BENCHMARK) -> int:
     parser = argparse.ArgumentParser(description="独立 prefilter：只运行准入，不执行评分/富化，不写生产数据库。")
     sub = parser.add_subparsers(dest="command", required=True)
     validate = sub.add_parser("validate")
@@ -175,14 +175,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "validate":
         from .object_entry import main as validate_main
-        return validate_main(target=TARGET, argv=["validate", "--dataset", str(args.dataset)])
+        return validate_main(target=TARGET, benchmark=benchmark, argv=["validate", "--dataset", str(args.dataset)])
     from .cli import transport_factory
     config = read_json(args.config)
     factory = transport_factory(config, args.env_file)
     result = evaluate(args.dataset, config=config, split=args.split, limit=args.limit, seed=args.seed,
                       workers=args.workers, label=args.label, chat_factory=factory,
                       prompt=read_json(args.prompt) if args.prompt else None, smoke=args.smoke, reuse=args.reuse,
-                      exclude_runs=tuple(args.exclude_run))
+                      exclude_runs=tuple(args.exclude_run), benchmark=benchmark)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

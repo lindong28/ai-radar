@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .assets import BENCHMARKS, OBJECT_BENCHMARKS, digest, file_digest, load_dataset, read_json, read_jsonl
+from .assets import BENCHMARKS, OBJECT_BENCHMARKS, OBSERVED_ADMISSION, digest, file_digest, load_dataset, read_json, read_jsonl
 from .dataset import news_key as legacy_news_key
 from .dataset import timestamp
 from .identity import news_key
@@ -51,7 +51,9 @@ def read_bases(paths):
         seed, _ = load_dataset(path)
         object_specific = seed["benchmark"] == OBJECT_BENCHMARKS[seed["target"]]
         candidates = {path}
-        for target, benchmark in (OBJECT_BENCHMARKS if object_specific else BENCHMARKS).items():
+        siblings = ({"news-admission": OBSERVED_ADMISSION} if seed["benchmark"] == OBSERVED_ADMISSION
+                    else OBJECT_BENCHMARKS if object_specific else BENCHMARKS)
+        for target, benchmark in siblings.items():
             parts = (benchmark, target) if seed["schema_version"] == 1 else (target, benchmark)
             sibling = path.parents[2].joinpath(*parts, seed["version"])
             if (sibling / "manifest.json").is_file():

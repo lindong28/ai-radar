@@ -25,11 +25,12 @@ OBJECT_BENCHMARKS = {
     "content-enrichment": "aihot-enrichment-fields",
     "featured-members": "aihot-featured-threshold",
 }
+OBSERVED_ADMISSION = "aihot-observed-membership"
 
 
 def benchmark_pairs():
     """Legacy and object-specific consumer contracts, without rewriting history."""
-    return (*BENCHMARKS.items(), *OBJECT_BENCHMARKS.items())
+    return (*BENCHMARKS.items(), *OBJECT_BENCHMARKS.items(), ("news-admission", OBSERVED_ADMISSION))
 
 
 def dataset_version(value: str) -> str:
@@ -101,7 +102,7 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
     if target is not None and target != selected:
         raise ValueError("dataset belongs to another target")
     schema = manifest.get("schema_version")
-    if manifest["benchmark"] == OBJECT_BENCHMARKS[selected]:
+    if manifest["benchmark"] in {OBJECT_BENCHMARKS[selected], OBSERVED_ADMISSION}:
         if schema != 2:
             raise ValueError("object benchmark requires schema 2")
         expected_mode = "pointwise-threshold" if selected == "featured-members" else "pointwise"
@@ -159,7 +160,7 @@ def create_run(root: Path, target: str, version: str, *, benchmark: str | None =
     benchmark = BENCHMARKS[target] if benchmark is None else benchmark
     if (target, benchmark) not in benchmark_pairs():
         raise ValueError("unknown target/benchmark pairing")
-    if benchmark == OBJECT_BENCHMARKS[target]:
+    if benchmark in {OBJECT_BENCHMARKS[target], OBSERVED_ADMISSION}:
         dataset_version(version)
     instant = created_at or datetime.now(UTC)
     if instant.tzinfo is None:

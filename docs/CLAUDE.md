@@ -38,11 +38,11 @@
 
 ### docs/evaluations/ [Developer]
 
-[新闻准入时间标注修订草案](evaluations/news-admission/time-label-design.md)：待用户审核；区分冻结批次已观察成员与 ±12h 时间匹配，不改当前题库或 gold。出版边界见 [20260919-9365](adr/20260919-9365-publish-admission-time-label-proposal.md)。
+[新闻准入时间标注修订](evaluations/news-admission/time-label-design.md)：用户已批准修改 gold 与重建；当前消费者及命令见 [aihot-observed-membership/v1](evaluations/news-admission/aihot-observed-membership/v1/README.md)，旧 ±12h benchmark 保留原义。历史出版边界见 [20260919-9365](adr/20260919-9365-publish-admission-time-label-proposal.md)。
 
 [README.md](evaluations/README.md) 是四对象体系入口；对象说明/状态在 `<target>/README.md` / `status.md`，逐 benchmark 输入版本说明在 `<target>/<benchmark>/vN/README.md`。执行与存储在 workflow.md / assets.md，共享建题规则和库存在 benchmarks/，假设及人读台账在 experiments/，报告模板在 reports/。根 runs/experiments 才是逐轮机器资产，不混入文档目录。旧近似度实验不作为此体系的达标线。
 
-[逐对象建题与扩展](evaluations/benchmarks/object-datasets.md) 包含合并去重、有效性重验、命名迁移与复用命令。当前说明：[新闻准入](evaluations/news-admission/aihot-prefilter/v1/README.md)、[可见评分](evaluations/visible-score/aihot-score-pointwise/v1/README.md)、[字段富化](evaluations/content-enrichment/aihot-enrichment-fields/v1/README.md)、[局部精选阈值](evaluations/featured-members/aihot-featured-threshold/v1/README.md)。契约不同拆 benchmark，契约相同用 vN；评分/富化可用 AIHOT 原文，准入/精选不因此扩充。原 objects/ 与规则名目录的有效内容已迁入这些单一入口，旧数据与成绩保持历史身份。
+[逐对象建题与扩展](evaluations/benchmarks/object-datasets.md) 包含合并去重、有效性重验、命名迁移与复用命令。当前说明：[新闻准入](evaluations/news-admission/aihot-observed-membership/v1/README.md)、[可见评分](evaluations/visible-score/aihot-score-pointwise/v1/README.md)、[字段富化](evaluations/content-enrichment/aihot-enrichment-fields/v1/README.md)、[局部精选阈值](evaluations/featured-members/aihot-featured-threshold/v1/README.md)。契约不同拆 benchmark，契约相同用 vN；评分/富化可用 AIHOT 原文，准入/精选不因此扩充。原 objects/ 与规则名目录的有效内容已迁入这些单一入口，旧数据与成绩保持历史身份。
 
 ### docs/operations/ [User]
 
