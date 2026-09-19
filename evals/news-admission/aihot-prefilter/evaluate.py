@@ -1,5 +1,5 @@
-"""news-admission/aihot-prefilter: independent dataset validation."""
-from evals._shared.object_entry import main
+"""news-admission/aihot-prefilter: independent validation and inference."""
+from evals._shared.prefilter_eval import main
 
 if __name__ == "__main__":
-    raise SystemExit(main(target="news-admission"))
+    raise SystemExit(main())

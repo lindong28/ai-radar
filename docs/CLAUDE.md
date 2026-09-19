@@ -21,6 +21,7 @@
 | 文件 | 性质 | 说明 |
 |---|---|---|
 | [architecture.md](architecture.md) | Mutable snapshot | 系统模块结构、分层、数据流、数据库设计、Web 层、关键抽象 |
+| [20260919-e1d3](adr/20260919-e1d3-test-prefilter-direct-ai-impact.md) | Decision | 仅离线测试 prefilter 的AI直接影响范围；固定开发/回归，不改变生产 |
 | [20260919-a3c1](adr/20260919-a3c1-harden-public-surface-after-security-review.md) | Decision | 安全审查后加固公网面：admin token、采集入口 scheme/host 白名单、页面路由请求边界、nginx 安全头、依赖升级；生产生效待部署 |
 | [20260918-7d0e](adr/20260918-7d0e-expand-score-and-enrichment-from-aihot-originals.md) | Decision | 仅评分/富化接入 AIHOT 绑定原文，准入/精选保持保守扩题边界 |
 | [20260917-8b86](adr/20260917-8b86-wait-for-collector-process-groups.md) | Decision | 采集进程组退出竞态与监督失败告警修复；已获批启用，19:58 真实入口结束 |

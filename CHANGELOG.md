@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-19（新闻准入独立离线评测）
+
+- 新闻准入独立题库现在可直接运行当前 prefilter、固定抽样、比较候选，并保留逐题输出和调用记录；失败题可以单独补跑，失败轮不伪报完整成绩。使用方式见[运行入口](evals/news-admission/aihot-prefilter/README.md)。
+- 新增显式 prompt 候选配置与开发／回归分组结果归档；本次不改变生产 prompt、网站、题库或采集任务，实验结论见[对象状态](docs/evaluations/news-admission/status.md)。
+
 ## 2026-09-19（安全审查加固）
 
 - Changed: `/admin`、`/admin/usage` 与 `/api/v1/admin/*` 改为共享密钥鉴权——`.env` 设 `AI_RADAR_ADMIN_TOKEN`，请求带 `X-Admin-Token`（或 `Authorization: Bearer`）；未配置时所有远程请求 403。此前只要请求带任意 `Cf-Access-Jwt-Assertion` 头就能进入，该头现已无效。

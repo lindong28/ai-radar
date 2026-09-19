@@ -18,7 +18,7 @@
 | ④ 自动指标 | precision、recall。判官及判官校验不适用。只有正例时精确率无区分拒绝能力，不据此宣称过滤已优化。 |
 | ⑤ 判官校验 | 不适用；通过有相反结果的确定性测试核计数 |
 
-执行与指标定义：[独立题库入口](../../../evals/news-admission/aihot-prefilter/README.md)、[metrics.json](../../../evals/news-admission/aihot-prefilter/metrics.json)。叶子 CLI 负责资产校验；现有 `metrics.score` 可对已有预测作确定性计分，逐对象模型运行与自动归档尚未接线。历史共享池操作见 [workflow](../workflow.md#历史-schema1共同窗口与全池运行)。
+执行与指标定义：[独立题库入口](../../../evals/news-admission/aihot-prefilter/README.md)、[metrics.json](../../../evals/news-admission/aihot-prefilter/metrics.json)。叶子 CLI 支持 validate 与独立 prefilter run，复用生产 renderer/provider 转换，不调用后续评分；模型输出由 `metrics.score` 确定性计分并自动归档。历史共享池操作见 [workflow](../workflow.md#历史-schema1共同窗口与全池运行)。
 
 ## L2 数据资产
 

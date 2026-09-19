@@ -16,7 +16,7 @@ prefilter 的通过集合；precision / recall，确定性集合比较，不需�
 
 cases.jsonl 的 reference 只有 member。recall-only.jsonl 是独立补充集，manifest.counts.positive / main 可推导主集正负数；excluded.jsonl 解释未知项。
 
-单条 prefilter 推理；计分入口 evals/_shared/metrics.py 的 news-admission。新叶子 CLI 只做 validate，已有逐题预测可调用共享 metrics.score；逐对象模型运行及自动归档仍未接线。schema2 不经旧共享池 run。
+单条 prefilter 推理；计分入口 evals/_shared/metrics.py 的 news-admission。独立叶子 CLI 支持 validate 与 run，后者只调用 prefilter 并自动归档，支持固定 seed 抽样和 dev/regression 分开执行。schema2 不经旧共享池 run。
 
 ## L2：代码、题库与复用
 
@@ -31,4 +31,4 @@ cases.jsonl 的 reference 只有 member。recall-only.jsonl 是独立补充集�
 
 ## 版本与结果
 
-旧 `object-specific-v2` 是规则标签，不是消费者版本。新 benchmark 明确区分主集与仅召回集，不能按旧完整池入口读取。v1 只迁移身份与证据定位，不重算题目；后续同输入/参考/计分契约的建题规则变化记录在新 vN README。运行原件归 `runs/news-admission/aihot-prefilter/v1/<UTC-date>/<UTC-time>/`，元数据归同分区 `experiments/`；本版没有模型成绩，历史成绩见[对象状态](../../status.md)。
+旧 `object-specific-v2` 是规则标签，不是消费者版本。新 benchmark 明确区分主集与仅召回集，不能按旧完整池入口读取。v1 只迁移身份与证据定位，不重算题目；后续同输入/参考/计分契约的建题规则变化记录在新 vN README。运行原件归 `runs/news-admission/aihot-prefilter/v1/<UTC-date>/<UTC-time>/`，元数据归同分区 `experiments/`；当前及历史成绩见[对象状态](../../status.md)。

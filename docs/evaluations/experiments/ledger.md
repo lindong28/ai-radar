@@ -1,6 +1,8 @@
 # 运行台账
 
-> [Developer] · 2026-09-17 真实运行台账。时间列为UTC；版本均为 `20260917-0700-1200-v1`。对应根 `experiments/<target>/<benchmark>/<version>/2026-09-17/<time>/` 与 `runs/` 同分区。
+> [Developer] · 真实运行台账，时间列为UTC。不同benchmark与题集版本分段，不跨身份相减。根 `experiments/<target>/<benchmark>/<version>/<date>/<time>/` 与 `runs/` 同分区。
+
+## 2026-09-17：历史共享池，版本20260917-0700-1200-v1
 
 | 轮次 | 范围 | 结果与资产 |
 | --- | --- | --- |
@@ -19,3 +21,29 @@
 供应商拒答 case_id 为 `6b5539ddc0d0cffa7d0764e7`（ITHome手机新闻，不在O1确定题中）。两次原始响应均 `finish_reason=content_filter`。不以人工推测替代prefilter输出；完整池的排名映射因此不确定，O2/O4仍缺分。若改变模型/供应商须显式定新对象并重建同条件基线，不能作为静默fallback。
 
 运行命令生成根 experiments 的机器元数据，summary投影可查询四对象的数值、未计算及未采信记录，沿source/pointer回原件；费用无权威价目，cost=null，usage逐attempt保留。文本校准出口已实测因0条完整三文本参考拒绝导出，不伪造用户票；新增窗口后复用同一build/runner，不导入T5或旧k/5。
+
+## 2026-09-19：news-admission / aihot-prefilter / v1
+
+本轮只评prefilter，不调用score/enrich；模型请求deepseek-v4-flash，已返回的实际模型为deepseek-v4-flash-ga-260731，temperature=0、max_tokens=200、thinking disabled、SDK零重试/无fallback。固定seed=prefilter-20260919；600 dev含80正520负、54来源，400 regression含42正358负。按case_id哈希抽样，不按标签重平衡。180题recall-only不混入。本轮获准抽样优化与独立回归，2603次调用为总上限（含恢复），不授权生产部署。
+
+| UTC轮次 | 范围 | 结果与资产 |
+| --- | --- | --- |
+| 07-50-45 | 3题真实smoke | 3调用全部成功，1正2负均正确，13.63秒；不作为质量验收 |
+| 07-51-29 | baseline，600 dev | 600调用，589成功/11失败（10连接、1超时）；584.49秒，两项指标未计算 |
+| **08-02-18** | **baseline恢复完整** | **新增11调用均成功，复用589；23.09秒。P=70/154=45.45%，R=70/80=87.50%** |
+| 08-02-59 | C1 direct-ai-impact，600 dev | 600调用，589成功/11连接失败；569.70秒，两项指标未计算 |
+| 08-12-52 | C1第一次恢复 | 新增11调用，9成功/2连接失败，21.22秒；仍未计算指标 |
+| **08-13-40** | **C1开发完整** | **新增2调用均成功，复用598；7.82秒。P=73/159=45.91%，R=73/80=91.25%；同题compare接受，冻结后进独立回归** |
+| 08-14-30 | baseline，400 regression | 400调用，392成功/8失败（7连接、1超时）；796.99秒，两项指标未计算 |
+| 08-14-41 | C1，400 regression | 400调用，390成功/10失败（9连接、1超时）；853.14秒，两项指标未计算 |
+| **08-28-00** | **baseline回归完整** | **新增8调用均成功，复用392；12.95秒。P=33/95=34.74%，R=33/42=78.57%** |
+| 08-29-08 | C1回归第一次恢复 | 新增10调用，9成功/1连接失败；23.85秒，两项指标仍未计算 |
+| **08-29-47** | **C1回归完整，最终不采纳** | **新增1调用成功，复用399；5.62秒。P=35/101=34.65%，R=35/42=83.33%；precision退步，compare accepted=false** |
+
+开发原件和变化明细见 `runs/news-admission/aihot-prefilter/v1/2026-09-19/08-13-40/{conclusion.md,comparison.json,paired-changes.json}`，首轮及恢复轮均保留。C1增加一句AI直接影响正例规则；不修改题库、标签、生产prompt。3条FN→TP、3条TN→FP、1条FP→TN，不能把全部变化都解释为确定性语义因果。静态AIHOT参照私有规则和自一致率未知，未以边际放行比例验收。
+
+回归对照与总账在 `runs/news-admission/aihot-prefilter/v1/2026-09-19/08-29-47/{conclusion.md,comparison.json,paired-changes.json,attempt-summary.json}`。回归2条FN→TP、5条TN→FP、1条FP→TN，净增4条误收。两组最终均完整，不合并指标掩盖回归precision退步，保留基线，不部署C1。
+
+合计11轮、2046次请求尝试（2003成功，40次APIConnectionError、3次APITimeoutError）；失败均保留并在身份不变下只补失败题，同一case_id与prompt组合最多三次尝试。成功响应的usage合计1,971,286 tokens，失败usage未知、金额未定价，不能称总费用为零。连接/超时的底层成因本轮未诊断，不能归因模型质量或采集断档；其对本轮题目缺失的影响已由有界恢复消除。全部实际成功模型相同。dev配置上限8；回归同时两进程各4、后续单进程补题上限8，不冒称服务端实测并发。
+
+本轮只测试一个候选，开发达标后冻结并进入最终回归，未因回归precision仅小幅下降而改判据、追调或重抽。已读400回归题今后不是未见留出；新优化另起假设和独立验证轮。本轮不自动追加付费调用。

@@ -4,7 +4,7 @@
 
 ## L2 数据资产
 
-新建题采用[逐对象规则](benchmarks/object-datasets.md)：题库为 `<target>/<benchmark>/vN`，新四 benchmark 对应四个独立消费者契约。共享证据随本次第一个目标落盘，不强绑 O1。O2/O3 可显式接入 AIHOT 原文，不混入 Radar raw-inputs；原 HTML 与输入授权 digest 随版本冻结。新 v1 是当前旧命名 schema2 题库的身份迁移；旧题库、运行与成绩保持原样，schema1 的 `<benchmark>/<target>/<version>` 仅为历史兼容。逐对象模型运行适配尚未建设。
+新建题采用[逐对象规则](benchmarks/object-datasets.md)：题库为 `<target>/<benchmark>/vN`，新四 benchmark 对应四个独立消费者契约。共享证据随本次第一个目标落盘，不强绑 O1。O2/O3 可显式接入 AIHOT 原文，不混入 Radar raw-inputs；原 HTML 与输入授权 digest 随版本冻结。新 v1 是当前旧命名 schema2 题库的身份迁移；旧题库、运行与成绩保持原样，schema1 的 `<benchmark>/<target>/<version>` 仅为历史兼容。O1 已接通独立模型运行与归档，命令见[prefilter入口](../../evals/news-admission/aihot-prefilter/README.md)；其它对象的独立推理适配仍见各自 status，不由 O1 接通推定完成。
 
 `--base` 合并版仍使用 schema2，每个叶子附 `merge-summary.json`（相对父版本去重并集的变化计数）与 `changes.jsonl`（字段级身份、输入/参考摘要、主集/补充集归属、移出原因）；共享 evidence/parents.json 记录直接父版本路径和 SHA。所有文件纳入 manifest 字节校验。新 evidence 保留完整合并后的紧凑输入及参照，不依赖祖先仍在线；合并不修改旧资产、不复制旧成绩，也不把重叠抓取观察次数相加。
 

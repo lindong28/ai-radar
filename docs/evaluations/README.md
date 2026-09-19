@@ -12,7 +12,7 @@
 
 判断原始数据能否使用，先按[数据充分性口径](benchmarks/object-datasets.md#data-sufficiency)分别核各对象所需的输入、参照与候选组。恢复／补采后的内容足够可以使用；“连续窗口”不等于要求每次计划抓取都成功。
 
-schema2 独立建题/校验与 schema1 全池推理分开：新叶子 CLI 只做 validate，已有预测可复用 `evals._shared.metrics.score`；旧 runner 不接独立题库。逐条评分映射、富化理由和精选阈值的推理/自动归档适配仍未完成，具体缺口归各对象 status；本次目录重构不建设它们、不运行模型。
+schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefilter 入口](../../evals/news-admission/aihot-prefilter/README.md)支持 validate、模型 run、固定抽样与恢复归档，真实成绩见[状态](news-admission/status.md)；其余新叶子 CLI 仍只做 validate，已有预测可复用 `evals._shared.metrics.score`。旧 runner 不接独立题库；逐条评分映射、富化理由和精选阈值的推理/自动归档适配仍未完成，具体缺口归各对象 status，不属于本轮 prefilter 任务。
 
 后续扩题默认用 `build --base <既有版本>`，可重复传入多个 schema1/schema2 版本：合并冻结的原始输入和 AIHOT 证据，去重后按当前逐对象规则重验，输出不可覆盖的新 vN 与逐题变化清单。旧题库只用于比较，不能直接拼 cases 或把版本题数相加。完整命令与 added/retained/updated/removed 口径见[扩展操作](benchmarks/object-datasets.md#后续-session-默认合并去重按当前设计检查有效性)。
 

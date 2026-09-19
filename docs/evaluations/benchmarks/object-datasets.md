@@ -202,6 +202,6 @@ PYTHONPATH=src:. uv run python scripts/migrate_eval_benchmarks.py \
 
 ## 执行边界与后续接线
 
-schema_version=2 表示独立逐对象题集；旧共享池 runner 只接受 schema1。新叶子 evaluate.py 只做 validate，已有预测通过共享 metrics.score API 计分，详见各 evals README。本次命名重构不实现逐条模型 runner、网站分数映射或精选规则；这些适配归后续评测/优化实施任务，不能把建题与校验完成写成新推理链已跑通。
+schema_version=2 表示独立逐对象题集；旧共享池 runner 只接受 schema1。O1 的 evaluate.py 已支持 validate 与独立 prefilter run（固定抽样、恢复、计分、归档），详见其 evals README；其余新叶子仍仅 validate，已有预测通过共享 metrics.score API 计分。网站分数映射、富化与精选规则适配仍归各对象评测/优化任务，不能把 O1 已运行或建题校验完成外推到其它对象。
 
 O1 可直接评价 prefilter；O2 需要 scorer + 固定逐条展示映射；O3 各字段独立，文本判官仍需用户校验。O4 旧 v2 仅用于我方固定预测后的逐条 threshold，不代表生产精选链；生产规则涉及池排序、时效窗口、来源配额及分数映射，后续全池评测仍须连续窗口的完整候选组，本次不借 AIHOT-only 新闻扩充。自动指标定义继续由各 evals 叶子的 metrics.json 维护，不增加新的治理分数或达标线。
