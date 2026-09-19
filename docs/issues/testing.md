@@ -35,3 +35,18 @@
 ### 2026-09-17：第 2 项的基线复现与本次去向
 
 持续采集恢复任务在基线 `371d21a` 再次复现 `tests/test_aihot_dataset.py::test_capture_writer_refuses_non_repo_root_and_existing_capture`：断言期望 `output_root_invalid`，实际得到 `git_checkout_invalid`。本次定向回归仅排除此单项，不能把排除后的结果称为该文件全量通过。该问题继续归本测试基线债，本轮不修旧测试；未来修复需对齐非仓根路径的错误码契约与断言，不能仅为变绿放宽检查。
+
+### 2026-09-19：基线已漂到 14 条（HEAD `0d0dc36`）
+
+FTS 触发器修复（003 `items_au_fts` 改为 `AFTER UPDATE OF …`）的全量对照：工作树 14 failed / 3270 passed。上表第 1、7 项本次未红；新增 7 条在 `git archive HEAD` 导出树上（`PYTHONPATH=<tree>/src`）同样失败或同样只在全量时红，与本次改动无关：
+
+| 测试 | 读数 |
+|---|---|
+| `tests/test_fetcher.py::test_fetch_source_delegates_to_fetch_then_apply` | `fake_apply_source_feed_result() takes 2 positional arguments but 3 were given`（`runner.py:127`），测试桩与代码签名漂移 |
+| `tests/test_ingestion.py::test_abrupt_process_exit_after_source_commit_is_recoverable` | 子进程 `python -c` 报 `No module named 'airadar'`，环境耦合 |
+| `tests/test_audit_receipts.py::test_x_success_allows_terminal_zero_item_and_draining_connectivity[...]` ×2 | `production code hashes does not match current file: src/airadar/fetcher/runner.py`，收据钉住旧 `runner.py` 哈希 |
+| `tests/test_eval_dataset_merge.py::test_cli_base_only_and_invalid_arguments_and_corrupt_base` | HEAD 树同红，未诊断 |
+| `tests/test_eval_system_integration.py::test_four_object_run_uses_distinct_o1_cases_and_preserves_queries` | HEAD 树同红，未诊断 |
+| `tests/test_eval_object_datasets.py::test_cli_usage` | 单跑绿、全量红，同上表第 8 项的形态 |
+
+取数时工作树另有一位写入者的未提交改动（`scripts/collection_supervisor.py` 等），上述 HEAD 树对照已排除它们的影响。

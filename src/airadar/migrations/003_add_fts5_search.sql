@@ -58,7 +58,11 @@ CREATE TRIGGER items_ai_fts AFTER INSERT ON items BEGIN
   );
 END;
 
-CREATE TRIGGER items_au_fts AFTER UPDATE ON items BEGIN
+-- Scoped to the columns FTS mirrors: item_id is UNINDEXED, so this UPDATE is a
+-- full scan of items_fts, and archive feeds re-upsert their whole history every
+-- round (fetched_at-only UPDATEs). Firing on every UPDATE made ingest
+-- non-convergent (30h, 2026-09-18/19).
+CREATE TRIGGER items_au_fts AFTER UPDATE OF title, content_text, author, source_id ON items BEGIN
   UPDATE items_fts
   SET title = new.title,
       content_text = new.content_text,

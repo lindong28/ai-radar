@@ -477,3 +477,47 @@ def test_fts_maintenance_merges_pending_segments(migrated_db: Path) -> None:
 
     after = _fts_acceptance(migrated_db)
     assert after == before, f"maintenance changed search results: {after} != {before}"
+
+
+def _seed_one_item(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO sources (id, name, url, tier, synced_at) VALUES ('s1', 'Source', 'https://s1', 'T2', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO items (id, source_id, url, title, author, published_at, fetched_at,"
+        " content_text, content_hash) VALUES ('i1', 's1', 'https://s1/a', 'Old title', 'Alice',"
+        " '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'body', 'h1')"
+    )
+    conn.commit()
+
+
+def test_fetched_at_only_update_does_not_touch_fts(migrated_db: Path) -> None:
+    """Refetching an unchanged item must not rewrite its FTS row.
+
+    ``item_id`` is UNINDEXED, so ``UPDATE items_fts ... WHERE item_id`` is a full
+    scan of the virtual table. Archive feeds re-emit their whole history every
+    round, so a trigger firing on *every* ``items`` UPDATE turned each round into
+    thousands of full scans (ingest ran 30h without converging, 2026-09-18/19).
+    The trigger is scoped to the columns FTS mirrors; the FTS shadow-table writes
+    show up in ``total_changes``, so a fetched_at-only UPDATE must change exactly
+    one row.
+    """
+    with sqlite3.connect(migrated_db) as conn:
+        _seed_one_item(conn)
+        before = conn.total_changes
+        conn.execute("UPDATE items SET fetched_at='2026-01-02T00:00:00Z' WHERE id='i1'")
+        conn.commit()
+        assert conn.total_changes - before == 1
+
+
+def test_title_update_still_reaches_fts(migrated_db: Path) -> None:
+    """Positive control for the scoped trigger: mirrored columns still propagate."""
+    with sqlite3.connect(migrated_db) as conn:
+        _seed_one_item(conn)
+        before = conn.total_changes
+        conn.execute("UPDATE items SET title='New title' WHERE id='i1'")
+        conn.commit()
+        assert conn.total_changes - before > 1
+        assert conn.execute(
+            "SELECT title FROM items_fts WHERE item_id='i1'"
+        ).fetchone()[0] == "New title"
