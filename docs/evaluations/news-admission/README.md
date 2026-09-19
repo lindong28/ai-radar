@@ -2,6 +2,8 @@
 
 > [Developer] · 2026-09-17 已认可设计及本轮澄清。当前进度见 [status](status.md)。
 
+2026-09-19 新增[时间标注修订草案](time-label-design.md)，**待用户审核、未启用**；下述 v1 的规则与已归档成绩仍保持原义。
+
 当前独立 benchmark 为 [aihot-prefilter / v1](aihot-prefilter/v1/README.md)。它以单条原始输入建题，主集与仅召回补充集分开。历史 `aihot-all-members` 保留共享池消费方式和原成绩，不是同一 benchmark 的上一版。规则变化的解释归 README，数据版本仅用 `v1`、`v2` 递增。
 
 ## 对象与边界

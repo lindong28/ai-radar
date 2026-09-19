@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260919-9365](./20260919-9365-publish-admission-time-label-proposal.md) | 仅出版新闻准入时间标注修订草案；新 benchmark 与 gold 变更待审核 | accepted for proposal publication only | 2026-09-19 |
 | [20260919-b7e2](./20260919-b7e2-second-security-round-deploy-chain-credentials-csp.md) | 第二轮安全审查：部署链验签与根路径保护、凭据面 allowlist、读时 URL 门、CSP 迁移 | accepted；部分 supersede ADR-003（只加载声明键）；CSP 强制待一周 Report-Only 后切换 | 2026-09-19 |
 | [20260919-d62b](./20260919-d62b-test-prefilter-ai-capabilities.md) | 离线测试AI设备实质能力及来源上下文；双90累计6000次，不改题库或生产 | accepted for experiment | 2026-09-19 |
 | [20260919-c31a](./20260919-c31a-test-prefilter-standalone-input.md) | 离线测试原始回复关系、正文条件及准入构框；不改题库和生产 | accepted for experiment | 2026-09-19 |
