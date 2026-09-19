@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-enrichment-fields",
+  "metrics": [
+    {
+      "task": "*",
+      "metric_name": "category_accuracy",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "分类精确一致率",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "tags_exact_set_accuracy",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "标签集合完全一致率，忽略顺序",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "title_mean_score",
+      "unit": "0-2",
+      "direction": "higher",
+      "definition": "标题相近度判官平均分；未校验不采信",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "summary_mean_score",
+      "unit": "0-2",
+      "direction": "higher",
+      "definition": "摘要相近度判官平均分；未校验不采信",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "reason_mean_score",
+      "unit": "0-2",
+      "direction": "higher",
+      "definition": "推荐理由相近度判官平均分；未校验不采信",
+      "source": "evals/_shared/metrics.py"
+    }
+  ]
+}

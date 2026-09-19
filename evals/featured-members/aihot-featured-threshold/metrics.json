@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-featured-threshold",
+  "metrics": [
+    {
+      "task": "*",
+      "metric_name": "precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "给定逐条题集内，阈值规则预测精选中 reference.featured=true 的比例；不代表生产全池精选",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "给定逐条题集内 reference.featured=true 的题被阈值规则预测精选覆盖的比例；不代表全窗召回",
+      "source": "evals/_shared/metrics.py"
+    }
+  ]
+}

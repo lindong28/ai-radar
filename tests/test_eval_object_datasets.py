@@ -157,7 +157,7 @@ def test_bad_input_fails_before_creating_version(tmp_path):
     blob = next(kwargs["raw_root"].glob("runs/*/items.jsonl.gz"))
     blob.write_bytes(b"corrupted")
     with pytest.raises(ValueError, match="hash"):
-        ob.build(**kwargs, version="invalid")
+        ob.build(**kwargs, version="v1")
     assert not kwargs["data_root"].exists()
 
 

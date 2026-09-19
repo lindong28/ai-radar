@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-prefilter",
+  "metrics": [
+    {
+      "task": "*",
+      "metric_name": "precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "主集 cases 中 prefilter 预测通过的题里，reference.member=true 的比例；不混入 recall-only 补充集",
+      "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "主集 cases 中 reference.member=true 的题被 prefilter 预测通过的比例；不是全窗召回，recall-only 补充集须单独报告",
+      "source": "evals/_shared/metrics.py"
+    }
+  ]
+}

@@ -19,6 +19,25 @@ BENCHMARKS = {
     "content-enrichment": "aihot-enrichment",
     "featured-members": "aihot-featured-members",
 }
+OBJECT_BENCHMARKS = {
+    "news-admission": "aihot-prefilter",
+    "visible-score": "aihot-score-pointwise",
+    "content-enrichment": "aihot-enrichment-fields",
+    "featured-members": "aihot-featured-threshold",
+}
+
+
+def benchmark_pairs():
+    """Legacy and object-specific consumer contracts, without rewriting history."""
+    return (*BENCHMARKS.items(), *OBJECT_BENCHMARKS.items())
+
+
+def dataset_version(value: str) -> str:
+    if not re.fullmatch(r"v[1-9][0-9]*", value):
+        raise ValueError("dataset version must be v1, v2, ...")
+    return value
+
+
 DEFAULT_DATA_ROOT = Path.home() / "research/video-eval-arena/data/benchmarks/ai-radar"
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -77,11 +96,18 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
     path = path.resolve()
     manifest = read_json(path / "manifest.json")
     selected = manifest["target"]
-    if selected not in BENCHMARKS or manifest["benchmark"] != BENCHMARKS[selected]:
+    if (selected, manifest["benchmark"]) not in benchmark_pairs():
         raise ValueError("unknown target/benchmark pairing")
     if target is not None and target != selected:
         raise ValueError("dataset belongs to another target")
     schema = manifest.get("schema_version")
+    if manifest["benchmark"] == OBJECT_BENCHMARKS[selected]:
+        if schema != 2:
+            raise ValueError("object benchmark requires schema 2")
+        expected_mode = "pointwise-threshold" if selected == "featured-members" else "pointwise"
+        if manifest.get("evaluation_mode") != expected_mode:
+            raise ValueError("evaluation mode differs from benchmark consumer contract")
+        dataset_version(manifest["version"])
     hierarchy = ((manifest["benchmark"], selected, manifest["version"]) if schema == 1 else
                  (selected, manifest["benchmark"], manifest["version"]))
     if path.parts[-3:] != hierarchy:
@@ -112,7 +138,7 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
 
 
 def validate_layout(root: Path = ROOT) -> None:
-    for target, benchmark in BENCHMARKS.items():
+    for target, benchmark in benchmark_pairs():
         leaf = root / "evals" / target / benchmark
         for name in ("README.md", "evaluate.py", "metrics.json"):
             if not (leaf / name).is_file():
@@ -128,8 +154,13 @@ def validate_layout(root: Path = ROOT) -> None:
                 raise ValueError("invalid metric direction")
 
 
-def create_run(root: Path, target: str, version: str, *, created_at: datetime | None = None) -> tuple[Path, Path]:
-    benchmark = BENCHMARKS[target]
+def create_run(root: Path, target: str, version: str, *, benchmark: str | None = None,
+               created_at: datetime | None = None) -> tuple[Path, Path]:
+    benchmark = BENCHMARKS[target] if benchmark is None else benchmark
+    if (target, benchmark) not in benchmark_pairs():
+        raise ValueError("unknown target/benchmark pairing")
+    if benchmark == OBJECT_BENCHMARKS[target]:
+        dataset_version(version)
     instant = created_at or datetime.now(UTC)
     if instant.tzinfo is None:
         raise ValueError("run directory time must be timezone-aware")
@@ -170,7 +201,7 @@ def archive_metrics(root: Path, run: Path, experiment: Path, result: dict, metad
 def rebuild_index(root: Path = ROOT) -> list[dict]:
     """Rebuildable projection. Atomic replace does not modify historical leaves."""
     rows = []
-    for target, benchmark in BENCHMARKS.items():
+    for target, benchmark in benchmark_pairs():
         for path in sorted((root / "experiments" / target / benchmark).glob("*/*/*/metrics/summary.json")):
             for row in read_json(path):
                 if row["target_slug"] != target or row["benchmark_name"] != benchmark:

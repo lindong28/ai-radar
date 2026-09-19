@@ -4,13 +4,13 @@
 
 ## L2 数据资产
 
-新建题默认采用[逐对象规则](benchmarks/object-datasets.md)：题库路径改为 `<target>/<benchmark>/<version>`，共享证据随本次第一个目标落盘，不强绑 O1。O2/O3 可显式接入 AIHOT 原文，但不混入 Radar raw-inputs；原 HTML 和输入授权 digest 名单随版本冻结。紧凑原始输入、完整 AIHOT 引用证据与逐轮原件的区别见该说明。下表题库一行与文末全池约束仅描述已有 v1，历史数据与运行资产不迁移；schema2 的逐对象运行适配尚未在本轮建设。
+新建题采用[逐对象规则](benchmarks/object-datasets.md)：题库为 `<target>/<benchmark>/vN`，新四 benchmark 对应四个独立消费者契约。共享证据随本次第一个目标落盘，不强绑 O1。O2/O3 可显式接入 AIHOT 原文，不混入 Radar raw-inputs；原 HTML 与输入授权 digest 随版本冻结。新 v1 是当前旧命名 schema2 题库的身份迁移；旧题库、运行与成绩保持原样，schema1 的 `<benchmark>/<target>/<version>` 仅为历史兼容。逐对象模型运行适配尚未建设。
 
 `--base` 合并版仍使用 schema2，每个叶子附 `merge-summary.json`（相对父版本去重并集的变化计数）与 `changes.jsonl`（字段级身份、输入/参考摘要、主集/补充集归属、移出原因）；共享 evidence/parents.json 记录直接父版本路径和 SHA。所有文件纳入 manifest 字节校验。新 evidence 保留完整合并后的紧凑输入及参照，不依赖祖先仍在线；合并不修改旧资产、不复制旧成绩，也不把重叠抓取观察次数相加。
 
 | 资产 | 唯一落点与产生时机 |
 | --- | --- |
-| 评测题（输入集） | `~/research/video-eval-arena/data/benchmarks/ai-radar/<benchmark>/<target>/<version>/`；build 生成 cases/manifest，输入与 reference 分离；原始全观察及两侧证据保留在该版本 news-admission 叶子，共享引用与校验和绑定 |
+| 评测题（输入集） | `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<benchmark>/vN/`；build 生成 cases/manifest，input/reference 分离；紧凑原始证据由本批首个目标持有，其它叶子通过 shared_evidence 与摘要引用；迁移版自带必需证据 |
 | 逐题输出 | 项目根 `runs/<target>/<benchmark>/<version>/<UTC-date>/<UTC-time>/`；共享 pool 原件只存一份，其他对象记录引用；predict 失败也有状态 |
 | 自动指标数值 | runs 的 scores.json 为数值源；`experiments/` 同分区存 metadata 和 metrics/summary.json；跨 benchmark 总表为 `experiments/metrics/summary.json`，可重建 |
 | 人评结果 | 项目根 `human-evals/`；材料、用户原票、确认 SHA、校准结果；无票时明确为零，不以 agent 代评补位 |
@@ -32,4 +32,4 @@
 
 可见评分与推荐理由通过当前生产纯函数投影，不拿中间 score/enrich 返回冒充网页值。O1 在用户 2026-09-17 最新裁决后**直接评 prefilter 的通过/不通过**，不再把 relevance 后置 gate 混进本对象。
 
-任一候选的准入/评分缺失会使完整池的精选及排名映射不确定，因此O2/O4保留未完成；不猜该条会被过滤。O3分类、标签、标题、摘要按该条自己的enrich状态独立计分，只有会被精选覆盖的推荐理由受完整池失败影响。失败轮的分类/标签0值不能脱离轮次complete=false解释为模型质量；首轮这类接线问题已在零调用重算轮纠正，旧原件不覆盖。
+以下是旧完整池成绩的解释边界，不是新逐条题库的统一入题门：任一候选准入/评分缺失会使完整池精选及排名映射不确定，因此 O2/O4 保留未完成，不猜该条会被过滤。O3 分类、标签、标题、摘要按该条 enrich 状态独立计分，只有被精选覆盖的理由受完整池失败影响。失败轮的分类/标签 0 值不能脱离 complete=false 解释为模型质量；首轮这类接线问题已在零调用重算轮纠正，旧原件不覆盖。

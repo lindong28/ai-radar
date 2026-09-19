@@ -1,0 +1,15 @@
+# O3 · 字段富化 状态
+
+> [Developer] · Mutable snapshot · 2026-09-19。区分能力、实际运行与有效成绩。
+
+新身份 `aihot-enrichment-fields/v1` 为 3,476 条新闻、12,006 道字段题，已从 20260919-refresh-1010 无改题迁移并完成字节核验。字段子集及确定性计分可用；逐对象模型运行、独立理由适配及自动归档由后续评测实施者接线。本轮无新模型成绩或用户票；文本判官校验仍待用户真实标注。当前题集见 [v1](aihot-enrichment-fields/v1/README.md)，字段题数见 [inventory](../benchmarks/inventory.md)。已有 109 条理由参考，不再沿用下表历史的“0 理由”作为当前题库缺口。
+
+## 历史共享池成绩（2026-09-17，aihot-enrichment）
+
+| 层 | 当前状态 |
+| --- | --- |
+| L1 计算逻辑 | 分类12/18=66.67%，标签exact-set 2/34=5.88%。标题/摘要判官真实6字段smoke已运行但未采信；推荐理由无参考。生产primary-category经既有网站slug映射后计分类。 |
+| L2 数据资产 | 34标题、32摘要、0理由参考；原模型输出与判词留存。当前确定性基线UTC 15-20-15；文本smoke UTC 15-07-22。 |
+| L3 治理与剩余归属 | 判官校准程序已实现，12个真实用户票未取得；当前0条同时有三文本参考，export-calibration明确拒绝编造材料。等待新增理由参考后由用户标票，不用agent代签；文本优化尚未启动。 |
+
+运行入口见 [workflow](../workflow.md)，原件定位见 [ledger](../experiments/ledger.md)。

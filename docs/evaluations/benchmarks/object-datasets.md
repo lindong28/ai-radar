@@ -6,10 +6,10 @@
 
 | 对象 | 独立规则 |
 | --- | --- |
-| 新闻准入 | [news-admission / aihot-all-members / object-specific-v2](news-admission/aihot-all-members/object-specific-v2/README.md) |
-| 可见评分 | [visible-score / aihot-visible-score / aihot-original-v3](visible-score/aihot-visible-score/aihot-original-v3/README.md) |
-| 内容富化 | [content-enrichment / aihot-enrichment / aihot-original-v3](content-enrichment/aihot-enrichment/aihot-original-v3/README.md) |
-| 精选成员 | [featured-members / aihot-featured-members / object-specific-v2](featured-members/aihot-featured-members/object-specific-v2/README.md) |
+| 新闻准入 | [news-admission / aihot-prefilter / v1](../news-admission/aihot-prefilter/v1/README.md) |
+| 可见评分 | [visible-score / aihot-score-pointwise / v1](../visible-score/aihot-score-pointwise/v1/README.md) |
+| 内容富化 | [content-enrichment / aihot-enrichment-fields / v1](../content-enrichment/aihot-enrichment-fields/v1/README.md) |
+| 精选成员 | [featured-members / aihot-featured-threshold / v1](../featured-members/aihot-featured-threshold/v1/README.md) |
 
 共享采集档案，不共享入题门槛。来源契约与所给 AIHOT 参照的实际出现共同确定来源范围，排除暂停、禁用、非主时间线、微信专用源；不导入旧 T5，也不先用我方 prefilter 或 score 过滤原始输入。仅控制共同来源，不把原始池裁成两站新闻 URL 交集。
 
@@ -44,12 +44,12 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
   --reference /absolute/path/to/aihot-reference/manifest.json \
   --reference /absolute/path/to/aihot/windows/START--END/manifest.json \
   --start 2026-09-15T14:45:00Z --end 2026-09-18T00:00:00Z \
-  --version 20260918-object-v2
+  --version v2
 ```
 
 路径是占位示例，时间必须带时区。`--start/--end` 选择 Radar run 的 started_at，左闭右开，允许非连续段；不是“新闻发布日期必须落入此区间”。AIHOT 每份参照使用它自己已验证的新闻窗口，O1 另外读取完整 API 遍历判断逐新闻 ±12h。多份 `--reference` 可重复传入：支持小时 interval 根/manifest，或标准 `windows/<window>/manifest.json` 日窗 v1/v2/v3；整个 archive 根不是输入。参照损坏、抓取未完成、游标链/标签证据错误会拒绝建题，不静默跳过。不要把 staging 目录当完成窗口。
 
-默认生成四个对象。只建一个或几个时重复 `--target visible-score` 等；可显式传 `--data-root` 与 `--contract-path`。版本 slug 只允许小写字母、数字、点、下划线、横杠。任一目标版本已存在就退出，不覆盖历史。
+默认生成四个对象。只建一个或几个时重复 `--target visible-score` 等；可显式传 `--data-root` 与 `--contract-path`。新独立题库版本必须为 `v1`、`v2` 等正整数递增名称；先看各 benchmark 已有版本，选尚未使用的下一版。不同对象的版本序列独立，不要求同时升版。任一目标版本已存在就退出，不覆盖历史。
 
 ## 仅扩充评分与富化：AIHOT 原文输入
 
@@ -57,11 +57,12 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 
 ```bash
 PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
-  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-visible-score/20260918-merged-v2 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v1 \
   --reference /absolute/path/to/aihot/windows/START--END/manifest.json \
   --aihot-inputs \
   --target visible-score --target content-enrichment \
-  --version 20260918-aihot-original-v3
+  --version v2
 ```
 
 没有 Radar raw 或 base 时，也可只提供 `--reference --aihot-inputs` 和这两个 target 新建 O2/O3。多个已完成窗口重复传 `--reference`；仍先验证原始证据，不支持把不完整或损坏归档当成可用输入。
@@ -76,7 +77,7 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 
 `--aihot-inputs` 授权当次全部参照，不只是最后一个 `--reference`。原文可用要求绑定外壳内确有文章或推文正文子结构；非空的“正文无法取得／仅有摘要”等说明不算正文，界面正文标签也不传给模型。原始 HTML 随 evidence 冻结，下次仅用 base 即可重建这批输入，无需原采集目录在线。后续新增 raw 时仍按 Radar 优先处理，同一 case 的输入改变记为 `updated`，不是新加一题。缺原标题/原文、身份绑定失败或多个有效内容版本等原因保留在排除记录，不由题库建设者猜补。
 
-新输入证明的是 AIHOT 归档中可提取的原文文本，不证明它等于 Radar 当时会抓到的字节，也不证明原站全文未截断。必须保留输入来源，比较模型候选时用同版同题，不能将题量扩大解释成模型提升。`aihot-original-v3` 是规则/数据版本名称，数据 manifest 继续使用独立题集的 schema_version=2，O2/O3 的 policy 为 `object-specific-aihot-original-v3`。
+新输入证明的是 AIHOT 归档中可提取的原文文本，不证明它等于 Radar 当时会抓到的字节，也不证明原站全文未截断。必须保留输入来源，比较模型候选时用同版同题，不能将题量扩大解释成模型提升。历史 `aihot-original-v3` 与 manifest.policy=`object-specific-aihot-original-v3` 描述生产规则；载荷仍为 schema_version=2。它们不再命名目录版本；来源适配没有改变原始 input → reference 的消费者契约，因此无需另拆 benchmark。
 
 `counts.input_origins` 分开统计 `radar-raw` 与 `aihot-original-detail`，`original_input_builder_sha256` 标识原文提取代码。manifest.window 仍只表示 Radar raw 选取时间范围，无 Radar 时为 null，不代表 AIHOT 历史题的覆盖跨度。查询最早新闻看 input.published_at，查询实际观察时刻看 provenance.observed_at，查询 AIHOT 参照窗口看冻结的 reference.window；三种时刻不能互换，更不能由包络声称连续采集。
 
@@ -90,22 +91,24 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
   --base ~/research/video-eval-arena/data/benchmarks/ai-radar/aihot-all-members/news-admission/20260917-0700-1200-v1 \
   --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260918-object-v2-r1 \
-  --version 20260918-merged-v2
+  --version v2
 ```
 
 日后扩展时，以最近一次合并后的版本作为 base，再提供新增 Radar 范围与已完成 AIHOT 参照。以下新增路径、日期和版本名须替换为实际值：
 
 ```bash
 PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
-  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260918-substantive-v4-r1 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-prefilter/v1 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 \
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v1 \
   --raw-root /absolute/path/to/data/raw-capture \
   --start 2026-09-18T00:00:00Z --end 2026-09-19T00:00:00Z \
   --reference /absolute/path/to/new-aihot-window/manifest.json \
   --target news-admission --target visible-score --target content-enrichment \
-  --version 20260919-extended-v2
+  --version v2
 ```
 
-`--base` 接受 schema1/schema2 的任一对象叶子目录或其 manifest，并自动读取该题库根下同数据版本的所有现存对象兄弟叶子；`--target` 只控制输出对象，不限制这些历史证据。只补 AIHOT 参照时可省略 raw 三参数；补 raw 时 `--raw-root/--start/--end` 必须一起给。重复传入同版、重叠版本或“合并版＋其祖先”不会重复计题。无 `--base` 仍是从指定原始档案开始的新建，不自动扫描目录挑最新版本。
+`--base` 接受 schema1/schema2 叶子或其 manifest；新 benchmark 的版本序列独立，不能仅因另一个对象也叫 v1 就把它自动并入。要合并的不同证据版本应逐一显式传 `--base`；同名兄弟叶子仅在冻结 evidence 摘要匹配时可自动关联。历史旧命名的关联行为保留兼容。`--target` 只控制输出对象，不限制显式输入的历史证据。只补 AIHOT 参照可省略 raw 三参数；补 raw 时 `--raw-root/--start/--end` 必须一起给。重复传入同版、重叠版本或“合并版＋其祖先”不会重复计题。无 `--base` 不自动扫描目录挑最新。
 
 | 环节 | 固定语义 |
 | --- | --- |
@@ -142,7 +145,7 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
 
 ```bash
 PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py validate \
-  ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-visible-score/20260918-object-v2
+  ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1
 ```
 
 validate 校验问题集和冻结证据的字节摘要、对象/版本路径、题数与身份；不证明模型质量或采集连续性。退出非零表示未完成。零题版本允许保留，并明确显示 main=0，不称为可评测样本充分。部分输出后发生 I/O 失败时该版本无完成保证，使用新版本重建，别手工补一份 manifest。
@@ -180,8 +183,25 @@ Radar 配对对象要求各自仅有一个实质输入版本，且配对的 AIHO
 
 历史 `--base` 先验证原冻结 key 和摘要，再按新身份重建；历史题在 changes 中也按规范身份对齐，不把 URL 别名改写计成“删一题、加一题”。X 的历史 split 可能随规范身份迁移，比较模型候选必须重新使用同版题库，不能混用旧 split 或把它声称为从未调参的 holdout。旧题库只保留在独立历史版本目录供复现，移出的题不留在新版本 cases 中；日后扩题必须指定当前版本，而非直接拼旧 cases。
 
+## benchmark 命名与存量迁移
+
+输入格式、评测单元、参考语义或必须采取的消费处理改变时拆 benchmark；契约不变的扩题、去重、校正与来源适配用新 vN，变化在该版 README 说明。本项目共享池 schema1 与独立 schema2 需要不同消费方式；尤其局部阈值不能替代完整池，因此四个独立 benchmark 使用上表的新名字。schema_version、policy 与数据 version 各管一件事，不混写。
+
+当前四份独立题库发布为新 benchmark 的 v1，不重建/更改 cases、参考或历史成绩。迁移脚本只复制所需资产，修复 evidence 相对引用，并在新 manifest 记录旧路径与摘要；旧叶子保留供历史复现。命令中源路径必须是实际已验证叶子，目标 v1 存在则拒绝覆盖：
+
+```bash
+PYTHONPATH=src:. uv run python scripts/migrate_eval_benchmarks.py \
+  --data-root ~/research/video-eval-arena/data/benchmarks/ai-radar \
+  --source news-admission=$HOME/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members/20260919-refresh-1010 \
+  --source visible-score=$HOME/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-visible-score/20260919-refresh-1010 \
+  --source content-enrichment=$HOME/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment/20260919-refresh-1010 \
+  --source featured-members=$HOME/research/video-eval-arena/data/benchmarks/ai-radar/featured-members/aihot-featured-members/20260919-refresh-o4-1010
+```
+
+这是一次身份迁移，不是以后扩题的命令。以后用前述 build --base 流程合并冻结证据、去重、按当前规则重验并输出 v2/v3。版本是完整快照，版本间允许 overlap；单版按新闻/字段身份去重。保留历史文件是为了复现，不表示全部旧题仍属于当前正式题集，也不把同一新闻跨版本重复计为新增。
+
 ## 执行边界与后续接线
 
-schema_version=2 表示独立逐对象题集；旧 schema_version=1 的共享池 runner 只接受旧题库。当前新脚本负责建题与校验，不运行模型，也不实现网站逐条评分映射或更换精选规则。这些推理改造仍由后续评测/优化任务实施；不能把建题完成写成整套新推理链已跑通。
+schema_version=2 表示独立逐对象题集；旧共享池 runner 只接受 schema1。新叶子 evaluate.py 只做 validate，已有预测通过共享 metrics.score API 计分，详见各 evals README。本次命名重构不实现逐条模型 runner、网站分数映射或精选规则；这些适配归后续评测/优化实施任务，不能把建题与校验完成写成新推理链已跑通。
 
 O1 可直接评价 prefilter；O2 需要 scorer + 固定逐条展示映射；O3 各字段独立，文本判官仍需用户校验。O4 旧 v2 仅用于我方固定预测后的逐条 threshold，不代表生产精选链；生产规则涉及池排序、时效窗口、来源配额及分数映射，后续全池评测仍须连续窗口的完整候选组，本次不借 AIHOT-only 新闻扩充。自动指标定义继续由各 evals 叶子的 metrics.json 维护，不增加新的治理分数或达标线。

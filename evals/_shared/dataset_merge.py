@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .assets import BENCHMARKS, digest, file_digest, load_dataset, read_json, read_jsonl
+from .assets import BENCHMARKS, OBJECT_BENCHMARKS, digest, file_digest, load_dataset, read_json, read_jsonl
 from .dataset import news_key as legacy_news_key
 from .dataset import timestamp
 from .identity import news_key
@@ -40,7 +40,7 @@ def merge_records(destination, incoming):
 
 
 def read_bases(paths):
-    """Accept any sibling leaf; use its available same-version siblings too."""
+    """Expand legacy siblings; new identities also require the same evidence bundle."""
     from .object_datasets import read_reference
 
     datasets, bundles = {}, {}
@@ -48,12 +48,15 @@ def read_bases(paths):
         path = path.resolve()
         if path.is_file():
             path = path.parent
-        seed = read_json(path / "manifest.json")
+        seed, _ = load_dataset(path)
+        object_specific = seed["benchmark"] == OBJECT_BENCHMARKS[seed["target"]]
         candidates = {path}
-        for target, benchmark in BENCHMARKS.items():
+        for target, benchmark in (OBJECT_BENCHMARKS if object_specific else BENCHMARKS).items():
             parts = (benchmark, target) if seed["schema_version"] == 1 else (target, benchmark)
             sibling = path.parents[2].joinpath(*parts, seed["version"])
             if (sibling / "manifest.json").is_file():
+                if object_specific and read_json(sibling / "manifest.json").get("evidence_files") != seed["evidence_files"]:
+                    continue
                 candidates.add(sibling)
         for leaf in sorted(candidates):
             if leaf in datasets:
@@ -109,7 +112,7 @@ def read_bases(paths):
             ref = read_reference(path)
             refs.setdefault(ref.key, ref)
     parents = [{"path": str(path), "manifest_sha256": file_digest(path / "manifest.json"),
-                "target": manifest["target"], "version": manifest["version"]}
+                "target": manifest["target"], "benchmark": manifest["benchmark"], "version": manifest["version"]}
                for path, (manifest, _) in sorted(datasets.items())]
     return records, refs, manifests, list(windows.values()), list(failures.values()), datasets, parents
 

@@ -9,6 +9,11 @@
 - Changed: 依赖升级修复已知漏洞（starlette 1.6.0、json-repair 0.63.4、soupsieve 2.9.2、lxml 6.1.3、lxml-html-clean 0.4.5、anyio 4.14.2）；仓库启用 Dependabot 与 `SECURITY.md`。
 - Changed（部署模板）：nginx 加安全响应头、隐藏版本、封 `/docs`；systemd serve 单元加沙箱指令；wechat2rss 镜像按 digest 钉住；DB 同步 SSH 改 `StrictHostKeyChecking=accept-new`。生效需重新部署，见 [ADR-20260919-a3c1](docs/adr/20260919-a3c1-harden-public-surface-after-security-review.md)。
 
+## 2026-09-19（评测 benchmark 身份与版本简化）
+
+- 共享池与独立逐条题库按消费者契约拆成不同 benchmark；同契约后续数据版本统一 v1/v2，来源与建题规则变化在 README 说明。旧数据和成绩保持原身份，不跨 benchmark 拼接曲线。
+- 文档移至 `docs/evaluations/<target>/<benchmark>/vN/README.md`，对象说明与状态直属 target；新增身份的校验入口、迁移及合并去重扩题说明见[评测入口](docs/evaluations/README.md)。本次不修改网站、采集器或模型行为，不声称独立模型 runner 已接线。
+
 ## 2026-09-18（评测 URL 配对与实质内容版本修复）
 
 - 建题按同来源 X 推文 ID 统一 URL 身份，兼容历史冻结 key；配对、去重、split 和变更统计使用同一身份，避免 URL 写法差异制造错误负例。

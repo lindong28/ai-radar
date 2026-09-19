@@ -70,7 +70,7 @@ def test_existing_version_files_cannot_be_overwritten(tmp_path):
 
 
 def definitions(root):
-    for target, benchmark in assets.BENCHMARKS.items():
+    for target, benchmark in assets.benchmark_pairs():
         source = assets.ROOT / "evals" / target / benchmark
         for name in ("README.md", "evaluate.py", "metrics.json"):
             path = root / "evals" / target / benchmark / name

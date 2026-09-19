@@ -4,28 +4,30 @@
 
 本体系衡量同窗、共同来源的全部动态成员、可见分数、富化字段与精选成员。不评事实身份、内容组织、排序、去重质量、微信独有解读；身份匹配只服务正确计数。
 
-## 当前建题默认（2026-09-18）
+## 当前建题默认（2026-09-19）
 
-用户已认可逐对象独立建题，入口为[建题与扩展操作](benchmarks/object-datasets.md)。O2/O3 的当前规则在 `benchmarks/<target>/<benchmark>/aihot-original-v3/README.md`：仅缺少 Radar raw 时可显式接入 AIHOT 原标题与绑定原文；O1 不补这种仅可见正例，O4 本轮不扩题并保留连续完整候选组要求。四份 `object-specific-v2/README.md` 保留历史规则及适用边界。原始档案共享，但不先取符合所有对象条件的交集。新数据按 `<target>/<benchmark>/<version>` 存储；旧 v1 路径不迁移。下文 2026-09-17 的共同窗口、双侧完整性和全池实跑均为历史 v1 说明，不能作为所有独立对象的入题条件。
+按消费者契约区分 benchmark：输入格式、评测语义或处理逻辑不同，使用不同 benchmark；契约不变的扩题、去重或来源适配，只递增数据版本 `v1`、`v2`，变化写进该版 README。`schema_version` 是载荷格式，历史 `object-specific-v2` / `aihot-original-v3` 是建题规则标签，都不是新目录的版本名。共享池与独立逐条题集分开，不以改目录名掩盖运行语义差异。
+
+原始档案共享，但各对象独立选题，不先取四对象条件交集。O2/O3 缺少 Radar raw 时可显式使用 AIHOT 原标题与绑定原文；O1 不补这种只有可见正例的数据；O4 局部阈值不冒充完整候选组。操作见[建题与扩展](benchmarks/object-datasets.md)，原始输入与题数见[库存](benchmarks/inventory.md)。新 v1 基线已完成身份/证据引用迁移及校验，题目、参考和旧成绩不变；读数边界见库存顶部。
 
 判断原始数据能否使用，先按[数据充分性口径](benchmarks/object-datasets.md#data-sufficiency)分别核各对象所需的输入、参照与候选组。恢复／补采后的内容足够可以使用；“连续窗口”不等于要求每次计划抓取都成功。
 
-v2 建题/校验与 v1 全池推理分开：新脚本不改网站算法，旧 runner 明确拒绝 v2。逐条评分映射与精选阈值的运行适配状态见各建题说明；题库完成不等于新推理链完成。
+schema2 独立建题/校验与 schema1 全池推理分开：新叶子 CLI 只做 validate，已有预测可复用 `evals._shared.metrics.score`；旧 runner 不接独立题库。逐条评分映射、富化理由和精选阈值的推理/自动归档适配仍未完成，具体缺口归各对象 status；本次目录重构不建设它们、不运行模型。
 
-后续扩题默认用 `build --base <既有版本>`，可重复传入多个 v1/v2 版本：合并冻结的原始输入和 AIHOT 证据，去重后按当前逐对象规则重验，输出不可覆盖的新版本与逐题变化清单。旧题库只用于比较，不能直接拼 cases 或把版本题数相加。完整命令与 added/retained/updated/removed 口径见[扩展操作](benchmarks/object-datasets.md#后续-session-默认合并去重按当前设计检查有效性)。
+后续扩题默认用 `build --base <既有版本>`，可重复传入多个 schema1/schema2 版本：合并冻结的原始输入和 AIHOT 证据，去重后按当前逐对象规则重验，输出不可覆盖的新 vN 与逐题变化清单。旧题库只用于比较，不能直接拼 cases 或把版本题数相加。完整命令与 added/retained/updated/removed 口径见[扩展操作](benchmarks/object-datasets.md#后续-session-默认合并去重按当前设计检查有效性)。
 
 2026-09-18 URL/版本修订：X 别名按同来源推文 ID 配对；只以评测对象相关的实质内容变化判多版本，不再因 published_at、HTML、来源标签或标题标点变化排题。规则与迁移边界见[实质性规则](benchmarks/object-datasets.md#实质内容版本与-url-身份2026-09-18-用户修订)，当前版本及精确题数以[库存](benchmarks/inventory.md)顶部为准。
 
-| 对象 | 代码与指标入口 | 优化维度 |
+| 对象与三层说明 | 当前 benchmark / 输入版本 | 优化维度 |
 | --- | --- | --- |
-| news-admission | [aihot-all-members](../../evals/news-admission/aihot-all-members/README.md) | prefilter 通过集合 precision / recall |
-| visible-score | [aihot-visible-score](../../evals/visible-score/aihot-visible-score/README.md) | 最终展示分 MAE |
-| content-enrichment | [aihot-enrichment](../../evals/content-enrichment/aihot-enrichment/README.md) | 分类 accuracy、标签 exact-set accuracy、标题/摘要/理由分别判分 |
-| featured-members | [aihot-featured-members](../../evals/featured-members/aihot-featured-members/README.md) | 固定预测输入后的成员 precision / recall |
+| [news-admission](news-admission/README.md) | [aihot-prefilter / v1](news-admission/aihot-prefilter/v1/README.md) | 主集 precision / recall，补充集只看 recall |
+| [visible-score](visible-score/README.md) | [aihot-score-pointwise / v1](visible-score/aihot-score-pointwise/v1/README.md) | 最终展示分 MAE |
+| [content-enrichment](content-enrichment/README.md) | [aihot-enrichment-fields / v1](content-enrichment/aihot-enrichment-fields/v1/README.md) | 分类、标签确定性指标；标题/摘要/理由分别判分 |
+| [featured-members](featured-members/README.md) | [aihot-featured-threshold / v1](featured-members/aihot-featured-threshold/v1/README.md) | 局部阈值成员 precision / recall；不覆盖全池 |
 
 后续迭代使用 user-scope `eval-workflows iterate-eval-system`，从本入口定位对象，再读 workflow、assets 及对象 status。没有该 skill 的 agent 沿项目入口执行相同命令和归档规则。
 
-## 本次明确选择
+## 历史首版选择（2026-09-17）
 
 - 题库只放本机 `~/research/video-eval-arena/data/benchmarks/ai-radar/<benchmark>/<target>/<version>/`，不使用 DGX。原始输入保留过滤前负例，不取两站 URL 交集冒充完整候选池；不使用旧 T5。
 - 首批取 2026-09-17 起可证明连续的共同窗口；现存日窗不能直接证明当日参照，补独立小时窗捕获而不改生产调度。
@@ -33,12 +35,12 @@ v2 建题/校验与 v1 全池推理分开：新脚本不改网站算法，旧 ru
 - 同题逐指标比较：至少一项改善，其他不退步，无未完成题。不设绝对达标阈值，不声称统计显著或整体拟合完成。
 - 模型调用不限总次数，但必须先小规模 smoke、成功后再扩大，按身份复用有效输出，不自动换模型/供应商。
 
-## 实施进度
+## 历史共享池实施进度（2026-09-17）
 
-四对象的版本化建题、推理/缓存、自动指标、判官/校准、固定池规则回放、同题比较与资产查询已实现。已冻结首版五小时数据，完成真实smoke和完整候选池调用；O1已有完整读数，文本判官仅诊断。完整候选池存在一条供应商拒答，O2/O4不得冒称完整；当前无用户校准票、无被采纳的优化。实际数值与每项缺口分别读库存、台账和 `objects/<target>/status.md`。
+旧共享池四对象的推理/缓存、自动指标、判官/校准、固定池规则回放、同题比较与资产查询已有实现。该轮冻结五小时数据，完成真实 smoke 和完整候选池调用；O1 有完整读数，文本判官仅诊断。完整候选池存在一条供应商拒答，O2/O4 不得冒称完整；这些是旧 benchmark 成绩，不代表新逐条链已运行。实际数值及当前缺口见库存、台账和 `<target>/status.md`。
 
 ## 2026-09-17 实施中的用户澄清
 
 O1 对每条原始数据用它自身生成时间戳 t（无则 Radar 抓取时间），在 AIHOT 的 (t−12小时,t+12小时) 范围有匹配则预期通过；无匹配且该24小时采集完整才预期不通过，不完整则从O1题集排除，但原始数据保留。负例同时检查两侧完整性。O1直接评prefilter，不混入后置评分门槛；这项覆盖旧报告的窗口新增成员标签。其它三个对象范围不变。
 
-执行与新增版本读 [workflow](workflow.md)，路径和三层归属读 [assets](assets.md)，实际存量读 [inventory](benchmarks/inventory.md)，实验与优先缺口读 [ledger](experiments/ledger.md) / [hypotheses](experiments/hypotheses.md)。各对象五槽与三层状态见 objects/ 下的 design.md / status.md。
+定位改进先读对应 `<target>/status.md`；执行与新增版本读 [workflow](workflow.md) 及对应 `<target>/<benchmark>/<version>/README.md`；路径和三层归属读 [assets](assets.md)，实际存量读 [inventory](benchmarks/inventory.md)，比较归因读 [ledger](experiments/ledger.md) / [hypotheses](experiments/hypotheses.md)。旧规则文档有效语义已并入对象与 v1 README，历史修订保留在库存与 Git，不另留一套权威路径。

@@ -1,6 +1,19 @@
 # 题库库存
 
-## 2026-09-19 10:10 +08 输入截止：合并新归档后重建（当前）
+## 2026-09-19 benchmark 身份迁移（当前）
+
+已按消费者契约将下节四份旧命名题库发布到以下新 benchmark/v1。迁移不是扩题，不新增新闻或模型成绩，cases/reference 保持原字节；旧叶子及其历史指标仍可复现。
+
+| 对象 | 新 benchmark / 版本 | 原叶子版本 | 主集题数 |
+| --- | --- | --- | --- |
+| news-admission | aihot-prefilter / v1 | aihot-all-members / 20260919-refresh-1010 | 11,804；另仅召回 180 |
+| visible-score | aihot-score-pointwise / v1 | aihot-visible-score / 20260919-refresh-1010 | 3,475 |
+| content-enrichment | aihot-enrichment-fields / v1 | aihot-enrichment / 20260919-refresh-1010 | 3,476 新闻 / 12,006 字段题 |
+| featured-members | aihot-featured-threshold / v1 | aihot-featured-members / 20260919-refresh-o4-1010 | 341 局部题；完整候选组 0 |
+
+题数已从四份源 manifest 核对，四个新叶子的实际 CLI validate 均完成；四份旧 manifest SHA 不变，cases 逐行相等，各叶子 files/evidence_files 摘要相等（O1 5/5,362，O2 4/5,362，O3 5/5,362，O4 4/685）。新 manifest.migration 绑定 source_dataset 与 source_manifest_sha256，不把目录发布时间补成历史采集时间。新版本完整路径为 `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<新 benchmark>/v1/`。后续扩题显式以需要的这些叶子为 base，输出尚未使用的 v2；同名 v1 不表示不同 benchmark 共享同一证据。命名、迁移、合并去重及重验命令见[共用操作说明](object-datasets.md)。下方保留历次快照及当时的路径/命令，不作为当前建题默认；历史自由命名版本不能直接代入新 build 的 --version，按新规则改用下一 vN。
+
+## 2026-09-19 10:10 +08 输入截止：合并新归档后重建（迁移源快照）
 
 本轮复用 `0015e3b` 的建题代码及现有来源契约，没有修改 URL、实质版本或逐对象准入规则。O1/O2/O3 从 `20260918-substantive-v4-r1` 合并 Radar 已完成归档，并加入已通过原件校验的 AIHOT 9/15、9/18 UTC 日窗（分别 441、436 条参照记录），输出 `20260919-refresh-1010`。新增参照显式启用 `--aihot-inputs`，仅允许评分、富化使用绑定原文；准入仍从 Radar 未过滤输入建题。
 

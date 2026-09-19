@@ -20,18 +20,20 @@ from airadar.eval import aihot_dataset as ds
 from airadar.fetcher.raw_capture import dependency_closure, read_run
 
 from .assets import (
-    BENCHMARKS,
     DEFAULT_DATA_ROOT,
     ROOT,
+    dataset_version,
     digest,
     file_digest,
     load_dataset,
     read_json,
     read_jsonl,
-    slug,
     utc_now,
     write_json,
     write_jsonl,
+)
+from .assets import (
+    OBJECT_BENCHMARKS as BENCHMARKS,
 )
 from .dataset import raw_content_hash, reference_pass_items, resolve_sources, timestamp
 from .identity import input_url, news_key, split_for, substantive_hash
@@ -296,7 +298,7 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
           start: str | None = None, end: str | None = None, version: str, bases: list[Path] | None = None,
           targets: list[str] | None = None, data_root: Path = DEFAULT_DATA_ROOT,
           contract_path: Path = ROOT / "tests/fixtures/aihot_sources.json", aihot_inputs: bool = False) -> dict:
-    slug(version)
+    dataset_version(version)
     targets = list(dict.fromkeys(targets or BENCHMARKS))
     if set(targets) - BENCHMARKS.keys():
         raise ValueError("unknown target")
@@ -425,7 +427,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     create = sub.add_parser("build", help="build immutable independent object question sets, offline")
     create.add_argument("--base", dest="bases", type=Path, action="append",
-                        help="existing v1/v2 dataset leaf or manifest; repeat to merge versions, revalidate frozen inputs")
+                        help="existing schema 1/2 dataset leaf or manifest (legacy names accepted); repeat to merge frozen inputs")
     create.add_argument("--raw-root", type=Path)
     create.add_argument("--reference", type=Path, action="append",
                         help="repeat for interval roots or published daily window manifest paths")
@@ -433,7 +435,7 @@ def main():
                         help="authorize frozen AIHOT original titles/bodies as O2/O3-only fallback; inherited by --base")
     create.add_argument("--start", help="inclusive new raw run start, timezone required")
     create.add_argument("--end", help="exclusive new raw run start, timezone required")
-    create.add_argument("--version", required=True)
+    create.add_argument("--version", required=True, help="next input snapshot version: v1, v2, ...")
     create.add_argument("--target", dest="targets", choices=list(BENCHMARKS), action="append")
     create.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     create.add_argument("--contract-path", type=Path, default=ROOT / "tests/fixtures/aihot_sources.json")

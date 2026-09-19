@@ -121,23 +121,23 @@ def test_real_capture_build_frozen_base_rebuild_and_new_radar_updates(tmp_path):
     contract.write_text(json.dumps(CONTRACT))
     kwargs = dict(data_root=tmp_path / "data", contract_path=contract,
                   targets=["visible-score", "content-enrichment"])
-    first = ob.build(references=[ref], aihot_inputs=True, version="first", **kwargs)
+    first = ob.build(references=[ref], aihot_inputs=True, version="v1", **kwargs)
     leaf = Path(first["datasets"]["visible-score"]["path"])
     manifest, cases = load_dataset(leaf)
     assert len(cases) == 2 and manifest["aihot_input_references"]
     assert not read_jsonl(leaf / "evidence/raw-inputs.jsonl")
     root.rename(tmp_path / "unavailable-original-capture")
-    second = ob.build(bases=[leaf], version="second", **kwargs)
+    second = ob.build(bases=[leaf], version="v2", **kwargs)
     newer = Path(second["datasets"]["visible-score"]["path"])
     assert load_dataset(newer)[1] == cases
     assert second["datasets"]["visible-score"]["merge"]["added"] == 0
     # Deliberately include O1/O4 in a base-only rebuild: neither gets AIHOT-only cases.
-    all_targets = ob.build(bases=[newer], version="all", data_root=tmp_path / "data", contract_path=contract)
+    all_targets = ob.build(bases=[newer], version="v3", data_root=tmp_path / "data", contract_path=contract)
     assert all_targets["datasets"]["news-admission"]["main"] == 0
     assert all_targets["datasets"]["featured-members"]["main"] == 0
     raw_root = tmp_path / "raw"
     write_raw(raw_root, START, END, [raw()])
-    third = ob.build(bases=[newer], raw_root=raw_root, start=START, end=END, version="third", **kwargs)
+    third = ob.build(bases=[newer], raw_root=raw_root, start=START, end=END, version="v4", **kwargs)
     changes = read_jsonl(Path(third["datasets"]["visible-score"]["path"]) / "changes.jsonl")
     assert any(c["status"] == "updated" for c in changes)
     assert read_json(leaf / "manifest.json") == manifest

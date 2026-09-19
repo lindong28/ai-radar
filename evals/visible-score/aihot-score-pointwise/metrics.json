@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-score-pointwise",
+  "metrics": [
+    {
+      "task": "*",
+      "metric_name": "mae",
+      "unit": "score-point",
+      "direction": "lower",
+      "definition": "有可验证原始输入且有 AIHOT 可见分的题，0–100 可见分绝对误差均值",
+      "source": "evals/_shared/metrics.py"
+    }
+  ]
+}

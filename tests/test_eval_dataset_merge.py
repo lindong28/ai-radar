@@ -22,30 +22,30 @@ def leaves(result):
 
 def test_merge_duplicate_versions_and_reextend_without_original_archives(tmp_path):
     args = setup_build(tmp_path)
-    first = leaves(ob.build(**args, version="first"))
-    second = leaves(ob.build(**args, version="second"))
+    first = leaves(ob.build(**args, version="v1"))
+    second = leaves(ob.build(**args, version="v2"))
     frozen = {p: file_digest(p / "cases.jsonl") for p in [*first.values(), *second.values()]}
     args["raw_root"].rename(tmp_path / "unavailable-raw")
     args["references"][0].parent.rename(tmp_path / "unavailable-reference")
     merged = leaves(ob.build(bases=[first["visible-score"], second["content-enrichment"]],
-        version="merged", data_root=args["data_root"], contract_path=args["contract_path"]))
+        version="v3", data_root=args["data_root"], contract_path=args["contract_path"]))
     for target, path in merged.items():
         assert load_dataset(path)[1] == load_dataset(first[target])[1]
         report = read_json(path / "merge-summary.json")
         assert report["added"] == report["updated"] == report["removed"] == 0
         assert report["duplicate_parent_questions"] == report["previous_unique_questions"]
     again = leaves(ob.build(bases=[merged["news-admission"], first["news-admission"]],
-        version="again", data_root=args["data_root"], contract_path=args["contract_path"]))
+        version="v4", data_root=args["data_root"], contract_path=args["contract_path"]))
     assert load_dataset(again["news-admission"])[1] == load_dataset(first["news-admission"])[1]
     assert {p: file_digest(p / "cases.jsonl") for p in frozen} == frozen
 
 
 def test_extend_with_new_raw_adds_questions_and_new_variant_removes_only_pair(tmp_path):
     args = setup_build(tmp_path)
-    base = leaves(ob.build(**args, version="base"))["news-admission"]
+    base = leaves(ob.build(**args, version="v1"))["news-admission"]
     write_raw(args["raw_root"], "2026-09-18T08:00:00Z", "2026-09-18T08:15:00Z", [raw("b")])
     extra = leaves(ob.build(**{**args, "start": "2026-09-18T08:00:00Z", "end": "2026-09-18T09:00:00Z"},
-                           bases=[base], version="extra"))
+                           bases=[base], version="v2"))
     score = extra["visible-score"]
     assert len(load_dataset(score)[1]) == 2
     assert read_json(score / "merge-summary.json")["added"] == 1
@@ -53,7 +53,7 @@ def test_extend_with_new_raw_adds_questions_and_new_variant_removes_only_pair(tm
     write_raw(args["raw_root"], "2026-09-19T08:00:00Z", "2026-09-19T08:15:00Z",
               [{**raw(), "content_text": "changed body"}])
     changed = leaves(ob.build(**{**args, "start": "2026-09-19T08:00:00Z", "end": "2026-09-19T09:00:00Z"},
-                              bases=[score], version="changed"))
+                              bases=[score], version="v3"))
     for target in ("visible-score", "featured-members"):
         report = read_json(changed[target] / "merge-summary.json")
         assert report["removed"] == 1 and report["retained"] == 1
@@ -68,9 +68,9 @@ def test_legacy_base_uses_unfiltered_observations_not_candidate_rows(tmp_path):
     write_raw(args["raw_root"], "2026-09-17T07:01:00Z", "2026-09-17T07:02:00Z", [], failed_source="gazette")
     old = legacy.build(raw_root=args["raw_root"], reference=args["references"][0],
         version="old", data_root=args["data_root"], contract_path=args["contract_path"])
-    latest = leaves(ob.build(**args, version="latest"))
+    latest = leaves(ob.build(**args, version="v1"))
     result = leaves(ob.build(bases=[Path(old["datasets"]["visible-score"]), latest["news-admission"]],
-        version="merged", data_root=args["data_root"], contract_path=args["contract_path"]))
+        version="v2", data_root=args["data_root"], contract_path=args["contract_path"]))
     assert load_dataset(result["visible-score"])[1] == load_dataset(latest["visible-score"])[1]
     report = read_json(result["news-admission"] / "merge-summary.json")
     assert report["updated"] == 1  # Historical positive main becomes recall-only.
@@ -83,18 +83,18 @@ def test_legacy_base_uses_unfiltered_observations_not_candidate_rows(tmp_path):
     inventory = read_json(result["news-admission"] / "evidence/inventory.json")
     failed = {"run_id": "20260917T070100Z", "source_id": "gazette", "reason": "failed"}
     assert inventory["source_failures"].count(failed) == 1
-    old_only = leaves(ob.build(bases=[Path(old["datasets"]["visible-score"])], version="legacy-only",
+    old_only = leaves(ob.build(bases=[Path(old["datasets"]["visible-score"])], version="v3",
         data_root=args["data_root"], contract_path=args["contract_path"]))
     assert read_json(old_only["news-admission"] / "evidence/inventory.json")["source_failures"] == [failed]
 
 
 def test_current_source_contract_can_remove_all_old_questions(tmp_path):
     args = setup_build(tmp_path)
-    first = leaves(ob.build(**args, version="base"))
+    first = leaves(ob.build(**args, version="v1"))
     contract = read_json(args["contract_path"])
     contract["sources"][0]["paused"] = True
     args["contract_path"].write_text(json.dumps(contract))
-    result = leaves(ob.build(bases=[first["news-admission"]], version="paused",
+    result = leaves(ob.build(bases=[first["news-admission"]], version="v2",
         data_root=args["data_root"], contract_path=args["contract_path"]))
     for path in result.values():
         assert not load_dataset(path)[1]
@@ -105,9 +105,9 @@ def test_current_source_contract_can_remove_all_old_questions(tmp_path):
 
 def test_cli_base_only_and_invalid_arguments_and_corrupt_base(tmp_path):
     args = setup_build(tmp_path)
-    base = leaves(ob.build(**args, version="base"))["news-admission"]
+    base = leaves(ob.build(**args, version="v1"))["news-admission"]
     command = [sys.executable, "scripts/build_eval_datasets.py", "build", "--base", str(base),
-               "--version", "cli", "--contract-path", str(args["contract_path"]), "--data-root", str(args["data_root"])]
+               "--version", "v2", "--contract-path", str(args["contract_path"]), "--data-root", str(args["data_root"])]
     result = subprocess.run(command, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)
@@ -116,15 +116,15 @@ def test_cli_base_only_and_invalid_arguments_and_corrupt_base(tmp_path):
     result = subprocess.run(command, text=True, capture_output=True)
     assert result.returncode == 1 and "already exists" in result.stderr
     with pytest.raises(ValueError, match="together"):
-        ob.build(bases=[base], raw_root=args["raw_root"], version="bad")
+        ob.build(bases=[base], raw_root=args["raw_root"], version="v3")
     (base / "evidence/raw-inputs.jsonl").write_text("{}\n")
     with pytest.raises(ValueError, match="integrity"):
-        ob.build(bases=[base], version="corrupt", data_root=args["data_root"])
+        ob.build(bases=[base], version="v3", data_root=args["data_root"])
 
 
 def test_new_reference_conflict_rechecks_old_field_without_dropping_others(tmp_path):
     args = setup_build(tmp_path)
-    base = leaves(ob.build(**args, version="base"))["news-admission"]
+    base = leaves(ob.build(**args, version="v1"))["news-admission"]
     # A second real capture has the same IDs but conflicting title observations.
     from test_eval_system_interval import Transport
 
@@ -143,7 +143,7 @@ def test_new_reference_conflict_rechecks_old_field_without_dropping_others(tmp_p
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(Transport, "get", changed_get)
         ref = capture(tmp_path / "new-reference")
-    result = leaves(ob.build(bases=[base], references=[ref], version="conflict", data_root=args["data_root"],
+    result = leaves(ob.build(bases=[base], references=[ref], version="v2", data_root=args["data_root"],
                             contract_path=args["contract_path"]))
     rows = load_dataset(result["content-enrichment"])[1]
     assert "title" not in rows[0]["reference"] and "tags" in rows[0]["reference"]

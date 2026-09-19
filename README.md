@@ -8,7 +8,7 @@ UX 设计与信息架构参照 [AIHOT](http://aihot.virxact.com/)。差异在定
 
 ## 离线评测与迭代
 
-AIHOT 对齐的四对象评测、版本化题库、运行入口及结果归档见 [评测文档](docs/evaluations/README.md)。题库保留过滤前原始新闻，在本机保存；评测与生产采集/网站数据隔离。
+AIHOT 对齐的四对象评测、版本化题库、运行入口及结果归档见 [评测文档](docs/evaluations/README.md)。按消费者契约区分 benchmark，同契约的数据快照使用 v1/v2；扩题操作见[建题说明](docs/evaluations/benchmarks/object-datasets.md)。题库保留过滤前原始新闻，在本机保存；评测与生产采集/网站数据隔离。
 
 ## 快速开始
 
