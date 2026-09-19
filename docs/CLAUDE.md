@@ -20,6 +20,7 @@
 
 | 文件 | 性质 | 说明 |
 |---|---|---|
+| [20260919-7ac2](adr/20260919-7ac2-test-prefilter-archived-quote-context.md) | Decision | 离线接入既存引用帖正文，不改gold/生产，剩余413次预算 |
 | [architecture.md](architecture.md) | Mutable snapshot | 系统模块结构、分层、数据流、数据库设计、Web 层、关键抽象 |
 | [20260919-b7e2](adr/20260919-b7e2-second-security-round-deploy-chain-credentials-csp.md) | Decision | 第二轮安全审查：部署链 pre-receive 验签与运行时根路径保护、runtime_env 只加载声明键、读时 URL scheme 门、CSP 外置脚本迁移；CSP 强制待一周后切换 |
 | [20260919-d62b](adr/20260919-d62b-test-prefilter-ai-capabilities.md) | Decision | 离线测试AI设备实质能力及来源上下文；双90累计6000次 |

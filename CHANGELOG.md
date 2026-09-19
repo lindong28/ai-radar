@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-19（准入引用上下文实验）
+
+- 离线 prefilter 评测新增显式 `--quote-context`：只接入冻结 Radar 归档中、题目观测时点之前的单跳引用原文；缺失或冲突不补造、不删题，默认关闭，不修改 gold 或生产。
+- 每轮保存实际引用上下文及来源，参与候选身份与失败恢复校验；运行方式见 [评测入口](evals/news-admission/aihot-observed-membership/README.md)，实验成绩见 [对象状态](docs/evaluations/news-admission/status.md)。
+
 ## 2026-09-19（采集停摆修复）
 
 - Fixed: 全站自 2026-09-18 11:00 起没有新文章入库（公网 `/`、`/all`、`/wechat` 都停在 9/18）。根因是 `items` 表任何 UPDATE（含每轮只刷新 `fetched_at` 的常规重抓）都触发 `items_au_fts`，而该触发器按无索引的 `item_id` 对 FTS 虚表全扫；`openai_blog`、`huggingface_blog` 每 15 分钟重吐整个归档（约 2070 条），单轮 ingest 因此超过 15 分钟、outbox 积压到 5.3 万批后不再收敛。触发器改为只在 `title`、`content_text`、`author`、`source_id` 变化时触发；已有数据库下次 migrate 会做一次 FTS 全量重建（68 MB，分钟级）。

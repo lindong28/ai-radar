@@ -65,7 +65,8 @@ def object_identity(config: dict, prompt: dict | None) -> dict:
 def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed: str,
              chat_factory, label: str, workers: int = 8, prompt: dict | None = None,
              smoke: bool = False, reuse: Path | None = None, root: Path = ROOT,
-             exclude_runs: tuple[Path, ...] = (), benchmark: str = BENCHMARK) -> dict:
+             exclude_runs: tuple[Path, ...] = (), benchmark: str = BENCHMARK,
+             quote_context: bool = False) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
     manifest, pool = load_dataset(dataset, TARGET)
@@ -85,6 +86,22 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         template = Template(prompt["user_template"], undefined=StrictUndefined)
     prompts = {c["case_id"]: {"system": prompt["system"], "user": template.render(**prompt_context(c["input"]))}
                for c in cases} if template else {}
+    contexts = []
+    if quote_context:
+        from .quote_context import QuoteContext, render_quotes
+        if prompt is None:
+            raise ValueError("quote context requires an explicit candidate prompt")
+        raw_path = dataset / manifest["shared_evidence"] / "raw-inputs.jsonl"
+        if manifest.get("evidence_files", {}).get("raw-inputs.jsonl") != file_digest(raw_path):
+            raise ValueError("quote context requires frozen raw evidence")
+        index = QuoteContext(raw_path)
+        for case in cases:
+            rows = index.resolve(case["input"], case["provenance"]["observed_at"])
+            contexts.append({"case_id": case["case_id"], "quotes": rows})
+            prompts[case["case_id"]]["user"] += render_quotes(rows)
+        identity["quote_context"] = {"raw_inputs_sha256": index.sha256,
+                                     "code_sha256": file_digest(ROOT / "evals/_shared/quote_context.py"),
+                                     "resolved_sha256": digest(contexts)}
     scorer_identity = {p: file_digest(ROOT / p) for p in
                        ("evals/_shared/metrics.py", f"evals/news-admission/{benchmark}/metrics.json")}
     cached = {}
@@ -113,6 +130,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     write_json(run / "started.json", metadata)
     write_json(run / "config.json", config)
     write_jsonl(run / "cases.jsonl", cases)
+    if quote_context:
+        write_jsonl(run / "quote-context.jsonl", contexts)
     print(f"运行目录：{run}；{len(cases)} 题，{split}，并发上限 {workers}", flush=True)
     chat_for_case = chat_factory(run / "attempts")
     start = time.monotonic()
@@ -172,6 +191,7 @@ def main(argv=None, *, benchmark=BENCHMARK) -> int:
     run.add_argument("--reuse", type=Path)
     run.add_argument("--exclude-run", type=Path, action="append", default=[])
     run.add_argument("--smoke", action="store_true")
+    run.add_argument("--quote-context", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "validate":
         from .object_entry import main as validate_main
@@ -182,7 +202,7 @@ def main(argv=None, *, benchmark=BENCHMARK) -> int:
     result = evaluate(args.dataset, config=config, split=args.split, limit=args.limit, seed=args.seed,
                       workers=args.workers, label=args.label, chat_factory=factory,
                       prompt=read_json(args.prompt) if args.prompt else None, smoke=args.smoke, reuse=args.reuse,
-                      exclude_runs=tuple(args.exclude_run), benchmark=benchmark)
+                      exclude_runs=tuple(args.exclude_run), benchmark=benchmark, quote_context=args.quote_context)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 
