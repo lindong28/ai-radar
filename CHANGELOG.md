@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-19（新闻准入双90%离线优化）
+
+- 独立 prefilter 评测支持按旧run排除已见题，再以同一seed抽取新回归题；候选可使用原始回复关系和正文状态，不向模型暴露参考答案。使用方式见[运行入口](evals/news-admission/aihot-prefilter/README.md)。
+- 新增HN热度、独立帖和正文条件的离线候选；绝对目标为precision与recall均>90%，不把相对改善当成达标。真实结果归档至[对象状态](docs/evaluations/news-admission/status.md)，生产prompt和题库未改动。
+
 ## 2026-09-19（新闻准入独立离线评测）
 
 - 新闻准入独立题库现在可直接运行当前 prefilter、固定抽样、比较候选，并保留逐题输出和调用记录；失败题可以单独补跑，失败轮不伪报完整成绩。使用方式见[运行入口](evals/news-admission/aihot-prefilter/README.md)。

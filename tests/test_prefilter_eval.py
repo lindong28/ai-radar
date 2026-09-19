@@ -22,6 +22,42 @@ def config():
             "transport_identity": {"provider": "ark", "base_url": "https://example.org/v1"}}
 
 
+def test_candidate_context_uses_only_raw_relationship_and_exact_web_fields():
+    raw = {**cases()[0]["input"], "source_kind": "x",
+           "extra": {"referenced_tweets": [{"type": "quoted"}]},
+           "reference": {"member": True}, "expected": "SECRET"}
+    assert not prefilter_eval.prompt_context(raw)["is_reply"]
+    raw["extra"]["referenced_tweets"].append({"type": "replied_to"})
+    context = prefilter_eval.prompt_context(raw)
+    assert context["is_reply"]
+    assert set(context) == {"item", "is_reply", "is_title_only_web"}
+    web = {**raw, "source_kind": "web", "content_text": raw["title"],
+           "fetched_at": raw["published_at"]}
+    assert not prefilter_eval.prompt_context(web)["is_reply"]
+    assert prefilter_eval.prompt_context(web)["is_title_only_web"]
+    for field, value in [("content_text", raw["title"] + " "), ("fetched_at", "other"),
+                         ("source_id", "hf_daily_papers"), ("source_kind", "feed")]:
+        assert not prefilter_eval.prompt_context({**web, field: value})["is_title_only_web"]
+
+
+def test_runner_renders_override_context_without_gold(tmp_path):
+    leaf = fixture_dataset(tmp_path)
+    captured = []
+    def factory(attempts):
+        def for_case(key):
+            def chat(**kwargs):
+                captured.append(kwargs["prompt"])
+                return {"json": {"is_ai_related": True, "confidence": 1}}
+            return chat
+        return for_case
+    prompt = {"system": "candidate", "user_template":
+              "{{ item.title }}|{{ is_reply }}|{{ is_title_only_web }}|{{ reference|default('absent') }}"}
+    prefilter_eval.evaluate(leaf, config=config(), split="dev", limit=2, seed="s",
+                            chat_factory=factory, label="context", root=tmp_path, prompt=prompt)
+    assert len(captured) == 2
+    assert all(p["system"] == "candidate" and p["user"].endswith("|False|False|absent") for p in captured)
+
+
 def fixture_dataset(tmp_path):
     leaf = tmp_path / "data/news-admission/aihot-prefilter/v1"
     assets.write_jsonl(leaf / "cases.jsonl", cases())
@@ -48,6 +84,41 @@ def test_sampling_ignores_labels_and_keeps_splits_disjoint():
     assert not ids(dev) & ids(prefilter_eval.select_cases(original, "regression", 3, "seed"))
     with pytest.raises(ValueError):
         prefilter_eval.select_cases(original, "dev", 0, "seed")
+
+
+def test_exclusions_remove_seen_ids_without_changing_remaining_order():
+    original = cases()
+    ordered = prefilter_eval.select_cases(original, "dev", None, "seed")
+    excluded = frozenset(c["case_id"] for c in ordered[:2])
+    assert prefilter_eval.select_cases(original, "dev", 3, "seed", excluded) == ordered[2:5]
+    changed = copy.deepcopy(original)
+    for c in changed:
+        c["reference"]["member"] = not c["reference"]["member"]
+    assert [c["case_id"] for c in prefilter_eval.select_cases(changed, "dev", 3, "seed", excluded)] == [
+        c["case_id"] for c in ordered[2:5]]
+    with pytest.raises(ValueError):
+        prefilter_eval.select_cases(original, "dev", 5, "seed", excluded)
+
+
+def test_runner_excludes_prior_run_before_calls_and_archives_selection(tmp_path):
+    leaf = fixture_dataset(tmp_path)
+    prior = tmp_path / "prior"
+    assets.write_jsonl(prior / "cases.jsonl", cases()[:2])
+    called = []
+    def factory(attempts):
+        def for_case(key):
+            called.append(key)
+            return lambda **kwargs: {"json": {"is_ai_related": True, "confidence": 1}}
+        return for_case
+    result = prefilter_eval.evaluate(leaf, config=config(), split="dev", limit=None, seed="s",
+                                    chat_factory=factory, label="exclude", root=tmp_path,
+                                    exclude_runs=(prior,))
+    assert set(called) == {"2", "3", "4", "5"}
+    run = Path(result["run"])
+    selected = assets.read_json(run / "started.json")["selection"]["exclusions"]
+    assert selected == [{"run": str(prior.resolve()), "cases_sha256": assets.file_digest(prior / "cases.jsonl"),
+                         "case_ids": ["0", "1"]}]
+    assert {c["case_id"] for c in assets.read_jsonl(run / "cases.jsonl")} == set(called)
 
 
 @pytest.mark.parametrize("answer", [True, False])

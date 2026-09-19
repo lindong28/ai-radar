@@ -34,7 +34,7 @@
 
 O4 比较固定 `pool.jsonl`：复制公开配置并仅修改选择规则，`run ... --fixed-pool <baseline pool.jsonl> --label <candidate>`，不重新调用模型。O1/O2/O3 改对象或模型后跑同版本题集，沿缓存身份自动重算受影响输入。不得把参考分、参考分类或成员数喂给被测对象。
 
-`compare <baseline experiment> <candidate experiment>` 要求同题、同尺；至少一项改善、其他不退步、无未知指标、题目全部完成才给 accepted。smoke 不参与验收。开发/回归新闻分组固定，优化选择只读开发结果，最终另查回归子集；已看过的结果不能再称盲留出。未设绝对达标线，不声称统计显著或已全面拟合。
+`compare <baseline experiment> <candidate experiment>` 要求同题、同尺；至少一项改善、其他不退步、无未知指标、题目全部完成才给 accepted。smoke 不参与验收。开发/回归新闻分组固定，优化选择只读开发结果，最终另查回归子集；已看过的结果不能再称盲留出。2026-09-19 用户为 O1 明确追加目标：precision、recall 必须同时 >90%；`accepted` 仅代表相对改善，不等于达到该绝对目标。其它对象未设绝对达标线，不声称统计显著或已全面拟合。
 
 失败/中断后先看各对象 experiment 的 `started.json`、共用 attempts 与已成功缓存，再重跑同配置；有 started 而没有 metadata 表示未收尾，不能视为成功。输出目录按创建 UTC 时刻追加，旧轮不覆盖。代码变动或输入版本变化时先重建基线再比，不把旧实验成绩接到新曲线上。
 

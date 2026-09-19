@@ -20,11 +20,26 @@ TARGET = "news-admission"
 BENCHMARK = "aihot-prefilter"
 
 
-def select_cases(cases: list[dict], split: str, limit: int | None, seed: str) -> list[dict]:
+def prompt_context(raw: dict) -> dict:
+    """Expose only source facts, never reference membership or case metadata."""
+    refs = (raw.get("extra") or {}).get("referenced_tweets") or []
+    return {"item": _item(raw),
+            "is_reply": raw.get("source_kind") == "x" and any(
+                isinstance(ref, dict) and ref.get("type") == "replied_to" for ref in refs),
+            "is_title_only_web": raw.get("source_kind") == "web"
+                and raw["source_id"] != "hf_daily_papers"
+                and raw["content_text"] == raw["title"]
+                and bool(raw.get("published_at"))
+                and raw["published_at"] == raw.get("fetched_at")}
+
+
+def select_cases(cases: list[dict], split: str, limit: int | None, seed: str,
+                 excluded: frozenset[str] = frozenset()) -> list[dict]:
     """Label-blind stable sampling; never rebalance positive/negative examples."""
     if split not in {"dev", "regression"}:
         raise ValueError("split must be dev or regression")
-    pool = sorted((c for c in cases if c["split"] == split), key=lambda c: digest([seed, c["case_id"]]))
+    pool = sorted((c for c in cases if c["split"] == split and c["case_id"] not in excluded),
+                  key=lambda c: digest([seed, c["case_id"]]))
     if limit is not None and not 1 <= limit <= len(pool):
         raise ValueError("limit must be positive and not exceed the selected split")
     selected = pool if limit is None else pool[:limit]
@@ -49,13 +64,18 @@ def object_identity(config: dict, prompt: dict | None) -> dict:
 
 def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed: str,
              chat_factory, label: str, workers: int = 8, prompt: dict | None = None,
-             smoke: bool = False, reuse: Path | None = None, root: Path = ROOT) -> dict:
+             smoke: bool = False, reuse: Path | None = None, root: Path = ROOT,
+             exclude_runs: tuple[Path, ...] = ()) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
     manifest, pool = load_dataset(dataset, TARGET)
     if manifest["benchmark"] != BENCHMARK:
         raise ValueError("this runner requires the independent prefilter benchmark")
-    cases = select_cases(pool, split, limit, seed)
+    exclusions = [{"run": str(p.resolve()), "cases_sha256": file_digest(p / "cases.jsonl"),
+                   "case_ids": [c["case_id"] for c in read_jsonl(p / "cases.jsonl")]}
+                  for p in exclude_runs]
+    excluded = frozenset(key for row in exclusions for key in row["case_ids"])
+    cases = select_cases(pool, split, limit, seed, excluded)
     identity = object_identity(config, prompt)
     # Validate all input/template paths before creating chargeable attempts.
     template = None
@@ -63,7 +83,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         if set(prompt) != {"system", "user_template"} or not all(isinstance(v, str) for v in prompt.values()):
             raise ValueError("prompt requires only system and user_template strings")
         template = Template(prompt["user_template"], undefined=StrictUndefined)
-    prompts = {c["case_id"]: {"system": prompt["system"], "user": template.render(item=_item(c["input"]))}
+    prompts = {c["case_id"]: {"system": prompt["system"], "user": template.render(**prompt_context(c["input"]))}
                for c in cases} if template else {}
     scorer_identity = {p: file_digest(ROOT / p) for p in
                        ("evals/_shared/metrics.py", "evals/news-admission/aihot-prefilter/metrics.json")}
@@ -82,7 +102,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                 "label": label, "dataset": str(dataset.resolve()),
                 "dataset_manifest_sha256": file_digest(dataset / "manifest.json"),
                 "case_identity": digest(cases), "split": split, "smoke": smoke,
-                "selection": {"seed": seed, "limit": limit, "method": "label-blind-hash-order"},
+                "selection": {"seed": seed, "limit": limit, "method": "label-blind-hash-order",
+                              "exclusions": exclusions},
                 "case_ids": [c["case_id"] for c in cases], "object_identity": identity,
                 "scorer_identity": scorer_identity, "started_at": utc_now(),
                 "directory_timestamp_utc": "/".join(run.parts[-2:]), "directory_time_source": "run_created",
@@ -149,6 +170,7 @@ def main(argv=None) -> int:
     run.add_argument("--label", required=True)
     run.add_argument("--prompt", type=Path)
     run.add_argument("--reuse", type=Path)
+    run.add_argument("--exclude-run", type=Path, action="append", default=[])
     run.add_argument("--smoke", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "validate":
@@ -159,7 +181,8 @@ def main(argv=None) -> int:
     factory = transport_factory(config, args.env_file)
     result = evaluate(args.dataset, config=config, split=args.split, limit=args.limit, seed=args.seed,
                       workers=args.workers, label=args.label, chat_factory=factory,
-                      prompt=read_json(args.prompt) if args.prompt else None, smoke=args.smoke, reuse=args.reuse)
+                      prompt=read_json(args.prompt) if args.prompt else None, smoke=args.smoke, reuse=args.reuse,
+                      exclude_runs=tuple(args.exclude_run))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

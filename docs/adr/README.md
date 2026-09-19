@@ -4,6 +4,8 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260919-c31a](./20260919-c31a-test-prefilter-standalone-input.md) | 离线测试原始回复关系、正文条件及准入构框；不改题库和生产 | accepted for experiment | 2026-09-19 |
+| [20260919-bc72](./20260919-bc72-test-prefilter-hn-heat.md) | 仅离线测试 prefilter 的 HN 热度条件；双 >90% 目标、3,000 次请求上限、不改题库 | accepted for experiment | 2026-09-19 |
 | [20260919-e1d3](./20260919-e1d3-test-prefilter-direct-ai-impact.md) | 仅离线测试 prefilter 纳入 AI 直接社会/经济/资源影响的单句候选，不改生产 | accepted for experiment | 2026-09-19 |
 | [20260919-a3c1](./20260919-a3c1-harden-public-surface-after-security-review.md) | 安全审查后加固公网面：origin 自验 admin token、采集入口白名单、请求边界、安全头与依赖升级 | accepted；生产生效待部署 + 服务器写入 token | 2026-09-19 |
 | [20260918-7d0e](./20260918-7d0e-expand-score-and-enrichment-from-aihot-originals.md) | 仅 O2/O3 以 AIHOT 原标题与绑定原文扩题，O1/O4 保持保守候选窗口 | accepted；已物化新 O2/O3 题库，读数见 inventory | 2026-09-18 |
