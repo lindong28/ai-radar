@@ -9,6 +9,12 @@
 - Changed（部署）：代码部署拒绝把 `data` / `logs` / `.venv` / `.env` 等运行时路径 track 成文件、symlink 或 gitlink 的候选 commit；`quarantine/` 只保留最近 2 份；服务器 bare repo 新增 pre-receive 验签（SSH commit 签名 + `allowed_signers`），未签名或非快进的推送被拒。生效与配置见 [ADR-20260919-b7e2](docs/adr/20260919-b7e2-second-security-round-deploy-chain-credentials-csp.md) 与 [services.md「代码部署的验签」](docs/operations/services.md)。
 - Changed（配置）：`data/sources.toml` 的 URL 只展开"整个 URL 就是一个 `${VAR}`"的占位符，嵌入式引用会被拒绝加载。
 
+## 2026-09-19（新闻准入AI能力与上下文续轮）
+
+- 增加实质AI能力、来源上下文及硬件主次边界三个显式离线prompt候选；共用既有准入规则与确定性precision/recall，生产配置、题库和标签保持不变。
+- 续轮使用双90目标及累计6000次API尝试上限；固定开发集与排除两批旧题的新回归分别记账。结果、限制和复用方式见[对象状态](docs/evaluations/news-admission/status.md)与[运行入口](evals/news-admission/aihot-prefilter/README.md)。
+- C8新400题回归仍未双达标：1题供应商持续拒答，保留正式未计算状态；最有利补值边界仍为precision 88.00%、recall 89.80%。记录时间匹配负例和标题占位规则误杀的逐题证据，不改变gold或上线候选。
+
 ## 2026-09-19（新闻准入双90%离线优化）
 
 - 独立 prefilter 评测支持按旧run排除已见题，再以同一seed抽取新回归题；候选可使用原始回复关系和正文状态，不向模型暴露参考答案。使用方式见[运行入口](evals/news-admission/aihot-prefilter/README.md)。

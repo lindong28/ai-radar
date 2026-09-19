@@ -37,6 +37,12 @@ PYTHONPATH=src:. uv run python evals/news-admission/aihot-prefilter/evaluate.py 
 
 ## 混合准入候选（离线，不是生产默认）
 
+主题候选可替换同一个`--prompt`参数，随后应用同一policy投影：C6=`prompts/ai-capability.json`（实体中的实质AI能力），C7=`prompts/ai-context.json`（加已有来源／产品上下文），C8=`prompts/ai-primary-context.json`（再限定硬件／通用OS的主要AI对象）。它们是实验资产，不是默认配置或已达标保证；真实结果及是否采纳只看[对象状态](../../../docs/evaluations/news-admission/status.md)。复用失败题时必须保持同一prompt及其它身份，不能将另一候选的成功响应当缓存。
+
+2026-09-19续轮完成后，新回归需在上述命令中同时传入`--exclude-run runs/news-admission/aihot-prefilter/v1/2026-09-19/08-28-00 --exclude-run runs/news-admission/aihot-prefilter/v1/2026-09-19/11-36-10 --exclude-run runs/news-admission/aihot-prefilter/v1/2026-09-19/12-48-32`，排除三批已见共1200题；即使第三批有拒答，该批也已被读取，不能再次称为未见留出。排除清单随实际已读回归增加。原题库不因排除而删除，排除只作用于新一轮的未见验收抽样。
+
+持续`content_filter`不能按网络失败无限重试，也不能填false或删题。12-50-00保留正式未计算指标，另存缺失预测两种可能结果的边界诊断；后者不是实际预测或完整评测成绩。并行启动两个同分区run时，先等第一进程打印运行目录，再启动第二个：目前目录精确到秒，同秒碰撞会在API调用前拒绝创建，不能据此覆盖既有目录。
+
 C5由 `direct-ai-impact.json` 模型主题判断与 `hn100-standalone-body-v1` 原始字段条件取AND。先用上面的 `run --prompt evals/news-admission/aihot-prefilter/prompts/direct-ai-impact.json` 产生模型run，再执行：
 
 ```bash

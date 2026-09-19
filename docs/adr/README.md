@@ -5,6 +5,7 @@
 | # | Title | Status | Date |
 |---|---|---|---|
 | [20260919-b7e2](./20260919-b7e2-second-security-round-deploy-chain-credentials-csp.md) | 第二轮安全审查：部署链验签与根路径保护、凭据面 allowlist、读时 URL 门、CSP 迁移 | accepted；部分 supersede ADR-003（只加载声明键）；CSP 强制待一周 Report-Only 后切换 | 2026-09-19 |
+| [20260919-d62b](./20260919-d62b-test-prefilter-ai-capabilities.md) | 离线测试AI设备实质能力及来源上下文；双90累计6000次，不改题库或生产 | accepted for experiment | 2026-09-19 |
 | [20260919-c31a](./20260919-c31a-test-prefilter-standalone-input.md) | 离线测试原始回复关系、正文条件及准入构框；不改题库和生产 | accepted for experiment | 2026-09-19 |
 | [20260919-bc72](./20260919-bc72-test-prefilter-hn-heat.md) | 仅离线测试 prefilter 的 HN 热度条件；双 >90% 目标、3,000 次请求上限、不改题库 | accepted for experiment | 2026-09-19 |
 | [20260919-e1d3](./20260919-e1d3-test-prefilter-direct-ai-impact.md) | 仅离线测试 prefilter 纳入 AI 直接社会/经济/资源影响的单句候选，不改生产 | accepted for experiment | 2026-09-19 |
