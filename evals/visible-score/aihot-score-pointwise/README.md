@@ -30,7 +30,19 @@ PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluat
 
 模型输入只取case.input的原始字段白名单，正文仍最多5000字符，不读取reference/provenance。原件归 `runs/visible-score/aihot-score-pointwise/<version>/<UTC-date>/<UTC-time>/`：started/config/prompt/cases/prompts、items、predictions、attempts及scores；元数据和metrics/summary归同结构 `experiments/`。逐题reason、原始响应和实际请求保留，费用未知不归零。不得写回题库；新v2等版本可使用同命令，不写死本轮题数。
 
+## 三维语义候选
+
+判断标准、权重及与旧六维的区别见[设计](../../../docs/evaluations/visible-score/semantic-design.md)。一次调用按影响、信息增量、实质支撑分别输出 `{"reason": "…", "score": 0}`，每维分数为0–10整数；顶层先给总理由，再给三维对象。`--mode semantic` 用代码计算 `5*impact + 3*information_gain + 2*evidence`，不使用校准、来源系数或排名池。
+
+```bash
+PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-ark.json --env-file .env --prompt evals/visible-score/prompts/semantic-news-value-v2.json --mode semantic --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label S2-semantic-dev200
+```
+
+同标尺的直接总分control使用 `semantic-direct-control-v1.json --mode direct`，仅对应初版S1的机制对照。扩题后替换dataset路径、冻结对应版本和抽样seed；候选冻结前不读回归结果。选新回归时用 `--exclude-run` 排除已用于诊断的历史题。题数不是写死在实现里的。所有新运行保留原始维度理由和分数于 `items/*.json` 的 `response_json`，预测总分在 `output.score`；失败不返回伪分数。
+
 ## 零调用分数校准
+
+2026-09-20 后续用户选择优先[多维语义评分](../../../docs/evaluations/visible-score/semantic-design.md)。本节保留历史诊断工具，不代表当前采用后置校准。
 
 [score_calibration.py](../../_shared/score_calibration.py) 只在完整 dev 运行拟合统一映射 `floor(clamp(scale * score + offset, 0, 100) + 0.5)`，保留原预测。搜索61个scale（0.20至1.40、步长0.02），每个取残差中位数offset，再按实际MAE选取；不是所有连续仿射参数的全局最优，也不是逐来源/逐题记分表。参考分只在 dev 拟合时读取，应用到回归时映射已冻结，不需要 AIHOT 分数作为推理输入。
 

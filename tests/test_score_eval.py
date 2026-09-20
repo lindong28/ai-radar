@@ -83,10 +83,14 @@ def execute(dataset, root, answer, *, captured=None, **kwargs):
                                label="fixture", mode="direct", workers=2, root=root, **kwargs)
 
 
-@pytest.mark.parametrize("mode", ["dimensions", "direct"])
+@pytest.mark.parametrize("mode", ["dimensions", "direct", "semantic"])
 def test_real_runner_persists_exact_prompts_responses_identity_and_mae(dataset, tmp_path, mode):
     captured = []
     def answer(key):
+        if mode == "semantic":
+            return {"reason": f"source evidence {key}", **{
+                field: {"reason": f"{field} evidence", "score": int(key)}
+                for field in score_eval.SEMANTIC_WEIGHTS}}
         return {"reason": f"source evidence {key}", **(
             {field: int(key) for field in score_eval.DIMENSIONS} if mode == "dimensions" else {"score": int(key) * 10})}
     result = score_eval.evaluate(dataset, config=config(), prompt=PROMPT, split="dev", limit=None,
@@ -118,6 +122,10 @@ def test_real_runner_persists_exact_prompts_responses_identity_and_mae(dataset, 
     assert identity["mapping"]["ranking_pool"] is False
     if mode == "dimensions":
         assert identity["mapping"]["weights"] == score_eval.DEFAULT_WEIGHTS.as_record()
+    if mode == "semantic":
+        assert identity["mapping"]["coefficients"] == {"impact": 5, "information_gain": 3, "evidence": 2}
+        assert identity["source_sha256"]["src/airadar/scorer/semantic.py"] == assets.file_digest(
+            assets.ROOT / "src/airadar/scorer/semantic.py")
     assert metadata["dataset_cases_sha256"] == assets.file_digest(dataset / "cases.jsonl")
     selected = assets.read_jsonl(run / "cases.jsonl")
     assert metadata["case_identity"] == assets.digest(selected)

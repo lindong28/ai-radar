@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260920-ae72](./20260920-ae72-test-semantic-score-dimensions.md) | 三维语义刻度、固定50/30/20与同规则直接对照；仅离线 | accepted for offline experiment | 2026-09-20 |
 | [20260920-6a27](./20260920-6a27-evaluate-pointwise-visible-scores.md) | 逐条可见分 reason-first 基线、同题 Flash 候选与固定映射离线优化 | accepted for offline experiment | 2026-09-20 |
 | [20260920-8f31](./20260920-8f31-separate-evaluation-assets-from-reference-archives.md) | 原始参照与当前评测入口分离；旧共享池实验按后续用户决定清退 | accepted；历史运行保留部分已修订 | 2026-09-20 |
 | [20260920-cc16](./20260920-cc16-compare-prefilter-model-with-fixed-input.md) | 固定C10及输入，离线比较Pro/Flash；不改gold或生产 | accepted for experiment | 2026-09-20 |

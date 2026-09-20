@@ -13,6 +13,7 @@ from jinja2 import StrictUndefined, Template
 from airadar.curator.score import weighted_score
 from airadar.curator.weights import DEFAULT_WEIGHTS, DIMENSIONS
 from airadar.provider.judgment import require_reason_first
+from airadar.scorer.semantic import SEMANTIC_WEIGHTS, semantic_score
 
 from .assets import (
     ROOT,
@@ -45,8 +46,10 @@ def prompt_context(raw: dict) -> dict:
 
 def project_score(payload: dict, mode: str, tier: str) -> dict:
     """Validate the model's emitted order and values before any score mapping."""
+    if mode == "semantic":
+        return {"score": semantic_score(payload)}
     if mode not in {"dimensions", "direct"}:
-        raise ValueError("mode must be dimensions or direct")
+        raise ValueError("mode must be dimensions, direct or semantic")
     require_reason_first(payload, "relevance" if mode == "dimensions" else "score")
     fields = DIMENSIONS if mode == "dimensions" else ("score",)
     ceiling = 10 if mode == "dimensions" else 100
@@ -71,13 +74,20 @@ def object_identity(config: dict, prompt: dict, mode: str) -> dict:
         "src/airadar/provider/deepseek_chat.py", "src/airadar/scorer/prompts.py",
         "src/airadar/curator/score.py", "src/airadar/curator/weights.py", "web/static/app.js",
     )
+    mapping = {"function": "identity-integer-0..100", "ranking_pool": False}
+    if mode == "dimensions":
+        mapping = {"function": "weighted_score; Math.round(score * 10)",
+                   "weights": DEFAULT_WEIGHTS.as_record(), "ranking_pool": False}
+    elif mode == "semantic":
+        paths += ("src/airadar/scorer/semantic.py",)
+        mapping = {"function": "sum(coefficient * dimension_score)",
+                   "coefficients": SEMANTIC_WEIGHTS, "dimension_domain": "integer-0..10",
+                   "output_domain": "integer-0..100", "ranking_pool": False}
     return {
         "surface": "ordinary-nonfeatured-visible-score", "mode": mode,
         "prompt": prompt, "prompt_contract": "model-emitted-reason-first",
         "request": _request("score", config), "transport": config["transport_identity"],
-        "mapping": {"function": "weighted_score; Math.round(score * 10)",
-                    "weights": DEFAULT_WEIGHTS.as_record(), "ranking_pool": False}
-                   if mode == "dimensions" else {"function": "identity-integer-0..100", "ranking_pool": False},
+        "mapping": mapping,
         "source_sha256": {p: file_digest(ROOT / p) for p in paths},
         "thinking": "disabled", "retry_count": 0, "fallback": False,
     }
@@ -90,8 +100,8 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
              exclude_runs: tuple[Path, ...] = ()) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
-    if mode not in {"dimensions", "direct"}:
-        raise ValueError("mode must be dimensions or direct")
+    if mode not in {"dimensions", "direct", "semantic"}:
+        raise ValueError("mode must be dimensions, direct or semantic")
     if not isinstance(prompt, dict) or set(prompt) != {"system", "user_template"} or not all(
         isinstance(value, str) and value.strip() for value in prompt.values()
     ):
@@ -236,7 +246,7 @@ def main(argv=None) -> int:
     run.add_argument("--dataset", type=Path, required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--prompt", type=Path, required=True)
-    run.add_argument("--mode", choices=["dimensions", "direct"], default="dimensions")
+    run.add_argument("--mode", choices=["dimensions", "direct", "semantic"], default="dimensions")
     run.add_argument("--env-file", type=Path)
     run.add_argument("--split", choices=["dev", "regression"], required=True)
     run.add_argument("--limit", type=int)

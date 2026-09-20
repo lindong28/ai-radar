@@ -4,13 +4,21 @@
 
 2026-09-20 路径与清退说明：下文保留历史记录中的原位置和当时结论；旧共享池 33 份实验原件已按用户要求清退，对应 85 行指标不再进入查询，不能再按下文旧路径回读或视作当前基线。prefilter 实验及顶层 preflight 的 support 材料仍保留，可用 `python -m evals._shared.relocations <旧路径>` 定位。范围及恢复边界见[资产说明](../assets.md#原始参照历史运行与-support-分区)。未产生新模型成绩。
 
-## 2026-09-20：aihot-score-pointwise / v1
+## 2026-09-20：aihot-score-pointwise / v1，多维语义续轮
+
+按[ae72](../../adr/20260920-ae72-test-semantic-score-dimensions.md)与用户最新方向设计三维0–10刻度、reason-first和固定50/30/20，不使用后置校准。固定dev200复用上一轮B0=13.330/C2=11.900；新运行S1 smoke3@15-35-22=8.6667、S1 dev200@15-35-46=11.385、同刻度直接D1 dev200@15-37-30=14.610、S2 dev200@15-38-57=11.015。S2只澄清impact以完整事件为单位及治理/公众认知范围，不重复惩罚转述；81题改善、78题变差、41题不变。
+
+冻结后新回归200：S2@15-41-00=10.160、B0@15-42-36=11.520、C2@15-46-06=11.095。同题对象/顺序相同，seed=`score-semantic-regression-20260920`、排除旧回归14-13-02；与开发及旧回归的case ID/URL均无重叠，不声称事件级与所有历史独立。S2总体改善，但低分段仍逊B0、高分段仍逊C2，详情见[当前状态](../visible-score/status.md#当前多维语义评分)。
+
+日期均2026-09-20 UTC，原件前缀 `runs/visible-score/aihot-score-pointwise/v1/`，元数据/指标在同分区 `experiments/`。七轮1,203调用、400个不同case IDs，全部成功；实际Flash260731、并发8、无重试/回退，金额未知。最终run `support/semantic-iteration/` 保存冻结身份、预检、汇总脚本/结果、审查和运行时源码快照。候选S2未接入生产；旧校准成绩保留但不再是当前方向，不跨新旧回归题集相减。无后台模型任务遗留。
+
+## 2026-09-20：aihot-score-pointwise / v1，历史直接评分与校准
 
 用户选定逐条基线，按[6a27](../../adr/20260920-6a27-evaluate-pointwise-visible-scores.md)执行。全部Flash、reason-first、正文上限5000字符，不经过prefilter、富化或精选排名。固定dev200 seed=`score-dev-20260920`，冻结候选后固定regression200 seed=`score-regression-20260920`；本轮case_id重叠0、历史/事件级独立性未核实。完整逐轮表与归因见[评分状态](../visible-score/status.md#本轮逐条实验)，假设先于干预登记在[hypotheses](hypotheses.md#score-pointwise-012026-09-20模型运行前登记)。
 
 七次真实调用run：14-03-10、14-03-25、14-04-35、14-05-02、14-07-25、14-13-02、14-14-23；五次零调用校准run：14-12-16、14-12-30、14-12-43、14-14-22、14-15-33。日期均2026-09-20 UTC，归档前缀为 `runs/visible-score/aihot-score-pointwise/v1/`，metadata/metrics在同分区 `experiments/`。同秒两次apply曾被create-only归档拒绝，未发模型调用、未覆写原件；随后另秒执行成功，不计成额外题或额外模型实验。
 
-开发MAE：B0=13.33、C1=13.55、C2=11.90；各自dev拟合校准后9.19/9.20/9.005。C1开发未胜不消耗回归。冻结后回归：B0=12.605、B0校准=9.355、C2=11.185、C2校准=8.360。当前离线候选C2＋校准相对B0下降33.68%，未修改生产、gold或数据版本。总计1,006次成功调用、0失败、400独立case IDs（两次smoke都在dev200中），850,725 tokens，价格未知。最终run `support/iteration-summary.json` 有逐run调用/usage/模型/覆盖读数，每run `conclusion.md` 说明L1/L2/L3；不是3,475题全量或绝对达标声明。
+开发MAE：B0=13.33、C1=13.55、C2=11.90；各自dev拟合校准后9.19/9.20/9.005。C1开发未胜不消耗回归。冻结后回归：B0=12.605、B0校准=9.355、C2=11.185、C2校准=8.360。当时离线候选C2＋校准相对B0下降33.68%，未修改生产、gold或数据版本；后续用户选择多维语义方向，见上节。总计1,006次成功调用、0失败、400独立case IDs（两次smoke都在dev200中），850,725 tokens，价格未知。最终run `support/iteration-summary.json` 有逐run调用/usage/模型/覆盖读数，每run `conclusion.md` 说明L1/L2/L3；不是3,475题全量或绝对达标声明。
 
 ## 2026-09-20：aihot-observed-membership / v1
 

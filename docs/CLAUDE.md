@@ -46,6 +46,8 @@
 
 ### docs/evaluations/ [Developer]
 
+[多维语义评分](evaluations/visible-score/semantic-design.md)：影响、信息增量、实质支撑的刻度与组合；离线边界见 [ae72](adr/20260920-ae72-test-semantic-score-dimensions.md)。
+
 [逐条可见分实验决策](adr/20260920-6a27-evaluate-pointwise-visible-scores.md)：reason-first 六维展示公式基线、开发/回归边界与离线候选授权；实际结果见 visible-score/status。
 
 [人评标注与优先级](evaluations/human-labels.md)：四对象的人评权威、原票归档、标签应用/重评分命令、判官分歧及 reason-first 规则（2026-09-20 用户裁决）。
