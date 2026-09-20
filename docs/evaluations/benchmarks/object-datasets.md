@@ -48,7 +48,7 @@ PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
   --version v2
 ```
 
-路径是占位示例，时间必须带时区。`--start/--end` 选择 Radar run 的 started_at，左闭右开，允许非连续段；不是“新闻发布日期必须落入此区间”。AIHOT 每份参照使用它自己已验证的新闻窗口；新 O1 另读冻结的全部 API 遍历确定已观察成员，以末两遍稳定性及历史覆盖判断主集资格，不再使用 ±12h。多份 `--reference` 可重复传入：支持小时 interval 根/manifest，或标准 `windows/<window>/manifest.json` 日窗 v1/v2/v3；整个 archive 根不是输入。参照损坏、抓取未完成、游标链/标签证据错误会拒绝建题，不静默跳过。不要把 staging 目录当完成窗口。CLI 为历史复现保留旧 benchmark 默认值，新建 O1 必须显式传上面的 `--admission-benchmark`。
+路径是占位示例，时间必须带时区。`--start/--end` 选择 Radar run 的 started_at，左闭右开，允许非连续段；不是“新闻发布日期必须落入此区间”。AIHOT 每份参照使用它自己已验证的新闻窗口；新 O1 另读冻结的全部 API 遍历确定已观察成员，以末两遍稳定性及历史覆盖判断主集资格，不再使用 ±12h。多份 `--reference` 可重复传入：支持小时 interval 根/manifest，或标准 `windows/<window>/manifest.json` 日窗 v1/v2/v3；整个 archive 根不是输入。参照损坏、抓取未完成、游标链/标签证据错误会拒绝建题，不静默跳过。不要把 staging 目录当完成窗口。2026-09-20 起 CLI 与 `build()` 默认使用 `aihot-observed-membership`；命令仍显式写出该值。复现旧 ±12h 建题必须指定 `--admission-benchmark aihot-prefilter`，不会从 `--base` 的旧身份自动继承旧规则。内部 `construct()` 保留旧默认以兼容历史单元调用；它不是新建题操作入口。
 
 默认生成四个对象。只建一个或几个时重复 `--target visible-score` 等；可显式传 `--data-root` 与 `--contract-path`。新独立题库版本必须为 `v1`、`v2` 等正整数递增名称；先看各 benchmark 已有版本，选尚未使用的下一版。不同对象的版本序列独立，不要求同时升版。任一目标版本已存在就退出，不覆盖历史。
 

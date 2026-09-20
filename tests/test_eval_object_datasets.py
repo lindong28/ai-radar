@@ -125,11 +125,11 @@ def setup_build(tmp_path):
 
 def test_real_producer_build_rebuild_extension_and_legacy_guard(tmp_path):
     kwargs = setup_build(tmp_path)
-    result = ob.build(**kwargs, version="v1")
+    result = ob.build(admission_benchmark="aihot-prefilter", **kwargs, version="v1")
     first = {t: load_dataset(Path(d["path"]))[1] for t, d in result["datasets"].items()}
     assert result["datasets"]["news-admission"]["main"] == 1
     assert result["datasets"]["news-admission"]["recall_only"] == 1
-    result2 = ob.build(**kwargs, version="v2")
+    result2 = ob.build(admission_benchmark="aihot-prefilter", **kwargs, version="v2")
     for target, leaf in result2["datasets"].items():
         manifest, rows = load_dataset(Path(leaf["path"]))
         assert rows == first[target]
@@ -139,9 +139,9 @@ def test_real_producer_build_rebuild_extension_and_legacy_guard(tmp_path):
     with pytest.raises(ValueError, match="not a shared pool"):
         dataset_paths(primary)
     with pytest.raises(FileExistsError):
-        ob.build(**kwargs, version="v1")
+        ob.build(admission_benchmark="aihot-prefilter", **kwargs, version="v1")
     write_raw(kwargs["raw_root"], "2026-09-17T09:00:00Z", "2026-09-17T09:15:00Z", [raw("b")])
-    result3 = ob.build(**kwargs, version="v3", targets=["content-enrichment"])
+    result3 = ob.build(admission_benchmark="aihot-prefilter", **kwargs, version="v3", targets=["content-enrichment"])
     leaf = Path(result3["datasets"]["content-enrichment"]["path"])
     assert len(load_dataset(leaf)[1]) == 2
     assert read_json(leaf / "field-subsets.json")["tags"]
@@ -157,7 +157,7 @@ def test_bad_input_fails_before_creating_version(tmp_path):
     blob = next(kwargs["raw_root"].glob("runs/*/items.jsonl.gz"))
     blob.write_bytes(b"corrupted")
     with pytest.raises(ValueError, match="hash"):
-        ob.build(**kwargs, version="v1")
+        ob.build(admission_benchmark="aihot-prefilter", **kwargs, version="v1")
     assert not kwargs["data_root"].exists()
 
 

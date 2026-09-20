@@ -1,6 +1,6 @@
 # 新闻准入 · aihot-prefilter / v1
 
-> [Developer] · 当前输入版本 v1；schema_version=2、evaluation_mode=pointwise。2026-09-19 已从 `news-admission/aihot-all-members/20260919-refresh-1010` 原样迁移题目与参考，已核验文件摘要，旧路径及成绩保留。v1 是新 benchmark 的首版，不是旧规则名的缩写。
+> [Developer] · 历史 ±12h 契约的输入版本 v1，仅供复现；当前准入使用 [aihot-observed-membership](../../aihot-observed-membership/v1/README.md)。schema_version=2、evaluation_mode=pointwise。2026-09-19 从 `news-admission/aihot-all-members/20260919-refresh-1010` 原样迁移题目与参考；历史成绩保持原身份，数据物理位置见下文。
 
 本版主集 11,804 题（1,379 正、10,425 负），另有仅召回 180 题；4,474 个覆盖未知身份不是负例。完整 counts 和来源见本版 manifest；后续同契约扩展使用 v2，不把多个版本题数相加。
 
@@ -22,8 +22,8 @@ cases.jsonl 的 reference 只有 member。recall-only.jsonl 是独立补充集�
 
 - 权威建题逻辑：[object_datasets.py](../../../../../evals/_shared/object_datasets.py)，命令入口：[build_eval_datasets.py](../../../../../scripts/build_eval_datasets.py)。
 - 校验、共享计分 API 及指标定义：[aihot-prefilter](../../../../../evals/news-admission/aihot-prefilter/README.md)。
-- 数据位置：`~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-prefilter/v1/`。文档不存大题库；不使用 DGX。
-- 生成本对象：共享命令增加 `--target news-admission`；省略 --target 时生成四个对象。后续扩展用可重复的 `--base` 合并旧版冻结原始证据及新增数据，去重后按本页规则重验；不直接拼旧题，旧版本保持不变。命令、逐题变更计数、校验及失败恢复见[共用操作说明](../../../benchmarks/object-datasets.md)。
+- 数据位置：`~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/news-admission/aihot-prefilter/v1/`。文档不存大题库；不使用 DGX。
+- 仅复现旧口径时：共享命令须增加 `--target news-admission --admission-benchmark aihot-prefilter`，并指定独立 `--data-root`，不要把历史库重新放回活动入口。可重复的 `--base` 合并旧版冻结原始证据及新增数据，去重后按本页规则重验；不直接拼旧题，旧版本保持不变。当前扩题见[共用操作说明](../../../benchmarks/object-datasets.md)，不能省略旧口径参数而期待默认继承本页规则。
 
 ## L3：最小可信边界
 

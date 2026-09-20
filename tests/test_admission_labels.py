@@ -87,7 +87,7 @@ def test_history_union_requires_no_hole():
 def test_real_builder_new_contract_roundtrip_and_legacy_unchanged(tmp_path):
     from pathlib import Path
     kwargs = setup_build(tmp_path)
-    old = build(**kwargs, version="v1", targets=["news-admission"])
+    old = build(**kwargs, version="v1", targets=["news-admission"], admission_benchmark="aihot-prefilter")
     old_leaf = Path(old["datasets"]["news-admission"]["path"])
     before = (old_leaf / "manifest.json").read_bytes()
     new = build(bases=[old_leaf], version="v1", targets=["news-admission"],

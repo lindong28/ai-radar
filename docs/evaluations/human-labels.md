@@ -94,14 +94,14 @@ PYTHONPATH=src:. uv run python -m evals._shared.human_labels apply \
 
 ### 根据人评解释运行新候选
 
-2026-09-20 已把解释转成四个显式 prompt 候选，路径为 `evals/news-admission/aihot-prefilter/prompts/human-information-value*.json`；`c11-reason-first.json` 为对照。这里沿用既有 prompt 目录，不表示使用旧 benchmark 的 gold。候选通过现有真实 prefilter 推理和确定性计分器执行，结果见[对象状态](news-admission/status.md)。未达到采用标准的候选不替换默认规则，不把完成代码等同于质量达标。
+2026-09-20 已把解释转成四个显式 prompt 候选，路径为 `evals/news-admission/prompts/human-information-value*.json`；`c11-reason-first.json` 为对照。候选归对象级目录，不绑定旧 benchmark 的 gold；旧路径通过兼容链接读取同一份文件。候选通过现有真实 prefilter 推理和确定性计分器执行，结果见[对象状态](news-admission/status.md)。未达到采用标准的候选不替换默认规则，不把完成代码等同于质量达标。
 
 ```bash
 PYTHONPATH=src:. uv run python scripts/eval/run_prefilter_human_feedback.py \
   --source-run runs/news-admission/aihot-observed-membership/v1/2026-09-20/01-19-03 \
   --config evals/_shared/configs/baseline-ark.json \
   --env-file /Users/lindong/research/ai-radar/.env \
-  --prompt evals/news-admission/aihot-prefilter/prompts/human-information-value-contextual.json \
+  --prompt evals/news-admission/prompts/human-information-value-contextual.json \
   --reviews human-evals/news-admission/reviews.json \
   --batch-id 2026-09-20-c11 --label my-human-feedback-candidate --workers 8
 ```

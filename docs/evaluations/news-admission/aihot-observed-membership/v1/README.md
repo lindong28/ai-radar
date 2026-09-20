@@ -16,15 +16,17 @@
 
 首版主集 1,450 题（727 正、723 负），仅召回 880，排除 14,128；主集含 94 来源，X 1,444 / Web 6。共同右界 H=`2026-09-19T00:07:06Z`。manifest SHA256 为 `f33fb137752f4a6d45611b0e70b59d2fd355d3f96e8c6d812aaaef2f4c9eb954`；详细排除与旧版去向见[库存](../../../benchmarks/inventory.md)。历史 raw manifests 均声明 code_dirty，字段来源核对依据归档结构与对应 producer 实现，不构成当时运行代码逐字节可还原的证明。
 
-在 ai-radar checkout 中运行；输出版本不可覆盖。首次从旧题库冻结的原始证据重建，不继承旧 gold：
+在 ai-radar checkout 中运行；输出版本不可覆盖。当前扩题从本 benchmark 的上一版合并，追加新参照／原始输入参数即可：
 
 ```bash
 PYTHONPATH=src:. uv run python scripts/build_eval_datasets.py build \
-  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-prefilter/v1 \
-  --target news-admission --admission-benchmark aihot-observed-membership --version v1
+  --base ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-observed-membership/v1 \
+  --target news-admission --admission-benchmark aihot-observed-membership --version v2
 ```
 
-以后用新 benchmark 的上一版作 `--base`，追加已验证 `--reference`，以及成组的 `--raw-root / --start / --end` 参数，发布 `--version v2`。底层仍是合并原始证据＋去重＋按当前设计重验全部资格与标签，不是累加旧 cases。日期缺失的数据不会因扩题被自动删除，仍保存在 evidence 中；取得新的独立证据后可以再建下一版。
+追加已验证 `--reference`，以及成组的 `--raw-root / --start / --end` 参数，使用下一个未存在版本。底层仍是合并原始证据＋去重＋按当前设计重验全部资格与标签，不是累加旧 cases。日期缺失的数据不会因扩题被自动删除，仍保存在 evidence 中；取得新的独立证据后可以再建下一版。
+
+历史 v1 最初从 `aihot-prefilter/v1` 冻结证据重建，不继承旧 gold；该父库现位于 `~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/news-admission/aihot-prefilter/v1`。复现首次构建须使用独立 `--data-root`，不能覆盖已发布的 v1。
 
 每版 `manifest.json` 固定输入、代码哈希、参照批次、来源计数；`changes.jsonl` / `merge-summary.json` 对比旧题去向。`provenance.admission` 保留发布时间依据、H、覆盖参照及匹配见证。旧版本只用于复现，不与本版累计题数或混算成绩。
 

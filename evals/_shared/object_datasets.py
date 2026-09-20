@@ -21,6 +21,7 @@ from airadar.fetcher.raw_capture import dependency_closure, read_run
 
 from .assets import (
     DEFAULT_DATA_ROOT,
+    OBSERVED_ADMISSION,
     ROOT,
     dataset_version,
     digest,
@@ -300,7 +301,7 @@ def build(*, raw_root: Path | None = None, references: list[Path] | None = None,
           start: str | None = None, end: str | None = None, version: str, bases: list[Path] | None = None,
           targets: list[str] | None = None, data_root: Path = DEFAULT_DATA_ROOT,
           contract_path: Path = ROOT / "tests/fixtures/aihot_sources.json", aihot_inputs: bool = False,
-          admission_benchmark: str = "aihot-prefilter") -> dict:
+          admission_benchmark: str = OBSERVED_ADMISSION) -> dict:
     dataset_version(version)
     targets = list(dict.fromkeys(targets or BENCHMARKS))
     if set(targets) - BENCHMARKS.keys():
@@ -456,7 +457,8 @@ def main():
     create.add_argument("--version", required=True, help="next input snapshot version: v1, v2, ...")
     create.add_argument("--target", dest="targets", choices=list(BENCHMARKS), action="append")
     create.add_argument("--admission-benchmark", choices=["aihot-prefilter", "aihot-observed-membership"],
-                        default="aihot-prefilter", help="explicit admission label contract; legacy default is preserved")
+                        default=OBSERVED_ADMISSION,
+                        help="default: aihot-observed-membership; select aihot-prefilter only for legacy +/-12h questions")
     create.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     create.add_argument("--contract-path", type=Path, default=ROOT / "tests/fixtures/aihot_sources.json")
     validate = sub.add_parser("validate", help="verify questions and all frozen evidence hashes")

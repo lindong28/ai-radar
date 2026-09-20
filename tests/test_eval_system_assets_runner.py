@@ -203,7 +203,7 @@ def fake_chat(calls):
     def chat(*, stage, prompt, request):
         calls.append(stage)
         payload = {
-            "prefilter": {"is_ai_related": True, "confidence": 0.9},
+            "prefilter": {"reason": "Detailed AI model release", "is_ai_related": True, "confidence": 0.9},
             "score": {
                 **dict.fromkeys(("relevance", "density", "recency", "authority", "engineering", "significance"), 8),
                 "reasoning": "Detailed model release",

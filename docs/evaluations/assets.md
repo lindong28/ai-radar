@@ -4,6 +4,14 @@
 
 ## L2 数据资产
 
+### 代码、文档与运行记录的整理边界
+
+当前／历史代码入口与测试职责统一见 [evals/README.md](../../evals/README.md)。当前准入候选的权威目录是 `evals/news-admission/prompts/`，旧 `aihot-prefilter/prompts` 只保留兼容链接；模板内容、题目与已归档成绩不变。当前操作文档使用新入口，历史台账／ADR／运行 metadata 保留当时身份。
+
+`runs/` 的逐题输出、请求、理由、失败与恢复记录，和 `experiments/` 的元数据、指标引用具有不同职责，不作重复文件删除。`runs/prefilter-*-preflight/` 与 `runs/human-eval-layout-migration/` 中被台账引用的分析、校验和原票迁移材料仍保留原路径。跨 benchmark 的 `experiments/metrics/summary.json` 是可重建索引，但不因可重建就把它从日常查询入口删掉。当前表现读各对象 status，逐轮历史读 ledger，不用目录的新旧名称判断有效性。
+
+本次没有永久删除模型输出、实验记录、人评、题库、共享证据或测试；未证明无引用且可再生的文件不列入删除项。旧共享池执行器、迁移与完整性测试继续保留，避免用整理目录的名义移除仍有用途的能力。
+
 ### 活动题库与历史归档（2026-09-20）
 
 活动入口仍为 `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<benchmark>/vN/`。四个对象目录各只保留当前 benchmark：`aihot-observed-membership`、`aihot-score-pointwise`、`aihot-enrichment-fields`、`aihot-featured-threshold`。不再把旧命名迁移副本与当前题库并列展示。

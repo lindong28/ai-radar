@@ -1,5 +1,7 @@
 # aihot-prefilter
 
+> 历史 ±12h benchmark，仅供复现；当前迭代使用 [aihot-observed-membership](../aihot-observed-membership/README.md)。本页旧数据目录已归档，下面命令已改用归档位置；新建旧口径题库须显式传 `--admission-benchmark aihot-prefilter`。候选 prompt 的权威位置为 [对象级 prompts](../prompts/README.md)，本目录 `prompts` 仅作兼容链接。
+
 对象：`news-admission`。prefilter 逐条准入；主集保留有充分参照证据的正负例，recall-only.jsonl 不混入 precision。
 
 本入口消费 schema 2 独立题库，版本为 `v1`、`v2`。当前版本说明见 [v1](../../../docs/evaluations/news-admission/aihot-prefilter/v1/README.md)，共享建题与扩展流程见 [object-datasets](../../../docs/evaluations/benchmarks/object-datasets.md)。
@@ -9,7 +11,7 @@
 在项目根执行（不调用模型）：
 
 ```bash
-PYTHONPATH=src:. uv run python evals/news-admission/aihot-prefilter/evaluate.py validate --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-prefilter/v1
+PYTHONPATH=src:. uv run python evals/news-admission/aihot-prefilter/evaluate.py validate --dataset ~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/news-admission/aihot-prefilter/v1
 ```
 
 `validate` 仅验证身份、文件哈希和题目结构，不能证明模型效果。独立 `run` 入口只执行当前生产源码的 prefilter（不执行 scorer/enricher），将 `is_ai_related` 映射到 `member`，使用共享 [metrics.score](../../_shared/metrics.py) 计算 precision/recall，并自动归档。指标定义见 [metrics.json](metrics.json)。本对象不使用 LLM 判官。
@@ -18,7 +20,7 @@ PYTHONPATH=src:. uv run python evals/news-admission/aihot-prefilter/evaluate.py 
 
 ```bash
 PYTHONPATH=src:. uv run python evals/news-admission/aihot-prefilter/evaluate.py run \
-  --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-prefilter/v1 \
+  --dataset ~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/news-admission/aihot-prefilter/v1 \
   --config evals/_shared/configs/baseline-ark.json --env-file .env \
   --split dev --limit 600 --seed prefilter-20260919 --workers 8 --label baseline-dev
 ```
