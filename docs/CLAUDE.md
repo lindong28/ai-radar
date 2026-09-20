@@ -18,6 +18,10 @@
 
 ### docs/ [Developer]
 
+[20260920-3b8a](adr/20260920-3b8a-test-prefilter-without-extra-context.md)：无引用候选及依赖消融；用户取消后续预算上限，不自动部署。
+
+[20260920-cc16](adr/20260920-cc16-compare-prefilter-model-with-fixed-input.md)：固定C10及原输入，仅比较Pro/Flash的离线准入读数，不自动部署。
+
 | 文件 | 性质 | 说明 |
 |---|---|---|
 | [20260920-91bd](adr/20260920-91bd-test-prefilter-professional-sharing.md) | Decision | 专业流短分享与投资商业边界两个离线prompt候选，累计8000次 |
