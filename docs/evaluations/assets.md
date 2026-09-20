@@ -4,6 +4,16 @@
 
 ## L2 数据资产
 
+### 活动题库与历史归档（2026-09-20）
+
+活动入口仍为 `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<benchmark>/vN/`。四个对象目录各只保留当前 benchmark：`aihot-observed-membership`、`aihot-score-pointwise`、`aihot-enrichment-fields`、`aihot-featured-threshold`。不再把旧命名迁移副本与当前题库并列展示。
+
+五个旧 benchmark 目录已可恢复地移到 `~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/`，保持 `<target>/<benchmark>/<version>` 相对结构。当前评分、富化的 `v1` 也在该归档树中保留实体，活动入口的 `v1` 是相对符号链接：两份冻结 manifest 的 `shared_evidence` 仍引用同树下旧 `aihot-prefilter/v1/evidence`。该依赖不是废文件，不能删除归档树；没有修改 manifest、题目或参考字节，也没有制造新的数据版本。
+
+日常评测和扩题继续传活动入口，现有 `load_dataset` 和 `read_bases` 会解析链接。新版本仍写活动根的真实 benchmark 目录，用尚未存在的 `v2/v3`；不要把归档根作为新输出根。旧实验或历史文档引用上述五个旧目录时，将原 `data/benchmarks/ai-radar/` 前缀换成 `data/benchmark-archives/ai-radar/20260920-cleanup/`，其余路径不变；原记录不追改。归档根 README 记录精确迁移清单和恢复方法。
+
+本次仅清理四个对象目录的历史入口；根目录旧 schema1 共享池、`_build-reports`、项目 `runs/`、`experiments/`、`human-evals/` 及持续采集档案不在删除范围。它们不属于当前四个独立 benchmark，不能累计为新增题。此次是目录整理而非磁盘瘦身，没有永久删除数据。
+
 2026-09-20 新增[人评优先标注层](human-labels.md)：用户原票及其材料在 `human-evals/<target>/reviews.json` 保存；批次、日期与来源归 `batches[].metadata`，字段字典和操作由该说明单一维护，不加日期/批次/`imported` 路径。明确人评覆盖同题同字段的自动参考，原 AIHOT 证据与成绩不覆盖。原票和 effective 计分视图分开保留，不能把改标签后的分数当作模型改进。
 
 2026-09-19 O1 新增消费者契约 `news-admission/aihot-observed-membership/v1`，用于冻结批次已观察收录；它不是旧 `aihot-prefilter` 的改名。新 gold、逐题去向及来源覆盖独立冻结，原始证据不删；旧对象响应可严格按输入身份重评分，但不得把重评分称为新模型调用或涨分收益。运行与 metadata 沿下表同样分区，当前操作见 [新入口](news-admission/aihot-observed-membership/v1/README.md)。
