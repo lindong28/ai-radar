@@ -1,9 +1,11 @@
+import json
 from copy import deepcopy
 
 import pytest
 
 from evals._shared.assets import file_digest, read_json, read_jsonl, write_json, write_jsonl
 from evals._shared.human_labels import apply_labels, import_prefilter_review, input_identity, load_annotations
+from evals._shared.human_store import append_batch, import_review, migrate_batch, read_reviews
 
 
 def case(key="one", **reference):
@@ -144,3 +146,99 @@ def test_invalid_ballot_is_rejected_before_writes(review, tmp_path, mutation):
     with pytest.raises(ValueError):
         import_prefilter_review(other, run, tmp_path / "not-created")
     assert not (tmp_path / "not-created").exists()
+
+
+def test_flat_store_migration_metadata_and_reuse(review, tmp_path):
+    run, feedback, _ = review
+    legacy = tmp_path / "legacy"
+    import_prefilter_review(feedback, run, legacy)
+    output = tmp_path / "human-evals/news-admission/reviews.json"
+    first = migrate_batch(legacy, output, "batch-one")
+    assert first["metadata"]["batch_id"] == "batch-one"
+    assert first["metadata"]["reviewed_at"] is None
+    assert first["data"]["feedback_raw"].encode() == feedback.read_bytes()
+    assert load_annotations(output) == load_annotations(legacy)
+    assert migrate_batch(legacy, output, "batch-one") == first
+    assert len(read_reviews(output)["batches"]) == 1
+    assert apply_labels(read_jsonl(run / "cases.jsonl"), load_annotations(output), "news-admission")[0] == read_jsonl(legacy / "effective-cases.jsonl")
+    changed = deepcopy(first)
+    changed.pop("sha256")
+    changed["data"]["annotations"][0]["reason"] = "different vote"
+    with pytest.raises(ValueError, match="already exists"):
+        append_batch(output, "news-admission", changed)
+    assert read_reviews(output)["batches"] == [first]
+    second = {**changed, "metadata": {**changed["metadata"], "batch_id": "batch-two"}}
+    append_batch(output, "news-admission", second)
+    assert len(read_reviews(output)["batches"]) == 2
+    assert read_reviews(output)["batches"][0] == first
+    raw = read_json(output)
+    raw["batches"][0]["data"]["annotations"][0]["value"] = "tampered"
+    output.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="integrity"):
+        load_annotations(output)
+
+
+def test_flat_import_and_apply_cli(review, tmp_path, monkeypatch):
+    import sys
+
+    from evals._shared.human_labels import main
+
+    run, feedback, _ = review
+    output = tmp_path / "human-evals/news-admission/reviews.json"
+    monkeypatch.setattr(sys, "argv", ["human_labels", "import-prefilter", "--feedback", str(feedback),
+                                    "--run", str(run), "--output", str(output), "--batch-id", "one"])
+    main()
+    assert len(load_annotations(output)) == 3
+    before = output.read_bytes()
+    import_review(feedback, run, output, "one")
+    assert output.read_bytes() == before
+    monkeypatch.setattr(sys, "argv", ["human_labels", "apply", "--target", "news-admission",
+                                    "--cases", str(run / "cases.jsonl"), "--batch", str(output),
+                                    "--output", str(tmp_path / "view")])
+    main()
+    assert read_json(tmp_path / "view/manifest.json")["human_case_count"] == 3
+
+
+def test_flat_store_target_mismatch_does_not_replace_existing(review, tmp_path):
+    run, feedback, _ = review
+    output = tmp_path / "reviews.json"
+    batch = import_review(feedback, run, output, "one")
+    before = output.read_bytes()
+    batch.pop("sha256")
+    with pytest.raises(ValueError, match="target mismatch"):
+        append_batch(output, "visible-score", batch)
+    assert output.read_bytes() == before
+
+
+def test_apply_freezes_batch_selection_across_later_appends(tmp_path, monkeypatch):
+    import sys
+
+    from evals._shared.human_labels import main
+
+    cases = [case("a", member=False), case("b", member=False)]
+    source, book = tmp_path / "cases.jsonl", tmp_path / "reviews.json"
+    write_jsonl(source, cases)
+    first = append_batch(book, "news-admission", {
+        "metadata": {"batch_id": "first"},
+        "data": {"annotations": [annotation(cases[0], "news-admission", "member", True)]},
+    })
+
+    def apply(name, *selection):
+        monkeypatch.setattr(sys, "argv", ["human_labels", "apply", "--target", "news-admission",
+                                        "--cases", str(source), "--batch", str(book),
+                                        "--output", str(tmp_path / name), *selection])
+        main()
+        return read_json(tmp_path / name / "manifest.json")
+
+    before = apply("before")
+    append_batch(book, "news-admission", {"metadata": {"batch_id": "second"},
+        "data": {"annotations": [annotation(cases[1], "news-admission", "member", True)]}})
+    replay = apply("replay", "--batch-id", "first")
+    assert replay == before
+    assert replay["batches"] == [{"path": str(book.resolve()), "batch_id": "first", "sha256": first["sha256"]}]
+    assert (tmp_path / "before/cases.jsonl").read_bytes() == (tmp_path / "replay/cases.jsonl").read_bytes()
+    assert apply("latest")["human_case_count"] == 2
+    assert len(load_annotations(book, batch_ids=["first"])) == 1
+    with pytest.raises(ValueError, match="unknown human batch"):
+        apply("invalid", "--batch-id", "missing")
+    assert not (tmp_path / "invalid").exists()

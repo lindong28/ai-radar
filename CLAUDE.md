@@ -20,6 +20,8 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
 
 2026-09-20 用户新增要求：四对象的建题、扩题、优化与判官分歧处理，先读[人评标注与优先级](docs/evaluations/human-labels.md)。同题、同实质输入、同维度的明确用户人评优先于 AIHOT 派生标签和任何模型/agent 代评；确认原标签也须保存，未评不算人评。原观测事实与旧成绩不覆盖。后续所有 LLM 判断调用必须要求并归档简短 `reason`，JSON 中先生成 `reason`、再生成最终决策/分数；不得用重排 JSON 或事后补理由冒充模型当时的输出。旧冻结实验保持原样，复现实验与新迭代分开标注。
 
+人评资产只按稳定对象分目录：`human-evals/<target>/reviews.json`；日期、批次与来源在 JSON metadata，不加日期/批次/`imported` 层。字段字典、追加与旧目录迁移沿上述人评说明执行。
+
 ## 旧 AIHOT 工作线：达标线与迭代机制 (BINDING，仅旧实验)
 
 本仓的长期目标之一是**在用户可见的指标上足够接近 AIHOT**。判据与回路在

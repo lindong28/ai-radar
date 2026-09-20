@@ -4,7 +4,7 @@
 
 ## L2 数据资产
 
-2026-09-20 新增[人评优先标注层](human-labels.md)：用户原票及其材料在 `human-evals/<target>/<batch>/` 冻结，明确人评覆盖同题同字段的自动参考，原 AIHOT 证据与成绩不覆盖。原票和 effective 计分视图分开保留，不能把改标签后的分数当作模型改进。
+2026-09-20 新增[人评优先标注层](human-labels.md)：用户原票及其材料在 `human-evals/<target>/reviews.json` 保存；批次、日期与来源归 `batches[].metadata`，字段字典和操作由该说明单一维护，不加日期/批次/`imported` 路径。明确人评覆盖同题同字段的自动参考，原 AIHOT 证据与成绩不覆盖。原票和 effective 计分视图分开保留，不能把改标签后的分数当作模型改进。
 
 2026-09-19 O1 新增消费者契约 `news-admission/aihot-observed-membership/v1`，用于冻结批次已观察收录；它不是旧 `aihot-prefilter` 的改名。新 gold、逐题去向及来源覆盖独立冻结，原始证据不删；旧对象响应可严格按输入身份重评分，但不得把重评分称为新模型调用或涨分收益。运行与 metadata 沿下表同样分区，当前操作见 [新入口](news-admission/aihot-observed-membership/v1/README.md)。
 

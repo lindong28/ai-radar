@@ -17,28 +17,50 @@
 
 ## 资产与使用
 
-原票与派生记录位于项目根 `human-evals/<target>/<batch>/`，不进 Git；本次权威批次为 `human-evals/news-admission/2026-09-20-c11/imported/`。规则、操作和批次解释在 Git 文档中。题目大数据仍按 assets.md 放本机 benchmark 根，不在 DGX。
+原票与派生记录统一位于项目根 `human-evals/<target>/reviews.json`，不进 Git。日期、批次、实验名与处理阶段不占目录层级；一个对象的多批人评保存在同一文件的 `batches[]` 中。本次实际文件是 `human-evals/news-admission/reviews.json`。存储代码为 `evals/_shared/human_store.py`，标签应用仍为 `human_labels.py`；题目大数据根仍按 assets.md，不在 DGX。
 
-- `feedback.json`：用户原票，原字段与理由逐字保存；SHA 绑定本地保存的字节，不声称用户签署了新 SHA。
-- `review-context.json`：用户评审时看到的案例、原预测、原 prompt、诊断 prompt 与 reason。
-- `annotations.jsonl`：仅明确人评；按 `target/case_id/field/input_identity` 限定适用范围，记录 `value`、原 `reason`、原票 SHA、`provenance=user`。
-- `source-cases.jsonl` / `source-predictions.jsonl`：源数据快照；`effective-cases.jsonl` 是应用人评后的计分视图；参考来源留在 provenance，不进入 LLM input。
-- `original-scores.json` / `human-priority-scores.json`：同300题、同原预测的两种标签口径，不是两轮模型性能。
-- `manifest.json`：来源、适用范围、覆盖数及归档文件 SHA。
+### metadata 字典（字段位置均相对 reviews.json）
 
-导入当前网页导出（输出目录必须不存在，无 API 调用）：
+| 字段 | 语义 / 来源 |
+| --- | --- |
+| `metadata.format` | `ai-radar-human-reviews-v1`，人评容器格式，不是 benchmark 版本 |
+| `metadata.target` | 稳定对象标识；本文件为 `news-admission` |
+| `batches[].metadata.batch_id` | 对象内唯一批次标识；本批保留 `2026-09-20-c11` 作为不解析的 ID，后续可用其它唯一名称；不由 ID 推定日期、模型或标签优先级 |
+| `batches[].metadata.reviewed_at` | 实际人评完成时间；本批无法精确取得，记 null |
+| `batches[].metadata.feedback_exported_at` | 原票 `exported_at`；本批 `2026-09-20T05:50:08.286Z`，是浏览器导出时间，不是新闻时间或人评完成时间 |
+| `batches[].metadata.recorded_at` | 本批首次写入新容器时的 UTC 时钟；迁移不是重新做人评，重复导入保留首次值 |
+| `batches[].metadata.source_run` | 原被评运行位置，由冻结源 manifest 取得；供追溯，不限定标注只可用于这一轮 |
+| `batches[].metadata.target_prediction` | 用户评的是哪份预测；本批 `original_c11`，不冒充诊断重跑输出 |
+| `batches[].metadata.policy`、`user_authority` | 标签优先策略与确属用户原票的授权来源，不由文件夹名称推定 |
+| `batches[].metadata.legacy_manifest` | 原归档 manifest 的完整快照，保留原 SHA、分母、范围；旧路径只表示历史位置，不是当前读入口 |
+| `batches[].sha256` | 该批 metadata 与 data 的结构化摘要，由读取器核对；不是用户签名，也不代表其它批次 |
+
+每批 `data` 的内容如下：
+
+以下字段描述新闻准入票型；内容富化的判官校验票保留 `data.feedback_raw`、`data.material`、`data.result`，`data.annotations=[]`，不能把候选质量评分转换成参考文本。其 metadata 的 `kind=judge-calibration`、`user_confirmed_sha256` 分别说明用途和用户确认依据；`source_run` 指校验 run，原被评输入/候选在 material 中。还没有这类真实用户票时不造文件。
+
+- `feedback_raw`：原反馈文件的 UTF-8 原文；还原为字节后保留原 SHA，不声称用户签署迁移后的新 SHA。
+- `review_context`：案例、原预测、原 prompt、诊断 prompt 与 reason。
+- `annotations[]`：仅明确人评；`target/case_id/field/input_identity` 界定适用范围，保留 `value`、用户 `reason`、原票 SHA 和 `provenance=user`。所属批次由父记录唯一确定，不在每行重复日期。
+- `source_cases[]` / `source_predictions[]`：原快照；`effective_cases[]` 是应用人评后的计分视图，来源信息不进入 LLM input。
+- `original_scores` / `human_priority_scores`：同题同预测的两种标签口径，不是两轮模型成绩。
+
+新增批次不会覆盖旧记录；同 ID 同内容重复导入无变化，同 ID 不同内容拒绝。读写器校验摘要与对象，写入用对象文件锁及完整文件替换，避免两个追加者丢票。`reviews.lock` 只是进程锁，不含评价数据。四对象沿同一布局，尚无实际用户票的不预建空文件。
+
+导入网页反馈（`--output` 是稳定 JSON 文件；批次通过参数写入 metadata，无 API 调用）：
 
 ```bash
 PYTHONPATH=src:. uv run python -m evals._shared.human_labels import-prefilter \
-  --feedback human-evals/news-admission/2026-09-20-c11/feedback.json \
+  --feedback /path/to/user-feedback.json \
   --run runs/news-admission/aihot-observed-membership/v1/2026-09-20/01-19-03 \
-  --output human-evals/news-admission/2026-09-20-c11/imported
+  --batch-id 2026-09-20-c11 \
+  --output human-evals/news-admission/reviews.json
 ```
 
 ### 后续建题/扩题/迭代必做
 
 1. 先照原建题流程合并、去重、重验输入与参照，输出新的不可变版本。AIHOT 原始事实不能被人评改写。
-2. 读取 `human-evals/` 下对应对象的真实用户标注批次，再应用人评形成明确标注 `human-reference-priority-v1` 的新计分视图。不能直接把新抓取的自动标签拿去覆盖已有用户判断。
+2. 读取 `human-evals/<target>/reviews.json` 中的全部真实用户标注批次，再应用人评形成明确标注 `human-reference-priority-v1` 的新计分视图。不能直接把新抓取的自动标签拿去覆盖已有用户判断。
 3. 检查输出 manifest 的 `human_case_count`、`changed_field_count`、`absent_case_ids`。本次视图不含的人评仍留在标注库供未来复用，不能静默删除。输入有实质改变会报错，需核对适用性，不退回自动标签当作已解决。
 4. 指标/实验记录须同时绑定原数据 SHA、人评批次 SHA、effective cases SHA；推理只读 `input`。已用于开发、错误分析的人评题不能标成未见 holdout；定向错误子集不代表总体分布。
 
@@ -48,13 +70,19 @@ PYTHONPATH=src:. uv run python -m evals._shared.human_labels import-prefilter \
 PYTHONPATH=src:. uv run python -m evals._shared.human_labels apply \
   --target news-admission \
   --cases /path/to/new-version/cases.jsonl \
-  --batch human-evals/news-admission/2026-09-20-c11/imported \
+  --batch human-evals/news-admission/reviews.json \
   --output /path/to/new-human-priority-view
 ```
 
 输出是 **human-priority 计分视图，不是原 `aihot-observed-membership` 的下一版本**；消费者语义不同，不冒充纯 AIHOT 收录 benchmark。共享 `apply_labels` 支持表中四对象的参考字段；当前网页导入器仅解析这次 prefilter export，其他对象收到实际人评时须按其票型接入，不能把文本候选质量票强转成参考值。此命令不会改历史 load_dataset、自动建题脚本或生产。后续 session 必须显式完成上述应用步骤；需注册可直接模型运行的新 benchmark 时，沿既有契约分区另建，不偷换旧 benchmark 的默认语义。
 
+计分视图 `manifest.json` 的 `batches[]` 对每个实际采用的人评批次记录 `path`、`batch_id`、`sha256`；摘要绑定该批内容，不绑定会随追加变化的整个容器。复现历史视图时，在同一个 `--batch reviews.json` 后按 manifest 增加一个或多个 `--batch-id <id>`，并核对所选批次的 `sha256`；不传选择器代表读取当前全部批次，可能得到更新后的计分口径。`load_annotations(path, batch_ids=[...])` 提供同样的代码入口，未知批次报错；旧 manifest 目录继续使用原 manifest SHA。
+
 内容适用性复用既有 `substantive_hash`：遵循用户此前的实质性裁决，仅时间戳、HTML、来源显示名、已支持的标题标点与 X URL 别名变化不使人评自动失效；这不代表时间戳不会影响模型的时效性判断。新闻准入还绑定回复/引用关系、来源类型与 tier；评分也绑定影响来源权威判断的 tier；精选完整保留输入身份。标注适用性检查不改写模型输入，也不是不同输入下复用旧模型输出的许可。
+
+### 从旧目录迁移
+
+`PYTHONPATH=src:. uv run python -m evals._shared.human_labels migrate --source /path/to/old-batch/imported --batch-id <id> --output human-evals/<target>/reviews.json` 先校验旧 manifest，再逐项装入新容器；当前迁移器对应已有的新闻准入票型，不能当作其它对象的票型转换器。旧目录只保留为 `runs/human-eval-layout-migration/source-layout/` 的迁移前档案，原重复导入验证材料也在那里，不再作为人评入口。当前标注、原理由、展示上下文及源预测的内容不变，历史成绩不重新归因。脚本仍可读取独立留存的旧 manifest 目录供历史复现，但新 CLI 导入默认要求 JSON 目标和显式 batch ID。
 
 ## 判官与 reason
 
@@ -75,6 +103,6 @@ PYTHONPATH=src:. uv run python -m evals._shared.human_labels apply \
 
 这不是模型优化收益，也不是独立回归达标：本批是已见开发集，300 题中只有 24 题由用户明确审过，不能称“全人评300题”。8 个 FP 改为 TP，6 个 FN 改为 TN；剩余 2 个 FN 中包含未评的 `d18cf04ecea4cb98b3765ca9`，不得擅自改票。用户票中的理由指向诊断调用时，以归档展示上下文解释，不改原预测。
 
-实际 `import-prefilter` 与 `apply` CLI 均已执行，重新应用的 cases 与导入产生的 effective cases SHA 完全一致：`13cf1bf6f632ae55a0ce961b316724e1c59f4e1ed488fd54dfd97b806835155d`。无新增模型调用，原 cases/predictions 与原票声明的 SHA 一致。18 项标签定向测试及 72 项既有指标、身份、合并测试通过；覆盖四对象八字段、五种投票状态、输入变化与冲突、无效票及归档篡改，不代表模型泛化质量。独立审查发现并修复评分 tier 适用身份遗漏，定点复核通过。
+初次导入的 `import-prefilter` 与 `apply` CLI 均已执行，重新应用的 cases 与导入产生的 effective cases SHA 完全一致：`13cf1bf6f632ae55a0ce961b316724e1c59f4e1ed488fd54dfd97b806835155d`。无新增模型调用，原 cases/predictions 与原票声明的 SHA 一致。初次导入时18项标签定向测试及72项既有指标、身份、合并测试通过；覆盖四对象八字段、五种投票状态、输入变化与冲突、无效票及归档篡改，不代表模型泛化质量。初次独立审查发现并修复评分 tier 适用身份遗漏，定点复核通过。
 
 用户指出：AI 相关性并非收录充分条件，还要有值得读者阅读的新增信息。无依据的推荐/观点、缺少一手信息的低信息转载宣传、过度细分的会议宣传，在本批具体案例中不值得收录。这是后续 prompt 假设的来源，不是“宣传全部拒绝”“某来源全部拒绝”的规则，也不能据此替用户标注其它题目。

@@ -162,6 +162,30 @@ def test_calibration_runs_dev_before_independent_validation(tmp_path):
     assert receipt["labels_sha256"] == confirmed
 
 
+def test_calibration_stores_human_metadata_separately_from_run(tmp_path):
+    from pathlib import Path
+
+    from evals._shared.assessment import calibrate_file, load_calibration
+    from evals._shared.human_store import read_reviews
+
+    material = prepare_calibration(samples())
+    labels, confirmed = labeled_file(tmp_path, material)
+    material_path = tmp_path / "material.json"
+    material_path.write_text(json.dumps(material))
+    result = calibrate_file(material_path, labels, confirmed, root=tmp_path,
+                            provider="deepseek", chat_factory=lambda _: lambda _: transport)
+    run = Path(result["result"]).parent
+    assert run.is_relative_to(tmp_path / "runs")
+    assert load_calibration(run, model=DEFAULT_MODEL, provider="deepseek")["provenance"] == "user"
+    book = read_reviews(tmp_path / "human-evals/content-enrichment/reviews.json")
+    batch = book["batches"][0]
+    assert batch["metadata"]["user_confirmed_sha256"] == confirmed
+    assert batch["metadata"]["reviewed_at"] is None
+    assert batch["data"]["feedback_raw"].encode() == labels.read_bytes()
+    assert batch["data"]["annotations"] == []
+    assert {p.name for p in (tmp_path / "human-evals/content-enrichment").iterdir()} == {"reviews.json", "reviews.lock"}
+
+
 @pytest.mark.parametrize("failed_split,expected_calls", [("dev", 6), ("validation", 12)])
 def test_failed_calibration_never_mints_trusted_receipt(tmp_path, failed_split, expected_calls):
     material = prepare_calibration(samples())

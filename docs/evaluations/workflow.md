@@ -30,7 +30,7 @@ O1 当前采用 [aihot-observed-membership](news-admission/aihot-observed-member
 
 `judge <content-enrichment experiment> --config <json>` 复用现有预测，仅新增 title/summary/reason 单字段判词；默认模型 `deepseek-v4-flash-ga-260731`，0/1/2 及理由，没有校准则仅为诊断。
 
-`export-calibration <experiment> --output <human-evals/new-folder> --config <json>` 从实际输入/参考/候选导出十二题及空标签模板。没有四条同时具备三文本参考的新闻就明确失败，不用编造的理由补齐。用户亲自给 0/1/2 标签并确认文件 SHA 后，运行 `calibrate <material.json> <labels.json> --user-confirmed-sha256 <confirmed> --config <json>`。先开发六题，再独立验证六题；任一不一致不产生可信 receipt。模型或 prompt 等身份变更后重校验。六题通过只是本小样本上的校验，不是普遍可靠性证明。
+`export-calibration <experiment> --output <准备材料目录> --config <json>` 从实际输入/参考/候选导出十二题及空标签模板；尚未填写的模板不是人评资产，不放入 `human-evals/`。没有四条同时具备三文本参考的新闻就明确失败，不用编造的理由补齐。用户亲自给 0/1/2 标签并确认文件 SHA 后，运行 `calibrate <material.json> <labels.json> --user-confirmed-sha256 <confirmed> --config <json>`。先开发六题，再独立验证六题；任一不一致不产生可信 receipt。实际用户票写入 `human-evals/content-enrichment/reviews.json`，批次在 metadata；模型校验产物与 attempts 归返回的 run 目录，`load_calibration` 读取该目录。模型或 prompt 等身份变更后重校验。六题通过只是本小样本上的校验，不是普遍可靠性证明。
 
 ## 复盘、优化和回归
 

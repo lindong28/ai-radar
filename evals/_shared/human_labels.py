@@ -162,7 +162,19 @@ def import_prefilter_review(feedback: Path, run: Path, output: Path) -> dict:
     return manifest
 
 
-def load_annotations(batch: Path) -> list[dict]:
+def load_annotations(batch: Path, *, batch_ids: list[str] | None = None) -> list[dict]:
+    if batch.is_file():
+        from .human_store import read_reviews
+
+        entries = read_reviews(batch)["batches"]
+        if batch_ids is not None:
+            unknown = set(batch_ids) - {entry["metadata"]["batch_id"] for entry in entries}
+            if unknown:
+                raise ValueError(f"unknown human batch IDs: {sorted(unknown)}")
+            entries = [entry for entry in entries if entry["metadata"]["batch_id"] in batch_ids]
+        return [row for entry in entries for row in entry["data"]["annotations"]]
+    if batch_ids is not None:
+        raise ValueError("batch ID selection requires reviews.json")
     manifest = read_json(batch / "manifest.json")
     if manifest["policy"] != POLICY or "annotations.jsonl" not in manifest["files"]:
         raise ValueError("not a human-reference batch")
@@ -180,24 +192,55 @@ def main():
     ingest.add_argument("--feedback", type=Path, required=True)
     ingest.add_argument("--run", type=Path, required=True)
     ingest.add_argument("--output", type=Path, required=True)
+    ingest.add_argument("--batch-id", required=True)
+    migrate = commands.add_parser("migrate")
+    migrate.add_argument("--source", type=Path, required=True)
+    migrate.add_argument("--output", type=Path, required=True)
+    migrate.add_argument("--batch-id", required=True)
     apply = commands.add_parser("apply")
     apply.add_argument("--cases", type=Path, required=True)
     apply.add_argument("--target", choices=list(FIELDS), required=True)
     apply.add_argument("--batch", type=Path, action="append", required=True)
+    apply.add_argument("--batch-id", action="append", help="Select batches from one reviews.json; omit for all")
     apply.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "import-prefilter":
-        import_prefilter_review(args.feedback, args.run, args.output)
+        from .human_store import import_review
+
+        import_review(args.feedback, args.run, args.output, args.batch_id)
+    elif args.command == "migrate":
+        from .human_store import migrate_batch
+
+        migrate_batch(args.source, args.output, args.batch_id)
     else:
-        annotations = [r for batch in args.batch for r in load_annotations(batch)]
+        from .human_store import read_reviews
+
+        if args.batch_id and len(args.batch) != 1:
+            parser.error("--batch-id requires exactly one --batch reviews.json")
+        annotations, bindings = [], []
+        for batch in args.batch:
+            if batch.is_file():
+                # Freeze the exact selection consumed, not a later read after another append.
+                book = read_reviews(batch)
+                entries = book["batches"]
+                if args.batch_id:
+                    if set(args.batch_id) - {e["metadata"]["batch_id"] for e in entries}:
+                        raise ValueError("unknown human batch ID")
+                    entries = [e for e in entries if e["metadata"]["batch_id"] in args.batch_id]
+                for entry in entries:
+                    annotations.extend(entry["data"]["annotations"])
+                    bindings.append({"path": str(batch.resolve()), "batch_id": entry["metadata"]["batch_id"],
+                                     "sha256": entry["sha256"]})
+            else:
+                annotations.extend(load_annotations(batch, batch_ids=args.batch_id))
+                bindings.append({"path": str(batch.resolve()), "manifest_sha256": file_digest(batch / "manifest.json")})
         cases, coverage = apply_labels(read_jsonl(args.cases), annotations, args.target)
         args.output.mkdir(parents=True, exist_ok=False)
         write_jsonl(args.output / "cases.jsonl", cases)
         write_json(args.output / "manifest.json", {
             **coverage, "target": args.target,
             "source_cases_sha256": file_digest(args.cases),
-            "batches": [{"path": str(b.resolve()), "manifest_sha256": file_digest(b / "manifest.json")}
-                        for b in args.batch],
+            "batches": bindings,
             "files": {"cases.jsonl": file_digest(args.output / "cases.jsonl")},
         })
 

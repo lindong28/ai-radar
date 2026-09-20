@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from uuid import uuid4
 
 from .assets import (
     ROOT,
@@ -63,7 +64,10 @@ def export_calibration(experiment: Path, output: Path, *, root: Path = ROOT, mod
 
 def calibrate_file(material_path: Path, labels_path: Path, confirmed_sha: str, *, chat_factory,
                    root: Path = ROOT, model: str = DEFAULT_MODEL, provider: str = "ark") -> dict:
-    output = root / "human-evals" / "content-enrichment" / utc_now().replace(":", "-")
+    from .human_store import append_batch
+
+    # Model attempts / calibration results are run assets, not human votes.
+    output, _ = create_run(root, "content-enrichment", "v1")
     result = calibrate(read_json(material_path), labels_path=labels_path, user_confirmed_sha256=confirmed_sha,
                        chat=chat_factory(output / "attempts")("calibration"), model=model, provider=provider)
     write_json(output / "material.json", read_json(material_path))
@@ -71,6 +75,14 @@ def calibrate_file(material_path: Path, labels_path: Path, confirmed_sha: str, *
     write_json(output / "result.json", result)
     write_json(output / "receipt.json", {"result_sha256": file_digest(output / "result.json"), "user_confirmed_sha256": confirmed_sha,
                                         "source_labels": str(labels_path.resolve()), "source_material": str(material_path.resolve())})
+    append_batch(root / "human-evals/content-enrichment/reviews.json", "content-enrichment", {
+        "metadata": {"batch_id": str(uuid4()), "recorded_at": utc_now(), "reviewed_at": None,
+                     "feedback_exported_at": None, "source_run": str(output.resolve()),
+                     "kind": "judge-calibration", "user_authority": "user-confirmed labels SHA",
+                     "user_confirmed_sha256": confirmed_sha},
+        "data": {"feedback_raw": labels_path.read_bytes().decode("utf-8"),
+                 "material": read_json(material_path), "result": result, "annotations": []},
+    })
     return {"status": result["status"], "result": str(output / "result.json")}
 
 
