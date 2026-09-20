@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DATASET_PATH = "benchmarks/aihot"
+DATASET_PATH = "data/aihot-reference"
 SYNTHETIC_OBJECT_ID = "0123456789abcdef0123456789abcdef01234567"
 
 
@@ -115,19 +115,19 @@ def test_aihot_dataset_index_boundary_rejects_exact_path_regular_blob() -> None:
     )
 
     assert _dataset_index_violations(synthetic_index) == [
-        "'benchmarks/aihot' has mode 100644, expected 160000"
+        "'data/aihot-reference' has mode 100644, expected 160000"
     ]
 
 
 def test_aihot_dataset_index_boundary_rejects_unusual_character_subpath() -> None:
-    unusual_path = 'benchmarks/aihot/windows/tab\tline\nquote"/items.jsonl'
+    unusual_path = 'data/aihot-reference/windows/tab\tline\nquote"/items.jsonl'
     synthetic_index = (
         f"100644 {SYNTHETIC_OBJECT_ID} 0\t{unusual_path}\0".encode()
     )
 
     assert _dataset_index_violations(synthetic_index) == [
         "dataset content is tracked as a superproject blob: "
-        "'benchmarks/aihot/windows/tab\\tline\\nquote\"/items.jsonl'"
+        "'data/aihot-reference/windows/tab\\tline\\nquote\"/items.jsonl'"
     ]
 
 
@@ -138,9 +138,9 @@ def test_aihot_dataset_index_boundary_rejects_nonzero_and_duplicate_stages() -> 
     ).encode()
 
     assert _dataset_index_violations(synthetic_index) == [
-        "'benchmarks/aihot' has stage 1, expected 0",
-        "'benchmarks/aihot' has stage 2, expected 0",
-        "'benchmarks/aihot' has 2 index entries, expected at most 1",
+        "'data/aihot-reference' has stage 1, expected 0",
+        "'data/aihot-reference' has stage 2, expected 0",
+        "'data/aihot-reference' has 2 index entries, expected at most 1",
     ]
 
 
@@ -149,7 +149,7 @@ def test_aihot_dataset_index_boundary_rejects_nonzero_and_duplicate_stages() -> 
     [
         (b"malformed without terminator", "missing NUL terminator"),
         (b"malformed without separator\0", "missing metadata/path separator"),
-        (b"100644 object-only\tbenchmarks/aihot\0", "expected mode object stage"),
+        (b"100644 object-only\tdata/aihot-reference\0", "expected mode object stage"),
     ],
 )
 def test_aihot_dataset_index_boundary_rejects_malformed_records(

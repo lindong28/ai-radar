@@ -26,7 +26,7 @@ def _parser() -> argparse.ArgumentParser:
     capture = subcommands.add_parser("capture", help="Capture two complete UTC days into the data repository.")
     capture.add_argument("--start", required=True)
     capture.add_argument("--end", required=True)
-    capture.add_argument("--output-root", type=Path, default=Path("benchmarks/aihot"))
+    capture.add_argument("--output-root", type=Path, default=Path("data/aihot-reference"))
     capture.add_argument("--fill-missing", action="store_true", help="Publish only missing complete UTC days as v2; validate existing windows.")
     capture.add_argument("--resilient", action="store_true", help="Publish capture v2/windows v3; RSS/OpenAPI failures are diagnostics, while API/SSR validation remains required.")
 
@@ -40,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("path", nargs="?")
     validate.add_argument("--report-json", metavar="PATH")
     frozen = subcommands.add_parser("freeze", help="Copy validated windows and all their capture dependencies; no data deletion.")
-    frozen.add_argument("--output-root", type=Path, default=Path("benchmarks/aihot"))
+    frozen.add_argument("--output-root", type=Path, default=Path("data/aihot-reference"))
     frozen.add_argument("--window", action="append", required=True)
     frozen.add_argument("--destination", type=Path, required=True)
     return parser

@@ -49,7 +49,7 @@ PYTHONPATH=src uv run python scripts/raw_capture.py --root data/raw-capture cove
 
 Radar 冻结：`scripts/raw_capture.py --root data/raw-capture freeze --run RUN_ID --destination data/frozen/SET_ID`，可重复 `--run`，复制并验证全部 304 依赖。该命令只保证所选 run 的依赖完整，不证明整个窗口的候选内容完整；“对象窗口完整”依逐对象口径判断，“采集过程连续”依上面的窗口审计判断。旧 v1 建题器仍有自己的 coverage 硬门，本说明不改变代码校验，也不授权篡改覆盖标记。冻结目录不得放在 rolling `runs/` 里面。
 
-AIHOT 冻结：`scripts/capture_aihot_dataset.py freeze --output-root "$AIHOT_CAPTURE_WORKTREE/benchmarks/aihot" --window windows/START--END/manifest.json --destination data/frozen-aihot/SET_ID`，可重复 `--window`；`AIHOT_CAPTURE_WORKTREE` 必须显式配置为与当前 cron 相同的运行树，不能默认取主树 submodule。每个窗口和其完整 capture 都复制并重新验证。冻结位置不能在 rolling captures/windows 内，现有目的地拒绝覆盖。冻结副本仍需备份；本地复制不等于已远端持久化。
+AIHOT 冻结：`scripts/capture_aihot_dataset.py freeze --output-root "$AIHOT_CAPTURE_WORKTREE/benchmarks/aihot" --window windows/START--END/manifest.json --destination data/frozen-aihot/SET_ID`，可重复 `--window`；此示例对应仍使用旧目录的 pinned runtime。2026-09-20 主仓原始参照已改为 `data/aihot-reference`，取目标运行树 `.gitmodules` 的 path，而非全局替换所有运行树路径。`AIHOT_CAPTURE_WORKTREE` 必须显式配置为与当前 cron 相同的运行树，不能默认取主树 submodule。每个窗口和其完整 capture 都复制并重新验证。冻结位置不能在 rolling captures/windows 内，现有目的地拒绝覆盖。冻结副本仍需备份；本地复制不等于已远端持久化。
 
 ## 保留、告警与启用边界
 

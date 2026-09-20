@@ -4,16 +4,32 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .assets import (ROOT, OBSERVED_ADMISSION, archive_metrics, create_run, digest, file_digest,
-                     load_dataset, read_json, read_jsonl, rebuild_index, utc_now, write_json, write_jsonl)
+from .assets import (
+    OBSERVED_ADMISSION,
+    ROOT,
+    archive_metrics,
+    create_run,
+    digest,
+    file_digest,
+    load_dataset,
+    read_json,
+    read_jsonl,
+    rebuild_index,
+    utc_now,
+    write_json,
+    write_jsonl,
+)
 from .metrics import score
+from .relocations import resolve_asset_path
 
 
 def rescore(source: Path, dataset: Path, *, label: str, root: Path = ROOT) -> dict:
+    source = resolve_asset_path(source, root=root)
+    dataset = resolve_asset_path(dataset, root=root)
     old = read_json(source / "started.json")
     if old["target"] != "news-admission":
         raise ValueError("source is not an admission run")
-    original_path = Path(old["dataset"])
+    original_path = resolve_asset_path(Path(old["dataset"]), root=root)
     _, original = load_dataset(original_path, "news-admission")
     if file_digest(original_path / "manifest.json") != old["dataset_manifest_sha256"]:
         raise ValueError("source dataset identity mismatch")

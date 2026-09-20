@@ -15,6 +15,7 @@ set -uo pipefail
 # attempted mutation runs the real script and reports green -- indistinguishable from a
 # mutation the tests genuinely caught. Measured: both directions of the gate "passed".
 SCRIPT="${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/scripts/capture_aihot_daily.sh}"
+export DATASET_PATH="${AIHOT_TEST_REFERENCE_PATH:-data/aihot-reference}"
 pass=0; fail=0
 check(){ if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "  ok   $1"; else fail=$((fail+1)); echo "  FAIL $1: expected '$3', got '$2'"; fi; }
 
@@ -27,7 +28,7 @@ setup(){  # $1 = stub behaviour; echoes the worktree path
     git add -A && git -c user.email=t@t -c user.name=t commit -qm base )
   git init -q "$root/tool"; ( cd "$root/tool"
     mkdir -p benchmarks src scripts logs
-    git -c protocol.file.allow=always submodule -q add "$root/data" benchmarks/aihot 2>/dev/null
+    git -c protocol.file.allow=always submodule -q add --name benchmarks/aihot "$root/data" "$DATASET_PATH" 2>/dev/null
     cp "$SCRIPT" scripts/capture_aihot_daily.sh
     git add -A && git -c user.email=t@t -c user.name=t commit -qm base )
   echo "$root"
@@ -46,13 +47,13 @@ capture_stamp(){
 }
 
 echo "1. fresh capture, plus a tracked capture old enough to prune"
-r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z benchmarks/aihot/windows/w2; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json; echo y > benchmarks/aihot/windows/w2/items.jsonl" --')
+r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z ${DATASET_PATH}/windows/w2; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json; echo y > ${DATASET_PATH}/windows/w2/items.jsonl" --')
 check "clean at exit"        "$(dirt "$r")" "0"
-check "the stale capture was pruned" "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+check "the stale capture was pruned" "$( [ -d "$r/tool/${DATASET_PATH}/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
 rm -rf "$r"
 
 echo "1b. the default retention keeps a 20-day capture and prunes a 31-day capture"
-r=$(setup); keep="$r/tool/benchmarks/aihot/captures/aihot-$(capture_stamp 20)"; prune="$r/tool/benchmarks/aihot/captures/aihot-$(capture_stamp 31)"
+r=$(setup); keep="$r/tool/${DATASET_PATH}/captures/aihot-$(capture_stamp 20)"; prune="$r/tool/${DATASET_PATH}/captures/aihot-$(capture_stamp 31)"
 mkdir -p "$keep" "$prune"; echo keep > "$keep/page.json"; echo prune > "$prune/page.json"
 rc=$(run "$r" 'bash -c "exit 0" --')
 check "default retention exits 0" "$rc" "0"
@@ -62,7 +63,7 @@ check "clean at exit" "$(dirt "$r")" "0"
 rm -rf "$r"
 
 echo "2. capture killed mid-flight leaves a .staging tree"
-r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/.staging/x; echo p > benchmarks/aihot/.staging/x/partial; exit 2" --')
+r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/.staging/x; echo p > ${DATASET_PATH}/.staging/x/partial; exit 2" --')
 check "does not block tomorrow" "$(dirt "$r")" "0"
 check "reports failure"         "$rc" "2"
 rm -rf "$r"
@@ -74,27 +75,27 @@ check "propagates rc"    "$rc" "2"
 rm -rf "$r"
 
 echo "4. half-published capture: a capture dir with no matching window"
-r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json; exit 2" --')
+r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json; exit 2" --')
 check "does not block tomorrow" "$(dirt "$r")" "0"
 rm -rf "$r"
 
 echo "5. a stray file under captures/ -- documented as NOT excluded; pinned so it stays known"
-r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json; echo junk > benchmarks/aihot/captures/stray.tmp" --')
+r=$(setup); rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json; echo junk > ${DATASET_PATH}/captures/stray.tmp" --')
 check "clean at exit"                 "$(dirt "$r")" "0"
 check "stray was committed, as documented" \
-  "$( cd "$r/tool/benchmarks/aihot" && git show --name-only --format= HEAD | grep -c 'stray.tmp' )" "1"
+  "$( cd "$r/tool/${DATASET_PATH}" && git show --name-only --format= HEAD | grep -c 'stray.tmp' )" "1"
 rm -rf "$r"
 
 echo "6. capture FAILS while a stale capture is on disk -- pruning is disk policy, not a"
 echo "   reward for a successful fetch; an outage is when it matters most, and a full disk is"
 echo "   itself a reason capture fails."
 r=$(setup); rc=$(run "$r" 'bash -c "exit 2" --')
-check "stale capture still pruned" "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+check "stale capture still pruned" "$( [ -d "$r/tool/${DATASET_PATH}/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
 check "clean at exit"              "$(dirt "$r")" "0"
 rm -rf "$r"
 
 echo "7. dirt the named paths do NOT cover must be reported, not swallowed"
-r=$(setup); rc=$(run "$r" 'bash -c "echo junk > benchmarks/aihot/loose.tmp" --')
+r=$(setup); rc=$(run "$r" 'bash -c "echo junk > ${DATASET_PATH}/loose.tmp" --')
 check "reported in the log"  "$( grep -c 'uncommitted content in the dataset submodule' "$r"/tool/logs/*.log )" "1"
 check "names the actual file" "$( grep -c 'loose.tmp' "$r"/tool/logs/*.log )" "1"
 check "but does not fail the run -- it no longer blocks tomorrow" "$rc" "0"
@@ -113,7 +114,7 @@ echo "   wrong premise as the code, so this case is the regression guard, not th
 r=$(setup); rc=$(run "$r" 'bash -c "echo \"ERROR target_exists: refusing to overwrite windows/w1\"; echo \"Choose a new output path and retry; existing files are never overwritten.\"; exit 2" --')
 check "a window already on disk still fails" "$rc" "2"
 check "nothing is logged as a skip"          "$( grep -c 'SKIP' "$r"/tool/logs/*.log )" "0"
-check "retention still ran"                  "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+check "retention still ran"                  "$( [ -d "$r/tool/${DATASET_PATH}/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
 check "clean at exit"                        "$(dirt "$r")" "0"
 rm -rf "$r"
 
@@ -128,25 +129,25 @@ echo "   so asking anyway would fetch the whole surface for 33 minutes and store
 echo "   Nothing is lost: tomorrow's pair starts where our history ends. The corpus therefore"
 echo "   trails by at most one day, which is structural -- AIHOT only offers day T-1 paired with"
 echo "   T-2 -- not something this gate introduced."
-r=$(setup); w="$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"; mkdir -p "$w"
+r=$(setup); w="$r/tool/${DATASET_PATH}/windows/$(d -1)--$(d -0)"; mkdir -p "$w"
 echo x > "$w/items.jsonl"; echo '{}' > "$w/manifest.json"
 rc=$(run "$r" 'bash -c "exit 0" --')
 check "exits 0"                       "$rc" "0"
 check "says it made no request"       "$( grep -c 'no request: windows already cover through' "$r"/tool/logs/*.log )" "1"
 check "the capture tool was NOT run"  "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "0"
-check "retention still ran"           "$( [ -d "$r/tool/benchmarks/aihot/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
+check "retention still ran"           "$( [ -d "$r/tool/${DATASET_PATH}/captures/aihot-20260101T000000Z" ] && echo present || echo pruned )" "pruned"
 # The message is not echoed to the log, so read it off the commit itself -- grepping the log
 # here silently passed as 0 and had to be traced by hand.
-check "retention deletions committed" "$( git -C "$r/tool/benchmarks/aihot" log -1 --format=%s )" "chore(aihot): retention on a no-request day"
+check "retention deletions committed" "$( git -C "$r/tool/${DATASET_PATH}" log -1 --format=%s )" "chore(aihot): retention on a no-request day"
 check "clean at exit"                 "$(dirt "$r")" "0"
 rm -rf "$r"
 
 echo "10. history ending exactly AT the pair's start does not overlap -- the request is made."
 echo "    This is the day the gate must not eat; without it, 9 would pass on a predicate that"
 echo "    simply always refuses and the job would never capture anything again."
-r=$(setup); w="$r/tool/benchmarks/aihot/windows/$(d -3)--$(d -2)"; mkdir -p "$w"
+r=$(setup); w="$r/tool/${DATASET_PATH}/windows/$(d -3)--$(d -2)"; mkdir -p "$w"
 echo x > "$w/items.jsonl"; echo '{}' > "$w/manifest.json"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "the request was made"   "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                "$rc" "0"
 check "clean at exit"          "$(dirt "$r")" "0"
@@ -158,8 +159,8 @@ rm -rf "$r"
 echo "11. a window directory with no manifest.json is NOT published history."
 echo "    The publish step writes the manifest; an empty or half-removed directory carries the"
 echo "    same name as a validated window, and counting it would eat that day for good."
-r=$(setup); mkdir -p "$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+r=$(setup); mkdir -p "$r/tool/${DATASET_PATH}/windows/$(d -1)--$(d -0)"
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                       "$rc" "0"
 rm -rf "$r"
@@ -167,9 +168,9 @@ rm -rf "$r"
 echo "12. a date-SHAPED name that is not a date must not pin the gate shut."
 echo "    9999-99-99 sorts above every real window, so a single such directory would stop this"
 echo "    job requesting anything ever again -- and it would exit 0 every day while doing it."
-r=$(setup); bad="$r/tool/benchmarks/aihot/windows/2026-01-01T000000Z--9999-99-99T000000Z"
+r=$(setup); bad="$r/tool/${DATASET_PATH}/windows/2026-01-01T000000Z--9999-99-99T000000Z"
 mkdir -p "$bad"; echo x > "$bad/items.jsonl"; echo '{}' > "$bad/manifest.json"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                       "$rc" "0"
 rm -rf "$r"
@@ -182,8 +183,8 @@ echo "    directory. Found by the reviewer, not by cases 11-12."
 # isolate it -- so the mutation reading it produced was not evidence.
 r=$(setup); real="$r/decoy"; mkdir -p "$real"
 echo x > "$real/items.jsonl"; echo '{}' > "$real/manifest.json"
-ln -s "$real" "$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+ln -s "$real" "$r/tool/${DATASET_PATH}/windows/$(d -1)--$(d -0)"
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                       "$rc" "0"
 rm -rf "$r"
@@ -193,9 +194,9 @@ echo "    The gate only reads the end, so validating only that leaves a name no 
 echo "    ever wrote counting as history."
 # Both files present, so this case isolates the START-date check: without items.jsonl it would
 # pass for the wrong reason and stay green if that check were deleted.
-r=$(setup); bad="$r/tool/benchmarks/aihot/windows/2026-99-99T000000Z--$(d -0)"
+r=$(setup); bad="$r/tool/${DATASET_PATH}/windows/2026-99-99T000000Z--$(d -0)"
 mkdir -p "$bad"; echo x > "$bad/items.jsonl"; echo '{}' > "$bad/manifest.json"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                       "$rc" "0"
 rm -rf "$r"
@@ -203,18 +204,18 @@ rm -rf "$r"
 echo "16. a 99:99:99 TIME component must not pin the gate shut either."
 echo "    It passes a digit-count check and sorts above every real instant. Same hole as 12 and"
 echo "    14, third face: every unvalidated field in this name fails toward permanent silence."
-r=$(setup); bad="$r/tool/benchmarks/aihot/windows/2026-09-01T000000Z--2026-09-11T999999Z"
+r=$(setup); bad="$r/tool/${DATASET_PATH}/windows/2026-09-01T000000Z--2026-09-11T999999Z"
 mkdir -p "$bad"; echo x > "$bad/items.jsonl"; echo '{}' > "$bad/manifest.json"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                       "$rc" "0"
 rm -rf "$r"
 
 echo "17. a half-published window (manifest but no items) is not history."
 echo "    Publish writes both; a tree with one of them is a partial or half-removed write."
-r=$(setup); half="$r/tool/benchmarks/aihot/windows/$(d -1)--$(d -0)"
+r=$(setup); half="$r/tool/${DATASET_PATH}/windows/$(d -1)--$(d -0)"
 mkdir -p "$half"; echo '{}' > "$half/manifest.json"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                       "$rc" "0"
 rm -rf "$r"
@@ -222,9 +223,9 @@ rm -rf "$r"
 echo "18. two real dates that are not ONE DAY apart do not name a canonical window."
 echo "    2026-01-01--2099-01-01 passes every other check and would skip every request until"
 echo "    2099. Fifth face of the same hole; found by the reviewer after cases 12/14/15/16/17."
-r=$(setup); wide="$r/tool/benchmarks/aihot/windows/2026-01-01T000000Z--2099-01-01T000000Z"
+r=$(setup); wide="$r/tool/${DATASET_PATH}/windows/2026-01-01T000000Z--2099-01-01T000000Z"
 mkdir -p "$wide"; echo x > "$wide/items.jsonl"; echo '{}' > "$wide/manifest.json"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "does not suppress the request" "$( grep -c 'requesting ' "$r"/tool/logs/*.log )" "1"
 check "exits 0"                       "$rc" "0"
 rm -rf "$r"
@@ -232,10 +233,10 @@ rm -rf "$r"
 echo "13. failing to persist must not report success. Until these objects reach a second place"
 echo "    they exist only in this worktree's private gitdir; a run that fetched an irrecoverable"
 echo "    day and then could not commit it is a failure, not a success."
-# benchmarks/aihot/.git is a gitlink FILE, so chmod on it locks nothing -- the objects live in
+# ${DATASET_PATH}/.git is a gitlink FILE, so chmod on it locks nothing -- the objects live in
 # $r/tool/.git/modules/. An index.lock in the real gitdir is what actually makes git refuse.
 r=$(setup); : > "$r/tool/.git/modules/benchmarks/aihot/index.lock"
-rc=$(run "$r" 'bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --')
+rc=$(run "$r" 'bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --')
 check "persist failure is non-zero"  "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero"
 check "and it says so"               "$( grep -cE 'WARNING: (git add failed|submodule commit failed)' "$r"/tool/logs/*.log )" "1"
 rm -rf "$r"
@@ -245,7 +246,7 @@ echo "    2026-09-13: the commit sat on a detached submodule HEAD in this worktr
 echo "    gitdir, rc was 0, and every consumer kept reading the previous capture for two days."
 echo "    ADR-20260913-c7d4 authorises the daily push; ADR-060's ORDER still binds, so a failed"
 echo "    push must leave the superproject pin where it was rather than pinning an orphan."
-stub='bash -c "mkdir -p benchmarks/aihot/captures/aihot-20260908T000000Z; echo x > benchmarks/aihot/captures/aihot-20260908T000000Z/p.json" --'
+stub='bash -c "mkdir -p ${DATASET_PATH}/captures/aihot-20260908T000000Z; echo x > ${DATASET_PATH}/captures/aihot-20260908T000000Z/p.json" --'
 
 # (a) push turned off -- the pre-c7d4 world. The durability check is the only thing standing
 #     between that state and a silent two days, so it must fire and name the way out.
@@ -286,10 +287,10 @@ rc=$(AIHOT_CAPTURE_SKIP_FETCH=1 run "$r" 'false --')
 check "retry committed data: exits 0 without refetch" "$rc" "0"
 check "retry committed data: exact remote head" \
   "$(git -C "$r/data" rev-parse refs/heads/captures/daily)" \
-  "$(git -C "$r/tool/benchmarks/aihot" rev-parse HEAD)"
+  "$(git -C "$r/tool/${DATASET_PATH}" rev-parse HEAD)"
 check "retry committed data: pointer caught up" \
-  "$(git -C "$r/tool" rev-parse HEAD:benchmarks/aihot)" \
-  "$(git -C "$r/tool/benchmarks/aihot" rev-parse HEAD)"
+  "$(git -C "$r/tool" rev-parse HEAD:${DATASET_PATH})" \
+  "$(git -C "$r/tool/${DATASET_PATH}" rev-parse HEAD)"
 rm -rf "$r"
 
 # (d) push reports success but the remote ref is NOT this commit. ADR-060 asks for the remote
@@ -356,13 +357,14 @@ echo "    had no way to tell that from the real thing."
 r=$(setup)
 rc1=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" "$stub")           # pushes; ref now current
 base=$( cd "$r/data" && git rev-parse HEAD )
-( cd "$r/tool/benchmarks/aihot" && git update-ref refs/remotes/origin/captures/daily "$base" )  # go stale
+( cd "$r/tool/${DATASET_PATH}" && git update-ref refs/remotes/origin/captures/daily "$base" )  # go stale
 rc2=$(AIHOT_CAPTURE_DURABILITY_CHECK=1 run "$r" 'true --')         # nothing staged, stale ref
 check "stale ref: still exits 0"   "$rc2" "0"
 check "stale ref: exact remote verification on both runs" "$( cat "$r"/tool/logs/*.log | grep -c 'submodule push: .* (verified)' )" "2"
 check "stale ref: no false alarm"  "$( cat "$r"/tool/logs/*.log | grep -c 'is on no remote-tracking ref, and the remote' )" "0"
 rm -rf "$r"
 
+if [ "${AIHOT_TEST_OFFLINE:-0}" != 1 ]; then
 echo "22. the outer wall-clock bound must actually fire on a NETWORK command. Until now its only"
 echo "    reading was \`sleep 30\` -- a leaf with no sockets -- so 'the timeout works' rested on a"
 echo "    shape nothing in production resembles. Here the remote is a non-routable blackhole:"
@@ -378,6 +380,7 @@ check "blackhole: non-zero"        "$( [ "$rc" != 0 ] && echo nonzero || echo ze
 check "blackhole: bound fired"     "$( [ "$elapsed" -lt 15 ] && echo bounded || echo "unbounded(${elapsed}s)" )" "bounded"
 check "blackhole: no gitlink"      "$( [ "$before" = "$after" ] && echo unchanged || echo pinned )" "unchanged"
 rm -rf "$r"
+fi
 
 echo "23. ssh-agent discovery -- the one piece of the push path that decides whether auth works"
 echo "    at all, and the reason cron could not push until 2026-09-14. It had no automated"

@@ -6,10 +6,24 @@ import json
 import re
 from pathlib import Path
 
-from .assets import (ROOT, OBSERVED_ADMISSION, archive_metrics, create_run, digest, file_digest, load_dataset,
-                     read_json, read_jsonl, rebuild_index, utc_now, write_json, write_jsonl)
+from .assets import (
+    OBSERVED_ADMISSION,
+    ROOT,
+    archive_metrics,
+    create_run,
+    digest,
+    file_digest,
+    load_dataset,
+    read_json,
+    read_jsonl,
+    rebuild_index,
+    utc_now,
+    write_json,
+    write_jsonl,
+)
 from .metrics import score
 from .prefilter_eval import BENCHMARK, TARGET, prompt_context
+from .relocations import resolve_asset_path
 
 POLICY = "hn100-standalone-body-v1"
 
@@ -39,10 +53,11 @@ def apply_policy(raw: dict, prediction: dict) -> dict:
 
 
 def project(source: Path, *, label: str, root: Path = ROOT) -> dict:
+    source = resolve_asset_path(source, root=root)
     old = read_json(source / "started.json")
     if old["target"] != TARGET or old["benchmark"] not in {BENCHMARK, OBSERVED_ADMISSION}:
         raise ValueError("requires an independent prefilter run")
-    dataset = Path(old["dataset"])
+    dataset = resolve_asset_path(Path(old["dataset"]), root=root)
     _, pool = load_dataset(dataset, TARGET)
     if file_digest(dataset / "manifest.json") != old["dataset_manifest_sha256"]:
         raise ValueError("source dataset identity changed")

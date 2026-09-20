@@ -94,6 +94,7 @@ deploy/wechat2rss/data/
 # Immutable offline evaluation assets; definitions and result interpretation are tracked.
 /runs/
 /experiments/
+/data/evaluation-archive/
 /human-evals/
 
 # Execution-plan workspace (audit trail is promoted to docs/plans/ after completion).

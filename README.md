@@ -209,19 +209,19 @@ uv run python scripts/probe_x_source.py --source x_openai --db <全新临时数�
 
 已认可的四对象简化评测设计及后续建题、计分、判官与归档入口见 [AIHOT 评测实施说明](docs/references/aihot-eval-implementation.md)。当前只有设计文档和指标定义，尚未冻结新题集或运行新体系；下文既有 capture 能力不等于新评测已接通。
 
-AIHOT benchmark 数据位于 private submodule `benchmarks/aihot`；主仓只保存工具、冻结 schema 和 gitlink，不保存 AIHOT raw、JSONL、标题或 URL 内容。使用者须先取得 AI Radar 主仓，并让用于 Git submodule 的 GitHub SSH 身份获得 `lindong28/ai-radar-data` 读取权限，再递归克隆；已有 checkout 可单独初始化该 submodule：
+AIHOT 原始参照位于 private submodule `data/aihot-reference`，不等同于四对象评测题库（题库及历史运行见[资产说明](docs/evaluations/assets.md)）；主仓只保存工具、冻结 schema 和 gitlink，不保存 AIHOT raw、JSONL、标题或 URL 内容。使用者须先取得 AI Radar 主仓，并让用于 Git submodule 的 GitHub SSH 身份获得 `lindong28/ai-radar-data` 读取权限，再递归克隆；已有 checkout 可单独初始化该 submodule：
 
 ```bash
 git clone --recurse-submodules <AI Radar repository URL>
-git submodule update --init --recursive benchmarks/aihot
+git submodule update --init --recursive data/aihot-reference
 ```
 
 采集、离线切窗与验收共用同一 CLI。`capture` 必须从 clean、已固定的工具 commit 运行，输出根必须是 data submodule，并严格遵守 AIHOT 的 30 requests/minute 与 `Retry-After`；`slice` 和 `validate` 只读已保存的 raw/schema，不依赖 AIHOT 继续在线：
 
 ```bash
-uv run python scripts/capture_aihot_dataset.py capture --start 2026-08-19T00:00:00Z --end 2026-08-21T00:00:00Z --output-root benchmarks/aihot
-uv run python scripts/capture_aihot_dataset.py slice --capture benchmarks/aihot/captures/<capture-id>/capture.json --start 2026-08-19T00:00:00Z --end 2026-08-20T00:00:00Z --output <output-path>
-uv run python scripts/capture_aihot_dataset.py validate --report-json benchmarks/aihot/windows/2026-08-19T000000Z--2026-08-20T000000Z/manifest.json
+uv run python scripts/capture_aihot_dataset.py capture --start 2026-08-19T00:00:00Z --end 2026-08-21T00:00:00Z --output-root data/aihot-reference
+uv run python scripts/capture_aihot_dataset.py slice --capture data/aihot-reference/captures/<capture-id>/capture.json --start 2026-08-19T00:00:00Z --end 2026-08-20T00:00:00Z --output <output-path>
+uv run python scripts/capture_aihot_dataset.py validate --report-json data/aihot-reference/windows/2026-08-19T000000Z--2026-08-20T000000Z/manifest.json
 ```
 
 当前首个基准提交固定两个半开 UTC 日窗口：`[2026-08-19T00:00Z, 2026-08-20T00:00Z)` 共 348 条，`[2026-08-20T00:00Z, 2026-08-21T00:00Z)` 共 330 条。capture 保存两遍一致的公开 API 观察、SSR 标签证据、冻结 schema bytes/hash 与离线重放所需 raw；它的“完整”只覆盖采集时刻可见的 AIHOT public-surface baseline，不表示 AIHOT 内部 snapshot、筛选或排序实现等价。AIHOT live 仅保留约 7 天，因此 data commit 是窗口过期后的可复现 authority。

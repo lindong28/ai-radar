@@ -44,7 +44,7 @@ from airadar.egress import open_external_url  # noqa: E402
 
 # 权威副本在 ai-radar-data 子模块里（tracked）；data/eval-fit/ 是 gitignored 的，
 # 量具不该静默依赖一个不在 git 里的目录。
-EVALSET = REPO / "benchmarks/aihot/evalsets/aihot-fit-v1/questions.jsonl"
+EVALSET = REPO / "data/aihot-reference/evalsets/aihot-fit-v1/questions.jsonl"
 
 
 def urlopen(request: Request, timeout: float):  # noqa: ANN201

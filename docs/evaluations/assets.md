@@ -8,7 +8,7 @@
 
 当前／历史代码入口与测试职责统一见 [evals/README.md](../../evals/README.md)。当前准入候选的权威目录是 `evals/news-admission/prompts/`，旧 `aihot-prefilter/prompts` 只保留兼容链接；模板内容、题目与已归档成绩不变。当前操作文档使用新入口，历史台账／ADR／运行 metadata 保留当时身份。
 
-`runs/` 的逐题输出、请求、理由、失败与恢复记录，和 `experiments/` 的元数据、指标引用具有不同职责，不作重复文件删除。`runs/prefilter-*-preflight/` 与 `runs/human-eval-layout-migration/` 中被台账引用的分析、校验和原票迁移材料仍保留原路径。跨 benchmark 的 `experiments/metrics/summary.json` 是可重建索引，但不因可重建就把它从日常查询入口删掉。当前表现读各对象 status，逐轮历史读 ledger，不用目录的新旧名称判断有效性。
+`runs/` 的逐题输出、请求、理由、失败与恢复记录，和 `experiments/` 的元数据、指标引用具有不同职责，不作重复文件删除。此前顶层 preflight 和人评迁移材料现归入下述 support 分区，历史台账保留当时路径，由映射解析。跨 benchmark 的 `experiments/metrics/summary.json` 是可重建索引，仍是日常查询入口。当前表现读各对象 status，逐轮历史读 ledger，不用目录的新旧名称判断有效性。
 
 本次没有永久删除模型输出、实验记录、人评、题库、共享证据或测试；未证明无引用且可再生的文件不列入删除项。旧共享池执行器、迁移与完整性测试继续保留，避免用整理目录的名义移除仍有用途的能力。
 
@@ -18,9 +18,33 @@
 
 五个旧 benchmark 目录已可恢复地移到 `~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/`，保持 `<target>/<benchmark>/<version>` 相对结构。当前评分、富化的 `v1` 也在该归档树中保留实体，活动入口的 `v1` 是相对符号链接：两份冻结 manifest 的 `shared_evidence` 仍引用同树下旧 `aihot-prefilter/v1/evidence`。该依赖不是废文件，不能删除归档树；没有修改 manifest、题目或参考字节，也没有制造新的数据版本。
 
-日常评测和扩题继续传活动入口，现有 `load_dataset` 和 `read_bases` 会解析链接。新版本仍写活动根的真实 benchmark 目录，用尚未存在的 `v2/v3`；不要把归档根作为新输出根。旧实验或历史文档引用上述五个旧目录时，将原 `data/benchmarks/ai-radar/` 前缀换成 `data/benchmark-archives/ai-radar/20260920-cleanup/`，其余路径不变；原记录不追改。归档根 README 记录精确迁移清单和恢复方法。
+日常评测和扩题继续传活动入口，`load_dataset` 和 `read_bases` 会解析链接。新版本仍写活动根的真实 benchmark 目录，用尚未存在的 `v2/v3`；不要把归档根作为新输出根。旧实验中的五个旧题库路径由 `evals/_shared/relocations.py` 自动解析到上述归档，不要求调用者手改冻结 metadata。归档根 README 记录题库迁移清单和恢复方法。
 
 本次仅清理四个对象目录的历史入口；根目录旧 schema1 共享池、`_build-reports`、项目 `runs/`、`experiments/`、`human-evals/` 及持续采集档案不在删除范围。它们不属于当前四个独立 benchmark，不能累计为新增题。此次是目录整理而非磁盘瘦身，没有永久删除数据。
+
+### 原始参照、历史运行与 support 分区
+
+后续整理按 [ADR-20260920-8f31](../adr/20260920-8f31-separate-evaluation-assets-from-reference-archives.md) 执行；上节的未迁范围是前一次题库整理的边界，不是继续保留杂目录的要求。
+
+| 内容 | 当前实际入口 | 语义 |
+| --- | --- | --- |
+| AIHOT 原始参照 gitlink | `data/aihot-reference/` | 原 `benchmarks/aihot/`；不是当前四对象题库；同一数据仓、同一 pin |
+| 标准 v1 历史及当前运行 | `runs/<target>/<benchmark>/v1/<date>/<time>/`，对应 `experiments/` | 原始输出与 metadata 分开；旧 prefilter 仍仅供复现 |
+| 旧共享池 33 轮 | `data/evaluation-archive/{runs,experiments}/<target>/<benchmark>/20260917-0700-1200-v1/<date>/<time>/` | 保留旧身份与字节，不改名成 v1；仍纳入统一指标查询 |
+| 旧准入 preflight | `runs/news-admission/aihot-prefilter/v1/2026-09-20/10-29-30/support/prefilter-20260919-preflight/` | 工作材料，不是新模型评测 |
+| dual90、人评反馈 preflight 与旧人评目录迁移 | `runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/` 下保留各原目录名 | 对应 experiments metadata 的 `kind=asset-migration`，不产生指标行 |
+
+support 容器的 `directory_time_source=migration_plan_created` 说明目录时间来自本次迁移计划登记，`recorded_at` 是实际收据创建时刻，`original_run_time=null` 表示没有补造这些历史辅助材料的运行时间；原文件内部时间不变。容器 `source_paths` 记录迁入前路径，`migration_receipt` 指向逐文件摘要和原/新位置；原件仍能读到它们各自的来源范围，容器不改变材料所比较的 benchmark。
+
+精确映射唯一维护在 `evals/asset-relocations.json`：`project` 的键/值是相对项目根的旧/新目录；`external` 是外部题库旧/新前缀（`~` 按当前用户展开）；`project_aliases` 用于识别冻结记录中本机主工作树绝对路径。只有完整路径段前缀匹配才迁移，不按 basename 或版本猜测。读取已有文件优先，兼容尚未迁移的 pinned checkout；新写入不使用这个 resolver。`assets.read_json/read_jsonl/file_digest/load_dataset`、扩题、重评分、判官输入与索引重建都接入读取解析。
+
+历史台账的路径可这样定位：`PYTHONPATH=src:. uv run python -m evals._shared.relocations runs/prefilter-dual90-preflight/c13-rule-check.json`。原始叶子 metadata 和 summary 不追改；`PYTHONPATH=src:. uv run python -m evals._shared.cli index` 重建总表，将 source/metadata 投影为实际位置，保留 run_id、benchmark_version、数值和采信状态。总表同时包含活动与历史归档实验；无成绩的迁移容器不会伪造模型轮次。
+
+本机迁移脚本 `PYTHONPATH=src:. uv run python scripts/migrate_eval_asset_layout.py` 默认 dry-run，`--apply` 执行注册清单；`--root` 显式选择项目工作树。它不移动 gitlink（由 Git 路径变更负责）、不操作外部题库、不删文件。收据在 `data/evaluation-archive/layout-migration.json`：`moves[].from/to/files` 保存位置与原始字节摘要/符号链接目标。冲突或内容变化立即失败，已有收据允许中断后同命令继续；完成后重复执行只验证，不复制数据。恢复时按收据反向移动并核摘要，恢复旧代码时同时恢复 gitlink 路径；不要覆盖碰撞目录。
+
+独立采集工作树未迁移；采集脚本按目标 checkout 的 `.gitmodules` 取原始参照位置，不以主仓新目录名推断运行时也已迁移。
+
+本机已执行运行资产迁移：12 个目录前缀、2,157 个文件，删除文件数为 0。统一索引仍为 261 行；33 轮旧共享池记录归档，88 轮标准版本记录保留，另有 2 个不产生成绩的 support 容器。迁移收据逐文件记录原始摘要，运行脚本可复验这些字节。
 
 2026-09-20 新增[人评优先标注层](human-labels.md)：用户原票及其材料在 `human-evals/<target>/reviews.json` 保存；批次、日期与来源归 `batches[].metadata`，字段字典和操作由该说明单一维护，不加日期/批次/`imported` 路径。明确人评覆盖同题同字段的自动参考，原 AIHOT 证据与成绩不覆盖。原票和 effective 计分视图分开保留，不能把改标签后的分数当作模型改进。
 

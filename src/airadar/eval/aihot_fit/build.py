@@ -27,10 +27,10 @@ from .common import (
     write_jsonl,
 )
 
-# The AIHOT benchmark repo is this repo's ``benchmarks/aihot`` submodule; point
+# The AIHOT reference repo is this repo's ``data/aihot-reference`` submodule; point
 # AI_RADAR_AIHOT_DATASET_ROOT at another checkout of it when the submodule is not
 # initialised here. Every default stays repo-relative so no maintainer path is baked in.
-_AIHOT_DATASET_ROOT = Path(os.environ.get("AI_RADAR_AIHOT_DATASET_ROOT") or db.PROJECT_ROOT / "benchmarks" / "aihot")
+_AIHOT_DATASET_ROOT = Path(os.environ.get("AI_RADAR_AIHOT_DATASET_ROOT") or db.PROJECT_ROOT / "data" / "aihot-reference")
 _T5_RAW_DEFAULT = db.PROJECT_ROOT / ".label-serve" / "round45-human" / "t5" / "r2_raw" / "aihot_items_raw_r2.json"
 DEFAULT_SOURCES: tuple[tuple[str, Path], ...] = (
     (
@@ -93,7 +93,7 @@ def _portable_source_path(path: Path, batch_name: str) -> str:
     """Describe v2 authorities without committing a maintainer-local checkout path."""
     if batch_name.startswith("t2-window-") and "windows" in path.parts:
         index = path.parts.index("windows")
-        return str(Path("benchmarks/aihot", *path.parts[index:]))
+        return str(Path("data/aihot-reference", *path.parts[index:]))
     if batch_name.startswith("t5-"):
         return ".label-serve/round45-human/t5/r2_raw/aihot_items_raw_r2.json"
     try:

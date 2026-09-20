@@ -194,9 +194,9 @@ def test_uninitialized_submodule_is_not_reported_as_no_historical_asset(tmp_path
         "def compute_metrics():\n    judge_acceptance()\n    compare_to_baseline()\n",
         encoding="utf-8",
     )
-    (root / "benchmarks/aihot").mkdir(parents=True)
+    (root / "data/aihot-reference").mkdir(parents=True)
     (root / ".gitmodules").write_text(
-        '[submodule "benchmarks/aihot"]\n\tpath = benchmarks/aihot\n\turl = ../aihot-benchmark\n',
+        '[submodule "benchmarks/aihot"]\n\tpath = data/aihot-reference\n\turl = ../aihot-benchmark\n',
         encoding="utf-8",
     )
 

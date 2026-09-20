@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "project_aliases": ["~/research/ai-radar"],
+  "project": {
+    "benchmarks/aihot": "data/aihot-reference",
+    "runs/news-admission/aihot-all-members/20260917-0700-1200-v1": "data/evaluation-archive/runs/news-admission/aihot-all-members/20260917-0700-1200-v1",
+    "experiments/news-admission/aihot-all-members/20260917-0700-1200-v1": "data/evaluation-archive/experiments/news-admission/aihot-all-members/20260917-0700-1200-v1",
+    "runs/visible-score/aihot-visible-score/20260917-0700-1200-v1": "data/evaluation-archive/runs/visible-score/aihot-visible-score/20260917-0700-1200-v1",
+    "experiments/visible-score/aihot-visible-score/20260917-0700-1200-v1": "data/evaluation-archive/experiments/visible-score/aihot-visible-score/20260917-0700-1200-v1",
+    "runs/content-enrichment/aihot-enrichment/20260917-0700-1200-v1": "data/evaluation-archive/runs/content-enrichment/aihot-enrichment/20260917-0700-1200-v1",
+    "experiments/content-enrichment/aihot-enrichment/20260917-0700-1200-v1": "data/evaluation-archive/experiments/content-enrichment/aihot-enrichment/20260917-0700-1200-v1",
+    "runs/featured-members/aihot-featured-members/20260917-0700-1200-v1": "data/evaluation-archive/runs/featured-members/aihot-featured-members/20260917-0700-1200-v1",
+    "experiments/featured-members/aihot-featured-members/20260917-0700-1200-v1": "data/evaluation-archive/experiments/featured-members/aihot-featured-members/20260917-0700-1200-v1",
+    "runs/prefilter-20260919-preflight": "runs/news-admission/aihot-prefilter/v1/2026-09-20/10-29-30/support/prefilter-20260919-preflight",
+    "runs/prefilter-dual90-preflight": "runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/prefilter-dual90-preflight",
+    "runs/prefilter-human-feedback-preflight": "runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/prefilter-human-feedback-preflight",
+    "runs/human-eval-layout-migration": "runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/human-eval-layout-migration"
+  },
+  "external": {
+    "~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-all-members": "~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/news-admission/aihot-all-members",
+    "~/research/video-eval-arena/data/benchmarks/ai-radar/news-admission/aihot-prefilter": "~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/news-admission/aihot-prefilter",
+    "~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-visible-score": "~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/visible-score/aihot-visible-score",
+    "~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment": "~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/content-enrichment/aihot-enrichment",
+    "~/research/video-eval-arena/data/benchmarks/ai-radar/featured-members/aihot-featured-members": "~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/featured-members/aihot-featured-members"
+  }
+}

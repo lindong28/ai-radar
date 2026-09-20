@@ -10,11 +10,22 @@ from pathlib import Path
 from jinja2 import StrictUndefined, Template
 
 from .assets import (
-    ROOT, archive_metrics, create_run, digest, file_digest, load_dataset,
-    read_json, read_jsonl, rebuild_index, utc_now, write_json, write_jsonl,
+    ROOT,
+    archive_metrics,
+    create_run,
+    digest,
+    file_digest,
+    load_dataset,
+    read_json,
+    read_jsonl,
+    rebuild_index,
+    utc_now,
+    write_json,
+    write_jsonl,
 )
 from .inference import _item, _request, predict_one
 from .metrics import score
+from .relocations import resolve_asset_path
 
 TARGET = "news-admission"
 BENCHMARK = "aihot-prefilter"
@@ -69,6 +80,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              quote_context: bool = False) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
+    dataset = resolve_asset_path(dataset, root=root)
     manifest, pool = load_dataset(dataset, TARGET)
     if manifest["benchmark"] != benchmark:
         raise ValueError("this runner requires the independent prefilter benchmark")

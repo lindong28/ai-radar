@@ -29,11 +29,13 @@ from .assets import (
 )
 from .inference import identity, predict_one, project_pool
 from .metrics import score
+from .relocations import resolve_asset_path
 
 OBJECTS = dict(zip(BENCHMARKS, ("O1", "O2", "O3", "O4"), strict=True))
 
 
 def dataset_paths(primary: Path) -> dict[str, Path]:
+    primary = resolve_asset_path(primary)
     manifest, _ = load_dataset(primary)
     if manifest["schema_version"] != 1:
         raise ValueError("object-specific v2 datasets are not a shared pool; use their documented pointwise adapters")
@@ -104,6 +106,7 @@ def run_pool(cases: list[dict], config: dict, *, chat_factory, cache: Path, work
 
 def evaluate(primary: Path, *, config: dict, chat_factory, root: Path = ROOT, smoke: int | None = None,
              workers: int = 8, fixed_pool: Path | None = None, label: str = "baseline") -> dict:
+    primary = resolve_asset_path(primary, root=root)
     validate_layout(root)
     paths = dataset_paths(primary)
     manifest, all_cases = load_dataset(paths["content-enrichment"])

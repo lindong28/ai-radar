@@ -24,7 +24,8 @@ def test_new_builder_rejects_descriptive_or_nonincremental_version(tmp_path, ver
 
 @pytest.mark.parametrize("target", assets.OBJECT_BENCHMARKS)
 def test_new_identity_contract_and_old_runner_boundary(tmp_path, target):
-    result = ob.build(**setup_build(tmp_path), version="v1", targets=[target])
+    result = ob.build(**setup_build(tmp_path), version="v1", targets=[target],
+                      admission_benchmark="aihot-prefilter")
     leaf = Path(result["datasets"][target]["path"])
     manifest, rows = assets.load_dataset(leaf)
     assert leaf.parts[-3:] == (target, assets.OBJECT_BENCHMARKS[target], "v1")

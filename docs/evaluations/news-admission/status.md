@@ -24,7 +24,7 @@
 
 L1：①新增候选、理由输出；④仍是确定性 P/R，news-admission 不另加 LLM 判官。相关内容富化文本判官同步 reason-first 校验与 canonical `reason` 字段，判官身份改变；未运行该判官质量校验，不继承旧身份的采信结论。L2：6个 run（5个完整变体、1个失败后恢复记录），1501次新尝试、1500成功、1超时已恢复，成功响应报告1,824,751 tokens；失败usage及金额未知。原始响应1500/1500理由在决策前、0重复键；其中300份有JSON代码围栏。L3：300身份、62来源、全X、299不同标题/正文；不能外推HN/Web效果。24人评9正15负，不代表总体分布。C11对照的system及输出上限也变了，不是纯reason因果消融；不宣称reason提高准确率。
 
-每轮原件在 `runs/news-admission/aihot-observed-membership/v1/2026-09-20/<UTC run>/`；全轮对照、effective cases SHA 与原始解释索引在 `runs/prefilter-human-feedback-preflight/comparison.json`，请求/原始响应/usage 在各 run 的 `attempts/`。用法见[人评说明](../human-labels.md#根据人评解释运行新候选)。本轮未部署或push，所有付费任务已结束。
+每轮原件在 `runs/news-admission/aihot-observed-membership/v1/2026-09-20/<UTC run>/`；全轮对照、effective cases SHA 与原始解释索引在 `runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/prefilter-human-feedback-preflight/comparison.json`，请求/原始响应/usage 在各 run 的 `attempts/`。用法见[人评说明](../human-labels.md#根据人评解释运行新候选)。本轮未部署或push，所有付费任务已结束。
 
 ### 最新补充：用户人评优先重评分（不是新模型成绩）
 

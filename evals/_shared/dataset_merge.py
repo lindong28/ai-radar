@@ -7,10 +7,20 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .assets import BENCHMARKS, OBJECT_BENCHMARKS, OBSERVED_ADMISSION, digest, file_digest, load_dataset, read_json, read_jsonl
+from .assets import (
+    BENCHMARKS,
+    OBJECT_BENCHMARKS,
+    OBSERVED_ADMISSION,
+    digest,
+    file_digest,
+    load_dataset,
+    read_json,
+    read_jsonl,
+)
 from .dataset import news_key as legacy_news_key
 from .dataset import timestamp
 from .identity import news_key
+from .relocations import resolve_asset_path
 
 
 def observation_order(row):
@@ -45,7 +55,7 @@ def read_bases(paths):
 
     datasets, bundles = {}, {}
     for path in paths:
-        path = path.resolve()
+        path = resolve_asset_path(path)
         if path.is_file():
             path = path.parent
         seed, _ = load_dataset(path)

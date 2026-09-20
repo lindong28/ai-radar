@@ -82,7 +82,7 @@ PYTHONPATH=src:. uv run python -m evals._shared.human_labels apply \
 
 ### 从旧目录迁移
 
-`PYTHONPATH=src:. uv run python -m evals._shared.human_labels migrate --source /path/to/old-batch/imported --batch-id <id> --output human-evals/<target>/reviews.json` 先校验旧 manifest，再逐项装入新容器；当前迁移器对应已有的新闻准入票型，不能当作其它对象的票型转换器。旧目录只保留为 `runs/human-eval-layout-migration/source-layout/` 的迁移前档案，原重复导入验证材料也在那里，不再作为人评入口。当前标注、原理由、展示上下文及源预测的内容不变，历史成绩不重新归因。脚本仍可读取独立留存的旧 manifest 目录供历史复现，但新 CLI 导入默认要求 JSON 目标和显式 batch ID。
+`PYTHONPATH=src:. uv run python -m evals._shared.human_labels migrate --source /path/to/old-batch/imported --batch-id <id> --output human-evals/<target>/reviews.json` 先校验旧 manifest，再逐项装入新容器；当前迁移器对应已有的新闻准入票型，不能当作其它对象的票型转换器。旧目录只保留为 `runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/human-eval-layout-migration/source-layout/` 的迁移前档案，原重复导入验证材料也在那里，不再作为人评入口。当前标注、原理由、展示上下文及源预测的内容不变，历史成绩不重新归因。脚本仍可读取独立留存的旧 manifest 目录供历史复现，但新 CLI 导入默认要求 JSON 目标和显式 batch ID。
 
 ## 判官与 reason
 

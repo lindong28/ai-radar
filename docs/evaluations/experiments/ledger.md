@@ -2,6 +2,8 @@
 
 > [Developer] · 真实运行台账，时间列为UTC。不同benchmark与题集版本分段，不跨身份相减。根 `experiments/<target>/<benchmark>/<version>/<date>/<time>/` 与 `runs/` 同分区。
 
+2026-09-20 路径整理说明：下文保留历史记录中的原位置；旧共享池实体已归 `data/evaluation-archive/`，顶层 preflight 已归标准 run 的 support。使用 `python -m evals._shared.relocations <旧路径>` 定位，完整映射及时间语义见[资产说明](../assets.md#原始参照历史运行与-support-分区)。迁移不产生模型成绩，也不修改下文结论。
+
 ## 2026-09-20：aihot-observed-membership / v1
 
 ### 人评解释驱动的五个变体（同300题，UTC 08时段）

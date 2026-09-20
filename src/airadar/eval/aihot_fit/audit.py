@@ -192,7 +192,7 @@ def _benchmark_state(project_root: Path, questions: Path) -> str:
     if questions.is_file():
         return "initialized"
     gitmodules = project_root / ".gitmodules"
-    if gitmodules.is_file() and "path = benchmarks/aihot" in gitmodules.read_text(encoding="utf-8"):
+    if gitmodules.is_file() and "path = data/aihot-reference" in gitmodules.read_text(encoding="utf-8"):
         return "gitlink present but submodule not initialized in this worktree"
     return "benchmark asset not present in this checkout"
 
@@ -242,7 +242,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
     judge_path = fit_root / "judge.py"
     archive_measure_path = project_root / "scripts/eval/measure_archive_composition.py"
     real_run_replay_path = project_root / "scripts/eval/replay_real_runs.py"
-    benchmark = project_root / "benchmarks/aihot"
+    benchmark = project_root / "data/aihot-reference"
     questions_v1 = benchmark / "evalsets/aihot-fit-v1/questions.jsonl"
     questions_v2 = benchmark / "evalsets/aihot-fit-v2/questions.jsonl"
     v1_state = _benchmark_state(project_root, questions_v1)
@@ -350,12 +350,12 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
         ),
         "2_questions": _entry(
             v1_status,
-            "benchmarks/aihot/evalsets/aihot-fit-v1/questions.jsonl",
+            "data/aihot-reference/evalsets/aihot-fit-v1/questions.jsonl",
             v1_validation,
         ),
         "2_questions_v2": _entry(
             v2_status,
-            "benchmarks/aihot/evalsets/aihot-fit-v2/questions.jsonl",
+            "data/aihot-reference/evalsets/aihot-fit-v2/questions.jsonl",
             v2_validation if questions_v2.is_file() else "v2 authority has not been materialized",
         ),
         "3_judge": _entry(
@@ -443,7 +443,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
         ),
         "provenance": _entry(
             "located" if current_ballot_present else "partial",
-            "benchmarks/aihot/labels/*/PROVENANCE.md + docs/adr/20260903-bc36...",
+            "data/aihot-reference/labels/*/PROVENANCE.md + docs/adr/20260903-bc36...",
             (
                 "agent labels are attributable and the current ballot asset is present"
                 if current_ballot_present

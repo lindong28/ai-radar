@@ -21,19 +21,23 @@ from .assets import (
 )
 from .judge import DEFAULT_MODEL, FIELDS, calibrate, judge_identity, judge_text, prepare_calibration
 from .metrics import score
+from .relocations import resolve_asset_path
 
 
 def source_run(experiment: Path, root: Path):
-    experiment, root = experiment.resolve(), root.resolve()
+    root = root.resolve()
+    experiment = resolve_asset_path(experiment, root=root)
     metadata = read_json(experiment / "metadata.json")
     if metadata["target"] != "content-enrichment":
         raise ValueError("text judging requires a content-enrichment run")
-    dataset = Path(metadata["dataset"])
+    dataset = resolve_asset_path(Path(metadata["dataset"]), root=root)
     _, cases = load_dataset(dataset, "content-enrichment")
     if file_digest(dataset / "manifest.json") != metadata["dataset_manifest_sha256"]:
         raise ValueError("source dataset identity changed")
     selected = {c["case_id"]: c for c in cases if c["case_id"] in metadata["case_ids"]}
-    run = root / "runs" / experiment.relative_to(root / "experiments")
+    base = (root / "experiments" if experiment.is_relative_to(root / "experiments")
+            else root / "data/evaluation-archive/experiments")
+    run = resolve_asset_path(root / "runs" / experiment.relative_to(base), root=root)
     predictions = read_jsonl(run / "predictions.jsonl")
     receipt = read_json(run / "prediction-receipt.json")
     if receipt["sha256"] != file_digest(run / "predictions.jsonl"):

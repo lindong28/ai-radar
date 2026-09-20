@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260920-8f31](./20260920-8f31-separate-evaluation-assets-from-reference-archives.md) | 原始参照、历史运行与当前评测入口分离；保留原字节与路径解析 | accepted | 2026-09-20 |
 | [20260920-cc16](./20260920-cc16-compare-prefilter-model-with-fixed-input.md) | 固定C10及输入，离线比较Pro/Flash；不改gold或生产 | accepted for experiment | 2026-09-20 |
 | [20260920-3b8a](./20260920-3b8a-test-prefilter-without-extra-context.md) | 无引用C11/C12对照；用户取消后续预算上限，保留逐轮归因与生产边界 | accepted for experiment; supersedes 91bd budget/scope bound | 2026-09-20 |
 | [20260920-91bd](./20260920-91bd-test-prefilter-professional-sharing.md) | 离线测试专业流短分享及投资商业主次边界；累计8000次调用，不改gold | accepted for experiment | 2026-09-20 |

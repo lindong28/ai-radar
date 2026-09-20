@@ -22,6 +22,9 @@ exec >>"$LOG" 2>&1
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === aihot capture START (worktree=$WORKTREE) ==="
 
 cd "$WORKTREE" || { echo "FATAL: worktree missing"; exit 3; }
+AIHOT_REFERENCE_PATH="$(git config -f .gitmodules --get submodule.benchmarks/aihot.path)" || {
+  echo "FATAL: AIHOT reference submodule path missing from runtime .gitmodules"; exit 3;
+}
 
 # Wall-clock bound for the network calls below. There is no `timeout(1)` on this host (measured:
 # `command not found`), and ssh's own `ConnectTimeout` covers the TCP connect ONLY -- a half-open
@@ -108,9 +111,9 @@ unset AI_RADAR_EGRESS_PROXY_PORT
 # date-SHAPED name that is not a date -- `junk--9999-99-99T000000Z` parses to a future instant and
 # would pin the gate shut for all time. So require a real directory, a real calendar date, and the
 # manifest the publish step writes; anything else is not history and does not hold back a request.
-last_end="$(python3 - <<'PY'
-import datetime, pathlib, re
-root = pathlib.Path("benchmarks/aihot/windows")
+last_end="$(python3 - "$AIHOT_REFERENCE_PATH" <<'PY'
+import datetime, pathlib, re, sys
+root = pathlib.Path(sys.argv[1]) / "windows"
 # Canonical windows are whole UTC days, so the time is literally 000000 -- pin it rather than
 # accept \d{6}. `99:99:99` passes a digit-count check, sorts above every real instant, and one
 # such directory stops this job requesting anything ever again while exiting 0 each day. That is
@@ -155,7 +158,7 @@ elif [ "${AIHOT_CAPTURE_FILL_MISSING:-0}" = 1 ]; then
   AIHOT_CAPTURE_CMD="${AIHOT_CAPTURE_CMD:-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture}"
   resilient_flag=""
   [ "${AIHOT_CAPTURE_RESILIENT:-0}" = 1 ] && resilient_flag="--resilient"
-  eval "$AIHOT_CAPTURE_CMD --fill-missing $resilient_flag --start \"$START\" --end \"$END\""
+  eval "$AIHOT_CAPTURE_CMD --output-root \"$AIHOT_REFERENCE_PATH\" --fill-missing $resilient_flag --start \"$START\" --end \"$END\""
   rc=$?
 elif [ -n "$last_end" ] && [ "$last_end" \> "$START" ]; then
   echo "no request: windows already cover through $last_end, so the canonical pair"
@@ -167,7 +170,7 @@ else
   # Seam so the git-handling below can be exercised without spending a real AIHOT window.
   # tests/test_capture_aihot_daily.sh substitutes a stub; nothing else sets it.
   AIHOT_CAPTURE_CMD="${AIHOT_CAPTURE_CMD:-PYTHONPATH=src uv run python scripts/capture_aihot_dataset.py capture}"
-  eval "$AIHOT_CAPTURE_CMD --start \"$START\" --end \"$END\""
+  eval "$AIHOT_CAPTURE_CMD --output-root \"$AIHOT_REFERENCE_PATH\" --start \"$START\" --end \"$END\""
   rc=$?
 fi
 
@@ -216,9 +219,9 @@ if [ "$RETAIN" -gt 0 ] 2>/dev/null; then
   # stamps every capture with the checkout time, so an mtime predicate prunes nothing for the
   # first RETAIN days on a new machine and then prunes the whole history at once -- and it fails
   # that way silently, which is exactly the shape this repo keeps getting bitten by.
-  before=$(du -sm benchmarks/aihot/captures 2>/dev/null | cut -f1)
+  before=$(du -sm "$AIHOT_REFERENCE_PATH/captures" 2>/dev/null | cut -f1)
   cutoff=$(python3 -c "import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=int(sys.argv[1]))).strftime('%Y%m%dT%H%M%SZ'))" "$RETAIN")
-  for d in benchmarks/aihot/captures/aihot-*; do
+  for d in "$AIHOT_REFERENCE_PATH"/captures/aihot-*; do
     [ -d "$d" ] || continue
     stamp="${d##*/aihot-}"
     case "$stamp" in
@@ -226,7 +229,7 @@ if [ "$RETAIN" -gt 0 ] 2>/dev/null; then
       *) echo "skipping unrecognised capture dir name: $d" ;;
     esac
   done
-  after=$(du -sm benchmarks/aihot/captures 2>/dev/null | cut -f1)
+  after=$(du -sm "$AIHOT_REFERENCE_PATH/captures" 2>/dev/null | cut -f1)
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === retention: keep ${RETAIN}d, captures ${before:-?}MB -> ${after:-?}MB ==="
 fi
 
@@ -259,26 +262,26 @@ fi
 # sat on a DETACHED submodule HEAD in this worktree's private gitdir -- no branch, one object
 # store. `git worktree remove` would have destroyed them.)
 if [ $rc -eq 0 ]; then
-  if ! git -C benchmarks/aihot add captures windows 2>&1; then
+  if ! git -C "$AIHOT_REFERENCE_PATH" add captures windows 2>&1; then
     echo "  WARNING: git add failed; nothing was committed"
     rc=1
-  elif git -C benchmarks/aihot diff --cached --quiet; then
+  elif git -C "$AIHOT_REFERENCE_PATH" diff --cached --quiet; then
     echo "  submodule: nothing staged"
   else
     if [ -n "$requested" ]; then
-      msg="data(aihot): $(basename "$(ls -dt benchmarks/aihot/captures/aihot-* 2>/dev/null | head -1)")"
+      msg="data(aihot): $(basename "$(ls -dt "$AIHOT_REFERENCE_PATH"/captures/aihot-* 2>/dev/null | head -1)")"
     else
       msg="chore(aihot): retention on a no-request day"
     fi
-    if ! git -C benchmarks/aihot commit -q -m "$msg"; then
+    if ! git -C "$AIHOT_REFERENCE_PATH" commit -q -m "$msg"; then
       echo "  WARNING: submodule commit failed; this run's output is uncommitted"
       rc=1
     fi
   fi
   # Retry publication even when the previous attempt already committed the data.
   if [ $rc -eq 0 ]; then
-      sub_sha="$(git -C benchmarks/aihot rev-parse HEAD)"
-      echo "  submodule commit: $(git -C benchmarks/aihot rev-parse --short HEAD)"
+      sub_sha="$(git -C "$AIHOT_REFERENCE_PATH" rev-parse HEAD)"
+      echo "  submodule commit: $(git -C "$AIHOT_REFERENCE_PATH" rev-parse --short HEAD)"
       # Order is load-bearing and comes from
       # [ADR-060](../docs/adr/060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md):
       # 「data local commit → 经显式授权 push并验证远端 exact ref → 主仓记录 gitlink」.
@@ -339,7 +342,7 @@ if [ $rc -eq 0 ]; then
         echo "           The gitlink is NOT recorded either: ADR-060's order pins only what a"
         echo "           remote has verifiably got, and 'skipped' is not 'got'."
         pushed=skipped
-      elif ! bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C benchmarks/aihot push -q "$push_remote" "HEAD:$push_ref"; then
+      elif ! bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C "$AIHOT_REFERENCE_PATH" push -q "$push_remote" "HEAD:$push_ref"; then
         echo "  WARNING: submodule push to $push_remote/$push_ref FAILED or timed out."
         echo "           Not recording the gitlink: pinning a SHA that reached no remote is the"
         echo "           orphan ADR-060's ordering exists to prevent. The capture is committed"
@@ -350,7 +353,7 @@ if [ $rc -eq 0 ]; then
       # ADR-060 asks for the remote EXACT ref, not just a zero exit. A push can report success
       # while a hook or a racing writer leaves the ref elsewhere; that reads as durable and is not.
       else
-        remote_sha="$(bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C benchmarks/aihot ls-remote "$push_remote" "$push_ref" 2>/dev/null | awk 'NR==1{print $1}')"
+        remote_sha="$(bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C "$AIHOT_REFERENCE_PATH" ls-remote "$push_remote" "$push_ref" 2>/dev/null | awk 'NR==1{print $1}')"
         if [ -z "$remote_sha" ]; then
           # Empty means the read-back itself did not happen (unreachable, timed out, no such ref).
           # Kept separate from a value mismatch: this one is usually transient and retries on its
@@ -367,7 +370,7 @@ if [ $rc -eq 0 ]; then
           echo "           writer. Gitlink not recorded."
           rc=1
         else
-          echo "  submodule push: $(git -C benchmarks/aihot rev-parse --short HEAD) -> $push_remote/$push_ref (verified)"
+          echo "  submodule push: $(git -C "$AIHOT_REFERENCE_PATH" rev-parse --short HEAD) -> $push_remote/$push_ref (verified)"
           pushed=1
         fi
       fi
@@ -376,9 +379,9 @@ if [ $rc -eq 0 ]; then
       # no remote, which is the exact orphan ADR-060's ordering exists to prevent. Caught by an
       # independent reviewer, not by the tests; case 19a now asserts it.
       if [ "$pushed" = 1 ]; then
-        if git diff --quiet HEAD -- benchmarks/aihot; then
+        if git diff --quiet HEAD -- "$AIHOT_REFERENCE_PATH"; then
           echo "  pointer already records the verified data commit"
-        elif git commit -q -m "chore(aihot): pin $(git -C benchmarks/aihot rev-parse --short HEAD)" -- benchmarks/aihot; then
+        elif git commit -q -m "chore(aihot): pin $(git -C "$AIHOT_REFERENCE_PATH" rev-parse --short HEAD)" -- "$AIHOT_REFERENCE_PATH"; then
           echo "  pointer commit: $(git rev-parse --short HEAD)"
         else
           echo "  WARNING: submodule committed but the parent pin did NOT -- run git submodule update and the new capture becomes an orphan"
@@ -398,10 +401,10 @@ if [ $rc -eq 0 ]; then
     # never pushed. Without it every one of them would fail for a reason none of them is
     # about. It defaults ON, so a real run cannot lose the check by forgetting a variable;
     # the two cases at the end of the test file cover both of its arms.
-    sub_head="$(git -C benchmarks/aihot rev-parse --short HEAD)"
+    sub_head="$(git -C "$AIHOT_REFERENCE_PATH" rev-parse --short HEAD)"
     if [ "${AIHOT_CAPTURE_DURABILITY_CHECK:-1}" != 1 ]; then
       echo "  submodule durability check: off"
-    elif [ -n "$(git -C benchmarks/aihot branch -r --contains HEAD 2>/dev/null)" ]; then
+    elif [ -n "$(git -C "$AIHOT_REFERENCE_PATH" branch -r --contains HEAD 2>/dev/null)" ]; then
       echo "  submodule durable: $sub_head is on a remote-tracking ref"
     else
       # Local remote-tracking refs are a CACHE, not the remote. Pushing from a different checkout
@@ -414,9 +417,9 @@ if [ $rc -eq 0 ]; then
       dur_ref="${AIHOT_CAPTURE_PUSH_REF:-refs/heads/captures/daily}"
       dur_sha=""
       if [ -n "$dur_remote" ]; then
-        dur_sha="$(bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C benchmarks/aihot ls-remote "$dur_remote" "$dur_ref" 2>/dev/null | awk 'NR==1{print $1}')"
+        dur_sha="$(bounded "${AIHOT_CAPTURE_NET_TIMEOUT:-300}" git -C "$AIHOT_REFERENCE_PATH" ls-remote "$dur_remote" "$dur_ref" 2>/dev/null | awk 'NR==1{print $1}')"
       fi
-      if [ -n "$dur_sha" ] && git -C benchmarks/aihot merge-base --is-ancestor HEAD "$dur_sha" 2>/dev/null; then
+      if [ -n "$dur_sha" ] && git -C "$AIHOT_REFERENCE_PATH" merge-base --is-ancestor HEAD "$dur_sha" 2>/dev/null; then
         echo "  submodule durable: $sub_head is reachable from $dur_remote/$dur_ref on the remote"
         echo "           (local remote-tracking ref was stale; not an alarm)"
       else
@@ -424,12 +427,12 @@ if [ $rc -eq 0 ]; then
         echo "           does not have it either (read back: ${dur_sha:-<unreadable>})."
         echo "           It exists only in this worktree's private gitdir; \`git worktree remove\`"
         echo "           destroys it, no other checkout can fetch it, and every consumer of"
-        echo "           benchmarks/aihot keeps reading the last pushed capture with no signal."
+        echo "           $AIHOT_REFERENCE_PATH keeps reading the last pushed capture with no signal."
         echo "           This run's own push either was skipped or failed -- see above. To recover:"
         # `${dur_remote:-origin}`, not `$dur_remote`: with pushing deliberately off the variable is
         # empty, and printing it bare hands the reader `git push  HEAD:...` -- a command that fails
         # with an unhelpful error. The recovery line has to be runnable in every arm that prints it.
-        echo "             git -C benchmarks/aihot push ${dur_remote:-origin} HEAD:$dur_ref"
+        echo "             git -C \"$AIHOT_REFERENCE_PATH\" push ${dur_remote:-origin} HEAD:$dur_ref"
         echo "           If that says 'Permission denied (publickey)', it is the missing ssh-agent,"
         echo "           not a key problem: log in so launchd holds an agent (see ADR-013)."
         rc=1
@@ -452,7 +455,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 # Submodule leftovers no longer block tomorrow, so this reports without failing the run -- but
 # it does report, because unbounded junk under a data directory is worth someone seeing.
-sub_dirt="$(git -C benchmarks/aihot status --porcelain)"
+sub_dirt="$(git -C "$AIHOT_REFERENCE_PATH" status --porcelain)"
 if [ -n "$sub_dirt" ]; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] === NOTE: uncommitted content in the dataset submodule ==="
   printf '%s\n' "$sub_dirt" | sed 's/^/    /'

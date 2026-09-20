@@ -4343,7 +4343,7 @@ def capture_dataset(
     *,
     start: str,
     end: str,
-    output_root: str | Path = "benchmarks/aihot",
+    output_root: str | Path = "data/aihot-reference",
     fill_missing: bool = False,
     resilient: bool = False,
 ) -> CaptureResult:

@@ -198,7 +198,7 @@ web/templates/          # Jinja2 SSR 页面模板（目录在仓库根 web/，�
 └── _wechat_inline_style.css # /wechat 内联进 SSR HTML 的样式（无 ?v= 可 bump）
 ```
 
-AIHOT benchmark 的代码/数据边界跨两个 Git 仓。主仓拥有 `scripts/capture_aihot_dataset.py`、`src/airadar/eval/aihot_dataset.py`、冻结 schema 与 synthetic tests；`benchmarks/aihot` 是 private submodule，gitlink 固定一个已远端发布的数据 commit。data 仓拥有 capture manifest、两遍 API raw、SSR raw、window manifest 与 JSONL，因此离线 replay/validate/slice 不依赖 7 天 live retention 后仍能访问 AIHOT。主仓 tree 不承载任何 AIHOT raw、JSONL、标题或 URL blob。
+AIHOT 原始参照的代码/数据边界跨两个 Git 仓。主仓拥有 `scripts/capture_aihot_dataset.py`、`src/airadar/eval/aihot_dataset.py`、冻结 schema 与 synthetic tests；`data/aihot-reference` 是 private submodule，gitlink 固定一个已远端发布的数据 commit（submodule section 名保留 `benchmarks/aihot`，不代表物理目录）。data 仓拥有 capture manifest、两遍 API raw、SSR raw、window manifest 与 JSONL，因此离线 replay/validate/slice 不依赖 7 天 live retention 后仍能访问 AIHOT。主仓 tree 不承载任何 AIHOT raw、JSONL、标题或 URL blob；当前四对象题库另存外部 benchmark 根，位置见[评测资产说明](evaluations/assets.md)。
 
 Capture 以采集时刻的 public API/RSS/OpenAPI/SSR surface 为 baseline。连续两遍相邻 API pass 的两个正式 UTC 日 target hashes 一致，才接受 canonical pass 并发布 window；这只排除同次采集内的 transient drift，不声称可见 public surface 等于 AIHOT 内部 snapshot、筛选、标签或排序 authority。发布顺序固定为 data local commit → 经授权 push exact data SHA → 主仓 gitlink commit；data push、远端设置、主仓 push与主分支整合是彼此独立的授权边界。
 
@@ -613,7 +613,7 @@ tier 乘数已于 2026-09-06 取消（[ADR-20260906-7c31](adr/20260906-7c31-rank
 |---|---|
 | 添加或暂停信源 | 更新 `tests/fixtures/aihot_sources.json` v2 机器契约并用 renderer 生成 `data/sources.toml`；每行显式 boolean `enabled`/`paused`，fetchable 为两者的 `enabled AND NOT paused`；当前 WeChat 主动入口是 `wx_wechat2rss`，paused `wx_mp2rss` 仍参与历史可见与跨源去重。后台发现候选账号在 `data/wechat-discovery.toml`，不得把凭据写入该文件 |
 | 维护 AIHOT 对齐信源 | `tests/fixtures/aihot_sources.json` + README「信源维护与验证」四个命令；稳定 identity/aliases、retirement ledger、解析器/规则、公开投影和收据必须同步，不能只改 TOML |
-| 采集或消费 AIHOT 私有基准 | `scripts/capture_aihot_dataset.py` + `src/airadar/eval/aihot_dataset.py` + `src/airadar/eval/schemas/aihot-item-v1.schema.json` + private submodule `benchmarks/aihot`；先核对 gitlink/tool/schema identity，再离线 validate/slice |
+| 采集或消费 AIHOT 私有参照 | `scripts/capture_aihot_dataset.py` + `src/airadar/eval/aihot_dataset.py` + `src/airadar/eval/schemas/aihot-item-v1.schema.json` + private submodule `data/aihot-reference`；先核对 gitlink/tool/schema identity，再离线 validate/slice |
 | 添加原始 Web/API 信源 | `src/airadar/fetcher/web.py` 登记确定性 fetch/item 边界与 parser + 正反 fixture + 真实 `audit_non_x_retrieval.py` 收据 |
 | 调整微信发现候选 | `wechat_discovery/`、`data/wechat-discovery.toml`、[ADR-024](adr/024-shadow-wechat-admin-discovery-before-mp2rss-cutover.md) 至 [ADR-032](adr/032-reject-duplicate-urls-before-wechat-shadow-comparison.md)、[ADR-040](adr/040-verify-provisional-searchbiz-mapping-with-article-url-biz.md)、[ADR-041](adr/041-version-wechat-discovery-invariant-hardening.md)、[摄取 runbook](operations/wechat-ingestion.md) |
 | 调整微信读书只读 canary | `scripts/wechat_weread_canary/`、[ADR-033](adr/033-version-weread-canary-shelf-request-evidence.md) 至 [ADR-038](adr/038-observe-weread-dynamic-header-presence-without-replay.md)、[摄取 runbook](operations/wechat-ingestion.md) |

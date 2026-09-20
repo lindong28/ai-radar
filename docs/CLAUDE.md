@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260920-8f31](adr/20260920-8f31-separate-evaluation-assets-from-reference-archives.md)：原始参照、历史运行与当前入口分离，保留冻结字节和路径解析。
+
 [20260920-3b8a](adr/20260920-3b8a-test-prefilter-without-extra-context.md)：无引用候选及依赖消融；用户取消后续预算上限，不自动部署。
 
 [20260920-cc16](adr/20260920-cc16-compare-prefilter-model-with-fixed-input.md)：固定C10及原输入，仅比较Pro/Flash的离线准入读数，不自动部署。

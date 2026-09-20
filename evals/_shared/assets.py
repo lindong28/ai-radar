@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .relocations import resolve_asset_path
+
 BENCHMARKS = {
     "news-admission": "aihot-all-members",
     "visible-score": "aihot-visible-score",
@@ -48,16 +50,16 @@ def digest(value: Any) -> str:
 
 
 def file_digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(resolve_asset_path(path.absolute()).read_bytes()).hexdigest()
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text())
+    return json.loads(resolve_asset_path(path.absolute()).read_text())
 
 
 def read_jsonl(path: Path) -> list[dict]:
     # JSONL records end at physical newlines, not Unicode prose separators.
-    with path.open(encoding="utf-8") as stream:
+    with resolve_asset_path(path.absolute()).open(encoding="utf-8") as stream:
         return [json.loads(line) for line in stream if line.strip()]
 
 
@@ -94,7 +96,7 @@ def code_identity(root: Path = ROOT, *, inference: bool = False) -> dict:
 
 
 def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict]]:
-    path = path.resolve()
+    path = resolve_asset_path(path.absolute())
     manifest = read_json(path / "manifest.json")
     selected = manifest["target"]
     if (selected, manifest["benchmark"]) not in benchmark_pairs():
@@ -121,8 +123,8 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
         candidate = (path / name).resolve()
         if not candidate.is_relative_to(path) or file_digest(candidate) != expected:
             raise ValueError(f"dataset integrity mismatch: {name}")
-    evidence = (Path(manifest["shared_evidence"]) if schema == 1 else
-                path / manifest["shared_evidence"]).resolve()
+    evidence = resolve_asset_path(Path(manifest["shared_evidence"]) if schema == 1 else
+                                  path / manifest["shared_evidence"])
     for name, expected in manifest["evidence_files"].items():
         candidate = (evidence / name).resolve()
         if not candidate.is_relative_to(evidence.resolve()) or file_digest(candidate) != expected:
@@ -202,19 +204,30 @@ def archive_metrics(root: Path, run: Path, experiment: Path, result: dict, metad
 def rebuild_index(root: Path = ROOT) -> list[dict]:
     """Rebuildable projection. Atomic replace does not modify historical leaves."""
     rows = []
+    root = root.resolve()
+    seen = set()
     for target, benchmark in benchmark_pairs():
-        for path in sorted((root / "experiments" / target / benchmark).glob("*/*/*/metrics/summary.json")):
+        leaves = [path for base in (root / "experiments", root / "data/evaluation-archive/experiments")
+                  for path in (base / target / benchmark).glob("*/*/*/metrics/summary.json")]
+        for path in sorted(leaves):
             for row in read_json(path):
                 if row["target_slug"] != target or row["benchmark_name"] != benchmark:
                     raise ValueError(f"misfiled query row: {path}")
-                value = read_json(root / row["source"])
+                source = resolve_asset_path(Path(row["source"]), root=root)
+                metadata = resolve_asset_path(Path(row["metadata"]), root=root)
+                value = read_json(source)
                 for key in row["pointer"]:
                     value = value[key]
                 if value != row["metric_value"]:
                     raise ValueError(f"query projection drift: {path}")
-                if not (root / row["metadata"]).is_file():
+                if not metadata.is_file():
                     raise ValueError(f"missing run metadata: {path}")
-                rows.append(row)
+                key = (row["run_id"], row["task"], row["metric_name"])
+                if key in seen:
+                    raise ValueError(f"duplicate query row: {path}")
+                seen.add(key)
+                rows.append({**row, "source": str(source.relative_to(root)),
+                             "metadata": str(metadata.relative_to(root))})
     destination = root / "experiments/metrics/summary.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     import tempfile
