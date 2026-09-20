@@ -83,10 +83,12 @@ def execute(dataset, root, answer, *, captured=None, **kwargs):
                                label="fixture", mode="direct", workers=2, root=root, **kwargs)
 
 
-@pytest.mark.parametrize("mode", ["dimensions", "direct", "semantic"])
+@pytest.mark.parametrize("mode", ["dimensions", "direct", "semantic", "five"])
 def test_real_runner_persists_exact_prompts_responses_identity_and_mae(dataset, tmp_path, mode):
     captured = []
     def answer(key):
+        if mode == "five":
+            return {"reason": f"source evidence {key}", **dict.fromkeys(score_eval.FIVE_WEIGHTS, int(key))}
         if mode == "semantic":
             return {"reason": f"source evidence {key}", **{
                 field: {"reason": f"{field} evidence", "score": int(key)}

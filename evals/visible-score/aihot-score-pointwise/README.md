@@ -30,6 +30,16 @@ PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluat
 
 模型输入只取case.input的原始字段白名单，正文仍最多5000字符，不读取reference/provenance。原件归 `runs/visible-score/aihot-score-pointwise/<version>/<UTC-date>/<UTC-time>/`：started/config/prompt/cases/prompts、items、predictions、attempts及scores；元数据和metrics/summary归同结构 `experiments/`。逐题reason、原始响应和实际请求保留，费用未知不归零。不得写回题库；新v2等版本可使用同命令，不写死本轮题数。
 
+## 作者结构启发的五维候选
+
+`--mode five` 对应2026-09-21的离线研究：一次LLM调用先输出 `reason`，然后输出 `impact / novelty / substance / authority / relevance` 五个0–10整数，由[纯函数](../../../src/airadar/scorer/five.py)计算 `floor(sum(weight_percent * dimension) / 10 + 0.5)`。默认权重35/20/25/10/10；可在config的 `five_weights` 给出恰好这五个键、有限非负且合计100的百分比。错误权重在模型调用前拒绝；有效权重进入对象身份，变化后不能借 `--reuse` 复用旧对象。没有截距、后置校准、来源乘数或排名池。字段名称及精确权重是本项目的可检验假设，不是作者公开的五维定义；出处和研究边界见[52af](../../../docs/adr/20260921-52af-test-author-inspired-five-dimension-scores.md)。
+
+```bash
+PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-ark.json --env-file .env --prompt evals/visible-score/prompts/five-news-value-v2.json --mode five --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label A2-five-dev200
+```
+
+`five-pro.json`配置只用于模型对照，不是生产默认。带示例的研究prompt包含其它开发题的原文/参考输出，保存在对应run的 `prompt.json`，不将样本复制进git或当前待测题输入；复现可直接以该文件作为 `--prompt`。扩题或选择新回归时必须同时排除示例及调参题的同源材料，不只排除run中的200个case IDs。示例集、选择规则和曝光核验随研究support保存。当前质量及全部实验位置见[status](../../../docs/evaluations/visible-score/status.md)，新增运行仍需使用冻结版本和明确题集用途。
+
 ## 三维语义候选
 
 判断标准、权重及与旧六维的区别见[设计](../../../docs/evaluations/visible-score/semantic-design.md)。一次调用按影响、信息增量、实质支撑分别输出 `{"reason": "…", "score": 0}`，每维分数为0–10整数；顶层先给总理由，再给三维对象。`--mode semantic` 用代码计算 `5*impact + 3*information_gain + 2*evidence`，不使用校准、来源系数或排名池。

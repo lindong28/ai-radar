@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260921-52af](adr/20260921-52af-test-author-inspired-five-dimension-scores.md)：五维语义假设、代码组合与MAE<3离线研究。
+
 [20260920-8f31](adr/20260920-8f31-separate-evaluation-assets-from-reference-archives.md)：原始参照、历史运行与当前入口分离，保留冻结字节和路径解析。
 
 [20260920-3b8a](adr/20260920-3b8a-test-prefilter-without-extra-context.md)：无引用候选及依赖消融；用户取消后续预算上限，不自动部署。

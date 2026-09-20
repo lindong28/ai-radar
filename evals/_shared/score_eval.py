@@ -13,6 +13,7 @@ from jinja2 import StrictUndefined, Template
 from airadar.curator.score import weighted_score
 from airadar.curator.weights import DEFAULT_WEIGHTS, DIMENSIONS
 from airadar.provider.judgment import require_reason_first
+from airadar.scorer.five import FIVE_WEIGHTS, five_score, validated_weights
 from airadar.scorer.semantic import SEMANTIC_WEIGHTS, semantic_score
 
 from .assets import (
@@ -44,12 +45,14 @@ def prompt_context(raw: dict) -> dict:
     return {"item": _item(raw)}
 
 
-def project_score(payload: dict, mode: str, tier: str) -> dict:
+def project_score(payload: dict, mode: str, tier: str, five_weights: dict | None = None) -> dict:
     """Validate the model's emitted order and values before any score mapping."""
     if mode == "semantic":
         return {"score": semantic_score(payload)}
+    if mode == "five":
+        return {"score": five_score(payload, five_weights)}
     if mode not in {"dimensions", "direct"}:
-        raise ValueError("mode must be dimensions, direct or semantic")
+        raise ValueError("mode must be dimensions, direct, semantic or five")
     require_reason_first(payload, "relevance" if mode == "dimensions" else "score")
     fields = DIMENSIONS if mode == "dimensions" else ("score",)
     ceiling = 10 if mode == "dimensions" else 100
@@ -83,6 +86,12 @@ def object_identity(config: dict, prompt: dict, mode: str) -> dict:
         mapping = {"function": "sum(coefficient * dimension_score)",
                    "coefficients": SEMANTIC_WEIGHTS, "dimension_domain": "integer-0..10",
                    "output_domain": "integer-0..100", "ranking_pool": False}
+    elif mode == "five":
+        paths += ("src/airadar/scorer/five.py",)
+        mapping = {"function": "Math.round(sum(percent * dimension_score) / 10)",
+                   "weights_percent": validated_weights(config.get("five_weights", FIVE_WEIGHTS)),
+                   "dimension_domain": "integer-0..10", "output_domain": "integer-0..100",
+                   "ranking_pool": False}
     return {
         "surface": "ordinary-nonfeatured-visible-score", "mode": mode,
         "prompt": prompt, "prompt_contract": "model-emitted-reason-first",
@@ -100,8 +109,11 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
              exclude_runs: tuple[Path, ...] = ()) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
-    if mode not in {"dimensions", "direct", "semantic"}:
-        raise ValueError("mode must be dimensions, direct or semantic")
+    if mode not in {"dimensions", "direct", "semantic", "five"}:
+        raise ValueError("mode must be dimensions, direct, semantic or five")
+    five_weights = validated_weights(config.get("five_weights")) if mode == "five" else None
+    if mode != "five" and "five_weights" in config:
+        raise ValueError("five_weights is only supported in five mode")
     if not isinstance(prompt, dict) or set(prompt) != {"system", "user_template"} or not all(
         isinstance(value, str) and value.strip() for value in prompt.values()
     ):
@@ -154,7 +166,7 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
                 if row["status"] == "ok":
                     # Do not trust an edited success row without revalidating its response.
                     payload = json.loads(row["response_json"])
-                    if row["output"] != project_score(payload, mode, case["input"]["tier"]):
+                    if row["output"] != project_score(payload, mode, case["input"]["tier"], five_weights):
                         raise ValueError("reuse output mapping mismatch")
                     if row["prompt"] != prompts.get(case["case_id"]):
                         raise ValueError("reuse rendered prompt mismatch")
@@ -205,7 +217,7 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
                     row["raw"] = row["response_json"]
                 if isinstance(payload, dict) and isinstance(payload.get("reason"), str):
                     row["reason"] = payload["reason"]
-                row["output"] = project_score(payload, mode, case["input"]["tier"])
+                row["output"] = project_score(payload, mode, case["input"]["tier"], five_weights)
                 row["status"] = "ok"
             except Exception as exc:
                 row["error"] = preparation_errors.get(key, type(exc).__name__)
@@ -246,7 +258,7 @@ def main(argv=None) -> int:
     run.add_argument("--dataset", type=Path, required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--prompt", type=Path, required=True)
-    run.add_argument("--mode", choices=["dimensions", "direct", "semantic"], default="dimensions")
+    run.add_argument("--mode", choices=["dimensions", "direct", "semantic", "five"], default="dimensions")
     run.add_argument("--env-file", type=Path)
     run.add_argument("--split", choices=["dev", "regression"], required=True)
     run.add_argument("--limit", type=int)
