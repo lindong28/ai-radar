@@ -5,7 +5,17 @@ import argparse
 from pathlib import Path
 
 from evals._shared.admission_policy import apply_policy
-from evals._shared.assets import ROOT, digest, file_digest, load_dataset, read_json, read_jsonl, write_json, write_jsonl
+from evals._shared.assets import (
+    ROOT,
+    digest,
+    file_digest,
+    load_dataset,
+    read_json,
+    read_jsonl,
+    rebuild_index,
+    write_json,
+    write_jsonl,
+)
 from evals._shared.cli import transport_factory
 from evals._shared.human_labels import apply_labels, load_annotations
 from evals._shared.human_store import read_reviews
@@ -75,6 +85,7 @@ def main() -> None:
                       exclude_runs=exclusions, benchmark=source["benchmark"], reuse=args.reuse)
     run = Path(result["run"])
     summary = summarize(run, args.reviews, args.batch_id)
+    rebuild_index()
     print({"run": str(run), "complete": result["complete"],
            "human_priority": {k: v["human_priority"]["metrics"] for k, v in summary["views"].items()}})
     if not result["complete"]:

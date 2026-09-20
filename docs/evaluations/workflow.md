@@ -8,6 +8,8 @@
 
 O1 当前采用 [aihot-observed-membership](news-admission/aihot-observed-membership/v1/README.md)：建题 CLI 与 `build()` 默认采用该契约，文档命令仍显式指定以便复现，运行其同名 evaluate.py。只有显式指定 `--admission-benchmark aihot-prefilter` 才构建旧 ±12h 契约。`admission_rescore` 可按实际输入完全相等复用旧响应，保留旧对象身份与失败；这类结果仅为测量迁移诊断，不算模型优化或未见回归。
 
+已测试准入候选无需再次调用模型即可应用新增人评：运行 `PYTHONPATH=src:. uv run python -m evals._shared.cli index`，然后读取 `experiments/metrics/summary.json` 或该轮 `metrics/current.json`，按 `label_policy`、`prediction_view`、人评覆盖数与 source/pointer 判读。`compare` 也使用当前人评优先口径。原 `scores.json` 及叶子 `metrics/summary.json` 仅供历史追溯；[完整字段与操作](human-labels.md#当前指标查询与历史补评分)。
+
 先按[按对象判断数据充分性](benchmarks/object-datasets.md#data-sufficiency)确定给定时间段的数据足够哪些用途。采集 coverage 用于定位过程缺口，不是四对象统一入题门；恢复、补采的实际内容及其证据决定可用范围。
 
 执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、带时区 raw 时间范围和不可覆盖的新 vN。O2/O3 可显式用 `--aihot-inputs` 接入 AIHOT 原标题与绑定原文；O1 不补这种仅有正例的数据。O4 全池规则继续要求连续完整候选组；`aihot-featured-threshold` 仅作局部用途。逐 benchmark 的题集/字段和代码入口由[对象索引](README.md)定位。O1 的独立模型运行、抽样、恢复和归档命令见 [prefilter 执行入口](../../evals/news-admission/aihot-observed-membership/README.md)；其余新叶子 CLI 仍仅做 validate，已有预测可用共享 metrics.score API。不接下文旧全池 run，不将建题命令与旧运行命令直接串接。

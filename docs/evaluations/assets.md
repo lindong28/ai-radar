@@ -58,7 +58,7 @@ support 容器的 `directory_time_source=migration_plan_created` 说明目录时
 | --- | --- |
 | 评测题（输入集） | `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<benchmark>/vN/`；build 生成 cases/manifest，input/reference 分离；紧凑原始证据由本批首个目标持有，其它叶子通过 shared_evidence 与摘要引用；迁移版自带必需证据 |
 | 逐题输出 | 项目根 `runs/<target>/<benchmark>/<version>/<UTC-date>/<UTC-time>/`；共享 pool 原件只存一份，其他对象记录引用；predict 失败也有状态 |
-| 自动指标数值 | runs 的 scores.json 为数值源；`experiments/` 同分区存 metadata 和 metrics/summary.json；跨 benchmark 总表为 `experiments/metrics/summary.json`，可重建 |
+| 自动指标数值 | runs 的 scores.json 与实验叶子的 metrics/summary.json 保存原始成绩；新闻准入当前查询用叶子 metrics/current.json 与跨 benchmark 的 `experiments/metrics/summary.json`，source/pointer 指向追加的人评优先补评分；[口径与重建](human-labels.md#当前指标查询与历史补评分) |
 | 人评结果 | 项目根 `human-evals/`；材料、用户原票、确认 SHA、校准结果；无票时明确为零，不以 agent 代评补位 |
 | 判官原始判词与调用日志 | 文本轮 runs 的 judgments 与 attempts；请求发出前创建 attempt，响应先保留 raw/usage 再解码；失败/未知费用不归零 |
 | 归因记录 | [hypotheses.md](experiments/hypotheses.md)，一条因果命题一行，不把猜测写成已证实 |

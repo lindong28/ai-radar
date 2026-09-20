@@ -203,13 +203,18 @@ def archive_metrics(root: Path, run: Path, experiment: Path, result: dict, metad
 
 def rebuild_index(root: Path = ROOT) -> list[dict]:
     """Rebuildable projection. Atomic replace does not modify historical leaves."""
+    from .human_metrics import current_rows, review_snapshot
+
     rows = []
     root = root.resolve()
+    book = review_snapshot(root)
+    current = []
     seen = set()
     for target, benchmark in benchmark_pairs():
         leaves = [path for base in (root / "experiments", root / "data/evaluation-archive/experiments")
                   for path in (base / target / benchmark).glob("*/*/*/metrics/summary.json")]
         for path in sorted(leaves):
+            original_rows = []
             for row in read_json(path):
                 if row["target_slug"] != target or row["benchmark_name"] != benchmark:
                     raise ValueError(f"misfiled query row: {path}")
@@ -222,17 +227,29 @@ def rebuild_index(root: Path = ROOT) -> list[dict]:
                     raise ValueError(f"query projection drift: {path}")
                 if not metadata.is_file():
                     raise ValueError(f"missing run metadata: {path}")
-                key = (row["run_id"], row["task"], row["metric_name"])
+                original_rows.append({**row, "source": str(source.relative_to(root)),
+                                      "metadata": str(metadata.relative_to(root))})
+            projected = current_rows(root, path.parent.parent, original_rows, book)
+            current.append((path.with_name('current.json'), projected))
+            for row in projected:
+                key = (row["run_id"], row.get("prediction_view", "archived"), row["task"], row["metric_name"])
                 if key in seen:
                     raise ValueError(f"duplicate query row: {path}")
                 seen.add(key)
-                rows.append({**row, "source": str(source.relative_to(root)),
-                             "metadata": str(metadata.relative_to(root))})
+                rows.append(row)
+    # Validate every leaf before publishing any current query view.
+    for destination, projected in current:
+        replace_json(destination, projected)
     destination = root / "experiments/metrics/summary.json"
+    replace_json(destination, rows)
+    return rows
+
+
+def replace_json(destination: Path, value: Any) -> None:
+    """Atomic replacement only for explicitly rebuildable query projections."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     import tempfile
     with tempfile.NamedTemporaryFile(mode="w", dir=destination.parent, encoding="utf-8", delete=False) as stream:
-        json.dump(rows, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
         temporary = Path(stream.name)
     temporary.replace(destination)
-    return rows

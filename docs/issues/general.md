@@ -4,6 +4,10 @@
 
 ---
 
+## 2026-09-20 旧全池准入入口与人评当前索引兼容
+
+Open · MEDIUM · owner：评测维护。独立代码审查发现，旧 `runner.evaluate` 的 `aihot-all-members` 路径只保存 input.json、不冻结 run/cases.jsonl；存在准入人评库时，新 current_rows 会要求该文件，因而再次运行旧入口将在最终重建索引时报错。当前实际88个运行仅有 observed-membership 50个、prefilter 38个，没有这种旧叶子，本次重评分不受影响。没有为了兼容已清退旧实验而补造题目或重跑模型；未来若恢复旧全池执行入口，先补其真实案例冻结/读取契约并验证 index。此项是本轮增量兼容边界，不是当前题库不可用的断言。
+
 **迁出记录 2026-09-05**：用户点名的「interpret 的 selector 收据与 domain-routing 策略之间存在写入竞态」在本分支基线中尚无条目；本轮已补录完整事实并直接按终态生命周期写入 [`archive/closed.md`](archive/closed.md)，未把已闭合事项留在 open 清单。
 
 ## 2026-09-09 出网边界改写：一次对抗审查提出、本轮**未处置**的几条

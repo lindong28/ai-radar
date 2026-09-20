@@ -74,7 +74,32 @@ PYTHONPATH=src:. uv run python -m evals._shared.human_labels apply \
   --output /path/to/new-human-priority-view
 ```
 
-输出是 **human-priority 计分视图，不是原 `aihot-observed-membership` 的下一版本**；消费者语义不同，不冒充纯 AIHOT 收录 benchmark。共享 `apply_labels` 支持表中四对象的参考字段；当前网页导入器仅解析这次 prefilter export，其他对象收到实际人评时须按其票型接入，不能把文本候选质量票强转成参考值。此命令不会改历史 load_dataset、自动建题脚本或生产。后续 session 必须显式完成上述应用步骤；需注册可直接模型运行的新 benchmark 时，沿既有契约分区另建，不偷换旧 benchmark 的默认语义。
+输出是 **human-priority 计分视图，不是原 `aihot-observed-membership` 的下一版本**；消费者语义不同，不冒充纯 AIHOT 收录 benchmark。共享 `apply_labels` 支持表中四对象的参考字段；当前网页导入器仅解析这次 prefilter export，其他对象收到实际人评时须按其票型接入，不能把文本候选质量票强转成参考值。此命令不会改历史 load_dataset、自动建题脚本或生产。后续 session 必须显式完成上述应用步骤；需注册可直接模型运行的新 benchmark 时，沿既有契约分区另建。2026-09-20 用户另行授权历史指标查询默认采用明确标识的人评计分视图，具体如下；原 benchmark 的输入契约与观测标签不变。
+
+### 当前指标查询与历史补评分
+
+新闻准入默认查询采用 `human-reference-priority-v1`。原 `runs/<run_id>/scores.json` 和 `experiments/<run_id>/metrics/summary.json` 永远是当时的原始评分记录，**不再是默认选型入口**。它们保留用于追溯、判断标签修正与逻辑改动各自的影响；历史原值不是错误数据，但将其不加说明地当成人评优先成绩是错误用法。
+
+```bash
+PYTHONPATH=src:. uv run python -m evals._shared.cli index
+```
+
+此命令零模型调用：读取每轮冻结案例、预测和当前全部人评批次，重用 `apply_labels` 与 `metrics.score`；失败题不丢弃，覆盖不到的案例不改标签。它追加 `experiments/<run_id>/metrics/human-priority-<identity>.json`，更新同目录 `current.json` 及总表 `experiments/metrics/summary.json`。重复执行在身份不变时不生成新补评分文件。原输入、预测、分数和人评票均不改写；未知输入、冲突票或原件不一致报错，全部叶子验证结束前不发布新查询总表。
+
+| 当前查询字段 / 补评分字段 | 语义 |
+| --- | --- |
+| `label_policy` | 当前有效参考策略，避免与原 AIHOT 口径混淆 |
+| `prediction_view` | `archived` 为该 run 原本的预测（可能已经是规则组合，须结合 metadata）；`with_existing_policy` 为同 run 已保存的规则预测，不新跑规则或模型 |
+| `human_case_count` / `changed_field_count` | 该 run 人评覆盖题数 / 实际改变的参考字段数；0 表示未覆盖，不是全题人工复核 |
+| `source` / `pointer` | 当前数值的实际补评分文件与 JSON 路径；必须沿它回读，不再假定源一定叫 scores.json |
+| `observed_source` / `observed_pointer` | 同预测视图的原 AIHOT 评分定位；policy 附加视图指向 `human-feedback-scores.json` 中的原规则成绩，不误指纯模型分数 |
+| `effective_cases_digest` | 当前有效案例结构化摘要，比较时须一致 |
+| 补评分 `identity` | 原 cases/predictions/metadata/scores SHA、有效案例摘要、人评批次 ID/SHA、实际 prediction view 及文件 SHA、标签应用/输入身份/计分/投影实现摘要 |
+| 补评分 `views.<view>.scores` / `.human_only` | 全部案例的当前成绩 / 明确人评子集成绩；后者为定向错误样本，不代表总体分布 |
+
+实现位于 `evals/_shared/human_metrics.py`，既有 `assets.rebuild_index` 和 `runner.compare` 共用它；compare 对原 run 的 archived 预测按同一批人评再计分，不拿附加 policy 视图冒充另一轮。新的人评解释候选运行完成后自动刷新总表；其它对象的查询语义不由这次新闻准入修正改变。查全表时按 `(run_id, prediction_view, task, metric_name)` 区分行，不把模型/规则两种结果重复计为不同题目。
+
+补评分是同一历史运行的新测量，不创建伪造的模型 run。新增人评后重新执行 index 即扩展当前视图，旧补评分文件仍可复现；人评库缺失而已有补评分记录时拒绝退回旧口径。最新候选比较见[新闻准入状态](news-admission/status.md#当前查询口径全部历史候选应用明确人评优先)。
 
 计分视图 `manifest.json` 的 `batches[]` 对每个实际采用的人评批次记录 `path`、`batch_id`、`sha256`；摘要绑定该批内容，不绑定会随追加变化的整个容器。复现历史视图时，在同一个 `--batch reviews.json` 后按 manifest 增加一个或多个 `--batch-id <id>`，并核对所选批次的 `sha256`；不传选择器代表读取当前全部批次，可能得到更新后的计分口径。`load_annotations(path, batch_ids=[...])` 提供同样的代码入口，未知批次报错；旧 manifest 目录继续使用原 manifest SHA。
 
@@ -108,7 +133,7 @@ PYTHONPATH=src:. uv run python scripts/eval/run_prefilter_human_feedback.py \
 
 该命令会产生付费请求，不是零调用重评分。重放源 run 的 dataset、split、seed、limit、排除记录，并在发请求前核对完整题目身份及人评适用性；无法原样重现即停止。原 run 与人评库只读。新批次可重复传 `--batch-id`，日期/批次不依赖目录解析；若只想应用标签，仍用上文零调用 `human_labels apply`。失败恢复加 `--reuse <该候选的失败run>`，只有题目/对象身份一致的成功结果可复用，不把不同 prompt 的预测混入。
 
-新 run 附加 `human-effective-cases.jsonl`、`policy-predictions.jsonl`、`human-feedback-scores.json`：后者 `views.model_only/with_existing_policy` 各含 `observed/human_priority/human_only` 三套分数，分别表示原 AIHOT、明确人评优先、仅明确人评子集。元数据绑定选中批次ID/SHA及输入、预测、effective cases、policy predictions SHA。早于本轮脚本补齐摘要字段的08-10/08-12/08-16/08-22原件不改写，其补充SHA在本轮 `comparison.json`。标准 `scores.json` 与机器总表仍保留原AIHOT口径，不能把两种参考分数混在一列。
+新 run 附加 `human-effective-cases.jsonl`、`policy-predictions.jsonl`、`human-feedback-scores.json`：后者 `views.model_only/with_existing_policy` 各含 `observed/human_priority/human_only` 三套分数，分别表示原 AIHOT、明确人评优先、仅明确人评子集。元数据绑定选中批次ID/SHA及输入、预测、effective cases、policy predictions SHA。早于本轮脚本补齐摘要字段的08-10/08-12/08-16/08-22原件不改写，其补充SHA在本轮 `comparison.json`。标准 `scores.json` 保留原AIHOT口径；**机器总表已改为上述人评优先当前视图**，原 sidecar 保留当时所选批次，后续追加票以最新补评分为准。
 
 模型实际 `reason` 位于 `predictions.jsonl → stage_results.prefilter.output.reason`；原始内容和实际 prompt 在 `attempts/`。生产模块保存到 `item_evaluations.output_json.reason`，原 numeric 字段维持兼容；启发式 fallback 明确标为规则说明，不伪装成 LLM 理由。当前内容富化文本判官 `evals/_shared/judge.py` 返回 `reason`，不再只投影为 `rationale`。缺失/空理由或解析字段顺序错误记 error，不补造；生产批处理保留出错 payload 并继续处理其它题。
 

@@ -210,6 +210,9 @@ def evaluate(primary: Path, *, config: dict, chat_factory, root: Path = ROOT, sm
 
 def compare(baseline: Path, candidate: Path, *, root: Path = ROOT) -> dict:
     """No aggregate substitute for individual metrics; untrusted values cannot win."""
+    from .human_metrics import current_rows, review_snapshot
+
+    book = review_snapshot(root)
     left, right = read_json(baseline / "metadata.json"), read_json(candidate / "metadata.json")
     for key in ("target", "benchmark", "version", "case_identity", "split", "scorer_identity"):
         if left[key] != right[key]:
@@ -227,10 +230,13 @@ def compare(baseline: Path, candidate: Path, *, root: Path = ROOT) -> dict:
             observed = source["metrics"][row["metric_name"]]
             if observed["value"] != row["metric_value"] or observed["status"] != row["status"]:
                 raise ValueError("metric projection integrity mismatch with original scorer")
-        return rows
+        return [r for r in current_rows(root, directory, rows, book)
+                if r.get('prediction_view', 'archived') == 'archived']
 
     a = verified_rows(baseline)
     b = {v["metric_name"]: v for v in verified_rows(candidate)}
+    if any(r.get('effective_cases_digest') != b[r['metric_name']].get('effective_cases_digest') for r in a):
+        raise ValueError('comparison effective case identity differs')
     definitions = read_json(root / "evals" / left["target"] / left["benchmark"] / "metrics.json")
     directions = {d["metric_name"]: d["direction"] for d in definitions["metrics"]}
     improved, regressed, unknown = [], [], []
@@ -251,4 +257,5 @@ def compare(baseline: Path, candidate: Path, *, root: Path = ROOT) -> dict:
         differences.append({"metric": name, "baseline": row["metric_value"], "candidate": other["metric_value"], "delta": delta})
     accepted = bool(improved) and not regressed and not unknown and left["status"] == right["status"] == "complete"
     return {"accepted": accepted, "improved": improved, "regressed": regressed, "untrusted_or_missing": unknown,
-            "differences": differences, "claim": "same cases, individual metrics; not significance or overall parity"}
+            "differences": differences, "label_policy": a[0].get('label_policy', 'original-reference'),
+            "claim": "same cases, individual metrics; not significance or overall parity"}
