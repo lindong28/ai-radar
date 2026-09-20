@@ -43,7 +43,7 @@ schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefil
 
 ## 当前独立评分入口（2026-09-20）
 
-O2 的 schema 2 逐条评分、reason-first 原始响应归档、MAE 与零调用校准已接通；本轮使用固定开发200题和回归200题，不是全量3,475题。当前结果、候选及生产边界见 [visible-score/status](visible-score/status.md)，复用命令见[执行入口](../../evals/visible-score/aihot-score-pointwise/README.md)。
+O2 的 schema 2 逐条评分、reason-first 原始响应归档、MAE/Spearman与零调用指标补算已接通；当前方向为作者结构启发的五维语义研究，历史校准仅保留为对照。已有固定开发200、历史回归200及最新回归100等不同题集，不是全量3,475题。当前结果、候选及生产边界见 [visible-score/status](visible-score/status.md)，复用命令见[执行入口](../../evals/visible-score/aihot-score-pointwise/README.md)。
 
 ## 历史共享池实施进度（2026-09-17）
 

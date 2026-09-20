@@ -43,6 +43,35 @@ def _metric(value, denominator: int, reason: str = "", *, trusted: bool = True) 
     }
 
 
+def _average_ranks(values: list[float]) -> list[float]:
+    """Rank ascending from one, assigning tied values their mean rank."""
+    ordered = sorted(range(len(values)), key=values.__getitem__)
+    ranks = [0.0] * len(values)
+    start = 0
+    while start < len(ordered):
+        end = start + 1
+        while end < len(ordered) and values[ordered[end]] == values[ordered[start]]:
+            end += 1
+        for index in ordered[start:end]:
+            ranks[index] = (start + 1 + end) / 2
+        start = end
+    return ranks
+
+
+def spearman(pairs: list[tuple[float, float]]) -> float | None:
+    """Pearson correlation of average ranks; undefined for n < 2 or constants."""
+    if len(pairs) < 2:
+        return None
+    left, right = (_average_ranks(list(values)) for values in zip(*pairs))
+    center = (len(pairs) + 1) / 2
+    left = [value - center for value in left]
+    right = [value - center for value in right]
+    denominator = math.sqrt(sum(value * value for value in left) * sum(value * value for value in right))
+    if denominator == 0:
+        return None
+    return max(-1.0, min(1.0, sum(a * b for a, b in zip(left, right)) / denominator))
+
+
 def score(
     target: str,
     cases: list[dict],
@@ -149,18 +178,25 @@ def score(
     elif target == "O2":
         eligible = [case for case in cases if case["input"] is not None and "score" in case["reference"]]
         errors = []
+        pairs = []
         for case in eligible:
             value, valid = candidate(case, "score")
             error = abs(value - case["reference"]["score"]) if valid else None
             traces[case["case_id"]]["fields"]["score"] = {"absolute_error": error, "prediction": value}
             if valid:
                 errors.append(error)
+                pairs.append((value, case["reference"]["score"]))
         complete = bool(eligible) and len(errors) == len(eligible)
         metrics["mae"] = _metric(
             sum(errors) / len(eligible) if complete else None,
             len(eligible),
             "" if complete else "no eligible cases" if not eligible else "incomplete predictions",
         )
+        correlation = spearman(pairs) if complete else None
+        reason = metrics["mae"]["reason"]
+        if complete and correlation is None:
+            reason = "fewer than two eligible cases" if len(eligible) < 2 else "constant reference or prediction scores"
+        metrics["spearman"] = _metric(correlation, len(eligible), reason)
     else:
         any_eligible = False
         for field in fields:

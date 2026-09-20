@@ -15,10 +15,10 @@
 | ① 优化对象 | reason-first 六维 scorer＋固定普通展示公式为历史基线；2026-09-21 起[优先研究作者公开的五维判断＋代码组合机制](status.md#当前方向作者公开机制优先)。`--mode five`、五维校验及显式百分比组合已实现并用于离线实验；具体维度/公式仍是研究假设，不冒充原作者定义。已测[三维语义候选](semantic-design.md)、直接总分与数值校准仅保留为历史对照；生产未替换。 |
 | ② 评测题 | 有可用原始输入及有限 0–100 AIHOT 可见分；输入先 Radar raw、缺失时沿获准 AIHOT 原文 fallback。没有分的可用于其它对象；不依赖 O1 通过、其它字段或全日连续性。 |
 | ③ 判官 | 不适用；确定性指标直接比较参考 |
-| ④ 自动指标 | 0–100可见分 MAE，越低越好；2026-09-21用户指定目标 **MAE < 3**。缺预测则全体指标未完成，不以成功子集冒充全体；判官及校验不适用。 |
+| ④ 自动指标 | 0–100可见分 MAE，越低越好，目标 **MAE < 3**；新增同题Spearman（同分平均秩的Pearson），越高越好，用户未指定达标阈值。两项分开报告，不用排序收益替代分数达标；缺预测则两项不可计算，不以成功子集冒充全体。常数或不足两题时仅Spearman不可计算；无LLM判官。 |
 | ⑤ 判官校验 | 不适用；通过有相反结果的确定性测试核计数 |
 
-执行与指标定义：[独立题库入口](../../../evals/visible-score/aihot-score-pointwise/README.md)、[metrics.json](../../../evals/visible-score/aihot-score-pointwise/metrics.json)。叶子CLI支持validate和独立run，prompt位于 `evals/visible-score/prompts/`。历史共享池操作见 [workflow](../workflow.md#历史-schema1共同窗口与全池运行)。
+执行与指标定义：[独立题库入口](../../../evals/visible-score/aihot-score-pointwise/README.md)、[metrics.json](../../../evals/visible-score/aihot-score-pointwise/metrics.json)。叶子CLI支持validate、独立run与原预测零调用rescore，prompt位于 `evals/visible-score/prompts/`。历史共享池操作见 [workflow](../workflow.md#历史-schema1共同窗口与全池运行)。
 
 ## L2 数据资产
 

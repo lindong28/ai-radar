@@ -2,7 +2,56 @@
 
 import pytest
 
-from evals._shared.metrics import score
+from evals._shared.metrics import score, spearman
+
+
+@pytest.mark.parametrize("gold,values,expected", [
+    ([10, 20, 30], [30, 40, 50], 1),
+    ([10, 20, 30], [50, 40, 30], -1),
+    ([1, 2, 3, 4, 5], [5, 6, 7, 8, 7], 0.8207826816681233),
+    ([10, 10, 30, 40], [10, 30, 30, 40], 5 / 6),
+    ([10, 20, 30, 40], [20, 40, 10, 30], 0),
+    ([10, 20], [40, 30], -1),
+])
+def test_spearman_average_ties_and_order_not_distance(gold, values, expected):
+    assert spearman(list(zip(gold, values))) == pytest.approx(expected)
+    cases = [case(str(i), {"score": value}) for i, value in enumerate(gold)]
+    predictions = [prediction(str(i), {"score": value}) for i, value in enumerate(values)]
+    result = score("O2", cases, predictions)
+    assert result["metrics"]["spearman"]["value"] == pytest.approx(expected)
+    assert result["metrics"]["spearman"]["denominator"] == len(gold)
+
+
+@pytest.mark.parametrize("gold,values,reason", [
+    ([], [], "no eligible cases"),
+    ([20], [30], "fewer than two eligible cases"),
+    ([20, 20], [30, 40], "constant reference or prediction scores"),
+    ([20, 30], [40, 40], "constant reference or prediction scores"),
+])
+def test_spearman_undefined_does_not_become_zero(gold, values, reason):
+    cases = [case(str(i), {"score": value}) for i, value in enumerate(gold)]
+    predictions = [prediction(str(i), {"score": value}) for i, value in enumerate(values)]
+    result = score("O2", cases, predictions)
+    assert result["metrics"]["spearman"] == {
+        "value": None, "status": "not_computed", "denominator": len(gold), "reason": reason,
+    }
+    assert result["complete"] == bool(gold)  # Complete predictions do not imply defined rank correlation.
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_spearman_keeps_mae_eligibility_and_incomplete_denominator(missing):
+    cases = [case("a", {"score": 20}), case("b", {"score": 40}),
+             case("c", {}), case("d", {"score": 80}, raw=False)]
+    predictions = [prediction("a", {"score": 30})]
+    if not missing:
+        predictions.append(prediction("b", {"score": float("nan")}))
+    result = score("O2", cases, predictions)
+    for metric in result["metrics"].values():
+        assert metric["value"] is None and metric["denominator"] == 2
+        assert metric["reason"] == "incomplete predictions"
+    result = score("O2", cases, [prediction("a", {"score": 30}), prediction("b", {"score": 50})])
+    assert result["metrics"]["mae"]["value"] == 10
+    assert result["metrics"]["spearman"]["value"] == 1
 
 
 def case(key, reference, *, raw=True):

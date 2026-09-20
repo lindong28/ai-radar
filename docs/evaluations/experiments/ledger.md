@@ -4,6 +4,12 @@
 
 2026-09-20 路径与清退说明：下文保留历史记录中的原位置和当时结论；旧共享池 33 份实验原件已按用户要求清退，对应 85 行指标不再进入查询，不能再按下文旧路径回读或视作当前基线。prefilter 实验及顶层 preflight 的 support 材料仍保留，可用 `python -m evals._shared.relocations <旧路径>` 定位。范围及恢复边界见[资产说明](../assets.md#原始参照历史运行与-support-分区)。未产生新模型成绩。
 
+## 2026-09-21：aihot-score-pointwise / v1，零调用补算 Spearman
+
+20个非smoke、非校准历史模型run保留原case/gold/prediction，新增MAE＋Spearman补评分，未重新推理。主要同题开发：A2=9.510/0.6670、A7=8.675/0.7134、A8=8.875/0.7233；最近回归100：A2=9.110/0.6705、A7=8.830/0.6681。数对依次为MAE/Spearman，不能将后者读成排序正确率；MAE<3未達成，无Spearman阈值。
+
+补算UTC分区：A7回归`17-08-31`，其余19轮`17-10-57`至`17-11-32`，日期2026-09-20，标准runs/experiments层级不变。每轮metadata的 `kind=metric-rescore`、`source_run`、`source_sha256`区分原模型实验与指标更新。首个分区support保存20组汇总、开发残差和3题原文核验。原文核验证实2个Radar短帖缺AIHOT详情包含的引用信息，尚未执行输入消融，不把线索写成降MAE收益；后续方向见[当前状态](../visible-score/status.md#2026-09-21增加-spearman-与下一步归因)。
+
 ## 2026-09-21：aihot-score-pointwise / v1，作者结构五维研究
 
 目标MAE<3未达成，按[52af](../../adr/20260921-52af-test-author-inspired-five-dimension-scores.md)离线研究，未改gold/生产。日期分区为2026-09-20 UTC：smoke3@16-22-26；同dev200的A1@16-22-47=10.510、A2@16-25-07=9.510、Pro A4@16-26-49=10.970、A5@16-28-51=11.120、正文前置A6@16-34-46=9.560、12例A7@16-36-04=8.675、48例A8@16-38-16=8.875。A3为已存维度输出的零调用组合诊断，不另计题数；A2/A7开发重算最低9.395/8.550，未作为回归权重。

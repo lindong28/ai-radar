@@ -40,7 +40,14 @@ def load_source(run: Path, *, root: Path = ROOT):
     if digest(cases) != metadata["case_identity"] or [c["case_id"] for c in cases] != metadata["case_ids"]:
         raise ValueError("source case identity mismatch")
     result = score("O2", cases, predictions)
-    if result != read_json(run / "scores.json"):
+    recorded = read_json(run / "scores.json")
+    # Earlier immutable runs registered MAE only. Verify every recorded field;
+    # adding a metric must not invalidate those runs or waive their integrity checks.
+    names = set(recorded.get("metrics", {}))
+    if names not in ({"mae"}, {"mae", "spearman"}):
+        raise ValueError("unsupported source metric contract")
+    comparable = {**result, "metrics": {name: result["metrics"][name] for name in names}}
+    if comparable != recorded:
         raise ValueError("source predictions or scores have changed")
     hashes = {name: file_digest(run / name) for name in SOURCE_FILES}
     return run, metadata, cases, predictions, result, hashes

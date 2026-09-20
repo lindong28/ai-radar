@@ -9,6 +9,14 @@
       "direction": "lower",
       "definition": "有可验证原始输入且有 AIHOT 可见分的题，0–100 可见分绝对误差均值",
       "source": "evals/_shared/metrics.py"
+    },
+    {
+      "task": "*",
+      "metric_name": "spearman",
+      "unit": "correlation",
+      "direction": "higher",
+      "definition": "与 MAE 同一完整题集上的分数秩相关：同分取平均名次后计算 Pearson，范围 [-1, 1]；少于两题或任一侧恒定则不可计算，不代表排序正确率",
+      "source": "evals/_shared/metrics.py"
     }
   ]
 }

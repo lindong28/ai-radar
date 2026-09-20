@@ -12,7 +12,21 @@
 PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py validate --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1
 ```
 
-`validate` 仅验证身份、文件哈希和题目结构，不能证明模型效果。独立 [score_eval.py](../../_shared/score_eval.py) 的 `run` 使用冻结题目、显式prompt及 [metrics.score](../../_shared/metrics.py) 的O2 MAE，并自动归档；不经过准入、富化或旧全池runner。指标定义见 [metrics.json](metrics.json)，无LLM判官。
+`validate` 仅验证身份、文件哈希和题目结构，不能证明模型效果。独立 [score_eval.py](../../_shared/score_eval.py) 的 `run` 使用冻结题目、显式prompt及 [metrics.score](../../_shared/metrics.py) 的O2 MAE与Spearman，并自动归档；不经过准入、富化或旧全池runner。指标定义见 [metrics.json](metrics.json)，无LLM判官。
+
+### 两个指标与历史预测补算
+
+MAE衡量0–100分尺度上的绝对误差，目标仍为 **MAE < 3**。Spearman衡量同一批新闻的分数相对次序：两侧同分分别取平均名次，再计算名次的Pearson相关系数，范围[-1,1]，越高越一致；0.67不等于67%的排序正确率。它对严格单调变换不敏感，不能替代MAE；也不是网站实际首页顺序或某个完整日窗的指标。两项只在相同case集合上比较，用户尚未指定Spearman达标阈值。
+
+两项采用相同合格题分母；缺失/失败/非法分数不从分母移除，两项均不可计算。少于两题或任一侧全部同分时，仅Spearman为 `null / not_computed` 并说明原因，不能当作0；`complete`仅表示预测完整，不表示每个统计量有定义或质量达标。
+
+```bash
+PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py rescore --source-run <已归档run目录> --label <候选名>-mae-spearman
+```
+
+无需凭据、不构建模型transport；`--json`提供机器输出。`rescore`核对原题/原分与题库manifest，在新UTC分区追加 `kind=metric-rescore` 记录，保留原对象身份、来源SHA及原推理时间；不改变case、gold、模型输出或旧成绩。新增API调用及本次模型费用为0，原推理用量仍归source_run，不能把复制预测中的usage累计为新费用。旧MAE-only运行仍逐字段复核后可读；新增Spearman不要求重建benchmark版本。当前索引会同时保留原成绩与补算记录，应通过metadata的kind/source_run区分，不能统计成两次模型实验。秒级归档分区相撞时明确拒绝，下一秒重试，不覆盖已有分区。
+
+该入口要求来源有冻结的 `dataset_manifest_sha256`：支持保存该身份的推理run及其补算run，缺少此身份的旧校准run明确拒绝，不替历史记录补造身份。再次补算时，`source_run`指向直接来源，`source_started_at`仍指向原推理时间，不改成上一次补算时间。
 
 在项目根运行基线（`--env-file` 指向本机现有凭据文件，不复制进配置）：
 

@@ -254,6 +254,10 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     validate = sub.add_parser("validate")
     validate.add_argument("--dataset", type=Path, required=True)
+    rescore = sub.add_parser("rescore", help="原预测补算当前指标；不调用模型，不修改原始实验")
+    rescore.add_argument("--source-run", type=Path, required=True)
+    rescore.add_argument("--label", required=True)
+    rescore.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     run = sub.add_parser("run")
     run.add_argument("--dataset", type=Path, required=True)
     run.add_argument("--config", type=Path, required=True)
@@ -273,6 +277,19 @@ def main(argv=None) -> int:
         from .object_entry import main as validate_main
         return validate_main(target=TARGET, benchmark=BENCHMARK,
                              argv=["validate", "--dataset", str(args.dataset)])
+    if args.command == "rescore":
+        from .score_rescore import rescore as rescore_saved
+        result = rescore_saved(args.source_run, label=args.label)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print("已归档原预测的指标重评分；新增模型调用 0，原始实验不变。")
+            for name, metric in result["metrics"].items():
+                value = metric["value"]
+                detail = f"{value:.6f}" if value is not None else f"不可计算（{metric['reason']}）"
+                print(f"{name}: {detail}；题数 {metric['denominator']}")
+            print(f"结果：{result['run']}；仅更新指标，不是新推理或质量达标声明。")
+        return 0 if result["complete"] else 1
     from .cli import transport_factory
     config = read_json(args.config)
     factory = transport_factory(config, args.env_file)
