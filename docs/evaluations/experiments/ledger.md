@@ -6,6 +6,19 @@
 
 ## 2026-09-20：aihot-observed-membership / v1
 
+### 随机900题固定默认组合（一次评测，两次attempt run）
+
+用户选定 C11 reason-first＋`hn100-standalone-body-v1`，要求随机900题、workers16。本轮固定已接入默认组合，未优化prompt、改gold或部署。dev 1,156题以 `label-blind-hash-order`、seed=`c11-reason-first-900-20260920-1` 抽900题；896 X＋4 Web、86来源、885种标题/正文，主集1,450与regression 294未动，880题仅召回集未混入。题集身份及当前质量边界见[对象状态](../news-admission/status.md)。
+
+| UTC run | 调用与复用 | 终态 | metadata耗时 |
+| --- | --- | --- | --- |
+| `12-37-30` | 900次新尝试：582成功、318 HTTP429（AccountRateLimitExceeded） | incomplete，不产生正式P/R | 74.46秒 |
+| `12-39-45` | `--reuse`复用上述582题，仅新调用318题，全部成功 | complete，900题最终预测完整 | 37.91秒 |
+
+两次run构成同一900题评测，不是1,800题；共1,218次真实尝试、900成功、318失败，成功响应报告1,383,645 tokens（prompt 1,334,710＋completion 48,935），失败usage未知、金额未定价。两轮均workers16，真实attempt时间戳计算的最大并发为16。成功实际模型900次均为 `deepseek-v4-flash-ga-260731`，temperature=0、max_tokens=500、thinking disabled、无引用正文；恢复未改变题集、对象或计分身份。
+
+当前人评优先结果 TP423/FP56/FN26/TN395，P88.31% / R94.21%，18题人评覆盖、12题改标，未达到双 >90%。原AIHOT口径P86.85% / R93.06%原样留存。当前机器入口 `experiments/news-admission/aihot-observed-membership/v1/2026-09-20/12-39-45/metrics/current.json` 指向不可变人评优先收据；两轮原件在同分区 `runs/`，逐题复算及历史曝光表在恢复轮 `support/sampling-and-result-audit.json`。与旧300题重叠225，与本轮之前当前保留历史run累计重叠361，余539仅表示当前保留记录未见，不能称独立回归；不把不同抽样的300与900汇总差异归因为代码回退。该次评测及失败恢复已完成，后续优化／部署未由本轮请求授权。
+
 ### 用户采纳 C11 reason-first＋既有规则（零新增模型调用）
 
 用户明确选定 C11 reason-first＋`hn100-standalone-body-v1` 为默认，取代先前推荐的 C11 原版。当前本地源码采用冻结候选及共享规则；C13–C16 未自动采用，未增加引用正文、网络或 Pro 依赖，未 push／部署。原实验成绩、预测与人评票保持原样。审查发现Web重复抓取会使标题占位条件失效，已改为每次upsert保存抓取时的布尔事实、保留原发布时间，并增加有日期／无日期的真实数据库重复抓取测试；冻结档案仍按原字段计算，旧数据库缺失事实由后续正常重抓补齐，未回填生产或改历史档案。
