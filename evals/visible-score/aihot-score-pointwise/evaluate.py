@@ -1,5 +1,5 @@
-"""visible-score/aihot-score-pointwise: independent dataset validation."""
-from evals._shared.object_entry import main
+"""visible-score/aihot-score-pointwise: offline pointwise score evaluation."""
+from evals._shared.score_eval import main
 
 if __name__ == "__main__":
-    raise SystemExit(main(target="visible-score"))
+    raise SystemExit(main())

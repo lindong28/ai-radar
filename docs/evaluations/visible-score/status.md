@@ -1,8 +1,45 @@
 # O2 · 可见评分 状态
 
-> [Developer] · Mutable snapshot · 2026-09-19。区分能力、实际运行与有效成绩。
+> [Developer] · Mutable snapshot · 2026-09-20 @C2-calibrated-regression200。区分能力、实际运行与有效成绩。
 
-新身份 `aihot-score-pointwise/v1` 为 3,475 题，已从 20260919-refresh-1010 无改题迁移并完成字节核验。逐条题库与 MAE 可用；scorer 加固定逐条展示分映射和自动归档尚待后续评测实施者接线，没有新模型成绩。当前题集见 [v1](aihot-score-pointwise/v1/README.md)，库存见 [inventory](../benchmarks/inventory.md)。旧全池拒答不阻止独立题库校验，但不能由此声称新推理链已完成。
+题库 `aihot-score-pointwise/v1` 经当前 loader 校验为3,475题（dev 2,778、regression 697），不改题或gold。用户本轮明确选定逐条评分基线：reason-first 六维 + 当前加权 + UI整数化；不包含精选整池排名映射，亦不冒称逐字复现生产prompt。决定见 [6a27](../../adr/20260920-6a27-evaluate-pointwise-visible-scores.md)。
+
+独立运行/归档入口已接通，见[执行说明](../../../evals/visible-score/aihot-score-pointwise/README.md)。主指标仍为0–100分MAE，越低越好，无绝对达标线，无LLM判官。当前本机 `human-evals/` 只有news-admission用户票，visible-score本轮没有人评覆盖，按冻结AIHOT参考计分。未修改生产scorer、排名映射或部署。
+
+## 本轮逐条实验
+
+所有正式候选使用固定dev200（seed=`score-dev-20260920`），仅为本轮开发结果。运行原件为项目根 `runs/visible-score/aihot-score-pointwise/v1/2026-09-20/<UTC-time>/`，对应元数据/指标为同分区 `experiments/`。
+
+| 轮次 / UTC run | 对象 | 题数 | MAE | 结果 |
+| --- | --- | ---: | ---: | --- |
+| B0 smoke / 14-03-10 | reason-first 六维逐条基线 | 3 | 23.3333 | 仅执行链验证，不参与选型 |
+| B0 dev / 14-03-25 | 同基线，Flash | 200 | 13.3300 | 200成功、0失败；当前开发基线 |
+| C1 smoke / 14-04-35 | 直接编辑标尺0–100，Flash | 3 | 21.6667 | 仅执行链验证 |
+| C1 dev / 14-05-02 | 直接编辑标尺 | 200 | 13.5500 | 劣于B0，不单独推进回归 |
+| C2 dev / 14-07-25 | 新闻重要性，不将准入/知识截止当评分 | 200 | 11.9000 | 开发改善，冻结后回归 |
+| B0 校准 dev / 14-12-16 | scale=.56、offset=16.26 | 200 | 9.1900 | 零调用拟合重放 |
+| C1 校准 dev / 14-12-30 | dev拟合映射，参数见原件 | 200 | 9.2000 | 零调用；开发未胜，不推进回归 |
+| C2 校准 dev / 14-12-43 | scale=.60、offset=16.90 | 200 | 9.0050 | 开发侧最优，冻结映射 |
+| B0 regression / 14-13-02 | reason-first 六维基线 | 200 | 12.6050 | 同题回归基线 |
+| B0 校准 regression / 14-14-22 | 仅应用冻结dev映射 | 200 | 9.3550 | 零调用，有改善 |
+| C2 regression / 14-14-23 | 冻结直接新闻重要性prompt | 200 | 11.1850 | 未校准也优于B0 |
+| C2 校准 regression / 14-15-33 | 仅应用冻结dev映射 | 200 | **8.3600** | 本轮最低回归MAE |
+
+当前诊断：B0平均有符号误差+3.01，中位+2.5；开发集常数中位数预测的MAE为13.87（零模型诊断，不是新闻评分方案）。因此基线只略优于不读内容的常数，不能将问题简化为固定偏高。大误差同时包括低估重要事件短帖、高估细分技术更新/汇总，以及把来源描述中的新模型名当成虚构的知识时效冲突；这些仍是归因线索，不是分别隔离后的因果证明。假设及预登记见[假设账](../experiments/hypotheses.md#score-pointwise-012026-09-20模型运行前登记)。
+
+## 本轮结论及复用
+
+当前离线候选为 C2＋统一校准：使用 `evals/visible-score/prompts/direct-news-importance-v2.json`（mode=direct），再按 `floor(clamp(0.6 * score + 16.9, 0, 100) + 0.5)` 映射。精确冻结参数/来源SHA在项目根 `runs/visible-score/aihot-score-pointwise/v1/2026-09-20/14-07-25/calibration.json`；调用方式见[执行入口](../../../evals/visible-score/aihot-score-pointwise/README.md#零调用分数校准)。不把本次拟合系数当成跨版本通用常数；扩数据后只用开发题重新拟合、另存映射，再选未参与优化的回归题验证。
+
+L1：同题回归较B0下降4.245分（33.68%），较B0校准下降0.995分；未校准C2也改善1.420分，支持评分构框与刻度校准各有增益，但没有隔离证明某一句prompt导致全部变化。校准收益大于本批换prompt收益。只承诺本批逐条MAE改善，不声称统计显著、整体拟合达标或精选分已优化。
+
+L2：两次3题smoke、三次dev200、两次regression200，共1,006次模型调用，全部成功；五次校准归档均零调用，共12个run。去重400题，smoke包含于开发200；开发66来源/200种标题正文（T1=11、T1.5=137、T2=52），回归65来源/200种标题正文（T1=10、T1.5=129、T2=61）。本轮全部使用实际 `deepseek-v4-flash-ga-260731`，temperature=0、max_tokens=600、thinking disabled、workers8、无隐式重试/回退。成功usage850,725 tokens（prompt782,388、completion68,337），金额未定价；C2回归平均900.08 tokens/题，B0为752.68，不把同为一次调用说成成本完全相同。逐题reason、请求prompt、原始响应、预测与分数可从各run回读；汇总在最终run的 `support/iteration-summary.json`。
+
+L3：dev/regression case_id重叠0，映射在读取本轮回归结果前已冻结；历史曝光与事件级独立性未完全核实，仅称本轮未用于优化的回归分区，不称从未见样本。没有修改gold、增删题或参考分；无visible-score人评票，不代造人评。独立审查分别覆盖runner与校准工具，无finding；130项定向测试覆盖dimensions/direct、reason先后、数值边界、成功/失败、复用身份、dev/regression拟合限制与原件篡改拒绝，不替代模型质量读数。
+
+剩余边界：C2校准在0–100输入域输出约17–77；高分端可能被压低，不能由MAE改善推断所有区间改善。本批参考≥60的52题，C2未校准MAE8.385、校准后10.712；参考<40的61题，B0校准7.230、C2校准8.443；参考40–59的87题，C2校准6.897。分层为事后诊断，未据它继续调参数。后续若优化高分端，这200回归题已提供诊断线索，应转为已见回归并另取未接触题验收。当前仍有497道回归分区题未在本轮调用；是否与更早历史优化重叠未核实。
+
+本轮评测、候选实现、回归与归档已完成；生产scorer、精选rank映射、push和部署不在本次离线授权内，均未执行。绝对可接受MAE尚未由用户设定，不自行宣称最终达标。
 
 ## 历史共享池成绩（2026-09-17，aihot-visible-score）
 

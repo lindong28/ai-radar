@@ -7,11 +7,11 @@
 | 对象 | 当前代码与指标入口 | 已实现的执行范围 |
 | --- | --- | --- |
 | 新闻准入 | [aihot-observed-membership](news-admission/aihot-observed-membership/README.md) | validate、独立 prefilter run、抽样、恢复、计分与归档 |
-| 可见评分 | [aihot-score-pointwise](visible-score/aihot-score-pointwise/README.md) | 独立题库 validate；预测后的指标复用共享 metrics.score |
+| 可见评分 | [aihot-score-pointwise](visible-score/aihot-score-pointwise/README.md) | validate、独立评分 run、固定抽样/恢复/归档、dev 拟合的零调用分数校准 |
 | 内容富化 | [aihot-enrichment-fields](content-enrichment/aihot-enrichment-fields/README.md) | 独立题库 validate；字段指标复用共享 metrics.score |
 | 精选成员 | [aihot-featured-threshold](featured-members/aihot-featured-threshold/README.md) | 独立题库 validate；逐条阈值不是完整池规则评测 |
 
-建题／扩题统一用 `scripts/build_eval_datasets.py`，其 `build` 默认使用当前准入口径；详见[操作说明](../docs/evaluations/benchmarks/object-datasets.md)。其余三个对象的独立推理适配缺口仍归各对象 status，不因本次整理而变为已实现。
+建题／扩题统一用 `scripts/build_eval_datasets.py`，其 `build` 默认使用当前准入口径；详见[操作说明](../docs/evaluations/benchmarks/object-datasets.md)。内容富化和精选成员的独立推理适配缺口仍归各对象 status，不因评分入口接通而变为已实现。
 
 ## 共享实现与候选资产
 

@@ -6,19 +6,19 @@
 
 ## 对象与边界
 
-固定原始新闻 → scorer + 明确固定的逐条展示分映射 → 预测可见分。当前生产映射仍依赖完整池；独立适配尚未完成，不将 scorer 中间分冒充网站显示分，也不把独立调用偷偷放入生产候选池。
+固定原始新闻 → scorer + 明确固定的逐条展示分映射 → 预测可见分。2026-09-20 用户选择当前普通条目展示公式作为基线：六维加权×10后按UI整数化；prompt采用reason-first适配。独立入口已接通。精选新闻另有完整池排名映射，不在本benchmark内，不把独立题临时拼成生产池。决定见 [6a27](../../adr/20260920-6a27-evaluate-pointwise-visible-scores.md)。
 
 ## L1 计算逻辑
 
 | 槽位 | 设计与当前能力 |
 | --- | --- |
-| ① 优化对象 | scorer 加明确固定的逐条展示分映射；当前题库和 MAE 可用，逐条映射及模型运行适配待后续实施。 |
+| ① 优化对象 | reason-first 六维 scorer＋固定普通展示公式为基线；直接0–100输出或开发集拟合的固定数值映射为离线候选。运行、失败保留和归档已接通，生产未替换。 |
 | ② 评测题 | 有可用原始输入及有限 0–100 AIHOT 可见分；输入先 Radar raw、缺失时沿获准 AIHOT 原文 fallback。没有分的可用于其它对象；不依赖 O1 通过、其它字段或全日连续性。 |
 | ③ 判官 | 不适用；确定性指标直接比较参考 |
 | ④ 自动指标 | 0–100可见分 MAE，越低越好。缺预测则全体指标未完成，不以成功子集冒充全体；判官及校验不适用。 |
 | ⑤ 判官校验 | 不适用；通过有相反结果的确定性测试核计数 |
 
-执行与指标定义：[独立题库入口](../../../evals/visible-score/aihot-score-pointwise/README.md)、[metrics.json](../../../evals/visible-score/aihot-score-pointwise/metrics.json)。叶子 CLI 校验资产，现有 `metrics.score` 计算已有可见分预测的 MAE；不代表逐条模型运行已接线。历史共享池操作见 [workflow](../workflow.md#历史-schema1共同窗口与全池运行)。
+执行与指标定义：[独立题库入口](../../../evals/visible-score/aihot-score-pointwise/README.md)、[metrics.json](../../../evals/visible-score/aihot-score-pointwise/metrics.json)。叶子CLI支持validate和独立run，prompt位于 `evals/visible-score/prompts/`。历史共享池操作见 [workflow](../workflow.md#历史-schema1共同窗口与全池运行)。
 
 ## L2 数据资产
 

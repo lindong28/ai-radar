@@ -12,7 +12,7 @@ O1 当前采用 [aihot-observed-membership](news-admission/aihot-observed-member
 
 先按[按对象判断数据充分性](benchmarks/object-datasets.md#data-sufficiency)确定给定时间段的数据足够哪些用途。采集 coverage 用于定位过程缺口，不是四对象统一入题门；恢复、补采的实际内容及其证据决定可用范围。
 
-执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、带时区 raw 时间范围和不可覆盖的新 vN。O2/O3 可显式用 `--aihot-inputs` 接入 AIHOT 原标题与绑定原文；O1 不补这种仅有正例的数据。O4 全池规则继续要求连续完整候选组；`aihot-featured-threshold` 仅作局部用途。逐 benchmark 的题集/字段和代码入口由[对象索引](README.md)定位。O1 的独立模型运行、抽样、恢复和归档命令见 [prefilter 执行入口](../../evals/news-admission/aihot-observed-membership/README.md)；其余新叶子 CLI 仍仅做 validate，已有预测可用共享 metrics.score API。不接下文旧全池 run，不将建题命令与旧运行命令直接串接。
+执行 [scripts/build_eval_datasets.py 的操作说明](benchmarks/object-datasets.md)，支持多参照、独立对象、带时区 raw 时间范围和不可覆盖的新 vN。O2/O3 可显式用 `--aihot-inputs` 接入 AIHOT 原标题与绑定原文；O1 不补这种仅有正例的数据。O4 全池规则继续要求连续完整候选组；`aihot-featured-threshold` 仅作局部用途。逐 benchmark 的题集/字段和代码入口由[对象索引](README.md)定位。O1 的独立模型运行、抽样、恢复和归档命令见 [prefilter 执行入口](../../evals/news-admission/aihot-observed-membership/README.md)，O2 见[逐条评分及校准入口](../../evals/visible-score/aihot-score-pointwise/README.md)。O3/O4 新叶子 CLI 仍仅做 validate，已有预测可用共享 metrics.score API。不接下文旧全池 run，不将建题命令与旧运行命令直接串接。
 
 扩展已有题库必须显式传 `--base <旧版任一对象叶子>`（多版可重复），再给新增原始范围/参照，使用新 `--version`。脚本合并证据、去重并按当前规则重建，不原地追加。完成后逐对象查 `merge-summary.json`、`changes.jsonl` 和 manifest.counts，并运行 validate；说明本版总题数与其中 added，而不是称整版为新增。更换题库版本不迁移旧模型成绩，比较仍须同题同尺。
 

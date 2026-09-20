@@ -46,6 +46,8 @@
 
 ### docs/evaluations/ [Developer]
 
+[逐条可见分实验决策](adr/20260920-6a27-evaluate-pointwise-visible-scores.md)：reason-first 六维展示公式基线、开发/回归边界与离线候选授权；实际结果见 visible-score/status。
+
 [人评标注与优先级](evaluations/human-labels.md)：四对象的人评权威、原票归档、标签应用/重评分命令、判官分歧及 reason-first 规则（2026-09-20 用户裁决）。
 
 [评测代码导航](../evals/README.md)：四对象当前入口、历史兼容入口、对象级 prompt 和测试职责；记录与历史归档的保留范围见 [assets](evaluations/assets.md)。

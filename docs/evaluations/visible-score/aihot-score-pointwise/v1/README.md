@@ -12,7 +12,7 @@
 
 输入先取同来源、同 URL 的 Radar 过滤前 raw；完全没有该 raw 时，显式批准的 AIHOT 参照可提供 `original_title` 与绑定详情页的文章/推文正文。原标题、正文须可用且无内容/身份歧义；仅含缺正文提示的非空外壳不算原文，AIHOT 生成标题/摘要也不能代替。原始多版本排除、字段参考冲突只排该字段、同 URL 固定 split 均保留；不要求准入通过、精选资格、其它富化字段齐全或全日采集连续。
 
-每题 input 是原始新闻，reference.score 才是可见分，二者不能混用。新来源扩大可建题范围，不证明跨站原文字节一致或原文未截断。当前全池可见分映射与逐条 scorer 分仍须区分；本轮只扩题，不把中间分冒充网站显示分，也不新增模型成绩。
+每题 input 是原始新闻，reference.score 才是可见分，二者不能混用。新来源扩大可建题范围，不证明跨站原文字节一致或原文未截断。2026-09-20 已接通逐条运行，用户确认普通新闻的六维加权×10及整数化作为reason-first基线；新模型成绩见[状态](../../status.md)，不外推精选全池映射。
 
 ## L2：资产与复用
 
@@ -27,4 +27,4 @@
 
 ## 版本与结果
 
-旧 `object-specific-v2` 仅允许 Radar 输入；`aihot-original-v3` 放宽为获准 AIHOT 原文，字段接口、逐题分母、MAE 没变，因此是同 benchmark 的生产规则变化，说明留在 README 而非目录名。共享池排名映射与独立逐条分映射则影响消费者，故新 `aihot-score-pointwise` 与旧 `aihot-visible-score` 分开。v1 不改题目/参考，不承接旧成绩。新叶子 CLI 只做 validate；已有预测可调用共享 MAE，逐条模型/映射适配尚未完成。原件归 `runs/visible-score/aihot-score-pointwise/v1/<UTC-date>/<UTC-time>/`，元数据归同分区 `experiments/`；当前读数边界见[对象状态](../../status.md)。
+旧 `object-specific-v2` 仅允许Radar输入；`aihot-original-v3` 放宽为获准AIHOT原文，消费者契约不变，因此变化留在README，不加路径层。共享池排名映射与逐条映射影响消费者，故两个benchmark分开。v1不改题目/参考、不承接旧成绩。叶子CLI现支持validate及逐条run，原件归 `runs/visible-score/aihot-score-pointwise/v1/<UTC-date>/<UTC-time>/`，元数据归同分区 `experiments/`；使用方法见[执行入口](../../../../../evals/visible-score/aihot-score-pointwise/README.md)，当前读数边界见[对象状态](../../status.md)。

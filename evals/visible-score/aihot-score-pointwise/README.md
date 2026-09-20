@@ -12,8 +12,33 @@
 PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py validate --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1
 ```
 
-`validate` 仅验证身份、文件哈希和题目结构，不能证明模型效果。当前没有此 benchmark 的端到端推理 CLI；不能把它交给旧全池 runner。已有输出可由共享 [metrics.score](../../_shared/metrics.py) 计算：输入是 cases 与按 case_id 关联的 `{case_id,status,output}` 预测行，输出仅供评分，不会自动归档。指标定义见 [metrics.json](metrics.json)。未取得文本判官校验时不把文本分数当作有效成绩。
+`validate` 仅验证身份、文件哈希和题目结构，不能证明模型效果。独立 [score_eval.py](../../_shared/score_eval.py) 的 `run` 使用冻结题目、显式prompt及 [metrics.score](../../_shared/metrics.py) 的O2 MAE，并自动归档；不经过准入、富化或旧全池runner。指标定义见 [metrics.json](metrics.json)，无LLM判官。
 
-模型输入只取 case.input，不读取 reference/provenance。后续 adapter 需保持本 benchmark 契约，输出原件归 `runs/visible-score/aihot-score-pointwise/<version>/<UTC-date>/<UTC-time>/`，元数据及指标归同结构 `experiments/`，不得写回题库。
+在项目根运行基线（`--env-file` 指向本机现有凭据文件，不复制进配置）：
 
-本校验 CLI 单进程、无并发参数；不对模型推理并发作承诺。旧 [aihot-visible-score](../aihot-visible-score/README.md) 保留历史全池契约与运行入口，旧成绩不重命名到本 benchmark。
+```bash
+PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-ark.json --env-file .env --prompt evals/visible-score/prompts/baseline-reason-first.json --mode dimensions --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label B0-dev200
+```
+
+- 首次新执行链先将 `--limit` 改为小样本并加 `--smoke`；该标志只声明用途，不自动减少题量。
+- `dimensions` 严格要求模型先输出非空reason，再输出六个有限0–10维度，按当前DEFAULT_WEIGHTS合成并执行与UI相同的整数化。它是普通条目的逐条展示公式，不是精选rank-linear分。
+- 直接打分候选使用 `--mode direct`；C1 为 `evals/visible-score/prompts/direct-editorial-v1.json`，C2 为 `evals/visible-score/prompts/direct-news-importance-v2.json`。要求reason先于0–100整数score。候选独立保存，不覆盖生产。
+- seed+split+limit固定实际题目，标签不参与抽样。`--split regression` 只在候选冻结后使用；不传limit跑指定分区全部，不等于整个benchmark。历史曝光不全时不得称完全未见。
+- 失败后保持全部参数，`--reuse <原run路径>` 只复用同对象身份、同题同序、同manifest及原始响应复核成功的题。失败调用仍留在原run，新run只补未成功题；代码/prompt变更不得借此复用旧对象。
+- `--exclude-run <run路径>` 可重复，选题前排除已有case IDs。不要用换seed反复看回归挑选好结果。
+- 并发上限默认8（允许1–32），按共享provider容量调整；SDK无隐式重试、无模型/provider回退。失败题保留，MAE未完成而不是成功子集均值。
+
+模型输入只取case.input的原始字段白名单，正文仍最多5000字符，不读取reference/provenance。原件归 `runs/visible-score/aihot-score-pointwise/<version>/<UTC-date>/<UTC-time>/`：started/config/prompt/cases/prompts、items、predictions、attempts及scores；元数据和metrics/summary归同结构 `experiments/`。逐题reason、原始响应和实际请求保留，费用未知不归零。不得写回题库；新v2等版本可使用同命令，不写死本轮题数。
+
+## 零调用分数校准
+
+[score_calibration.py](../../_shared/score_calibration.py) 只在完整 dev 运行拟合统一映射 `floor(clamp(scale * score + offset, 0, 100) + 0.5)`，保留原预测。搜索61个scale（0.20至1.40、步长0.02），每个取残差中位数offset，再按实际MAE选取；不是所有连续仿射参数的全局最优，也不是逐来源/逐题记分表。参考分只在 dev 拟合时读取，应用到回归时映射已冻结，不需要 AIHOT 分数作为推理输入。
+
+```bash
+PYTHONPATH=src:. uv run python -m evals._shared.score_calibration fit --run <完整开发run目录> --output <该run目录>/calibration.json
+PYTHONPATH=src:. uv run python -m evals._shared.score_calibration apply --run <同对象开发或回归run目录> --mapping <开发run目录>/calibration.json --label <校准候选名>
+```
+
+fit拒绝regression、空集、失败题；映射文件不可覆盖，保存原对象/题目身份与来源SHA。apply核对这些身份，输出新的runs/experiments分区，保留原题和失败分母，不覆写原成绩。每次apply零新增模型调用；原推理费用仍属于源run。当前分区以秒命名，同一秒内多个归档会明确拒绝碰撞；逐条CLI执行并在碰撞后下一秒重试，不覆盖目录。应在持久的项目资产目录上拟合/应用，避免把即将删除的临时worktree路径写入来源。
+
+本校验CLI仍单进程且零模型调用；只有run使用并发。旧 [aihot-visible-score](../aihot-visible-score/README.md) 保留历史全池契约与运行入口，旧成绩不重命名到本benchmark。当前结果、采纳及未验证边界见[status](../../../docs/evaluations/visible-score/status.md)。
