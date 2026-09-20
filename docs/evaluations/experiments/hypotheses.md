@@ -1,6 +1,6 @@
 # 归因假设
 
-本档的历史路径按当时记录保留。旧 preflight 和共享池运行已迁移，使用 `python -m evals._shared.relocations <旧路径>` 定位；见[资产说明](../assets.md#原始参照历史运行与-support-分区)。假设和原实验结论未重写。
+本档的历史路径按当时记录保留。旧 preflight 已迁至 support，可用 `python -m evals._shared.relocations <旧路径>` 定位；旧共享池 33 份实验原件于 2026-09-20 按用户要求清退，不再可回读，仅保留假设与结论文字。prefilter 实验不在清退范围；见[资产说明](../assets.md#原始参照历史运行与-support-分区)。
 
 ## PREFILTER-CONFIDENCE-05（2026-09-20，零调用诊断前登记）
 

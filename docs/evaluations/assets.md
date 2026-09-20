@@ -10,7 +10,7 @@
 
 `runs/` 的逐题输出、请求、理由、失败与恢复记录，和 `experiments/` 的元数据、指标引用具有不同职责，不作重复文件删除。此前顶层 preflight 和人评迁移材料现归入下述 support 分区，历史台账保留当时路径，由映射解析。跨 benchmark 的 `experiments/metrics/summary.json` 是可重建索引，仍是日常查询入口。当前表现读各对象 status，逐轮历史读 ledger，不用目录的新旧名称判断有效性。
 
-本次没有永久删除模型输出、实验记录、人评、题库、共享证据或测试；未证明无引用且可再生的文件不列入删除项。旧共享池执行器、迁移与完整性测试继续保留，避免用整理目录的名义移除仍有用途的能力。
+2026-09-20 用户明确清退低价值旧共享池实验：仅移出下述 33 份运行及元数据，不改当前题库、人评、共享证据、prefilter 实验或测试。通用历史格式读取与计分代码继续保留；代码支持旧格式不意味着旧实验原件仍存在。
 
 ### 活动题库与历史归档（2026-09-20）
 
@@ -20,7 +20,7 @@
 
 日常评测和扩题继续传活动入口，`load_dataset` 和 `read_bases` 会解析链接。新版本仍写活动根的真实 benchmark 目录，用尚未存在的 `v2/v3`；不要把归档根作为新输出根。旧实验中的五个旧题库路径由 `evals/_shared/relocations.py` 自动解析到上述归档，不要求调用者手改冻结 metadata。归档根 README 记录题库迁移清单和恢复方法。
 
-本次仅清理四个对象目录的历史入口；根目录旧 schema1 共享池、`_build-reports`、项目 `runs/`、`experiments/`、`human-evals/` 及持续采集档案不在删除范围。它们不属于当前四个独立 benchmark，不能累计为新增题。此次是目录整理而非磁盘瘦身，没有永久删除数据。
+第一轮题库整理仅清理四个对象目录的历史入口；当时未处置根目录旧 schema1 共享池、`_build-reports`、项目运行、人评及采集档案。随后运行档案的迁移和用户批准的清退见下节；外部题库及其共享证据不在本次清退范围。
 
 ### 原始参照、历史运行与 support 分区
 
@@ -30,7 +30,7 @@
 | --- | --- | --- |
 | AIHOT 原始参照 gitlink | `data/aihot-reference/` | 原 `benchmarks/aihot/`；不是当前四对象题库；同一数据仓、同一 pin |
 | 标准 v1 历史及当前运行 | `runs/<target>/<benchmark>/v1/<date>/<time>/`，对应 `experiments/` | 原始输出与 metadata 分开；旧 prefilter 仍仅供复现 |
-| 旧共享池 33 轮 | `data/evaluation-archive/{runs,experiments}/<target>/<benchmark>/20260917-0700-1200-v1/<date>/<time>/` | 保留旧身份与字节，不改名成 v1；仍纳入统一指标查询 |
+| 旧共享池 33 份实验 | 已从 `data/evaluation-archive/{runs,experiments}/` 清退 | 不再纳入统一指标查询；台账仅保留历史文字，不作为当前基线 |
 | 旧准入 preflight | `runs/news-admission/aihot-prefilter/v1/2026-09-20/10-29-30/support/prefilter-20260919-preflight/` | 工作材料，不是新模型评测 |
 | dual90、人评反馈 preflight 与旧人评目录迁移 | `runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/` 下保留各原目录名 | 对应 experiments metadata 的 `kind=asset-migration`，不产生指标行 |
 
@@ -38,13 +38,13 @@ support 容器的 `directory_time_source=migration_plan_created` 说明目录时
 
 精确映射唯一维护在 `evals/asset-relocations.json`：`project` 的键/值是相对项目根的旧/新目录；`external` 是外部题库旧/新前缀（`~` 按当前用户展开）；`project_aliases` 用于识别冻结记录中本机主工作树绝对路径。只有完整路径段前缀匹配才迁移，不按 basename 或版本猜测。读取已有文件优先，兼容尚未迁移的 pinned checkout；新写入不使用这个 resolver。`assets.read_json/read_jsonl/file_digest/load_dataset`、扩题、重评分、判官输入与索引重建都接入读取解析。
 
-历史台账的路径可这样定位：`PYTHONPATH=src:. uv run python -m evals._shared.relocations runs/prefilter-dual90-preflight/c13-rule-check.json`。原始叶子 metadata 和 summary 不追改；`PYTHONPATH=src:. uv run python -m evals._shared.cli index` 重建总表，将 source/metadata 投影为实际位置，保留 run_id、benchmark_version、数值和采信状态。总表同时包含活动与历史归档实验；无成绩的迁移容器不会伪造模型轮次。
+仍保留的历史路径可这样定位：`PYTHONPATH=src:. uv run python -m evals._shared.relocations runs/prefilter-dual90-preflight/c13-rule-check.json`。原始叶子 metadata 和 summary 不追改；`PYTHONPATH=src:. uv run python -m evals._shared.cli index` 重建总表，将 source/metadata 投影为实际位置，保留 run_id、benchmark_version、数值和采信状态。清退后总表为 176 行，移除了旧共享池的 85 行；无成绩的迁移容器不会伪造模型轮次。映射只定位、不保证目标存在；已清退共享池路径查询会失败，不自动从废纸篓找回。
 
-本机迁移脚本 `PYTHONPATH=src:. uv run python scripts/migrate_eval_asset_layout.py` 默认 dry-run，`--apply` 执行注册清单；`--root` 显式选择项目工作树。它不移动 gitlink（由 Git 路径变更负责）、不操作外部题库、不删文件。收据在 `data/evaluation-archive/layout-migration.json`：`moves[].from/to/files` 保存位置与原始字节摘要/符号链接目标。冲突或内容变化立即失败，已有收据允许中断后同命令继续；完成后重复执行只验证，不复制数据。恢复时按收据反向移动并核摘要，恢复旧代码时同时恢复 gitlink 路径；不要覆盖碰撞目录。
+`scripts/migrate_eval_asset_layout.py` 是此前一次性迁移工具，不是当前健康检查；清退后旧／新位置均缺的条目会使它报错，不能再按整份清单重跑或据此恢复已退休档案。`data/evaluation-archive/layout-migration.json` 保留当时的 `moves[].from/to/files`（位置及摘要），供仍在用的 support 容器引用，不证明全部原件仍存在。
 
 独立采集工作树未迁移；采集脚本按目标 checkout 的 `.gitmodules` 取原始参照位置，不以主仓新目录名推断运行时也已迁移。
 
-本机已执行运行资产迁移：12 个目录前缀、2,157 个文件，删除文件数为 0。统一索引仍为 261 行；33 轮旧共享池记录归档，88 轮标准版本记录保留，另有 2 个不产生成绩的 support 容器。迁移收据逐文件记录原始摘要，运行脚本可复验这些字节。
+此前迁移了 12 个目录前缀、2,157 个文件；随后按用户清退要求移出其中旧共享池的 2,058 个文件（68,067,526 字节）。保留 88 轮标准版本实验、2 个不产生成绩的 support 容器和 99 个 support 文件。旧原件当前移至本机废纸篓 `~/.Trash/ai-radar-eval-retired-20260920T111910701963Z/{runs,experiments}/`，不再占项目目录，但未清空废纸篓，因此不声称磁盘空间已释放；此处不是长期备份。确需恢复且废纸篓原件仍存时，先确认原项目位置无碰撞、按原迁移收据核摘要，再分别移回原归档位置并重建索引；不得自动恢复。清退范围不含外部 `benchmark-archives`，它仍承载当前题库共享证据。
 
 2026-09-20 新增[人评优先标注层](human-labels.md)：用户原票及其材料在 `human-evals/<target>/reviews.json` 保存；批次、日期与来源归 `batches[].metadata`，字段字典和操作由该说明单一维护，不加日期/批次/`imported` 路径。明确人评覆盖同题同字段的自动参考，原 AIHOT 证据与成绩不覆盖。原票和 effective 计分视图分开保留，不能把改标签后的分数当作模型改进。
 

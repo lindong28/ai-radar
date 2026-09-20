@@ -16,6 +16,8 @@ O1 当前采用 [aihot-observed-membership](news-admission/aihot-observed-member
 
 ## 历史 schema1：共同窗口与全池运行
 
+2026-09-20 已清退 9/17 的 33 份共享池实验原件。以下是仍保留的旧格式运行能力，不代表那批预测、分数或判官输入仍可复用；新迭代从四对象当前入口开始，不为恢复历史目录而重跑付费实验。清退范围和恢复边界见[资产说明](assets.md#原始参照历史运行与-support-分区)。
+
 1. `capture --start <UTC> --end <UTC> --output <new-directory>` 捕获已关闭窗口。API 连续两次终态遍历须稳定，SSR 标签须有证据。失败产物保留，不冒充成功快照；不修改已有每日采集调度。
 2. `build --raw-root <raw-capture> --reference <capture-directory> --version <new-slug>` 冻结共同来源、完整采集窗和逐题参考。缺 cadence/source 拒绝冻结；O1 按新闻时间 ±12 小时单独选题，未确定新闻不当负例。版本存在即拒绝覆盖。
 3. 配置固定模型、provider/base_url，不含凭据；`--env-file` 指定项目 dotenv。先 `run --dataset <any-target-version> --config <json> --env-file <dotenv> --smoke 3`，检查三条新闻的真实请求模型、返回模型、输出 schema 和日志。

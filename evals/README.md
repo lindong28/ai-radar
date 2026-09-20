@@ -30,7 +30,7 @@
 
 `assets.benchmark_pairs()`、布局校验与历史指标查询仍注册上述契约；不从目录名称猜测可删除性。保留这些轻量入口和相应测试，是为了读取／复现既有实验，不是新迭代的默认选择。旧数据的物理归档位置由[资产说明](../docs/evaluations/assets.md)维护。
 
-旧路径通过 `asset-relocations.json` 与 `_shared/relocations.py` 解析；旧共享池实验实体在 `data/evaluation-archive/`，不改写历史版本名。查询总表同时覆盖归档与活动记录。用 `python -m evals._shared.relocations <旧路径>` 定位原件，正式模型输出与 support 迁移容器须按 metadata.kind 区分。
+旧路径通过 `asset-relocations.json` 与 `_shared/relocations.py` 解析；2026-09-20 用户已清退 33 份旧共享池实验及其 85 行指标引用，映射不代表这些原件仍存在，也不自动恢复。仍保留的 prefilter、support 与外部题库路径可用 `python -m evals._shared.relocations <旧路径>` 定位；正式模型输出与 support 迁移容器须按 metadata.kind 区分。旧格式代码仍可运行，不代表已清退实验可继续复盘。
 
 ## 测试与运行记录
 
