@@ -185,3 +185,25 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 
 **残留缺口**：新测试要求 `.git` 存在，故它在**导出树**里 skip。`create-commit` 的导出树执行检查因此
 覆盖不到它，它的读数只来自工作树。
+
+## [open] 2026-09-20：部署链对 gitlink 的处置会把自己焊死，一次真实发生
+
+- Type: reliability · Priority: high · Discovered: 把 FTS 触发器与并发解读部署到生产时
+
+`benchmarks/aihot` 是真 submodule。2026-09-19 安全加固给 `deploy_code.py` 加了「拒绝任何 gitlink」的校验，而加固本身是被**旧**部署代码装上去的，所以这道闸从下一次部署才第一次执行。三个后果连成一条死路，全部实测：
+
+1. **任何带 submodule 的树都部署不上去**。本地用生产那份 `deploy_code.py` 的 `_guard_runtime_paths` 复跑：`tencent/main`（即当时已部署的 `b18a513`）自身也被拒。换言之生产处在「连自己都重新部署不了」的状态。
+2. **移除 gitlink 的那次部署会在 promote 中途失败**。`materialize` 的顺序是「先删除、后 checkout」，`_apply_deletions` 只会 `unlink()`；而旧部署在该路径留下的是一个**空目录**（`checkout-index` 对 gitlink 建空目录，不是跳过），`unlink()` 抛 `OSError` → `DeployError`。好在删除在 checkout 之前，live tree 一个文件都没被动。
+3. **随后的回滚也失败**，因为回滚目标 `b18a513` 的树同样含 gitlink、过不了同一道闸。journal 因此卡在 `promoting`，而 `post-receive` 无法让 `git push` 失败——push 报成功，唯一信号是失败标记与健康检查。
+
+本次解法（已执行）：服务器上 `rmdir` 那个空目录、把陈旧 journal 改回 `idle`（live tree 当时确实是完整的 `b18a513` 发布），再用同一 sha 驱动部署，成功。生产线 `tencent/main` 此后不含 submodule，所以回滚目标不再带 gitlink，这个死锁不会自动重演。
+
+未做的根治，按优先级：
+
+| 项 | 内容 |
+|---|---|
+| A | `_apply_deletions` 遇到空目录应 `rmdir` 而不是报错。现在它对 `FileNotFoundError` 容忍、对目录不容忍，而 gitlink 是 git 唯一能让某路径物化成空目录的方式 |
+| B | 回滚路径不该被前向校验挡住。回滚目标是**曾经部署成功过**的树，用新规则去拒它，等于让任何一次规则收紧都使历史不可回滚 |
+| C | 外审另指出：放宽 gitlink 规则会让落在 `web/templates`、`web/static` 等**惰性读取**路径上的 submodule「部署成功」而整站 500——`checkout-index` 建出空目录，服务照常启动、`/api/v1/healthz` 返回 200，候选闸的 `import airadar.cli` 不覆盖 `airadar.web.app`。所以 A/B 才是方向，不要用放宽该规则来解 |
+
+生产线与 main 的差异现已包含：`tencent/main` 不含 `benchmarks/aihot`（`.gitmodules` 保留但无对应条目，inert）。
