@@ -35,6 +35,7 @@ from .inference import _item, _request
 from .metrics import score
 from .prefilter_eval import select_cases
 from .relocations import resolve_asset_path
+from .score_dimensions import combine_calls, dimension_prompts, run_calls
 
 TARGET = "visible-score"
 BENCHMARK = "aihot-score-pointwise"
@@ -49,7 +50,7 @@ def project_score(payload: dict, mode: str, tier: str, five_weights: dict | None
     """Validate the model's emitted order and values before any score mapping."""
     if mode == "semantic":
         return {"score": semantic_score(payload)}
-    if mode == "five":
+    if mode in {"five", "five-separate"}:
         return {"score": five_score(payload, five_weights)}
     if mode not in {"dimensions", "direct"}:
         raise ValueError("mode must be dimensions, direct, semantic or five")
@@ -86,12 +87,16 @@ def object_identity(config: dict, prompt: dict, mode: str) -> dict:
         mapping = {"function": "sum(coefficient * dimension_score)",
                    "coefficients": SEMANTIC_WEIGHTS, "dimension_domain": "integer-0..10",
                    "output_domain": "integer-0..100", "ranking_pool": False}
-    elif mode == "five":
+    elif mode in {"five", "five-separate"}:
         paths += ("src/airadar/scorer/five.py",)
+        if mode == "five-separate":
+            paths += ("evals/_shared/score_dimensions.py",)
         mapping = {"function": "Math.round(sum(percent * dimension_score) / 10)",
                    "weights_percent": validated_weights(config.get("five_weights", FIVE_WEIGHTS)),
                    "dimension_domain": "integer-0..10", "output_domain": "integer-0..100",
                    "ranking_pool": False}
+        if mode == "five-separate":
+            mapping["call_strategy"] = "five independent judgments; sequential within each case"
     return {
         "surface": "ordinary-nonfeatured-visible-score", "mode": mode,
         "prompt": prompt, "prompt_contract": "model-emitted-reason-first",
@@ -109,15 +114,22 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
              exclude_runs: tuple[Path, ...] = ()) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
-    if mode not in {"dimensions", "direct", "semantic", "five"}:
-        raise ValueError("mode must be dimensions, direct, semantic or five")
-    five_weights = validated_weights(config.get("five_weights")) if mode == "five" else None
-    if mode != "five" and "five_weights" in config:
+    if mode not in {"dimensions", "direct", "semantic", "five", "five-separate"}:
+        raise ValueError("unknown pointwise scoring mode")
+    five_weights = validated_weights(config.get("five_weights")) if mode in {"five", "five-separate"} else None
+    if mode not in {"five", "five-separate"} and "five_weights" in config:
         raise ValueError("five_weights is only supported in five mode")
-    if not isinstance(prompt, dict) or set(prompt) != {"system", "user_template"} or not all(
-        isinstance(value, str) and value.strip() for value in prompt.values()
+    expected_prompt = {"system", "user_template"} | ({"dimension_rubrics"} if mode == "five-separate" else set())
+    if not isinstance(prompt, dict) or set(prompt) != expected_prompt or not all(
+        isinstance(prompt.get(key), str) and prompt[key].strip() for key in ("system", "user_template")
     ):
-        raise ValueError("prompt requires only nonempty system and user_template strings")
+        raise ValueError("prompt requires nonempty system/user_template and mode-specific fields only")
+    if mode == "five-separate":
+        rubrics = prompt["dimension_rubrics"]
+        if not isinstance(rubrics, dict) or list(rubrics) != list(FIVE_WEIGHTS) or not all(
+            isinstance(value, str) and value.strip() for value in rubrics.values()
+        ):
+            raise ValueError("dimension_rubrics must explicitly define the five ordered rubrics")
     if "weights" in config and config["weights"] != DEFAULT_WEIGHTS.as_record():
         raise ValueError("pointwise baseline uses current production weights")
     dataset = resolve_asset_path(dataset.expanduser(), root=root)
@@ -143,6 +155,8 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
         try:
             prompts[key] = {"system": prompt["system"],
                             "user": template.render(**prompt_context(case["input"]))}
+            if mode == "five-separate":
+                prompts[key] = dimension_prompts(prompt, prompts[key]["user"])
         except Exception as exc:
             preparation_errors[key] = type(exc).__name__
     scorer_identity = {p: file_digest(ROOT / p) for p in (
@@ -166,6 +180,13 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
                 if row["status"] == "ok":
                     # Do not trust an edited success row without revalidating its response.
                     payload = json.loads(row["response_json"])
+                    if mode == "five-separate":
+                        calls = row["dimension_calls"]
+                        if combine_calls(calls) != payload or any(
+                            call["prompt"] != prompts[case["case_id"]][call["dimension"]]
+                            or call["request"] != identity["request"] for call in calls
+                        ):
+                            raise ValueError("reuse dimension calls mismatch")
                     if row["output"] != project_score(payload, mode, case["input"]["tier"], five_weights):
                         raise ValueError("reuse output mapping mismatch")
                     if row["prompt"] != prompts.get(case["case_id"]):
@@ -207,10 +228,25 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
             try:
                 if key in preparation_errors:
                     raise ValueError("source input or prompt could not be rendered")
-                response = chat_for_case(key)(stage="score", prompt=prompts[key], request=identity["request"])
-                row.update({field: response.get(field) for field in
-                            ("raw", "usage", "model", "provider", "requested_model", "attempt_id")})
-                payload = response["json"]
+                if mode == "five-separate":
+                    calls = run_calls(key, prompts[key], identity["request"], chat_for_case, run / "attempts")
+                    row["dimension_calls"] = calls
+                    row["reason_origin"] = "aggregated-dimension-calls"
+                    row["attempt_ids"] = [call["attempt_id"] for call in calls if call.get("attempt_id")]
+                    # Preserve partial calls on failure; never mark a partial score successful.
+                    payload = combine_calls(calls)
+                    row["model"] = calls[0].get("model")
+                    row["provider"] = calls[0].get("provider")
+                    row["requested_model"] = calls[0].get("requested_model")
+                    if all(isinstance(call.get("usage"), dict) for call in calls):
+                        keys = {k for call in calls for k, value in call["usage"].items()
+                                if type(value) in (int, float)}
+                        row["usage"] = {k: sum(call["usage"].get(k, 0) or 0 for call in calls) for k in keys}
+                else:
+                    response = chat_for_case(key)(stage="score", prompt=prompts[key], request=identity["request"])
+                    row.update({field: response.get(field) for field in
+                                ("raw", "usage", "model", "provider", "requested_model", "attempt_id")})
+                    payload = response["json"]
                 # A text envelope preserves invalid NaN/Infinity responses in strict JSON archives.
                 row["response_json"] = json.dumps(payload, ensure_ascii=False)
                 if row["raw"] is None:
@@ -262,7 +298,7 @@ def main(argv=None) -> int:
     run.add_argument("--dataset", type=Path, required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--prompt", type=Path, required=True)
-    run.add_argument("--mode", choices=["dimensions", "direct", "semantic", "five"], default="dimensions")
+    run.add_argument("--mode", choices=["dimensions", "direct", "semantic", "five", "five-separate"], default="dimensions")
     run.add_argument("--env-file", type=Path)
     run.add_argument("--split", choices=["dev", "regression"], required=True)
     run.add_argument("--limit", type=int)

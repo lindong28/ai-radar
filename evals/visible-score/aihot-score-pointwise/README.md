@@ -54,6 +54,24 @@ PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluat
 
 `five-pro.json`配置只用于模型对照，不是生产默认。带示例的研究prompt包含其它开发题的原文/参考输出，保存在对应run的 `prompt.json`，不将样本复制进git或当前待测题输入；复现可直接以该文件作为 `--prompt`。扩题或选择新回归时必须同时排除示例及调参题的同源材料，不只排除run中的200个case IDs。示例集、选择规则和曝光核验随研究support保存。当前质量及全部实验位置见[status](../../../docs/evaluations/visible-score/status.md)，新增运行仍需使用冻结版本和明确题集用途。
 
+## 无示例与逐维独立调用
+
+2026-09-21 用户偏好无示例。A9用 `five-ai-impact-v3.json --mode five`，A11用 `five-evidence-boundary-v3.json --mode five`；均沿上方命令替换prompt，不改变题库/权重。旧示例prompt保留为历史证据，不是当前建议路线。
+
+A10用 `five-independent-v2.json --mode five-separate`。prompt的 `dimension_rubrics` 必须按impact/novelty/substance/authority/relevance显式列出五项；一条新闻的五次调用共享同一原始输入，但只读自己的rubric，不读其它维度分数或参考分。每次先reason再0–10整数，代码仍使用同一 `five_score`。按新闻有界并发、单题五次串行，`--workers 8`意味着最多8个在飞请求，不是40个。任一维失败则该题无总分，完整分母保留；`--reuse`仅复用完整成功且身份复核通过的题，不自动复用半题或隐藏失败。
+
+`items/*.json`及 `predictions.jsonl` 的 `dimension_calls` 保存逐维actual prompt、request、response、reason、usage、模型及attempt身份；顶层 `reason_origin=aggregated-dimension-calls` 表示代码拼接，不是模型原生总理由。该模式已测但没有优于A2，不作为生产默认。实际质量、调用数及采用状态看[status](../../../docs/evaluations/visible-score/status.md)。
+
+## 评分题复核页
+
+生成器只读取冻结运行，不重跑模型、不改题库。分析JSON是有序数组，每条 `case_id/category/analysis` 必填，`counterargument`可选；分类为疑似参考分、疑似Radar错误、输入缺口或待判断。分析是agent意见，不是人评。新增批次写尚不存在的输出目录，保留旧页面。
+
+```bash
+PYTHONPATH=src:. uv run python -m evals._shared.score_review --source-run <A2冻结run> --analysis-json <support/review-analysis.json> --comparison-run <候选冻结run> --output-dir <研究run/review>
+```
+
+`--comparison-run`可重复。生成器核题目/预测/原分、实际prompt及比较题目身份；页面展开原始输入、实际模型reason和prompt，提供四类资格票、自由理由、浏览器本地草稿和一键复制整批JSON；复制失败显示整批文本，不假报成功。草稿同时绑定源cases/predictions SHA和完整批次SHA，分析或候选变化不得复用旧票。票型字段及收到回票后的处理见[人评说明](../../../docs/evaluations/human-labels.md#评分题资格复核票)。本轮20条页面位于 `runs/visible-score/aihot-score-pointwise/v1/2026-09-20/18-01-06/review/index.html`；须通过隔离本地HTTP服务展示，不对外发布。
+
 ## 三维语义候选
 
 判断标准、权重及与旧六维的区别见[设计](../../../docs/evaluations/visible-score/semantic-design.md)。一次调用按影响、信息增量、实质支撑分别输出 `{"reason": "…", "score": 0}`，每维分数为0–10整数；顶层先给总理由，再给三维对象。`--mode semantic` 用代码计算 `5*impact + 3*information_gain + 2*evidence`，不使用校准、来源系数或排名池。

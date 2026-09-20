@@ -76,6 +76,14 @@ PYTHONPATH=src:. uv run python -m evals._shared.human_labels apply \
 
 输出是 **human-priority 计分视图，不是原 `aihot-observed-membership` 的下一版本**；消费者语义不同，不冒充纯 AIHOT 收录 benchmark。共享 `apply_labels` 支持表中四对象的参考字段；当前网页导入器仅解析这次 prefilter export，其他对象收到实际人评时须按其票型接入，不能把文本候选质量票强转成参考值。此命令不会改历史 load_dataset、自动建题脚本或生产。后续 session 必须显式完成上述应用步骤；需注册可直接模型运行的新 benchmark 时，沿既有契约分区另建。2026-09-20 用户另行授权历史指标查询默认采用明确标识的人评计分视图，具体如下；原 benchmark 的输入契约与观测标签不变。
 
+### 评分题资格复核票
+
+评分复核页导出 `format=ai-radar-score-human-review-v1`，不同于prefilter的positive/negative/keep票型；现有 `import-prefilter` 不接收该格式。`metadata` 中的 `target/benchmark/version/source_run` 绑定实际被审的评分运行，`source_cases_sha256/source_predictions_sha256`绑定源字节，`batch_id/batch_sha256`绑定源、agent分析和比较候选，`exported_at`只是浏览器导出时钟，不冒充人评完成时间。`judgments[]`保存 `case_id/decision/reason`；模型reason、agent分析、用户reason分开，不能互相补造。
+
+`pending`未评，`retain`暂保留题目但**不确认AIHOT具体分数**，`exclude`用户建议该题不进入评分评测，`uncertain`无法判断。这里没有人工数值score，不能强转成 `annotations[].field=score`，尤其不能把retain当旧keep。同批草稿恢复必须核完整batch SHA，不能只核源预测后把旧票盖上新批次身份。
+
+收到用户真实回票后，将原JSON及实际展示材料追加到 `human-evals/visible-score/reviews.json`，沿共用metadata保存评价者/批次来源；资格裁决与数值标注分开记录、原题/原分不覆盖。已确认剔除仅作用于指定评分题/实质输入/评分维度，不外推准入、富化或精选；对同一有效视图重算全部候选并保留原口径。该步在收到回票后执行，当前没有真实票，未建空对象文件、未修改gold或自动删除题目。
+
 ### 当前指标查询与历史补评分
 
 新闻准入默认查询采用 `human-reference-priority-v1`。原 `runs/<run_id>/scores.json` 和 `experiments/<run_id>/metrics/summary.json` 永远是当时的原始评分记录，**不再是默认选型入口**。它们保留用于追溯、判断标签修正与逻辑改动各自的影响；历史原值不是错误数据，但将其不加说明地当成人评优先成绩是错误用法。

@@ -24,6 +24,8 @@
 
 ### 原始参照、历史运行与 support 分区
 
+2026-09-21 无示例评分研究的原始运行、失败和恢复均归标准O2分区。`2026-09-20/18-01-06/support`保存研究脚本、身份检查、源码快照、20条分析及汇总，`review/index.html`是同分区只读人评展示；原票只在用户提交后归 `human-evals/visible-score/reviews.json`。自己的实验worktree原件整合到主checkout后保留字节，冻结记录中的旧路径通过 `evals/asset-relocations.json` 的精确前缀读取映射，不改写历史SHA或用目录迁移冒充新运行。
+
 后续整理按 [ADR-20260920-8f31](../adr/20260920-8f31-separate-evaluation-assets-from-reference-archives.md) 执行；上节的未迁范围是前一次题库整理的边界，不是继续保留杂目录的要求。
 
 | 内容 | 当前实际入口 | 语义 |

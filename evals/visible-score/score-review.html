@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>评分题复核 · AI Radar</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fa; --surface: #fff; --ink: #1b2a3a; --muted: #526478;
+      --line: #dce3ea; --accent: #175f9e; --accent-bg: #eaf3fc; --warn: #925119;
+      --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px;
+      --radius: 8px; --motion: 120ms ease-out;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 14px; line-height: 20px; color: var(--ink); background: var(--bg);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button, select, textarea { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    button, select { min-height: 36px; padding: var(--s2) var(--s3); }
+    button, summary, select, input[type="radio"] { cursor: pointer; }
+    button, a, select, textarea, .choice { transition: background-color var(--motion), border-color var(--motion), color var(--motion); }
+    button:hover, .choice:hover { background: var(--accent-bg); border-color: var(--accent); }
+    button:active { background: #d7e9fa; }
+    button:disabled { opacity: .5; cursor: default; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    a { color: var(--accent); overflow-wrap: anywhere; }
+    a:hover { color: #113e67; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 20px; line-height: 28px; font-weight: 650; overflow-wrap: anywhere; }
+    h2 { font-size: 16px; line-height: 24px; font-weight: 600; }
+    pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/20px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .muted, .meta { color: var(--muted); }
+    .small { font-size: 12px; line-height: 16px; }
+    .number { font-variant-numeric: tabular-nums; }
+    .topbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); background: var(--surface); }
+    .brand { font-size: 16px; line-height: 24px; font-weight: 650; }
+    .progress-group { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+    progress { accent-color: var(--accent); width: 100px; height: 8px; }
+    .topbar .copy { margin-left: auto; background: var(--accent); color: white; border-color: var(--accent); }
+    .topbar .copy:hover { background: #124d82; }
+    .scope { padding: var(--s2) var(--s4); border-bottom: 1px solid var(--line); background: #edf3f8; font-size: 12px; line-height: 20px; }
+    .shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: calc(100vh - 108px); }
+    .sidebar { position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column; min-width: 0; padding: var(--s3); border-right: 1px solid var(--line); background: var(--surface); }
+    .filter-label { margin-bottom: var(--s1); font-weight: 600; }
+    .nav-summary { margin: var(--s2) 0; }
+    .case-list { display: flex; flex-direction: column; gap: var(--s1); overflow-y: auto; min-height: 0; padding: 2px; }
+    .case-nav { flex: 0 0 auto; width: 100%; text-align: left; padding: var(--s3); display: grid; gap: var(--s1); border-color: transparent; }
+    .case-nav[aria-current="true"] { border-color: var(--accent); background: var(--accent-bg); }
+    .nav-title { font-size: 13px; line-height: 20px; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+    .nav-detail { display: flex; flex-wrap: wrap; gap: var(--s2); color: var(--muted); font-size: 12px; line-height: 16px; }
+    main { min-width: 0; padding: var(--s4) var(--s6) var(--s6); }
+    .case-toolbar { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin-bottom: var(--s3); }
+    .case-toolbar .position { margin-right: auto; }
+    article { display: grid; gap: var(--s4); }
+    .article-header { display: grid; gap: var(--s2); }
+    .meta { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+    .scores { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s3); }
+    .score { padding: var(--s3) var(--s4); border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); }
+    .score-value { display: block; font-size: 28px; line-height: 36px; font-weight: 650; }
+    .section { display: grid; gap: var(--s2); }
+    .prose { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 82ch; line-height: 24px; }
+    .note { font-size: 12px; line-height: 20px; color: var(--muted); }
+    .analysis-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4); }
+    .analysis { padding-left: var(--s3); border-left: 3px solid #b8d2e9; }
+    .counterargument { border-left-color: #d5c2a5; }
+    .dimensions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+    .dimension { padding: var(--s2) var(--s3); }
+    .dimension dt { font-size: 12px; line-height: 20px; color: var(--muted); }
+    .dimension dd { margin: var(--s1) 0 0; font-size: 16px; line-height: 24px; font-weight: 600; }
+    details { min-width: 0; border-top: 1px solid var(--line); padding-top: var(--s2); }
+    summary { color: var(--accent); padding: var(--s1) 0; }
+    details[open] > summary { margin-bottom: var(--s2); }
+    details pre { padding: var(--s3); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+    .candidate { padding: var(--s4); background: #edf3f8; border-radius: var(--radius); }
+    .decision { padding: var(--s4); border: 1px solid #b8d2e9; border-radius: var(--radius); background: var(--surface); }
+    .choices { display: flex; flex-wrap: wrap; gap: var(--s2); border: 0; padding: 0; margin: 0; }
+    .choices legend { font-weight: 600; padding: 0 0 var(--s2); font-size: 16px; line-height: 24px; }
+    .choice { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: var(--radius); }
+    .choice:has(input:checked) { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+    .choice input { margin: 0; accent-color: var(--accent); }
+    textarea { width: 100%; min-height: 88px; padding: var(--s3); resize: vertical; }
+    .decision textarea { margin-top: var(--s1); }
+    .warning { color: var(--warn); }
+    #copy-fallback { margin: var(--s3) var(--s4); }
+    #copy-fallback textarea { min-height: 200px; margin-top: var(--s2); }
+    [hidden] { display: none !important; }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 224px minmax(0, 1fr); }
+      main { padding: var(--s4); }
+      .analysis-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .shell { display: block; }
+      .sidebar { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .case-list { max-height: 152px; }
+      .topbar .copy { margin-left: 0; }
+      main { padding: var(--s3); }
+      .scores { gap: var(--s2); }
+      .score { padding: var(--s2); }
+      .score-value { font-size: 24px; line-height: 32px; }
+      .dimensions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .choice { flex: 1 1 144px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">评分题复核</span>
+    <div class="progress-group"><span id="progress-text" class="number"></span><progress id="progress" aria-label="复核完成进度"></progress></div>
+    <span id="save-status" class="small muted" role="status"></span>
+    <button id="copy-all" class="copy" type="button">复制整批复核 JSON</button>
+  </header>
+  <p class="scope">仅复核 visible-score 评分评测题，不影响新闻准入、内容补充或精选。票据须整批粘回对话并确认后处理；此页不会改 gold、题库或生效人评标签。</p>
+  <section id="copy-fallback" hidden aria-label="手动复制整批复核结果">
+    <p id="copy-status" class="warning" role="status"></p>
+    <textarea id="copy-text" readonly aria-label="完整复核 JSON"></textarea>
+  </section>
+  <div class="shell">
+    <aside class="sidebar" aria-label="样本导航">
+      <label class="filter-label" for="category-filter">初步分组</label>
+      <select id="category-filter"></select>
+      <p id="nav-summary" class="nav-summary small muted"></p>
+      <nav id="case-list" class="case-list" aria-label="评分题"></nav>
+    </aside>
+    <main>
+      <div class="case-toolbar">
+        <span id="position" class="position small muted number"></span>
+        <button id="previous" type="button">上一条</button><button id="next" type="button">下一条</button>
+      </div>
+      <article id="case-content" aria-label="当前评分题"></article>
+    </main>
+  </div>
+  <noscript>此复核页需要 JavaScript 来显示样本及保存你的草稿。</noscript>
+  <script id="review-data" type="application/json">__REVIEW_DATA__</script>
+  <script>/* SCORE_REVIEW_SCRIPT */</script>
+</body>
+</html>

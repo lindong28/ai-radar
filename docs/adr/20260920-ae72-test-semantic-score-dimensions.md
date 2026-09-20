@@ -1,6 +1,6 @@
 # 三维语义评分的离线实验
 
-Status: accepted for offline experiment · 2026-09-20
+Status: accepted for offline experiment · 2026-09-20；“暂不拆多次调用”被[20260921-a93c](20260921-a93c-test-no-example-score-rubrics-and-dimension-calls.md)窄替代，仅授权离线对照。
 
 用户选择优先多维语义评分、先做好判断标准及组合。新候选不继承旧六维与零权重；采用影响、信息增量、实质支撑和预设50/30/20，一次Flash调用，由代码组合。具体刻度、边界、题集与停止条件见[设计](../evaluations/visible-score/semantic-design.md)。
 

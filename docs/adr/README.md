@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260921-a93c](./20260921-a93c-test-no-example-score-rubrics-and-dimension-calls.md) | 无示例刻度与逐维独立调用对照；残差人评只导出待裁决票 | accepted for offline experiment | 2026-09-21 |
 | [20260921-52af](./20260921-52af-test-author-inspired-five-dimension-scores.md) | 作者结构优先的五维假设与显式组合，MAE<3，多轮离线验证 | accepted for offline experiment | 2026-09-21 |
 | [20260920-ae72](./20260920-ae72-test-semantic-score-dimensions.md) | 三维语义刻度、固定50/30/20与同规则直接对照；仅离线 | accepted for offline experiment | 2026-09-20 |
 | [20260920-6a27](./20260920-6a27-evaluate-pointwise-visible-scores.md) | 逐条可见分 reason-first 基线、同题 Flash 候选与固定映射离线优化 | accepted for offline experiment | 2026-09-20 |

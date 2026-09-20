@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260921-a93c](adr/20260921-a93c-test-no-example-score-rubrics-and-dimension-calls.md)：无示例评分的impact刻度、逐维独立调用和证据边界对照；20题人评页不自动改gold。
+
 [20260921-52af](adr/20260921-52af-test-author-inspired-five-dimension-scores.md)：五维语义假设、代码组合与MAE<3离线研究。
 
 [20260920-8f31](adr/20260920-8f31-separate-evaluation-assets-from-reference-archives.md)：原始参照、历史运行与当前入口分离，保留冻结字节和路径解析。
