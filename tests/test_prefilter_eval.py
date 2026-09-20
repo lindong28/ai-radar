@@ -58,9 +58,9 @@ def test_runner_renders_override_context_without_gold(tmp_path):
     assert all(p["system"] == "candidate" and p["user"].endswith("|False|False|absent") for p in captured)
 
 
-def fixture_dataset(tmp_path):
+def fixture_dataset(tmp_path, rows=None):
     leaf = tmp_path / "data/news-admission/aihot-prefilter/v1"
-    assets.write_jsonl(leaf / "cases.jsonl", cases())
+    assets.write_jsonl(leaf / "cases.jsonl", cases() if rows is None else rows)
     assets.write_json(leaf / "manifest.json", {
         "schema_version": 2, "target": "news-admission", "benchmark": "aihot-prefilter",
         "version": "v1", "evaluation_mode": "pointwise", "case_count": 10,
@@ -84,6 +84,25 @@ def test_sampling_ignores_labels_and_keeps_splits_disjoint():
     assert not ids(dev) & ids(prefilter_eval.select_cases(original, "regression", 3, "seed"))
     with pytest.raises(ValueError):
         prefilter_eval.select_cases(original, "dev", 0, "seed")
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_default_runs_policy_but_explicit_candidate_is_model_only(tmp_path, override):
+    rows = cases()
+    for row in rows:
+        row["input"].update(source_id="buzzing_hn", content_text="99 HN Points")
+    leaf = fixture_dataset(tmp_path, rows)
+    def factory(attempts):
+        return lambda key: lambda **kw: {"json": {
+            "reason": "AI launch", "is_ai_related": True, "confidence": .9}}
+    prompt = {"system": "candidate", "user_template": "{{ item.title }}"} if override else None
+    result = prefilter_eval.evaluate(leaf, config=config(), split="dev", limit=2, seed="s",
+                                    chat_factory=factory, label="default-policy", root=tmp_path,
+                                    prompt=prompt)
+    predictions = assets.read_jsonl(Path(result["run"]) / "predictions.jsonl")
+    assert len(predictions) == 2
+    assert all(row["output"]["member"] is override for row in predictions)
+    assert all(("admission_policy" in row) is not override for row in predictions)
 
 
 def test_exclusions_remove_seen_ids_without_changing_remaining_order():

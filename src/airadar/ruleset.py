@@ -124,12 +124,19 @@ def prefilter_inputs_digest() -> str:
     a line would otherwise trigger a redundant full-window recompute.
     """
 
+    from .prefilter.policy import POLICY
     from .prefilter.prompts import render_prefilter_prompt
+    from .provider.deepseek_v32 import DeepSeekV32Prefilter
 
     rendered = render_prefilter_prompt(_DIGEST_PROBE_ITEM)  # type: ignore[arg-type]
     digest = hashlib.sha256()
     digest.update(rendered["system"].encode("utf-8"))
     digest.update(rendered["user"].encode("utf-8"))
+    digest.update(f"policy={POLICY}\u0000model={DeepSeekV32Prefilter.model_id}".encode())
+    for name in ("AI_RADAR_PREFILTER", "AI_RADAR_DEEPSEEK_PREFILTER_MODEL",
+                 "AI_RADAR_ARK_PREFILTER_MODEL", "AI_RADAR_ARK_DEEPSEEK_MODEL",
+                 "AI_RADAR_FORCE_HEURISTIC"):
+        digest.update(f"{name}={os.environ.get(name, '')}\u0000".encode())
     return digest.hexdigest()[:8]
 
 

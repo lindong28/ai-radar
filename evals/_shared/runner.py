@@ -49,7 +49,8 @@ def run_pool(cases: list[dict], config: dict, *, chat_factory, cache: Path, work
         raise ValueError("workers must be between 1 and 32")
     object_identity = identity(config)
     stage_identity = {"sources": object_identity["source_sha256"], "requests": object_identity["requests"],
-                      "transport": config["transport_identity"]}
+                      "transport": config["transport_identity"],
+                      "prefilter_policy": object_identity["prefilter_policy"]}
     lock = threading.Lock()
     active = peak = calls = hits = 0
     started = time.monotonic()

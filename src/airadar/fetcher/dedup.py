@@ -136,7 +136,11 @@ def upsert_item(conn: sqlite3.Connection, item: FetchedItem, *, wechat: bool = F
     if x_post_id:
         identity_text = f"{identity_text}\n{x_post_id}"
     item_content_hash = content_hash(identity_text)
-    extra_json = json.dumps(item.extra, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # Preserve this batch's facts before dedup keeps the first publication time
+    # but refreshes fetched_at. Prefilter must not combine those two snapshots.
+    extra = {**item.extra, "title_only_fetch_time_placeholder": bool(item.published_at)
+             and item.content_text == item.title and item.published_at == item.fetched_at}
+    extra_json = json.dumps(extra, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     existing = conn.execute(
         "SELECT id FROM items WHERE source_id=? AND content_hash=?",
         (item.source_id, item_content_hash),

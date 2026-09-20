@@ -56,7 +56,7 @@ def test_projection_real_consumer_preserves_cases_and_rejects_mutated_source(tmp
     target_metrics.parent.mkdir(parents=True)
     target_metrics.write_bytes(metrics.read_bytes())
     result = prefilter_eval.evaluate(dataset, config={"models": {"prefilter": "deepseek-v4-flash"},
-        "transport_identity": {}}, split="dev", limit=None, seed="fixture", label="model",
+        "transport_identity": {}, "prefilter_policy": False}, split="dev", limit=None, seed="fixture", label="model",
         chat_factory=lambda attempts: lambda key: lambda **kwargs:
             {"json": {"reason": "fixture evidence", "is_ai_related": True, "confidence": 1}}, root=model_root)
     source = Path(result["run"])

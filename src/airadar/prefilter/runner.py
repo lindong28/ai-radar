@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -17,6 +18,7 @@ from ..ruleset import current_version
 from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
 from ..stage_common import provider_item_from_row as _to_provider_item
+from .policy import apply_to_output
 from .prompts import render_prefilter_prompt
 
 
@@ -71,7 +73,8 @@ def _candidate_rows(
     if not force:
         params.append(ruleset_version)
     sql = f"""
-      SELECT i.id, i.title, i.url, i.source_id, s.tier, i.author, i.published_at, i.content_text
+      SELECT i.id, i.title, i.url, i.source_id, s.tier, i.author, i.published_at, i.content_text,
+             s.kind, i.fetched_at, i.extra_json
       FROM items i
       JOIN sources s ON s.id=i.source_id
       WHERE {item_filter}
@@ -96,7 +99,7 @@ def _candidate_rows(
 
 
 def _evaluate_item(
-    provider: PrefilterProvider, item: ProviderItem
+    provider: PrefilterProvider, item: ProviderItem, *, policy_input: dict | None = None
 ) -> tuple[PrefilterNumeric | None, dict[str, Any], str | None, int]:
     start = time.monotonic()
     if os.environ.get("AI_RADAR_FAKE_BAD_JSON"):
@@ -115,6 +118,8 @@ def _evaluate_item(
         "raw": result.raw,
     }
     try:
+        numeric = PrefilterNumeric.model_validate(output)
+        output = apply_to_output(policy_input or vars(item), output)
         numeric = PrefilterNumeric.model_validate(output)
         error = None
     except ValidationError as exc:
@@ -166,7 +171,13 @@ def run_prefilter(
     errors = 0
     for row in rows:
         item = _to_provider_item(row)
-        numeric, output, error, latency_ms = _evaluate_item(selected_provider, item)
+        policy_input = {**vars(item), "source_kind": row[8], "fetched_at": row[9],
+                        "extra": json.loads(row[10] or "{}")}
+        numeric, output, error, latency_ms = _evaluate_item(
+            selected_provider, item, policy_input=policy_input)
+        # Freeze the facts used by rules alongside the unchanged model prompt.
+        output["policy_input"] = {key: policy_input[key] for key in
+                                  ("source_kind", "fetched_at", "extra")}
         errors += 1 if error else 0
         _insert_evaluation(conn, item, selected_provider, selected_ruleset, numeric, output, error, latency_ms)
         processed += 1

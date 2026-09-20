@@ -39,6 +39,7 @@ from airadar.enrich.prompts_v2 import render_enrich_prompt
 from airadar.enrich.schema_v2 import EnrichOutputV2
 from airadar.prefilter.prompts import render_prefilter_prompt
 from airadar.prefilter.runner import PrefilterNumeric
+from airadar.prefilter.policy import apply_to_output
 from airadar.presentation.summary import _visible_reason_from_payload, item_summary
 from airadar.provider.base import ProviderItem
 from airadar.provider.judgment import require_reason_first
@@ -152,6 +153,8 @@ def predict_one(target: str, input: dict[str, Any], config: dict[str, Any]) -> d
         raise ValueError(f"unknown target: {target}")
     item = _item(input)
     stages = {stage: _run_stage(stage, item, config)}
+    if stage == "prefilter" and stages[stage]["status"] == "ok" and config.get("prefilter_policy", True):
+        stages[stage]["output"] = apply_to_output(input, stages[stage]["output"])
     if target == "news-admission" and stages[stage]["status"] == "ok" and stages[stage]["output"]["is_ai_related"]:
         stages["score"] = _run_stage("score", item, config)
     success = all(value["status"] == "ok" for value in stages.values())
@@ -275,7 +278,7 @@ def identity(config: dict[str, Any]) -> dict[str, Any]:
     root = Path(__file__).resolve().parents[2]
     paths = [
         "evals/_shared/inference.py", "src/airadar/prefilter/prompts.py",
-        "src/airadar/prefilter/runner.py", "src/airadar/provider/base.py",
+        "src/airadar/prefilter/runner.py", "src/airadar/prefilter/policy.py", "src/airadar/provider/base.py",
         "src/airadar/scorer/prompts.py", "src/airadar/scorer/schema.py",
         "src/airadar/enrich/prompts_v2.py", "src/airadar/enrich/schema_v2.py",
         "src/airadar/enrich/normalizers/production_enrich_provider_output_v2.py",
@@ -290,6 +293,7 @@ def identity(config: dict[str, Any]) -> dict[str, Any]:
         "baseline": "isolated-current-source-replay", "surface": "timeline-and-archive-membership",
         "source_sha256": {path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in paths},
         "requests": {stage: _request(stage, config) for stage in _STAGES},
+        "prefilter_policy": config.get("prefilter_policy", True),
         "selection": config.get("selection", {}), "weights": config.get("weights", DEFAULT_WEIGHTS.as_record()),
         "now": config.get("now"), "archive_initial": config.get("archive_initial"),
         "retry_policy": "caller-owned; one invocation per stage",

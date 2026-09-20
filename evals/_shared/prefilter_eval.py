@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from jinja2 import StrictUndefined, Template
+from airadar.prefilter.policy import POLICY, context_flags
 
 from .assets import (
     ROOT,
@@ -33,15 +34,7 @@ BENCHMARK = "aihot-prefilter"
 
 def prompt_context(raw: dict) -> dict:
     """Expose only source facts, never reference membership or case metadata."""
-    refs = (raw.get("extra") or {}).get("referenced_tweets") or []
-    return {"item": _item(raw),
-            "is_reply": raw.get("source_kind") == "x" and any(
-                isinstance(ref, dict) and ref.get("type") == "replied_to" for ref in refs),
-            "is_title_only_web": raw.get("source_kind") == "web"
-                and raw["source_id"] != "hf_daily_papers"
-                and raw["content_text"] == raw["title"]
-                and bool(raw.get("published_at"))
-                and raw["published_at"] == raw.get("fetched_at")}
+    return {"item": _item(raw), **context_flags(raw)}
 
 
 def select_cases(cases: list[dict], split: str, limit: int | None, seed: str,
@@ -62,10 +55,11 @@ def select_cases(cases: list[dict], split: str, limit: int | None, seed: str,
 def object_identity(config: dict, prompt: dict | None) -> dict:
     from airadar.prefilter.prompts import SYSTEM_PROMPT, USER_TEMPLATE
 
-    paths = ["src/airadar/provider/judgment.py", "src/airadar/prefilter/prompts.py", "src/airadar/provider/deepseek_v32.py",
+    paths = ["src/airadar/prefilter/policy.py", "src/airadar/provider/judgment.py", "src/airadar/prefilter/prompts.py", "src/airadar/provider/deepseek_v32.py",
              "src/airadar/prefilter/runner.py", "evals/_shared/inference.py",
              "evals/_shared/prefilter_eval.py", "evals/_shared/transport.py"]
     return {"baseline": "isolated-current-source-prefilter", "surface": "prefilter-boolean-only",
+            "admission_policy": POLICY if config.get("prefilter_policy", prompt is None) else None,
             "request": _request("prefilter", config), "transport": config["transport_identity"],
             "prompt_override": prompt, "system_prompt": SYSTEM_PROMPT if prompt is None else prompt["system"],
             "source_sha256": {p: file_digest(ROOT / p) for p in paths},
@@ -89,6 +83,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                   for p in exclude_runs]
     excluded = frozenset(key for row in exclusions for key in row["case_ids"])
     cases = select_cases(pool, split, limit, seed, excluded)
+    # Explicit prompt experiments remain model-only unless explicitly enabled.
+    config = {**config, "prefilter_policy": config.get("prefilter_policy", prompt is None)}
     identity = object_identity(config, prompt)
     # Validate all input/template paths before creating chargeable attempts.
     template = None
@@ -163,6 +159,11 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
             result = predict_one("prefilter", raw, {**config, "chat": call})
             row = {**result, "output": {"member": result["output"]["is_ai_related"]}
                    if result["status"] == "ok" else None}
+            if config["prefilter_policy"]:
+                row["admission_policy"] = {"name": POLICY, "rejection_reasons": []}
+                if result["status"] == "ok":
+                    row["admission_policy"] = result["output"]["admission_policy"]
+                    row["model_output"] = {"member": result["output"]["model_output"]["is_ai_related"]}
         write_json(run / "items" / f"{key}.json", row)
         return row
 

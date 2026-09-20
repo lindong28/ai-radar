@@ -5,16 +5,7 @@ from airadar.provider.base import ProviderItem
 
 
 def test_chinese_half_states_the_same_rule_with_concrete_shapes() -> None:
-    """The prompt is bilingual, and the two halves drifting apart is the hazard.
-
-    This used to pin five category words from an exclusion list. That list was the
-    defect: it enumerated objects (printers, appliances, car factories) while the
-    include side asked only whether an item was "related to" AI, so consumer hardware
-    carrying an AI feature satisfied one and escaped the other. The Chinese half must
-    now carry the same aboutness rule the English half does, and still name concrete
-    shapes -- a rule with no worked examples is the failure mode the old list was
-    reaching for.
-    """
+    """C11 includes material AI capabilities, not generic technology association."""
     item = ProviderItem(
         id="fixture",
         title="Xiaomi foldable with a built-in assistant",
@@ -31,7 +22,7 @@ def test_chinese_half_states_the_same_rule_with_concrete_shapes() -> None:
     # The rule itself, not a category list.
     assert "这条内容在讲的那一件事" in prompt
     # Concrete shapes, including the ones that used to slip through.
-    for shape in ["手机", "车", "眼镜", "家电", "配件"]:
+    for shape in ["本地模型运行", "AI 助手", "自动驾驶", "配件"]:
         assert shape in prompt
     # The two ways this was previously decided wrong, both named.
     assert "出现了 AI 这个词" in prompt
@@ -81,15 +72,7 @@ def test_editing_the_user_template_moves_the_stamp(monkeypatch) -> None:
 
 
 def test_criterion_asks_what_the_item_is_about_not_what_it_mentions() -> None:
-    """The rewrite's whole point, pinned so it cannot silently revert.
-
-    The previous criterion asked whether an item was "related to" AI and listed
-    excluded object categories. Consumer hardware carrying an AI feature satisfied
-    the first and was absent from the second, so it passed: measured 2026-09-09, an
-    SUV paint-colour launch and three AI-branded device launches sat in a 25-item
-    pool sample, and they land in product and industry once enriched — the two
-    categories the site already runs long on.
-    """
+    """Pin the selected candidate's aboutness and contextless-link criteria."""
     item = ProviderItem(
         id="fixture",
         title="fixture",
@@ -104,6 +87,6 @@ def test_criterion_asks_what_the_item_is_about_not_what_it_mentions() -> None:
 
     assert "aboutness, not association" in user
     # The failing shape, named so a reader cannot mistake the rule for a category list.
-    assert "even when it ships an assistant" in user
+    assert "Material AI capabilities in physical products also count" in user
     # No judgeable content is its own answer rather than an inferred topic.
-    assert "no judgeable content" in user
+    assert "A contextless link from an unidentified or general-interest source is insufficient" in user

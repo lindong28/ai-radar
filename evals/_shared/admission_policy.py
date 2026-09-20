@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
+from airadar.prefilter.policy import POLICY, rejection_reasons
 
 from .assets import (
     OBSERVED_ADMISSION,
@@ -22,26 +22,8 @@ from .assets import (
     write_jsonl,
 )
 from .metrics import score
-from .prefilter_eval import BENCHMARK, TARGET, prompt_context
+from .prefilter_eval import BENCHMARK, TARGET
 from .relocations import resolve_asset_path
-
-POLICY = "hn100-standalone-body-v1"
-
-
-def rejection_reasons(raw: dict) -> list[str]:
-    """Fixed development-derived policy; receives no case/reference fields."""
-    reasons = []
-    if raw["source_id"] == "buzzing_hn":
-        points = re.search(r"(\d+) HN Points", raw["content_text"][:4000])
-        if points is None or int(points[1]) < 100:
-            reasons.append("hn_points_missing_or_below_100")
-    context = prompt_context(raw)
-    if context["is_reply"]:
-        reasons.append("conversation_reply")
-    if context["is_title_only_web"]:
-        reasons.append("title_only_web_listing")
-    return reasons
-
 
 def apply_policy(raw: dict, prediction: dict) -> dict:
     reasons = rejection_reasons(raw)
@@ -78,7 +60,7 @@ def project(source: Path, *, label: str, root: Path = ROOT) -> dict:
     projected = [apply_policy(by_id[r["case_id"]]["input"], r) for r in predictions]
     run, experiment = create_run(root, TARGET, old["version"], benchmark=old["benchmark"])
     identity = {"baseline": "hybrid-prefilter", "model_component": old["object_identity"],
-                "policy": POLICY, "policy_code_sha256": file_digest(Path(__file__)),
+                "policy": POLICY, "policy_code_sha256": file_digest(ROOT / "src/airadar/prefilter/policy.py"),
                 "context_code_sha256": file_digest(ROOT / "evals/_shared/prefilter_eval.py")}
     now = utc_now()
     metadata = {**old, "label": label, "object_identity": identity, "started_at": now,
