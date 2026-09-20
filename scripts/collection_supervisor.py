@@ -207,7 +207,99 @@ def supervisor_problems(kind: str, state: dict[str, Any], instant: datetime) -> 
     return []
 
 
-def radar_problems(root: Path, instant: datetime, sources_path: Path | None = None) -> list[str]:
+RADAR_SOURCE_FAILURE_ROUNDS = 3
+
+
+RADAR_BROAD_FAILURE_FRACTION = 0.5
+# notify_transition matches on this to tell a blackout apart from a flaky feed.
+# Producer and consumer share the constant so the two cannot drift.
+RADAR_BROAD_PREFIX = 'Radar 本轮 '
+
+
+def read_streaks(path: Path) -> dict[str, Any]:
+    """Load the streak file, treating anything unreadable as "no history".
+
+    Never raises. This function is called from inside `radar_problems`, and main()
+    turns any exception there into a single `归档健康状态无法核实` line that *replaces*
+    the whole Radar list — the staleness check, the "no archive at all" check and the
+    manifest hash verification all vanish with it. `notify_transition` then dedups on a
+    bare boolean, so that substitution costs one page and buys permanent silence. A
+    truncated write or a hand edit must not be able to do that, and since the file is
+    pure derived state, forgetting it is always safe: the worst case is that each
+    currently-failing source waits RADAR_SOURCE_FAILURE_ROUNDS rounds again.
+    """
+    try:
+        loaded = read(path)
+    except Exception:
+        return {}
+    if not isinstance(loaded, dict) or not isinstance(loaded.get('counts'), dict):
+        return {}
+    counts: dict[str, int] = {}
+    for slug, value in loaded['counts'].items():
+        try:
+            counts[str(slug)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return {'run_id': loaded.get('run_id'), 'counts': counts}
+
+
+def write_streaks(path: Path, run_id: object, counts: dict[str, int]) -> None:
+    """Persist streaks atomically under a process-unique temp name. Never raises.
+
+    `save()` derives its temp path from the target alone, so two health checks writing
+    at once race on one filename and can leave a spliced, unparseable file behind —
+    which is exactly the input read_streaks must survive, so this closes the loop rather
+    than relying on it.
+    """
+    temporary = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with temporary.open('w') as stream:
+            json.dump({'run_id': run_id, 'counts': counts}, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    except Exception:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def sustained_source_failures(path: Path, failed: list[str], run_id: object) -> list[str]:
+    """Report only sources that have missed RADAR_SOURCE_FAILURE_ROUNDS capture rounds.
+
+    One round's miss is not a user-visible failure — the next round collects the source
+    — but across ~160 sources at least one misses in most rounds, which made this the
+    noisiest alert on the host. Measured over the 613 rounds recorded in
+    logs/collection-supervisor/health.log: 84 incident transitions, and 97 of the
+    failing rounds were `claude_youtube` alone flickering between HTTP 200 and 404. At
+    three rounds that becomes 20 transitions while every multi-round outage in the same
+    history still fires — the 86-round one that took out the x_* batch, and a 4-round
+    one.
+
+    Counting is keyed to `run_id`, not to invocations. The health check runs every five
+    minutes while capture rounds land every ~5.5 on average, so 20% of manifests get
+    sampled three or more times; counting invocations would let a single round's miss
+    reach the threshold on its own and page with a message claiming three rounds in a
+    row. Re-reading the same manifest is therefore a no-op that returns the same answer.
+
+    Only currently-failing sources are written back, so a source that recovers restarts
+    at zero and the file stays the size of the failing set.
+    """
+    previous = read_streaks(path)
+    # read_streaks returns {} for no-history, so a None run_id would equal that
+    # sentinel every round, freeze the counts at zero, and silence the alert forever.
+    if run_id is not None and previous.get('run_id') == run_id:
+        counts = previous.get('counts', {})
+    else:
+        counts = {slug: int(previous.get('counts', {}).get(slug, 0)) + 1 for slug in failed}
+    write_streaks(path, run_id, counts)
+    return [slug for slug in failed if counts.get(slug, 0) >= RADAR_SOURCE_FAILURE_ROUNDS]
+
+
+def radar_problems(root: Path, instant: datetime, sources_path: Path | None = None,
+                   streak_path: Path | None = None) -> list[str]:
     paths = sorted((root / 'runs').glob('*/manifest.json'), reverse=True)
     latest = None
     for path in paths:
@@ -231,7 +323,19 @@ def radar_problems(root: Path, instant: datetime, sources_path: Path | None = No
         return ['Radar 未找到应采集来源，不能判定归档完整']
     failed = sorted(slug for slug in expected
                     if latest['sources'].get(slug, {}).get('status') not in {'success', 'not_modified'})
-    return [f'Radar 本轮未收全来源：{", ".join(failed)}'] if failed else []
+    if streak_path is None:
+        # No debounce state to read: report what this round saw, and say only that.
+        return [f'Radar 本轮未收全来源：{", ".join(failed)}'] if failed else []
+    sustained = sustained_source_failures(streak_path, failed, latest.get('run_id'))
+    # A round that loses most of the sources at once is a different event from a flaky
+    # feed, and waiting three rounds for it would hide the thing most worth seeing: the
+    # manifest still completes on time, so the staleness check says nothing, and a
+    # DNS/proxy/disk failure that lasts a single round would never be reported at all.
+    # Two sources is the floor so that a tiny configured set cannot make every single
+    # miss "broad".
+    if len(failed) >= max(2, round(len(expected) * RADAR_BROAD_FAILURE_FRACTION)):
+        return [f'{RADAR_BROAD_PREFIX}{len(failed)}/{len(expected)} 个来源未收到：{", ".join(failed)}']
+    return [f'Radar 连续 {RADAR_SOURCE_FAILURE_ROUNDS} 轮以上未收全来源：{", ".join(sustained)}'] if sustained else []
 
 
 def aihot_problems(state: dict[str, Any], instant: datetime, root: Path | None = None) -> list[str]:
@@ -249,17 +353,27 @@ def aihot_problems(state: dict[str, Any], instant: datetime, root: Path | None =
 def notify_transition(path: Path, key: str, problems: list[str], notifier: str) -> None:
     previous = read(path) if path.exists() else {}
     # Stable incident identity: timestamps and rotating log tails never create new pages.
+    # It is deliberately coarse, with one exception. A round that loses most of the
+    # sources is a different event from a flaky feed, and a bare boolean cannot say so:
+    # replaying the archive, 3 of 6 complete 160/160 blackouts sent nothing at all
+    # because a single-source incident already held the channel open — and the source
+    # holding it was `claude_youtube`, the flaky one this debounce exists to suppress.
+    # Escalation therefore joins the identity so it can break through, and de-escalation
+    # back to an ordinary incident is a transition too, which is correct: the blackout
+    # ending is worth saying even while the ordinary incident continues.
     incident = bool(problems)
-    if incident == previous.get('incident', False):
+    escalated = any(problem.startswith(RADAR_BROAD_PREFIX) for problem in problems)
+    identity = f'{incident}:{escalated}'
+    if identity == previous.get('identity', f"{bool(previous.get('incident', False))}:False"):
         return
     title = 'AI Radar 评测数据采集异常' if incident else 'AI Radar 评测数据采集已恢复'
     message = '\n'.join(problems) if incident else f'{key} 本次健康检查通过；旧缺口未被补造。'
     message += '\n请查看 logs/collection-supervisor 与 docs/operations/continuous-eval-data.md。'
-    result = subprocess.run([notifier, '--alert', '--dedup-key', key, '--dedup-text', str(incident),
+    result = subprocess.run([notifier, '--alert', '--dedup-key', key, '--dedup-text', identity,
                              '--title', title, message], timeout=45, check=False)
     if result.returncode:
         raise RuntimeError('采集告警投递失败；下次检查继续重试')
-    save(path, {'incident': incident, 'sent_at': now().isoformat()})
+    save(path, {'incident': incident, 'identity': identity, 'sent_at': now().isoformat()})
 
 
 def main() -> int:
@@ -300,7 +414,8 @@ def main() -> int:
     problems = []
     by_collector = {}
     for label, check in (
-        ('Radar', lambda: radar_problems(args.radar_root, now(), args.sources_path)),
+        ('Radar', lambda: radar_problems(args.radar_root, now(), args.sources_path,
+                                         args.state_dir / 'radar-source-streaks.json')),
         ('AIHOT', lambda: aihot_problems(read(args.state_dir / 'aihot.json'), now(), args.aihot_root)),
     ):
         try:

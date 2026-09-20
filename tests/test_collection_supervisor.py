@@ -281,3 +281,172 @@ def test_http_retry_only_transient(monkeypatch, failures):
             with pytest.raises(httpx.HTTPStatusError):
                 http_client.fetch_feed(source, conn)
     assert len(calls) == len(failures)
+
+
+def _radar_root(tmp_path, sources, run_id='r1'):
+    """A radar tree whose newest completed manifest carries the given source states."""
+    run = tmp_path / 'radar' / 'runs' / run_id
+    run.mkdir(parents=True, exist_ok=True)
+    (run / 'manifest.json').write_text(json.dumps({
+        'state': 'completed', 'completed_at': datetime.now(UTC).isoformat(),
+        'run_id': run_id, 'sources': sources,
+    }))
+    return tmp_path / 'radar'
+
+
+@pytest.fixture
+def stub_read_run(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'airadar.fetcher.raw_capture',
+                        SimpleNamespace(read_run=lambda *_: None))
+
+
+def test_a_source_must_miss_several_capture_rounds_before_it_is_reported(tmp_path):
+    # One round's miss is normal at ~160 sources and the next round collects it;
+    # paging on the first miss is what made this alert the noisiest one on the host.
+    streaks = tmp_path / 'streaks.json'
+    assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r1') == []
+    assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r2') == []
+    assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r3') == ['claude_youtube']
+    assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r4') == ['claude_youtube']
+
+
+def test_re_reading_one_manifest_does_not_advance_the_count(tmp_path):
+    # The health check runs every 5 minutes while capture rounds land every ~5.5, so a
+    # fifth of manifests are sampled three or more times. Counting invocations would let
+    # a single round's miss reach the threshold on its own — and then say "三轮".
+    streaks = tmp_path / 'streaks.json'
+    for _ in range(5):
+        assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r1') == []
+    assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r2') == []
+    assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r3') == ['claude_youtube']
+
+
+def test_a_recovered_source_restarts_its_streak(tmp_path):
+    # "Consecutive", not "cumulative": without the reset a source that misses one round
+    # every few hours would eventually cross the threshold and alert anyway.
+    streaks = tmp_path / 'streaks.json'
+    supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r1')
+    supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r2')
+    supervisor.sustained_source_failures(streaks, [], 'r3')          # recovered
+    assert json.loads(streaks.read_text())['counts'] == {}
+    assert supervisor.sustained_source_failures(streaks, ['claude_youtube'], 'r4') == []
+
+
+def test_sources_are_counted_independently(tmp_path):
+    streaks = tmp_path / 'streaks.json'
+    for run_id in ('r1', 'r2', 'r3'):
+        supervisor.sustained_source_failures(streaks, ['claude_youtube'], run_id)
+    assert supervisor.sustained_source_failures(
+        streaks, ['claude_youtube', 'wx_wechat2rss'], 'r4') == ['claude_youtube']
+
+
+@pytest.mark.parametrize('content', ['{"counts": {"a": 2}', '', '[]', '{"counts": {"a": "many"}}',
+                                     '{"counts": {"a": null}}', '{"counts": []}',
+                                     # the pre-run_id shape this version replaces
+                                     '{"a": 2}'])
+def test_an_unreadable_streak_file_is_forgotten_rather_than_raised(tmp_path, content):
+    # main() turns any exception here into one line that REPLACES the whole Radar list —
+    # staleness, "no archive", manifest verification all vanish — and notify_transition
+    # dedups on a bare boolean, so that substitution costs one page and buys silence.
+    streaks = tmp_path / 'streaks.json'
+    streaks.write_text(content)
+    assert supervisor.sustained_source_failures(streaks, ['a'], 'r1') == []
+    assert json.loads(streaks.read_text())['counts'] == {'a': 1}      # and it self-repairs
+
+
+def test_radar_problems_reports_a_broad_failure_on_the_first_round(tmp_path, stub_read_run):
+    # The manifest completes on time, so the staleness check says nothing; without this
+    # a round that loses every source would wait three rounds, or never be seen at all.
+    sources = {f's{i}': {'status': 'failed'} for i in range(10)}
+    root = _radar_root(tmp_path, sources)
+    problems = supervisor.radar_problems(root, datetime.now(UTC), None, tmp_path / 'streaks.json')
+    assert problems == [f'Radar 本轮 10/10 个来源未收到：{", ".join(sorted(sources))}']
+
+
+def test_radar_problems_debounces_a_single_flaky_source(tmp_path, stub_read_run):
+    sources = {f's{i}': {'status': 'success'} for i in range(10)}
+    sources['bad'] = {'status': 'failed'}
+    streaks = tmp_path / 'streaks.json'
+    instant = datetime.now(UTC)
+    for run_id in ('r1', 'r2'):
+        root = _radar_root(tmp_path, sources, run_id)
+        assert supervisor.radar_problems(root, instant, None, streaks) == []
+    root = _radar_root(tmp_path, sources, 'r3')
+    assert supervisor.radar_problems(root, instant, None, streaks) == [
+        'Radar 连续 3 轮以上未收全来源：bad']
+
+
+def test_radar_problems_without_streak_state_claims_only_this_round(tmp_path, stub_read_run):
+    sources = {f's{i}': {'status': 'success'} for i in range(10)}
+    sources['bad'] = {'status': 'failed'}
+    root = _radar_root(tmp_path, sources)
+    assert supervisor.radar_problems(root, datetime.now(UTC)) == ['Radar 本轮未收全来源：bad']
+
+
+def test_main_wires_the_streak_file_into_the_radar_check(tmp_path, monkeypatch):
+    # Without this the only main() test stubs radar_problems out entirely, so dropping
+    # the streak argument — which silently restores the original noise — would pass.
+    # --notify is deliberately omitted so no notifier is ever invoked.
+    seen: dict[str, object] = {}
+
+    def fake_radar_problems(root, instant, sources_path=None, streak_path=None):
+        seen['streak_path'] = streak_path
+        return []
+
+    monkeypatch.setattr(supervisor, 'radar_problems', fake_radar_problems)
+    monkeypatch.setattr(supervisor, 'aihot_problems', lambda *_, **__: [])
+    monkeypatch.setattr(supervisor, 'supervisor_problems', lambda *_: [])
+    state = tmp_path / 'state'
+    state.mkdir()
+    monkeypatch.setattr(sys, 'argv', [
+        'collection_supervisor', '--state-dir', str(state),
+        'health', '--radar-root', str(tmp_path / 'radar')])
+
+    supervisor.main()
+
+    assert seen['streak_path'] == state / 'radar-source-streaks.json'
+
+
+def _fake_notifier(tmp_path):
+    """A notifier that records its argv. Nothing here may reach a real channel."""
+    log = tmp_path / 'notifier.log'
+    script = tmp_path / 'fake-notify'
+    script.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_NOTIFY_LOG"\n')
+    script.chmod(0o755)
+    return script, log
+
+
+def test_a_blackout_breaks_through_an_open_single_source_incident(tmp_path, monkeypatch):
+    # The dedup identity used to be a bare boolean, so a round losing every source sent
+    # nothing whenever any incident was already open. Replaying the archive, 3 of 6 real
+    # 160/160 blackouts were swallowed that way — by an incident held open by the one
+    # flaky feed this debounce exists to suppress.
+    script, log = _fake_notifier(tmp_path)
+    monkeypatch.setenv('FAKE_NOTIFY_LOG', str(log))
+    state = tmp_path / 'notification-Radar.json'
+
+    supervisor.notify_transition(state, 'k', ['Radar 连续 3 轮以上未收全来源：claude_youtube'], str(script))
+    assert log.read_text().count('--dedup-text') == 1
+
+    supervisor.notify_transition(state, 'k', [f'{supervisor.RADAR_BROAD_PREFIX}160/160 个来源未收到：…'], str(script))
+    body = log.read_text()
+    assert body.count('--dedup-key') == 2, 'the blackout must page even though an incident was open'
+    assert 'True:True' in body and 'True:False' in body
+
+
+def test_an_ordinary_incident_does_not_re_page_itself(tmp_path, monkeypatch):
+    script, log = _fake_notifier(tmp_path)
+    monkeypatch.setenv('FAKE_NOTIFY_LOG', str(log))
+    state = tmp_path / 'notification-Radar.json'
+    for _ in range(3):
+        supervisor.notify_transition(state, 'k', ['Radar 连续 3 轮以上未收全来源：a'], str(script))
+    assert log.read_text().count('--dedup-key') == 1
+
+
+def test_a_manifest_without_a_run_id_still_advances_the_count(tmp_path):
+    # read_streaks returns {} for "no history", so a None run_id equal to that sentinel
+    # would take the "same manifest" branch every round and freeze counting at zero.
+    streaks = tmp_path / 'streaks.json'
+    for _ in range(3):
+        result = supervisor.sustained_source_failures(streaks, ['a'], None)
+    assert result == ['a']
