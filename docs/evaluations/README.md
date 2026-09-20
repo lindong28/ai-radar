@@ -6,6 +6,8 @@
 
 ## 当前建题默认（2026-09-19）
 
+2026-09-20 起，先应用[人评标注与优先级](human-labels.md)：明确用户人评优先于 AIHOT/模型派生参考，按对象和字段保存，建题后显式应用；历史观测标签不覆盖。该页包含本批原票位置、导入/复用命令、判官分歧处理和后续 reason-first 要求。
+
 按消费者契约区分 benchmark：输入格式、评测语义或处理逻辑不同，使用不同 benchmark；契约不变的扩题、去重或来源适配，只递增数据版本 `v1`、`v2`，变化写进该版 README。`schema_version` 是载荷格式，历史 `object-specific-v2` / `aihot-original-v3` 是建题规则标签，都不是新目录的版本名。共享池与独立逐条题集分开，不以改目录名掩盖运行语义差异。
 
 原始档案共享，但各对象独立选题，不先取四对象条件交集。O2/O3 缺少 Radar raw 时可显式使用 AIHOT 原标题与绑定原文；O1 不补这种只有可见正例的数据；O4 局部阈值不冒充完整候选组。操作见[建题与扩展](benchmarks/object-datasets.md)，原始输入与题数见[库存](benchmarks/inventory.md)。早先 v1 身份迁移不改题目；随后获批的 O1 时间语义修订已另建 `aihot-observed-membership/v1`，不能与旧 gold 的成绩直接相减。

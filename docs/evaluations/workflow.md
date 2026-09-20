@@ -4,6 +4,8 @@
 
 ## 新数据默认：逐对象独立建题
 
+建题、扩题或选择优化子集后，必须按[人评优先流程](human-labels.md#后续建题扩题迭代必做)检查并显式应用该对象已有用户标注，再冻结本轮计分视图。原 builder 仍产出 AIHOT 事实标签，不会隐式载入可变人评；不能漏掉这一步而把自动标签当作最新优化 gold。
+
 O1 当前采用 [aihot-observed-membership](news-admission/aihot-observed-membership/v1/README.md)：建题必须显式指定 `--admission-benchmark aihot-observed-membership`，运行其同名 evaluate.py。下文旧 prefilter 入口仍可复现 ±12h 契约，不是当前 gold。`admission_rescore` 可按实际输入完全相等复用旧响应，保留旧对象身份与失败；这类结果仅为测量迁移诊断，不算模型优化或未见回归。
 
 先按[按对象判断数据充分性](benchmarks/object-datasets.md#data-sufficiency)确定给定时间段的数据足够哪些用途。采集 coverage 用于定位过程缺口，不是四对象统一入题门；恢复、补采的实际内容及其证据决定可用范围。

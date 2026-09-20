@@ -4,6 +4,8 @@
 
 ## L2 数据资产
 
+2026-09-20 新增[人评优先标注层](human-labels.md)：用户原票及其材料在 `human-evals/<target>/<batch>/` 冻结，明确人评覆盖同题同字段的自动参考，原 AIHOT 证据与成绩不覆盖。原票和 effective 计分视图分开保留，不能把改标签后的分数当作模型改进。
+
 2026-09-19 O1 新增消费者契约 `news-admission/aihot-observed-membership/v1`，用于冻结批次已观察收录；它不是旧 `aihot-prefilter` 的改名。新 gold、逐题去向及来源覆盖独立冻结，原始证据不删；旧对象响应可严格按输入身份重评分，但不得把重评分称为新模型调用或涨分收益。运行与 metadata 沿下表同样分区，当前操作见 [新入口](news-admission/aihot-observed-membership/v1/README.md)。
 
 新建题采用[逐对象规则](benchmarks/object-datasets.md)：题库为 `<target>/<benchmark>/vN`，按消费者契约区分 benchmark。共享证据随本次第一个目标落盘，不强绑 O1。O2/O3 可显式接入 AIHOT 原文，不混入 Radar raw-inputs；原 HTML 与输入授权 digest 随版本冻结。早先四份 v1 是旧命名 schema2 题库的身份迁移，O1 随后另建上段的新契约；旧题库、运行与成绩保持原样，schema1 的 `<benchmark>/<target>/<version>` 仅为历史兼容。O1 已接通独立模型运行与归档，命令见[prefilter入口](../../evals/news-admission/aihot-observed-membership/README.md)；其它对象的独立推理适配仍见各自 status，不由 O1 接通推定完成。
