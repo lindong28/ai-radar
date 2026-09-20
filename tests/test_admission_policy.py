@@ -58,7 +58,7 @@ def test_projection_real_consumer_preserves_cases_and_rejects_mutated_source(tmp
     result = prefilter_eval.evaluate(dataset, config={"models": {"prefilter": "deepseek-v4-flash"},
         "transport_identity": {}}, split="dev", limit=None, seed="fixture", label="model",
         chat_factory=lambda attempts: lambda key: lambda **kwargs:
-            {"json": {"is_ai_related": True, "confidence": 1}}, root=model_root)
+            {"json": {"reason": "fixture evidence", "is_ai_related": True, "confidence": 1}}, root=model_root)
     source = Path(result["run"])
     projected = policy.project(source, label="hybrid", root=tmp_path)
     assert projected["new_api_attempts"] == 0

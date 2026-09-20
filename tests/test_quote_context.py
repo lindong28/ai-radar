@@ -77,7 +77,7 @@ def test_runner_keeps_cases_and_archives_actual_context(tmp_path):
         def for_case(key):
             def chat(**kwargs):
                 captured.append(kwargs["prompt"])
-                return {"json": {"is_ai_related": True, "confidence": 1}}
+                return {"json": {"reason": "fixture evidence", "is_ai_related": True, "confidence": 1}}
             return chat
         return for_case
     prompt = {"system": "candidate", "user_template": "{{ item.title }}"}

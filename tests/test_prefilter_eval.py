@@ -47,7 +47,7 @@ def test_runner_renders_override_context_without_gold(tmp_path):
         def for_case(key):
             def chat(**kwargs):
                 captured.append(kwargs["prompt"])
-                return {"json": {"is_ai_related": True, "confidence": 1}}
+                return {"json": {"reason": "fixture evidence", "is_ai_related": True, "confidence": 1}}
             return chat
         return for_case
     prompt = {"system": "candidate", "user_template":
@@ -108,7 +108,7 @@ def test_runner_excludes_prior_run_before_calls_and_archives_selection(tmp_path)
     def factory(attempts):
         def for_case(key):
             called.append(key)
-            return lambda **kwargs: {"json": {"is_ai_related": True, "confidence": 1}}
+            return lambda **kwargs: {"json": {"reason": "fixture evidence", "is_ai_related": True, "confidence": 1}}
         return for_case
     result = prefilter_eval.evaluate(leaf, config=config(), split="dev", limit=None, seed="s",
                                     chat_factory=factory, label="exclude", root=tmp_path,
@@ -128,7 +128,7 @@ def test_production_prompt_request_and_conversion_parity(monkeypatch, answer):
     monkeypatch.delenv("AI_RADAR_FORCE_HEURISTIC", raising=False)
     monkeypatch.setenv("AI_RADAR_PREFILTER", "deepseek_v32")
     calls = []
-    payload = {"is_ai_related": answer, "confidence": 0.7}
+    payload = {"reason": "fixture evidence", "is_ai_related": answer, "confidence": 0.7}
     def production_call(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace(json=payload, model="deepseek-v4-flash", provider="ark")
@@ -145,6 +145,7 @@ def test_production_prompt_request_and_conversion_parity(monkeypatch, answer):
     actual = predict_one("prefilter", raw, {**config(), "chat": chat})
     assert set(actual["stage_results"]) == {"prefilter"}
     assert actual["output"]["is_ai_related"] is expected.is_ai_related
+    assert actual["output"]["reason"] == expected.reason == payload["reason"]
 
 
 @pytest.mark.parametrize("mode", ["correct", "flipped", "failed"])
@@ -159,7 +160,7 @@ def test_real_runner_archives_and_scores_both_classes(tmp_path, mode):
                 if mode == "failed":
                     raise TimeoutError("fixture")
                 value = int(key) % 2 == 0
-                return {"json": {"is_ai_related": value if mode == "correct" else not value, "confidence": 1}}
+                return {"json": {"reason": "fixture evidence", "is_ai_related": value if mode == "correct" else not value, "confidence": 1}}
             return chat
         return for_case
     result = prefilter_eval.evaluate(leaf, config=config(), split="dev", limit=None, seed="s",

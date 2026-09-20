@@ -61,7 +61,7 @@ def test_stage_aliases_use_production_prompts_and_preserve_transport_evidence():
 
     def chat(**kwargs):
         calls.append(kwargs)
-        payload = {"prefilter": {"is_ai_related": True, "confidence": 0.9},
+        payload = {"prefilter": {"reason": "fixture evidence", "is_ai_related": True, "confidence": 0.9},
                    "score": score(), "enrich": enrichment()}[kwargs["stage"]]
         return {"json": payload, "model": "served-model", "provider": "fake", "attempt_id": "attempt-test",
                 "requested_model": "requested-model",
@@ -76,7 +76,7 @@ def test_stage_aliases_use_production_prompts_and_preserve_transport_evidence():
         assert saved["raw"] == "raw-completion"
         assert saved["usage"] == {"prompt_tokens": 12}
     assert [call["stage"] for call in calls] == ["prefilter", "score", "enrich"]
-    assert calls[0]["request"]["max_tokens"] == 200
+    assert calls[0]["request"]["max_tokens"] == 500  # Short reason plus decision, shared with production.
     assert calls[1]["request"]["max_tokens"] == 600
     assert "max_tokens" not in calls[2]["request"]
     assert all("DO_NOT_SEND" not in json.dumps(call) and "PRIVATE_CASE" not in json.dumps(call) for call in calls)
@@ -103,7 +103,7 @@ def test_prefilter_false_short_circuits_scoring_but_positive_calls_it():
 
     def chat(**kwargs):
         calls.append(kwargs["stage"])
-        return {"json": {"is_ai_related": False, "confidence": 1}}
+        return {"json": {"reason": "unrelated fixture", "is_ai_related": False, "confidence": 1}}
 
     assert inference.predict_one("news-admission", raw(), {"chat": chat})["status"] == "pending_pool"
     assert calls == ["prefilter"]
@@ -111,7 +111,7 @@ def test_prefilter_false_short_circuits_scoring_but_positive_calls_it():
 
     def yes_chat(**kwargs):
         calls.append(kwargs["stage"])
-        return {"json": {"is_ai_related": True, "confidence": 1} if kwargs["stage"] == "prefilter" else score()}
+        return {"json": {"reason": "AI fixture", "is_ai_related": True, "confidence": 1} if kwargs["stage"] == "prefilter" else score()}
 
     assert inference.predict_one("news-admission", raw(), {"chat": yes_chat})["status"] == "pending_pool"
     assert calls == ["prefilter", "score"]

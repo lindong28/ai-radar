@@ -11,6 +11,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from airadar.provider.judgment import require_reason_first
+
 DEFAULT_MODEL = "deepseek-v4-flash-ga-260731"
 FIELDS = ("title", "summary", "reason")
 PROMPT = """Evaluate how closely the candidate field matches the visible reference,
@@ -45,6 +47,9 @@ def judge_identity(model: str = DEFAULT_MODEL, *, provider: str = "deepseek") ->
             "temperature": 0,
             "scale": [0, 1, 2],
             "implementation_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "reason_validator_sha256": hashlib.sha256(
+                (Path(__file__).resolve().parents[2] / "src/airadar/provider/judgment.py").read_bytes()
+            ).hexdigest(),
         }
     )
 
@@ -92,7 +97,11 @@ def judge_text(
         or not payload["reason"].strip()
     ):
         return {**result, "error": "invalid judge score or reason"}
-    return {**result, "status": "ok", "score": payload["score"], "rationale": payload["reason"]}
+    try:
+        require_reason_first(payload, "score")
+    except ValueError as exc:
+        return {**result, "error": str(exc)}
+    return {**result, "status": "ok", "reason": payload["reason"], "score": payload["score"]}
 
 
 def prepare_calibration(samples: list[dict], *, model: str = DEFAULT_MODEL, provider: str = "deepseek") -> dict:

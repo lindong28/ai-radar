@@ -41,12 +41,13 @@ from airadar.prefilter.prompts import render_prefilter_prompt
 from airadar.prefilter.runner import PrefilterNumeric
 from airadar.presentation.summary import _visible_reason_from_payload, item_summary
 from airadar.provider.base import ProviderItem
+from airadar.provider.judgment import require_reason_first
 from airadar.scorer.prompts import render_scoring_prompt
 from airadar.scorer.schema import ScoringNumeric
 
 TARGETS = ("news-admission", "visible-score", "content-enrichment", "featured-members")
 _STAGES = {
-    "prefilter": (render_prefilter_prompt, "deepseek-v4-flash", "AI_RADAR_DEEPSEEK_PREFILTER_MODEL", 0.0, 200),
+    "prefilter": (render_prefilter_prompt, "deepseek-v4-flash", "AI_RADAR_DEEPSEEK_PREFILTER_MODEL", 0.0, 500),
     "score": (render_scoring_prompt, "deepseek-v4-flash", "AI_RADAR_DEEPSEEK_SCORER_MODEL", 0.0, 600),
     "enrich": (render_enrich_prompt, "deepseek-v4-pro", "AI_RADAR_DEEPSEEK_ENRICH_MODEL", 0.2, None),
 }
@@ -96,11 +97,13 @@ def _run_stage(stage: str, item: ProviderItem, config: dict[str, Any]) -> dict[s
         if result["raw"] is None:
             result["raw"] = payload
         if stage == "prefilter":
+            reason = require_reason_first(payload, "is_ai_related")
             # Same conversion as DeepSeekV32Prefilter, then production runner validation.
             output = PrefilterNumeric.model_validate({
                 "is_ai_related": bool(payload.get("is_ai_related")),
                 "confidence": max(0.0, min(1.0, float(payload.get("confidence", 0.0)))),
             }).model_dump()
+            output = {"reason": reason, **output}
         elif stage == "score":
             output = ScoringNumeric.model_validate({
                 **{key: float(payload.get(key, 0.0)) for key in

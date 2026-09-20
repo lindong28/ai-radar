@@ -77,7 +77,9 @@ def heuristic_prefilter(item: ProviderItem) -> PrefilterResult:
     hits = sum(1 for term in AI_TERMS if term in text)
     is_related = hits > 0
     confidence = min(0.98, 0.35 + hits * 0.12) if is_related else 0.18
-    return PrefilterResult(is_ai_related=is_related, confidence=round(confidence, 3), raw={"term_hits": hits})
+    return PrefilterResult(is_ai_related=is_related, confidence=round(confidence, 3),
+                           reason=f"heuristic AI_TERMS: {hits} matching terms; not an LLM judgment",
+                           raw={"term_hits": hits})
 
 
 def heuristic_score(item: ProviderItem) -> ScoringResult:

@@ -10,7 +10,8 @@ from evals._shared.human_store import append_batch, import_review, migrate_batch
 
 def case(key="one", **reference):
     return {"case_id": key, "split": "dev", "reference": reference,
-            "input": {"title": "New model!", "content_text": "Measured AI release.",
+            "input": {"case_id": key, "tier": "T1.5", "published_at": "2026-09-19",
+                      "title": "New model!", "content_text": "Measured AI release.",
                       "source_id": "x_lab", "source_kind": "x", "author": "lab",
                       "url": "https://x.com/lab/status/123", "extra": {}}}
 
@@ -208,6 +209,27 @@ def test_flat_store_target_mismatch_does_not_replace_existing(review, tmp_path):
     with pytest.raises(ValueError, match="target mismatch"):
         append_batch(output, "visible-score", batch)
     assert output.read_bytes() == before
+
+
+def test_feedback_summary_keeps_observed_and_human_views_separate(review, tmp_path):
+    from scripts.eval.run_prefilter_human_feedback import summarize
+
+    run, feedback, ballot = review
+    book = tmp_path / "reviews.json"
+    import_review(feedback, run, book, "one")
+    before = book.read_bytes()
+    result = summarize(run, book, ["one"])
+    observed = result["views"]["model_only"]["observed"]
+    human = result["views"]["model_only"]["human_priority"]
+    assert observed["metrics"]["precision"]["value"] == 0
+    assert human["metrics"]["precision"]["value"] == 0.5
+    assert result["application"]["human_case_count"] == 3
+    assert result["not_independent_holdout"] is True
+    assert file_digest(run / "cases.jsonl") == ballot["source_cases_sha256"]
+    assert file_digest(run / "predictions.jsonl") == ballot["source_predictions_sha256"]
+    assert book.read_bytes() == before
+    assert result["batches"][0]["batch_id"] == "one"
+    assert read_json(run / "human-feedback-scores.json") == result
 
 
 def test_apply_freezes_batch_selection_across_later_appends(tmp_path, monkeypatch):

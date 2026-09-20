@@ -92,6 +92,28 @@ PYTHONPATH=src:. uv run python -m evals._shared.human_labels apply \
 
 ## 本批可复用的编辑偏好
 
+### 根据人评解释运行新候选
+
+2026-09-20 已把解释转成四个显式 prompt 候选，路径为 `evals/news-admission/aihot-prefilter/prompts/human-information-value*.json`；`c11-reason-first.json` 为对照。这里沿用既有 prompt 目录，不表示使用旧 benchmark 的 gold。候选通过现有真实 prefilter 推理和确定性计分器执行，结果见[对象状态](news-admission/status.md)。未达到采用标准的候选不替换默认规则，不把完成代码等同于质量达标。
+
+```bash
+PYTHONPATH=src:. uv run python scripts/eval/run_prefilter_human_feedback.py \
+  --source-run runs/news-admission/aihot-observed-membership/v1/2026-09-20/01-19-03 \
+  --config evals/_shared/configs/baseline-ark.json \
+  --env-file /Users/lindong/research/ai-radar/.env \
+  --prompt evals/news-admission/aihot-prefilter/prompts/human-information-value-contextual.json \
+  --reviews human-evals/news-admission/reviews.json \
+  --batch-id 2026-09-20-c11 --label my-human-feedback-candidate --workers 8
+```
+
+该命令会产生付费请求，不是零调用重评分。重放源 run 的 dataset、split、seed、limit、排除记录，并在发请求前核对完整题目身份及人评适用性；无法原样重现即停止。原 run 与人评库只读。新批次可重复传 `--batch-id`，日期/批次不依赖目录解析；若只想应用标签，仍用上文零调用 `human_labels apply`。失败恢复加 `--reuse <该候选的失败run>`，只有题目/对象身份一致的成功结果可复用，不把不同 prompt 的预测混入。
+
+新 run 附加 `human-effective-cases.jsonl`、`policy-predictions.jsonl`、`human-feedback-scores.json`：后者 `views.model_only/with_existing_policy` 各含 `observed/human_priority/human_only` 三套分数，分别表示原 AIHOT、明确人评优先、仅明确人评子集。元数据绑定选中批次ID/SHA及输入、预测、effective cases、policy predictions SHA。早于本轮脚本补齐摘要字段的08-10/08-12/08-16/08-22原件不改写，其补充SHA在本轮 `comparison.json`。标准 `scores.json` 与机器总表仍保留原AIHOT口径，不能把两种参考分数混在一列。
+
+模型实际 `reason` 位于 `predictions.jsonl → stage_results.prefilter.output.reason`；原始内容和实际 prompt 在 `attempts/`。生产模块保存到 `item_evaluations.output_json.reason`，原 numeric 字段维持兼容；启发式 fallback 明确标为规则说明，不伪装成 LLM 理由。当前内容富化文本判官 `evals/_shared/judge.py` 返回 `reason`，不再只投影为 `rationale`。缺失/空理由或解析字段顺序错误记 error，不补造；生产批处理保留出错 payload 并继续处理其它题。
+
+校验范围是解析对象的字段顺序，不是任意非法 JSON 的严格语法证明；独立审查留下一个 MEDIUM：重复 `reason` 键可能被旧解析器折叠，导致顺序检查失去区分力。本轮1500个成功原始响应未出现重复键，现阶段未扩大修改共用解析器，后续维护可从该具体边界接续。旧冻结输出与 legacy `src/airadar/eval/aihot_fit` 判官未改写；该历史链不是当前四对象文本判官入口。
+
 ### 2026-09-20 实际导入与重评分
 
 25 票中 `keep=10`、`positive=8`、`negative=6`、`pending=1`；形成 24 条明确人评，其中 14 条改变 reference，10 条确认原标签。其余三个对象本批没有用户票，不生成虚构标注。原 C11 的同一批 300 题、同一份预测重评分如下：

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..provider.base import PrefilterProvider, PrefilterResult, ProviderItem
 from ..provider.deepseek_v32 import DeepSeekV32Prefilter
 from ..provider.glm import GLMPrefilter
+from ..provider.judgment import JudgmentFormatError
 from ..ruleset import current_version
 from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
@@ -103,8 +104,12 @@ def _evaluate_item(
         latency_ms = int((time.monotonic() - start) * 1000)
         return None, {"raw": "{not valid json", "attempts": 2}, "json parse failed after retry", latency_ms
 
-    result: PrefilterResult = provider.is_ai_related(item)
+    try:
+        result: PrefilterResult = provider.is_ai_related(item)
+    except JudgmentFormatError as exc:
+        return None, {"raw": {"json": exc.payload}}, str(exc), int((time.monotonic() - start) * 1000)
     output = {
+        "reason": result.reason,
         "is_ai_related": result.is_ai_related,
         "confidence": result.confidence,
         "raw": result.raw,

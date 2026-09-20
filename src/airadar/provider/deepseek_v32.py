@@ -6,6 +6,7 @@ from ..prefilter.prompts import render_prefilter_prompt
 from .base import PrefilterResult, ProviderItem
 from .deepseek_chat import chat_json
 from .heuristics import heuristic_prefilter
+from .judgment import require_reason_first
 
 
 class DeepSeekV32Prefilter:
@@ -28,7 +29,7 @@ class DeepSeekV32Prefilter:
             model_env="AI_RADAR_DEEPSEEK_PREFILTER_MODEL",
             ark_model_env="AI_RADAR_ARK_PREFILTER_MODEL",
             temperature=0.0,
-            max_tokens=200,
+            max_tokens=500,
             stage="prefilter",
             item_id=item.id,
             input_item_count=1,
@@ -36,7 +37,9 @@ class DeepSeekV32Prefilter:
             attribution={"source_id": item.source_id, "url": item.url, "title": item.title},
         )
         payload = result.json
+        reason = require_reason_first(payload, "is_ai_related")
         return PrefilterResult(
+            reason=reason,
             is_ai_related=bool(payload.get("is_ai_related")),
             confidence=max(0.0, min(1.0, float(payload.get("confidence", 0.0)))),
             raw={"provider": result.provider, "model": result.model, "json": payload},

@@ -93,6 +93,32 @@ def test_run_prefilter_writes_numeric_evaluations(tmp_path: Path) -> None:
     assert row[4] is None
 
 
+def test_invalid_llm_reason_is_archived_without_aborting_batch(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from airadar.provider import deepseek_v32
+
+    monkeypatch.setenv("ARK_API_KEY", "fixture")
+    monkeypatch.delenv("AI_RADAR_FORCE_HEURISTIC", raising=False)
+    payloads = [
+        {"is_ai_related": True, "confidence": .9},
+        {"is_ai_related": False, "reason": "too late", "confidence": .9},
+        {"reason": "concrete new model capability", "is_ai_related": True, "confidence": .9},
+    ]
+    responses = iter(payloads)
+    monkeypatch.setattr(deepseek_v32, "chat_json", lambda **kw: SimpleNamespace(
+        json=next(responses), provider="ark", model="fixture"))
+    conn = _db(tmp_path)
+    for i in range(3):
+        _seed_item(conn, f"LLM reason {i}", f"distinct body {i}")
+    result = run_prefilter(conn, provider=deepseek_v32.DeepSeekV32Prefilter(), since="24h")
+    assert (result.processed, result.errors) == (3, 2)
+    rows = conn.execute("SELECT output_json, numeric_json, error FROM item_evaluations ORDER BY id").fetchall()
+    assert [json.loads(row[0])["raw"]["json"] for row in rows] == payloads
+    assert all(row[1] is None and row[2] for row in rows[:2])
+    assert json.loads(rows[2][0])["reason"] == payloads[2]["reason"]
+    assert rows[2][2] is None
+
+
 def test_run_prefilter_skips_existing_ruleset_evaluation(tmp_path: Path) -> None:
     conn = _db(tmp_path)
     _seed_item(conn, "LLM benchmark", "A dense article about LLM evals.")

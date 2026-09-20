@@ -15,7 +15,7 @@ def test_rescore_preserves_object_and_failure_with_exact_input_only(tmp_path):
             def chat(**kwargs):
                 if key == "1":
                     raise ValueError("failed response")
-                return {"json": {"is_ai_related": True, "confidence": 1}}
+                return {"json": {"reason": "fixture evidence", "is_ai_related": True, "confidence": 1}}
             return chat
         return case_chat
     result = prefilter_eval.evaluate(old_leaf, config=config(), split="dev", limit=None, seed="s",

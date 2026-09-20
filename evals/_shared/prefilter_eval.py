@@ -51,7 +51,7 @@ def select_cases(cases: list[dict], split: str, limit: int | None, seed: str,
 def object_identity(config: dict, prompt: dict | None) -> dict:
     from airadar.prefilter.prompts import SYSTEM_PROMPT, USER_TEMPLATE
 
-    paths = ["src/airadar/prefilter/prompts.py", "src/airadar/provider/deepseek_v32.py",
+    paths = ["src/airadar/provider/judgment.py", "src/airadar/prefilter/prompts.py", "src/airadar/provider/deepseek_v32.py",
              "src/airadar/prefilter/runner.py", "evals/_shared/inference.py",
              "evals/_shared/prefilter_eval.py", "evals/_shared/transport.py"]
     return {"baseline": "isolated-current-source-prefilter", "surface": "prefilter-boolean-only",

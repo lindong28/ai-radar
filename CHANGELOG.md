@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-20（人评理由驱动的准入候选）
+
+- 根据用户的新闻信息价值解释实现四个可运行 prefilter 候选，新增固定题目、人评优先/原AIHOT双口径与模型/规则对照入口；五个变体各跑同300题。候选未达到采用标准，默认准入标准未替换；[结果与复用](docs/evaluations/news-admission/status.md)。
+- Prefilter 真实LLM输出先给 `reason` 再给判断，保存理由并将格式错误按题归档；当前内容富化文本判官同步 reason-first 校验与 `reason` 输出。未部署生产，历史响应不改写。
+
 ## 2026-09-20（人评标注优先）
 
 - 人评目录简化为 `human-evals/<target>/reviews.json`；日期、批次与来源进入 `metadata`，支持追加、同批重复导入识别和原票核验。旧 C11 目录迁出人评入口留作迁移前档案，标注和指标不变。

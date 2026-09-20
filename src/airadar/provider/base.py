@@ -21,6 +21,7 @@ class PrefilterResult:
     is_ai_related: bool
     confidence: float
     raw: dict[str, Any] = field(default_factory=dict)
+    reason: str = ""  # Legacy/custom providers can lack an explanation; never invent one.
 
 
 @dataclass(frozen=True)
