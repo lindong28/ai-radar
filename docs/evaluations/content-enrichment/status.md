@@ -2,6 +2,46 @@
 
 > [Developer] · Mutable snapshot · 2026-09-21。区分能力、实际运行与有效成绩。
 
+## 2026-09-21：增加每类精确率与召回率
+
+### L1：确定性计分
+
+保留整体 accuracy，另为六类各算 precision=TP/(TP+FP)、recall=TP/(TP+FN)，共13项。失败/非法/缺预测计真实类FN；零分母为未计算。正式evaluate和离线rescore共用 `evals/_shared/category_metrics.py`，定义及复用命令见[执行README](../../../evals/content-enrichment/aihot-category-navigation/README.md)。不新增F1或阈值，不改模型、prompt、gold及benchmark版本。
+
+以下为相同76题回归（不是全量361题），A0仍是当前研究基线；整体准确率A0=69.74%、A2=68.42%。
+
+| 分类 | 参考题数 | A0 Precision | A0 Recall | A2 Precision | A2 Recall |
+|---|---:|---:|---:|---:|---:|
+| 模型 | 7 | 53.85% | 100.00% | 60.00% | 85.71% |
+| 产品 | 19 | 77.27% | 89.47% | 73.91% | 89.47% |
+| 行业 | 9 | 50.00% | 88.89% | 46.15% | 66.67% |
+| 论文 | 5 | 75.00% | 60.00% | 75.00% | 60.00% |
+| 教程 | 13 | 100.00% | 61.54% | 88.89% | 61.54% |
+| 观点 | 23 | 76.92% | 43.48% | 70.59% | 52.17% |
+
+逐类读数揭示A0模型和行业的误收、观点的漏分，整体准确率会掩盖这些差异。A2观点召回改善但精确率下降，模型/行业召回退化；本轮没有重新优化或改变候选处置。每类题量5–23，不能把个别100%理解为稳定泛化保证。
+
+### L2：六轮补算与查询
+
+从既有6轮逐题预测补算，各产13项指标，共78条新增查询记录。原6条整体accuracy及原件不覆盖。UTC日期均2026-09-21，以下时间位于 `{runs,experiments}/content-enrichment/aihot-category-navigation/v1/<date>/<time>/`。
+
+| 源推理 | 补算分区 | 题数 | 标签 |
+|---|---|---:|---|
+| 10-08-04 | 12-45-48 | 8 | category-a0-smoke |
+| 10-08-21 | 12-45-50 | 200 | category-a0-dev |
+| 10-11-22 | 12-45-51 | 200 | category-a1-dev |
+| 10-13-19 | 12-45-53 | 200 | category-a2-dev |
+| 10-15-13 | 12-45-54 | 76 | category-a0-regression |
+| 10-15-14 | 12-45-55 | 76 | category-a2-regression |
+
+每轮scores保留每类TP/FP/FN、P/R分母和逐题对照，conclusion为可读表；experiments metadata标明metric_recompute、source_run及原件哈希，指标进入统一 `experiments/metrics/summary.json`。零新增LLM调用，不把补算当新增题或新候选；开发三轮仍incomplete且各保留1个content_filter失败。
+
+### L3：复用边界与验证
+
+复用源冻结gold，不重应用后来人评；如需改标签，另开标注修订流程。补算前后源输入/计分代码身份一致，源整体accuracy一致。独立审查发现的跨root注册表及来源定位问题已修复并定向通过；实际归档定义必须与执行checkout一致，源run保存可解析绝对路径。123项定向测试覆盖六类计分、成功/失败/缺失/非法输出、零分母、跨root归档、源漂移拒绝及既有建题/指标/归档逻辑；这是确定性链路验证，不是新增模型质量样本。决策及实现审查记录归首个补算run的support。
+
+额外检查旧资产迁移测试时，`test_eval_asset_relocations.py` 为4 passed/2 failed：两项旧迁移fixture缺metadata.target，经human_metrics.current_rows触发KeyError。未修改的main基线7984d31同样复现，归基线独立/非本轮边界；本次分类源metadata有target并已完成真实归档。此项在本节记账，归后续旧迁移测试维护，不扩展当前逐类指标任务去修改历史迁移语义。
+
 ## 当前：六类分类已建题并完成首轮优化实验（2026-09-21）
 
 已按用户要求对齐模型、产品、行业、论文、教程、观点。AIHOT 网页分开教程/观点，旧 API 把两者合为 tip；新 [aihot-category-navigation/v1](aihot-category-navigation/v1/README.md) 有361题（dev285／regression76），旧字段题库保留原义并扩至 [v2](aihot-enrichment-fields/v2/README.md)。不把旧1,673条API分类直接当六类题。

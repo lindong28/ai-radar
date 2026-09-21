@@ -1,12 +1,110 @@
 {
   "schema_version": 1,
   "benchmark_slug": "aihot-category-navigation",
-  "metrics": [{
-    "task": "category",
-    "metric_name": "category_accuracy",
-    "unit": "fraction",
-    "direction": "higher",
-    "definition": "预测类别与 AIHOT 六分类页面实际成员归属完全一致的题数 / 全部选中题数；失败题仍在分母",
-    "source": "evals/_shared/metrics.py"
-  }]
+  "metrics": [
+    {
+      "task": "category",
+      "metric_name": "category_accuracy",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "正确分类题数 / 全部选中题数；调用或格式失败仍在分母",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_model_precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "模型精确率 TP/(TP+FP)，无该类有效预测时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_model_recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "模型召回率 TP/(TP+FN)，失败计真实类 FN，无该类参考时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_product_precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "产品精确率 TP/(TP+FP)，无该类有效预测时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_product_recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "产品召回率 TP/(TP+FN)，失败计真实类 FN，无该类参考时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_industry_precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "行业精确率 TP/(TP+FP)，无该类有效预测时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_industry_recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "行业召回率 TP/(TP+FN)，失败计真实类 FN，无该类参考时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_paper_precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "论文精确率 TP/(TP+FP)，无该类有效预测时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_paper_recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "论文召回率 TP/(TP+FN)，失败计真实类 FN，无该类参考时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_tutorial_precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "教程精确率 TP/(TP+FP)，无该类有效预测时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_tutorial_recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "教程召回率 TP/(TP+FN)，失败计真实类 FN，无该类参考时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_opinion_precision",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "观点精确率 TP/(TP+FP)，无该类有效预测时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    },
+    {
+      "task": "category",
+      "metric_name": "category_opinion_recall",
+      "unit": "fraction",
+      "direction": "higher",
+      "definition": "观点召回率 TP/(TP+FN)，失败计真实类 FN，无该类参考时未计算",
+      "source": "evals/_shared/category_metrics.py"
+    }
+  ]
 }

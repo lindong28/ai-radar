@@ -12,10 +12,10 @@ from airadar.enrich.category import RUBRIC, category_output, render_category_pro
 from airadar.enrich.classification import PRIMARY_CATEGORY_SLUGS
 
 from . import assets
+from .category_metrics import check_metric_definitions, score_categories
 from .cli import transport_factory
 from .human_labels import apply_labels
 from .human_store import read_reviews
-from .metrics import score
 from .prefilter_eval import select_cases
 from .score_type_study import preflight
 
@@ -53,6 +53,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              smoke: bool = False, root: Path = assets.ROOT) -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
+    check_metric_definitions(root)
     manifest, all_cases = assets.load_dataset(dataset, TARGET)
     if manifest["benchmark"] != BENCHMARK:
         raise ValueError("category runner requires website navigation gold, not legacy five-class API gold")
@@ -69,13 +70,16 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     request = {"model": config["models"]["category"], "temperature": 0, "max_tokens": 700}
     paths = ("src/airadar/enrich/category.py", "src/airadar/enrich/classification.py",
              "src/airadar/provider/judgment.py", "evals/_shared/category_eval.py",
-             "evals/_shared/metrics.py", "evals/_shared/transport.py", "evals/_shared/cli.py",
+             "evals/_shared/metrics.py", "evals/_shared/category_metrics.py",
+             "evals/content-enrichment/aihot-category-navigation/metrics.json",
+             "evals/_shared/transport.py", "evals/_shared/cli.py",
              "evals/_shared/human_labels.py", "evals/_shared/human_store.py",
              "evals/_shared/score_type_study.py")
 
     def identity():
         return {"code": {p: assets.file_digest(assets.ROOT / p) for p in paths},
-                "behavior": {"request": request, "transport": config["transport_identity"],
+                "behavior": {"metric_registry": check_metric_definitions(root),
+                             "request": request, "transport": config["transport_identity"],
                              "rubric": rubric, "thinking": "disabled", "retry_count": 0},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "cases": assets.digest(cases), "prompts": assets.digest(prompts),
@@ -125,7 +129,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                 print(f"分类已返回 {len(predictions)}/{len(cases)}；失败 {sum(p['status'] != 'ok' for p in predictions)}", flush=True)
     predictions.sort(key=lambda p: p["case_id"])
     assets.write_jsonl(run / "predictions.jsonl", predictions)
-    result = score("O3", cases, predictions)
+    result = score_categories(cases, predictions)
     unchanged = frozen == identity()
     if not unchanged:
         result["complete"] = False
@@ -137,7 +141,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                 identity_unchanged=unchanged)
     assets.archive_metrics(root, run, experiment, result, meta)
     assets.rebuild_index(root)
-    return {"run": str(run), "complete": result["complete"], "category_accuracy": result["metrics"]["category_accuracy"]}
+    return {"run": str(run), "complete": result["complete"],
+            "category_accuracy": result["metrics"]["category_accuracy"], "metrics": result["metrics"]}
 
 
 def main(argv=None):

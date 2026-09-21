@@ -30,6 +30,21 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 smoke 验证链路，不代表质量。随后固定 seed/开发题比较 rubric（`--rubric path.txt`）；冻结候选后使用 regression，不把开发或反复选型结果称盲测。模型输入严格只有 title 与前 5,000 字正文，参考、tags、AIHOT 摘要不进入 prompt；每题一个 Flash 调用，输出 reason 后 primary_category。共享实现位于 `src/airadar/enrich/category.py`，runner 为 `evals/_shared/category_eval.py`；独立调用成绩不代表完整 enrich 或生产已上线。
 
-主指标 `category_accuracy` 复用确定性 O3 scorer，无需 LLM 判官；调用/格式失败仍占分母并使该轮 incomplete。diagnostics 保存逐类分母、混淆矩阵和多数类基线，不额外改变验收阈值。人评从稳定 `human-evals/content-enrichment/reviews.json` 按输入身份和字段优先覆盖，只作用本轮计分视图，不改原始参考。
+指标全部是确定性计算，无需 LLM 判官，定义见 `metrics.json`，实现见 `evals/_shared/category_metrics.py`。整体 `category_accuracy`＝正确分类题数／全部选中题数；每类新增 `category_<name>_precision`＝TP/(TP+FP)、`category_<name>_recall`＝TP/(TP+FN)。`name` 为 model/product/industry/paper/tutorial/opinion；这是精确率与召回率，不是计入大量 TN 的 one-vs-rest accuracy。全部取值 0–1、越高越好，不新增验收阈值。
+
+某题误分时计入预测类 FP、真实类 FN；缺预测、调用/格式失败或未知类别只计真实类 FN，不分配预测类别，整体 accuracy 仍计错且该轮 incomplete。P/R 的零分母返回 `value: null, status: not_computed, reason: zero denominator`，不是 0 或 100%。`scores.json.category_counts` 按网页 slug 保存每类 tp/fp/fn，metric 的 denominator 是该指标分母，per_case 保留 reference/prediction/有效性。diagnostics 继续保存混淆矩阵及多数类基线。人评从稳定 `human-evals/content-enrichment/reviews.json` 按输入身份和字段优先覆盖，只作用新推理轮的计分视图，不改原始参考。
+
+## 用冻结预测补算指标（零模型调用）
+
+```bash
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/rescore.py \
+  --source-run "$PWD/runs/content-enrichment/aihot-category-navigation/v1/2026-09-21/10-15-13"
+# 在隔离 worktree 补算主仓原件：另传 --source-root /path/to/ai-radar。
+# --output-root 选择新运行落点；--json 将机器结果输出到 stdout、身份诊断到 stderr。
+```
+
+每次写入新的标准 runs/experiments 时间分区，不覆盖历史 scores 或预测；只接受原始推理轮，拒绝对补算轮再补算。核对原轮身份、cases 摘要、逐题预测与 items 原件以及旧 accuracy 一致，计分期间再次核对源文件和 scorer 哈希。输出根的 metrics.json 必须与执行代码所在 checkout 一致，否则在推理/补算前拒绝，防止归档遗漏指标。保留源轮冻结的人评/gold 视图，不静默引入后来人评；修改标签属于另一种重计分任务。退出 0 表示源预测完整，退出 1 表示源预测不完整但其补算已归档（CLI 明示该状态）；校验异常不产生正式成绩。
+
+补算 `experiments/.../metadata.json` 字典：`run_kind: metric_recompute` 区别新推理；`source_run` 是已解析的原推理绝对路径（跨 checkout 不丢失源根，迁移时由资产路径解析处理）；`source_sha256` 锁 cases/predictions/scores/metadata；`object_identity` 原样继承源轮被测对象，`metric_identity` 则锁本次计分代码/规则/输入；`additional_model_calls: 0` 与 `cost.value: 0` 只指此次补算的增量，不改源轮历史费用。原题身份、split 与 benchmark/v1 不变，仅扩充指标输出。指标查询时按 source_run 关联，不把补算当新模型候选或新增题量。
 
 逐题 prompt/response/reason、attempts、scores、diagnostics、conclusion 保存在 `runs/content-enrichment/aihot-category-navigation/vN/<UTC-date>/<UTC-time>/`；metadata 与指标在同分区 experiments，统一索引由 assets.rebuild_index 重建。`--output-root` 可指定主 checkout 归档而在隔离 worktree 执行代码。失败/无参考类别不从分母静默丢弃；不自动 fallback、重试、改 gold 或部署。

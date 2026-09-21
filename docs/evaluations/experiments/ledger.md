@@ -1,5 +1,9 @@
 # 运行台账
 
+## 2026-09-21：分类逐类指标补算（非新推理）
+
+按用户要求保留整体accuracy并增加六类P/R，已有6轮冻结预测经rescore写入6个新标准分区：12-45-48、12-45-50、12-45-51、12-45-53、12-45-54、12-45-55（UTC），位于content-enrichment/aihot-category-navigation/v1/2026-09-21。原run、gold、split及accuracy不变；共78条新增指标，零新增模型调用/费用，不累加题数。A0回归76题观点P/R=76.92%/43.48%，模型53.85%/100%，行业50%/88.89%；完整六类与源映射见[状态](../content-enrichment/status.md#2026-09-21增加每类精确率与召回率)。开发三轮原有失败仍计FN、状态incomplete；无需LLM判官。指标定义、重算代码、测试与复用说明同步更新；无新优化、生产或部署行为。
+
 ## 2026-09-21：六类网站分类建题与 Flash 首轮优化
 
 新 `content-enrichment/aihot-category-navigation/v1` 361题（dev285/reg76），gold来自网页六类成员，旧API五类fields/v2另保留。6个run：smoke8、A0/A1/A2同dev200、冻结A2与A0同reg76；760次Flash调用（757成功，3次为同题content_filter），276个唯一计分ID、651,712已报告tokens、金额未知，非全量。开发并发8、两回归各4共享总8。真实模型均deepseek-v4-flash-ga-260731。
