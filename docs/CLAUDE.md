@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260921-c4e1](adr/20260921-c4e1-test-news-type-score-combination.md)：新闻用途分类、固定来源留出条件权重与代表原文诊断；结果与复用记录在[评分状态](evaluations/visible-score/status.md)。
+
 [20260921-b82e](adr/20260921-b82e-test-score-source-context.md)：评分来源身份、条件权重、时钟和事件上下文离线消融，不修改生产或gold。上下文同40题的模型配对[v2](evaluations/visible-score/aihot-score-context/v2/README.md)及空对照[v3](evaluations/visible-score/aihot-score-context/v3/README.md)不累加计题。
 
 [20260921-a93c](adr/20260921-a93c-test-no-example-score-rubrics-and-dimension-calls.md)：无示例评分的impact刻度、逐维独立调用和证据边界对照；20题人评页不自动改gold。

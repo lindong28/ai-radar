@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-21（新闻类型与上下文重复检验）
+
+- 新增可复用的输入新闻类型分类和来源隔离条件权重拟合入口；保留reason、原始响应与失败终态，拒绝身份失效产物。
+- 完成287次Flash调用：类型分支未改善57题来源留出；固定上下文重复显示排序提升但MAE恶化；7条候选已按各自gold实际评分。未更改生产或gold，MAE<3仍未达，具体成绩与原件见[评分状态](docs/evaluations/visible-score/status.md)。
+
 ## 2026-09-21（评分上下文消融）
 
 - 增加可复用的来源身份、来源条件权重、归档时钟和同事件上下文离线实验脚本，保留冻结版本和reason-first原件；设计与复用入口见[上下文设计](docs/evaluations/visible-score/context-design.md)。

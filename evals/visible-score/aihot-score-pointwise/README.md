@@ -44,6 +44,19 @@ PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluat
 
 模型输入只取case.input的原始字段白名单，正文仍最多5000字符，不读取reference/provenance。原件归 `runs/visible-score/aihot-score-pointwise/<version>/<UTC-date>/<UTC-time>/`：started/config/prompt/cases/prompts、items、predictions、attempts及scores；元数据和metrics/summary归同结构 `experiments/`。逐题reason、原始响应和实际请求保留，费用未知不归零。不得写回题库；新v2等版本可使用同命令，不写死本轮题数。
 
+## 新闻类型条件权重研究
+
+`score_type_study`复用一个完整五维开发run，不固定200题。分类仅渲染该run原始输入模板，先输出reason再输出新闻类型；不把参考分、AIHOT分类或富化字段交给模型。其结果是辅助推理，不是gold。
+
+```bash
+PYTHONPATH=src:. uv run python -m evals._shared.score_type_study classify --run <完整五维dev-run> --source-root <原run所属项目根> --output <新support目录>/type-dev --env-file .env --workers 8
+PYTHONPATH=src:. uv run python -m evals._shared.score_type_study fit --run <同一dev-run> --source-root <原run所属项目根> --classifications <support目录>/type-dev --output <support目录>/type-fit.json
+```
+
+分类有1800秒截止、最多8并发、无隐式重试/回退；共用既有离线API资源档位。保存原始响应及全部attempts，失败题不删除；只有complete与identity_unchanged均为真才能拟合。source SHA和每题输入、原始响应顺序须一致；中断后先看attempts，不删除输出标记重付全批。输出路径必须新建，不覆盖已发布结果。
+
+拟合不调用模型：开发题按来源hash固定划分训练／内部留出，每类型至少15训练题才拟合正权重，否则退回global。两臂同训练集、LAD、权重5%–60%、和100。`type-fit.json`保存各组case_ids、权重、MAE/Spearman和来源哈希；只有留出两指标同时严格改善才保存`full_dev_mapping`，否则为null。true不等于上线许可，也不是已完成独立回归；回归只能消费冻结映射，不能训练。输出属于研究support；正式指标重放按标准runs/experiments追加，2026-09-21完整可复算驱动见[状态](../../../docs/evaluations/visible-score/status.md)。
+
 ## 作者结构启发的五维候选
 
 `--mode five` 对应2026-09-21的离线研究：一次LLM调用先输出 `reason`，然后输出 `impact / novelty / substance / authority / relevance` 五个0–10整数，由[纯函数](../../../src/airadar/scorer/five.py)计算 `floor(sum(weight_percent * dimension) / 10 + 0.5)`。默认权重35/20/25/10/10；可在config的 `five_weights` 给出恰好这五个键、有限非负且合计100的百分比。错误权重在模型调用前拒绝；有效权重进入对象身份，变化后不能借 `--reuse` 复用旧对象。没有截距、后置校准、来源乘数或排名池。字段名称及精确权重是本项目的可检验假设，不是作者公开的五维定义；出处和研究边界见[52af](../../../docs/adr/20260921-52af-test-author-inspired-five-dimension-scores.md)。
