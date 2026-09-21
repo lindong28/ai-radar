@@ -6,6 +6,23 @@
 
 ## 使用
 
+### 评分内部分类修订实验
+
+2026-09-21候选：`five-editorial-workflow-v2.json`（Q1新分类→P1）、`five-information-workflow-v1.json`（Q2同分类→A11）、`five-editorial-workflow-v3.json`（Q3核心消息分类＋虚构边界示例→P1）。均是研究对象prompt，不是网站分类标签或生产默认；指标/是否晋级见[状态](../../../docs/evaluations/visible-score/status.md)。
+
+复用现有 `score_context_study --mode five-editorial`，传入新的完整基线run、题库、prompt和独有label/support目录即可扩到更多原始题；基线题必须由同题库、seed、split及排除集精确重建。它先跑3题smoke再跑基线题数，最大8并发、单臂1800秒，已存在label拒绝静默重跑。不要复用本轮目录写新实验。
+
+```bash
+PYTHONPATH=src:. uv run python -m evals._shared.score_context_study --dataset <题库vN> --baseline-run <同题完整run> --source-root <源项目根> --support <新support目录> --env-file .env --prompt evals/visible-score/prompts/five-editorial-workflow-v3.json --label <唯一实验名> --mode five-editorial --workers 8
+PYTHONPATH=src:. uv run python -m evals._shared.score_editorial_classify --baseline <同题完整五维run> --candidate-run <已冻结Q3-run> --output <不存在的新重复目录> --env-file .env --source-root <源项目根>
+```
+
+第二条只重复分类、不重跑评分；核验来源身份后，按case_id配对分类输出并验证两次实际prompt/request相同，不依赖文件行序。标签一致率不是正确率，不能用分类repeat替代父评分评测。原始分类与评分各自的prompt/reason/attempt/raw已由共享runner保存，未引入新的输入契约或benchmark版本。
+
+本研究复算脚本及结果在 `runs/visible-score/aihot-score-pointwise/v1/2026-09-21/08-27-40/support/`；`analyze.py`保存每个候选集合的不可覆盖分析快照，`summarize.py`核验6个run及Q3-repeat并生成总账。本轮这些脚本固定其历史候选；新研究应传入自己的实际run，不把历史指针当最新成绩。
+
+### 基础验证
+
 在项目根执行（不调用模型）：
 
 ```bash
