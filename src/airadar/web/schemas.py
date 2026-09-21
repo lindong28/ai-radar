@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..enrich.classification import PrimaryCategory
+
 
 class _ResponseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -29,7 +31,7 @@ class FeedItem(_ResponseModel):
     why_recommend: str | None = Field(json_schema_extra={"preload": False})
     enriched_tags: list[str]
     topic_tags: list[str]
-    primary_category: Literal["model", "product", "industry", "paper", "tutorial"] | None = None
+    primary_category: PrimaryCategory | None = None
     is_opinion: bool | None = None
     classification_projection_status: Literal["exact", "ambiguous", "unclassified"] = "unclassified"
     classification_projection_authority: Literal[

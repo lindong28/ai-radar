@@ -29,12 +29,13 @@ OBJECT_BENCHMARKS = {
 }
 OBSERVED_ADMISSION = "aihot-observed-membership"
 SCORE_CONTEXT = "aihot-score-context"
+CATEGORY_NAVIGATION = "aihot-category-navigation"
 
 
 def benchmark_pairs():
     """Legacy and object-specific consumer contracts, without rewriting history."""
     return (*BENCHMARKS.items(), *OBJECT_BENCHMARKS.items(), ("news-admission", OBSERVED_ADMISSION),
-            ("visible-score", SCORE_CONTEXT))
+            ("visible-score", SCORE_CONTEXT), ("content-enrichment", CATEGORY_NAVIGATION))
 
 
 def dataset_version(value: str) -> str:
@@ -106,7 +107,7 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
     if target is not None and target != selected:
         raise ValueError("dataset belongs to another target")
     schema = manifest.get("schema_version")
-    if manifest["benchmark"] in {OBJECT_BENCHMARKS[selected], OBSERVED_ADMISSION, SCORE_CONTEXT}:
+    if manifest["benchmark"] in {OBJECT_BENCHMARKS[selected], OBSERVED_ADMISSION, SCORE_CONTEXT, CATEGORY_NAVIGATION}:
         if schema != 2:
             raise ValueError("object benchmark requires schema 2")
         expected_mode = ("pointwise-context" if manifest["benchmark"] == SCORE_CONTEXT else
@@ -165,7 +166,7 @@ def create_run(root: Path, target: str, version: str, *, benchmark: str | None =
     benchmark = BENCHMARKS[target] if benchmark is None else benchmark
     if (target, benchmark) not in benchmark_pairs():
         raise ValueError("unknown target/benchmark pairing")
-    if benchmark in {OBJECT_BENCHMARKS[target], OBSERVED_ADMISSION, SCORE_CONTEXT}:
+    if benchmark in {OBJECT_BENCHMARKS[target], OBSERVED_ADMISSION, SCORE_CONTEXT, CATEGORY_NAVIGATION}:
         dataset_version(version)
     instant = created_at or datetime.now(UTC)
     if instant.tzinfo is None:

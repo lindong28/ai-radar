@@ -8,10 +8,10 @@
 | --- | --- | --- |
 | 新闻准入 | [aihot-observed-membership](news-admission/aihot-observed-membership/README.md) | validate、独立 prefilter run、抽样、恢复、计分与归档 |
 | 可见评分 | [aihot-score-pointwise](visible-score/aihot-score-pointwise/README.md) | validate、独立评分 run、固定抽样/恢复/归档、dev 拟合的零调用分数校准 |
-| 内容富化 | [aihot-enrichment-fields](content-enrichment/aihot-enrichment-fields/README.md) | 独立题库 validate；字段指标复用共享 metrics.score |
+| 内容富化 | [aihot-category-navigation](content-enrichment/aihot-category-navigation/README.md)；[aihot-enrichment-fields](content-enrichment/aihot-enrichment-fields/README.md) | 网站六类分类的捕获、建题、独立推理和归档；其它字段仍复用原字段题库与计分器 |
 | 精选成员 | [aihot-featured-threshold](featured-members/aihot-featured-threshold/README.md) | 独立题库 validate；逐条阈值不是完整池规则评测 |
 
-建题／扩题统一用 `scripts/build_eval_datasets.py`，其 `build` 默认使用当前准入口径；详见[操作说明](../docs/evaluations/benchmarks/object-datasets.md)。内容富化和精选成员的独立推理适配缺口仍归各对象 status，不因评分入口接通而变为已实现。
+原字段与其它对象建题／扩题用 `scripts/build_eval_datasets.py`；网站六类分类因参考语义不同，用其叶子的 `capture.py`、`build.py`。详见各入口 README；内容富化其它字段和精选成员的独立推理适配缺口仍归各对象 status，不因分类入口接通而变为已实现。
 
 可见评分另有 [aihot-score-context](visible-score/aihot-score-context/README.md) 离线上下文诊断，建题用 `score_context_dataset`，时钟/事件配对用 `score_context_run`；输入消费者契约不同，不能把它的40题作为主题库新增40条。来源字段消融和条件权重的代码为 `_shared/score_context_study.py`、`score_context_analysis.py`、`score_context_validate.py`，结果与复用边界见[评分状态](../docs/evaluations/visible-score/status.md)。
 

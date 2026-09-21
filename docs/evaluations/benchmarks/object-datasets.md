@@ -8,7 +8,7 @@
 | --- | --- |
 | 新闻准入 | [news-admission / aihot-observed-membership / v1](../news-admission/aihot-observed-membership/v1/README.md) |
 | 可见评分 | [visible-score / aihot-score-pointwise / v1](../visible-score/aihot-score-pointwise/v1/README.md) |
-| 内容富化 | [content-enrichment / aihot-enrichment-fields / v1](../content-enrichment/aihot-enrichment-fields/v1/README.md) |
+| 内容富化 | [字段题库 v2](../content-enrichment/aihot-enrichment-fields/v2/README.md)；网站六分类单独用 [aihot-category-navigation/v1](../content-enrichment/aihot-category-navigation/v1/README.md) |
 | 精选成员 | [featured-members / aihot-featured-threshold / v1](../featured-members/aihot-featured-threshold/v1/README.md) |
 
 共享采集档案，不共享入题门槛。来源契约与所给 AIHOT 参照的实际出现共同确定来源范围，排除暂停、禁用、非主时间线、微信专用源；不导入旧 T5，也不先用我方 prefilter 或 score 过滤原始输入。仅控制共同来源，不把原始池裁成两站新闻 URL 交集。
@@ -35,6 +35,8 @@
 当前逐对象 `build` 执行的是已实现的逐题规则，成功退出不是“最终内容已完整”的自动证明。旧 v1 仍可能按 cadence／coverage 拒绝冻结；本节不授权改完成标志、篡改 coverage 或绕过校验。若充分性结论与现有代码准入不匹配，应保留原始证据、指出具体不匹配并交回代码实施任务，不宣称文档已改变脚本行为。本节本身不重建旧题库或重写历史时间。
 
 ## 建题命令
+
+以下通用builder生成原API字段题，**不会生成网站六分类题**。六类分类须先捕获真实分类页成员，再通过[独立capture/build入口](../../../evals/content-enrichment/aihot-category-navigation/README.md)与合格原文配题；旧API的tip合并了教程/观点，不能直接改名当六类gold。
 
 在 AI Radar 仓库根运行，先 `uv sync --frozen`。全部离线，不读取 API 凭据、不调用模型、不改采集调度/网站 DB。
 

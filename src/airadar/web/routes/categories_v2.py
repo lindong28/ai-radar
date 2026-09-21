@@ -75,6 +75,20 @@ def _tag_condition_clause(
 def category_filter_clause(category: str | None, item_alias: str = "i") -> tuple[str, list[object]]:
     if not category:
         return "", []
+    if category == "opinion":
+        output = _latest_enrich_output_clause(item_alias)
+        legacy_clause = _latest_enrich_tag_exists_clause(
+            item_alias, "category_opinion_enrich", "category_opinion_tag", "category_opinion_tag.value = ?"
+        )
+        return (
+            f"""(
+              json_extract({output}, '$.primary_category') = 'opinion'
+              OR (json_type({output}, '$.primary_category') IS NULL
+                  AND json_type({output}, '$.is_opinion') IS NULL
+                  AND {_legacy_output_clause(output)} AND {legacy_clause})
+            )""",
+            ["大佬观点"],
+        )
     rule = CATEGORY_CONTRACT.get(category)
     if rule is None:
         return "", []
@@ -164,6 +178,8 @@ def opinion_filter_clause(enabled: bool, item_alias: str = "i") -> tuple[str, li
     return (
         f"""
         (
+          json_extract({output}, '$.primary_category') = 'opinion'
+          OR
           (json_type({output}, '$.is_opinion') IN ('true', 'false')
            AND json_extract({output}, '$.is_opinion') = 1)
           OR
@@ -206,6 +222,8 @@ def matches_category(item: dict[str, Any], category: str | None) -> bool:
     primary_category = SLUG_PRIMARY_CATEGORIES.get(category)
     if primary_category is None:
         return True
+    if category == "opinion" and item.get("classification_projection_authority") == "legacy_v1":
+        return item.get("is_opinion") is True
     value = item.get("primary_category")
     status = item.get("classification_projection_status")
     authority = item.get("classification_projection_authority")
@@ -219,4 +237,6 @@ def matches_opinion(item: dict[str, Any], enabled: bool = True) -> bool:
         return True
     value = item.get("is_opinion")
     authority = item.get("classification_projection_authority")
-    return authority in {"candidate_v2", "legacy_v1"} and value is True
+    return authority in {"candidate_v2", "legacy_v1"} and (
+        value is True or item.get("primary_category") == "opinion"
+    )

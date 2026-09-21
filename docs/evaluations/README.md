@@ -4,7 +4,7 @@
 
 本体系衡量同窗、共同来源的全部动态成员、可见分数、富化字段与精选成员。不评事实身份、内容组织、排序、去重质量、微信独有解读；身份匹配只服务正确计数。
 
-代码入口及历史兼容边界见 [evals 导航](../../evals/README.md)；新运行只从下表四个当前 benchmark 进入。准入候选统一位于 `evals/news-admission/prompts/`，旧路径兼容但不再作为新文档默认。
+代码入口及历史兼容边界见 [evals 导航](../../evals/README.md)；新运行从下表各对象当前 benchmark 进入。准入候选统一位于 `evals/news-admission/prompts/`，旧路径兼容但不再作为新文档默认。
 
 ## 当前建题默认（2026-09-19）
 
@@ -18,7 +18,7 @@
 
 判断原始数据能否使用，先按[数据充分性口径](benchmarks/object-datasets.md#data-sufficiency)分别核各对象所需的输入、参照与候选组。恢复／补采后的内容足够可以使用；“连续窗口”不等于要求每次计划抓取都成功。
 
-schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefilter 入口](../../evals/news-admission/aihot-observed-membership/README.md)支持 validate、模型 run、固定抽样与恢复归档，真实成绩见[状态](news-admission/status.md)；O2 的[逐条评分入口](../../evals/visible-score/aihot-score-pointwise/README.md)已接通 run、自动归档及零调用 rescore。O3/O4 独立叶子 CLI 仍只做 validate，已有预测可复用 `evals._shared.metrics.score`，其推理/自动归档缺口见各对象 status；旧全池 runner 不接独立题库。
+schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefilter 入口](../../evals/news-admission/aihot-observed-membership/README.md)支持 validate、模型 run、固定抽样与恢复归档；O2 的[逐条评分入口](../../evals/visible-score/aihot-score-pointwise/README.md)已接通 run、自动归档及零调用 rescore；O3 的[六类网站分类](../../evals/content-enrichment/aihot-category-navigation/README.md)已接通建题、独立 Flash 调用与归档。O3 其它字段及 O4 的独立推理缺口见各对象 status；旧全池 runner 不接独立题库。
 
 后续扩题默认用 `build --base <既有版本>`，可重复传入多个 schema1/schema2 版本：合并冻结的原始输入和 AIHOT 证据，去重后按当前逐对象规则重验，输出不可覆盖的新 vN 与逐题变化清单。旧题库只用于比较，不能直接拼 cases 或把版本题数相加。完整命令与 added/retained/updated/removed 口径见[扩展操作](benchmarks/object-datasets.md#后续-session-默认合并去重按当前设计检查有效性)。
 
@@ -28,7 +28,7 @@ schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefil
 | --- | --- | --- |
 | [news-admission](news-admission/README.md) | [aihot-observed-membership / v1](news-admission/aihot-observed-membership/v1/README.md) | 冻结批次已观察收录主集 precision / recall，补充集只看 recall |
 | [visible-score](visible-score/README.md) | [aihot-score-pointwise / v1](visible-score/aihot-score-pointwise/v1/README.md) | 最终展示分 MAE |
-| [content-enrichment](content-enrichment/README.md) | [aihot-enrichment-fields / v1](content-enrichment/aihot-enrichment-fields/v1/README.md) | 分类、标签确定性指标；标题/摘要/理由分别判分 |
+| [content-enrichment](content-enrichment/README.md) | [aihot-category-navigation / v1](content-enrichment/aihot-category-navigation/v1/README.md)；[aihot-enrichment-fields / v2](content-enrichment/aihot-enrichment-fields/v2/README.md) | 前者为网站六类分类；后者保留其它字段及旧 API 分类语义，不混算 |
 | [featured-members](featured-members/README.md) | [aihot-featured-threshold / v1](featured-members/aihot-featured-threshold/v1/README.md) | 局部阈值成员 precision / recall；不覆盖全池 |
 
 后续迭代使用 user-scope `eval-workflows iterate-eval-system`，从本入口定位对象，再读 workflow、assets 及对象 status。没有该 skill 的 agent 沿项目入口执行相同命令和归档规则。
@@ -43,7 +43,7 @@ schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefil
 
 ## 当前阶段（2026-09-21 收尾）
 
-用户决定暂停 O2 评分优化，先做 O3 网站新闻的 category / tags，再评估我方预测字段是否有助评分。评分收尾、历史成绩和资产定位见 [visible-score/status](visible-score/status.md)；下一阶段的范围、确定性评测与输入隔离要求见 [content-enrichment/status](content-enrichment/status.md)。本次仅同步文档，没有新模型运行、O3 实现、部署或 gold 修改。
+用户决定暂停 O2 评分优化，先做 O3 网站新闻的 category / tags，再评估我方预测字段是否有助评分。分类已按模型、产品、行业、论文、教程、观点重新建题并进入独立评测；最新成绩和接续见 [content-enrichment/status](content-enrichment/status.md)。标签和评分接入不由分类局部成绩背书；评分原件仍见 [visible-score/status](visible-score/status.md)。
 
 ## 历史共享池实施进度（2026-09-17）
 

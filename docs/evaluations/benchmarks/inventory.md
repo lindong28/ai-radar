@@ -1,5 +1,13 @@
 # 题库库存
 
+## 2026-09-21 网站六分类题库
+
+`content-enrichment/aihot-category-navigation/v1` 为361题：模型45、产品60、行业60、论文46、教程67、观点83；dev285、regression76。通过真实分类页面item_id＋规范化URL配冻结原文建立，不用旧API tip猜观点。该benchmark消费者语义与旧fields不同，但新闻可能重叠，不能相加；建设与复用见[版本说明](../content-enrichment/aihot-category-navigation/v1/README.md)。当前模型运行覆盖276个唯一case，不是全量，结果见[状态](../content-enrichment/status.md)。
+
+## 2026-09-21 O3 原始字段扩题
+
+`content-enrichment/aihot-enrichment-fields/v2` 已物化并经真实 loader 核验：3,866 条新闻、13,331 道字段题；category 1,673、tags 3,866、title 3,866、summary 3,810、reason 116。相对 v1 新增 1,325 道字段题、保留 12,006 道，无更新或移除。只增加 AIHOT 9/19、9/20 UTC 两个参照窗，未扩其它对象。分类仍是 API 的五类观测，不能冒充网页六类 gold；使用边界与重建命令见 [v2](../content-enrichment/aihot-enrichment-fields/v2/README.md)。
+
 ## 2026-09-20 目录清理（题目不变）
 
 四个对象的活动目录现各保留一个 benchmark：新闻准入 `aihot-observed-membership/v1`（主集 1,450）、评分 `aihot-score-pointwise/v1`（3,475）、富化 `aihot-enrichment-fields/v1`（3,476 条新闻／12,006 字段题）、精选 `aihot-featured-threshold/v1`（341 局部题）。五个旧 benchmark 目录移出活动目录、可从独立归档恢复；当前评分与富化的 v1 通过符号链接保持共享证据可达。位置和历史命令换址见[资产说明](../assets.md#活动题库与历史归档2026-09-20)。这是存储整理，不是扩题或新评测；下方历史记录中的旧路径按该映射定位，不作为当前入口。

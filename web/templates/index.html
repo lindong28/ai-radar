@@ -6,7 +6,7 @@
     <title>AI Radar · 精选</title>
     <meta name="theme-color" content="#10151c">
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');var s=null;try{s=localStorage.getItem("ai-radar:theme");}catch(e){}var t=(s==="dark"||s==="light"||s==="system")?s:"system";var d=t==="dark"||(t==="system"&&(typeof matchMedia!=="function"||matchMedia("(prefers-color-scheme: dark)").matches));r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;if(m)m.setAttribute("content",d?"#10151c":"#f4f5f6");})();</script>
-    <link rel="modulepreload" href="/app.js?v=20260817-aihot-33b1dc91">
+    <link rel="modulepreload" href="/app.js?v=20260817-aihot-6a29037c">
     <link rel="stylesheet" href="/style.css?v=20260817-aihot-03fc77b5">
   </head>
   <body data-init="initClientNavigation,initCurated">
@@ -53,7 +53,8 @@
               <a class="seg-item" href="/?category=ai-products&page=1" data-category="product" aria-pressed="false">产品</a>
               <a class="seg-item" href="/?category=industry&page=1" data-category="industry" aria-pressed="false">行业</a>
               <a class="seg-item" href="/?category=paper&page=1" data-category="paper" aria-pressed="false">论文</a>
-              <a class="seg-item" href="/?category=tip&page=1" data-category="practice" aria-pressed="false">技巧</a>
+              <a class="seg-item" href="/?category=tip&page=1" data-category="practice" aria-pressed="false">教程</a>
+              <a class="seg-item" href="/?category=opinion&page=1" data-category="opinion" aria-pressed="false">观点</a>
             </div>
           <a class="mobile-search-link" aria-label="搜索全部动态" href="/all#search"><span class="mobile-search-icon" aria-hidden="true"></span></a>
           <form class="feed-filter" action="/" method="get">
@@ -77,6 +78,6 @@
       {{ preload | tojson | safe }}
     </script>
 {% include "_mobile_tabbar.html" %}
-    <script type="module" src="/app.js?v=20260817-aihot-33b1dc91" async></script>
+    <script type="module" src="/app.js?v=20260817-aihot-6a29037c" async></script>
   </body>
 </html>

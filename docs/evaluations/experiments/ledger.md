@@ -1,5 +1,11 @@
 # 运行台账
 
+## 2026-09-21：六类网站分类建题与 Flash 首轮优化
+
+新 `content-enrichment/aihot-category-navigation/v1` 361题（dev285/reg76），gold来自网页六类成员，旧API五类fields/v2另保留。6个run：smoke8、A0/A1/A2同dev200、冻结A2与A0同reg76；760次Flash调用（757成功，3次为同题content_filter），276个唯一计分ID、651,712已报告tokens、金额未知，非全量。开发并发8、两回归各4共享总8。真实模型均deepseek-v4-flash-ga-260731。
+
+开发A0/A1/A2准确率69.0/74.5/77.0%；回归A0=69.74%、A2=68.42%，A2修正5退化6，未支持推广，默认保留A0六类基线。没有人评/gold/生产调用变更。原件与元数据在根runs/experiments的六分类v1/2026-09-21，UTC时间分别10-08-04、10-08-21、10-11-22、10-13-19、10-15-13、10-15-14；首轮support含复算与网页证据，逐轮conclusion均落盘。详细归因、失败分母和接续见[O3状态](../content-enrichment/status.md#当前六类分类已建题并完成首轮优化实验2026-09-21)。
+
 ## 2026-09-21：评分研究收尾与 O3 接续决定（无新运行）
 
 用户决定暂停 visible-score 优化，先完成网站 category / tags，再判断我方预测字段是否有助评分。保留全部历史读数、P1 同题研究对照及 Q1–Q3 负结果；MAE < 3 未达，P1 不是跨历史最优或生产选择。当前状态与原件入口见 [O2 收尾](../visible-score/status.md#2026-09-21-收尾评分优化暂停)，确定性字段评测、预测输入消融与 benchmark 身份边界见 [O3 接续](../content-enrichment/status.md#2026-09-21-接续先做网站分类与标签)。本条记录路线变化，不登记新 run、模型指标或费用；没有模型调用、O3 实现、gold 修改或部署。

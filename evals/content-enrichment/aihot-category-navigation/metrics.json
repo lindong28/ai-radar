@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "benchmark_slug": "aihot-category-navigation",
+  "metrics": [{
+    "task": "category",
+    "metric_name": "category_accuracy",
+    "unit": "fraction",
+    "direction": "higher",
+    "definition": "预测类别与 AIHOT 六分类页面实际成员归属完全一致的题数 / 全部选中题数；失败题仍在分母",
+    "source": "evals/_shared/metrics.py"
+  }]
+}

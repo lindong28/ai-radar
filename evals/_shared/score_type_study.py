@@ -48,13 +48,15 @@ def classifier_prompt(raw: dict, template: str) -> dict:
     return {"system": SYSTEM, "user": Template(template, undefined=StrictUndefined).render(**prompt_context(raw))}
 
 
-def preflight(identity: dict, actual: dict, output: Path) -> None:
+def preflight(identity: dict, actual: dict, output: Path, *,
+              run_name: str = "score-type", baseline_id: str = "input-only-news-type-v1",
+              authority: str = "ADR c4e1; offline hypothesis") -> None:
     frozen = output / "identity-frozen.json"
     assets.write_json(frozen, identity)
     roles = (("code", "deploy_version"), ("behavior", "effective_config"), ("inputs", "input_assets"))
     dep = assets.digest(identity["code"])
-    spec = {"run": "score-type", "at": "before calls", "baseline": {
-        "id": "input-only-news-type-v1", "kind": "local_source", "authority": "ADR c4e1; offline hypothesis"},
+    spec = {"run": run_name, "at": "before calls", "baseline": {
+        "id": baseline_id, "kind": "local_source", "authority": authority},
         "sources": [{"id": k, "role": role, "name": k, "count": 1, "origin": "frozen study identity"} for k, role in roles],
         "anchors": [{"field": role, "source": k, "covers": 1,
             "base": {"value": assets.digest(identity[k]), "provenance": "pre-call identity", "locator": str(frozen), "deploy_ref": dep},

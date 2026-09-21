@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260921-e38b](./20260921-e38b-align-six-category-evaluation.md) | 网站六类分类、实际导航金标、独立 Flash 分类评测与消费者兼容 | accepted；不部署或切换生产调用 | 2026-09-21 |
 | [20260921-f6b3](./20260921-f6b3-test-editorial-evidence-score-rules.md) | 编辑边界、虚构few-shot、独立识别与条件公式四类评分实验 | accepted for offline experiment | 2026-09-21 |
 | [20260921-c4e1](./20260921-c4e1-test-news-type-score-combination.md) | 新闻类型条件权重与代表原文自身gold诊断；不改生产或gold | accepted for offline experiment | 2026-09-21 |
 | [20260921-a93c](./20260921-a93c-test-no-example-score-rubrics-and-dimension-calls.md) | 无示例刻度与逐维独立调用对照；残差人评只导出待裁决票 | accepted for offline experiment | 2026-09-21 |

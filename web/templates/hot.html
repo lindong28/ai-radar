@@ -6,7 +6,7 @@
     <title>AI Radar · 热点榜</title>
     <meta name="theme-color" content="#10151c">
     <script>(function(){var r=document.documentElement,m=document.querySelector('meta[name="theme-color"]');var s=null;try{s=localStorage.getItem("ai-radar:theme");}catch(e){}var t=(s==="dark"||s==="light"||s==="system")?s:"system";var d=t==="dark"||(t==="system"&&(typeof matchMedia!=="function"||matchMedia("(prefers-color-scheme: dark)").matches));r.dataset.theme=d?"dark":"light";r.dataset.themeMode=t;if(m)m.setAttribute("content",d?"#10151c":"#f4f5f6");})();</script>
-    <link rel="modulepreload" href="/app.js?v=20260817-aihot-33b1dc91">
+    <link rel="modulepreload" href="/app.js?v=20260817-aihot-6a29037c">
     <link rel="stylesheet" href="/style.css?v=20260817-aihot-03fc77b5">
   </head>
   <body data-init="initNavigationOnly,initHotAutoReload">
@@ -108,6 +108,6 @@
 {% include "_mobile_tabbar.html" %}
     {# 候选缓存未就绪时的有界自动重载住在 app.js 的 initHotAutoReload()，由 <body data-init> 拉起；
        不再内联 <script>，因为 CSP 的 script-src 不带 'unsafe-inline'。 #}
-    <script type="module" src="/app.js?v=20260817-aihot-33b1dc91"></script>
+    <script type="module" src="/app.js?v=20260817-aihot-6a29037c"></script>
   </body>
 </html>

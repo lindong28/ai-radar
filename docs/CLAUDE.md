@@ -56,6 +56,8 @@
 
 ### docs/evaluations/ [Developer]
 
+[网站六类分类题](evaluations/content-enrichment/aihot-category-navigation/v1/README.md)：361 题的实际网页成员金标、建题/扩题与原始输入隔离；区别于[旧 API 字段 v2](evaluations/content-enrichment/aihot-enrichment-fields/v2/README.md)。[e38b](adr/20260921-e38b-align-six-category-evaluation.md)记录分类实施边界，结果见[O3 状态](evaluations/content-enrichment/status.md)。
+
 [评分上下文实验设计](evaluations/visible-score/context-design.md)：来源身份、条件化组合、时效、事件聚合的顺序消融与数据边界，2026-09-21 用户批准离线研究。
 
 [归档上下文评分题](evaluations/visible-score/aihot-score-context/v1/README.md)：区别于单条评分的时钟/当时事件候选输入契约、建题和运行入口，40题局部开发诊断。

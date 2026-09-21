@@ -191,7 +191,8 @@ const CATEGORY_LABELS = {
   product: "产品",
   industry: "行业",
   paper: "论文",
-  practice: "技巧",
+  practice: "教程",
+  opinion: "观点",
 };
 
 const CATEGORY_URL_VALUES = {
@@ -201,6 +202,7 @@ const CATEGORY_URL_VALUES = {
   industry: "industry",
   paper: "paper",
   practice: "tip",
+  opinion: "opinion",
 };
 
 const CATEGORY_FROM_URL = Object.fromEntries(Object.entries(CATEGORY_URL_VALUES).map(([key, value]) => [value, key]));
@@ -2007,21 +2009,27 @@ const DAILY_SECTION_DEFS = [
   {
     key: "practice",
     number: "05",
-    title: "技巧与观点",
-    subtitle: "TIPS & TAKES",
+    title: "教程",
+    subtitle: "TUTORIALS",
     tags: ["教程/实践", "开源/仓库", "端侧", "部署/工程", "大佬观点"],
+  },
+  {
+    key: "opinion",
+    number: "06",
+    title: "观点",
+    subtitle: "OPINIONS",
+    tags: [],
   },
 ];
 
-// content-v2's five primary_category values map onto this page's five existing
-// sections; "tutorial" folds into "practice" (main has no separate tutorial
-// section — it already groups tutorial/opinion tags there).
+// Explicit six-way classifications take precedence; legacy tag routing is unchanged.
 const PRIMARY_CATEGORY_SECTION_MAP = {
   model: "model",
   product: "product",
   industry: "industry",
   paper: "paper",
   tutorial: "practice",
+  opinion: "opinion",
 };
 
 const CHINESE_DIGITS = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
@@ -2220,8 +2228,9 @@ export function renderDailyReport(container, items, activeDate) {
         const title = itemTitleText(item);
         const source = dailySourceParts(item);
         const avatar = source.avatar ? `<img class="daily-source-avatar" src="${esc(safeCssUrl(source.avatar))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "";
-        const opinionBadge = item.is_opinion ? '<span class="role-tag">观点</span>' : "";
-        return `<article class="daily-article" data-published-date="${esc(itemDateBucket(item))}" data-opinion="${item.is_opinion ? "true" : "false"}">
+        const isOpinion = item.primary_category === "opinion" || item.is_opinion === true;
+        const opinionBadge = isOpinion ? '<span class="role-tag">观点</span>' : "";
+        return `<article class="daily-article" data-published-date="${esc(itemDateBucket(item))}" data-opinion="${isOpinion ? "true" : "false"}">
           <h3 class="daily-article-title"><a href="${esc(itemHref(item))}" target="_blank" rel="noopener noreferrer">${esc(title)}</a></h3>
           <div class="daily-article-source daily-article-meta"><span class="role-tag">${esc(source.role)}</span>${opinionBadge}${avatar}<span>${esc(source.label)}</span></div>
           <p class="daily-article-summary">${esc(excerpt(item))}</p>

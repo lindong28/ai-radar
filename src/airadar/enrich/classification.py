@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-type PrimaryCategory = Literal["model", "product", "industry", "paper", "tutorial"]
+type PrimaryCategory = Literal["model", "product", "industry", "paper", "tutorial", "opinion"]
 type ProjectionStatus = Literal["exact", "ambiguous", "unclassified"]
 type ProjectionAuthority = Literal[
     "candidate_v2",
@@ -21,6 +21,7 @@ PRIMARY_CATEGORIES: tuple[PrimaryCategory, ...] = (
     "industry",
     "paper",
     "tutorial",
+    "opinion",
 )
 
 PRIMARY_CATEGORY_SLUGS: dict[PrimaryCategory, str] = {
@@ -29,6 +30,7 @@ PRIMARY_CATEGORY_SLUGS: dict[PrimaryCategory, str] = {
     "industry": "industry",
     "paper": "paper",
     "tutorial": "tip",
+    "opinion": "opinion",
 }
 SLUG_PRIMARY_CATEGORIES = {slug: category for category, slug in PRIMARY_CATEGORY_SLUGS.items()}
 

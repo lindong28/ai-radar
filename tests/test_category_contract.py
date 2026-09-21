@@ -88,7 +88,8 @@ def test_category_tags_are_derived_from_the_declarative_contract() -> None:
 
     assert set(contract) == set(EXPECTED_CATEGORY_TAGS)
     assert categories.CATEGORY_TAGS == {
-        category: set(rule.include_any) for category, rule in contract.items()
+        **{category: set(rule.include_any) for category, rule in contract.items()},
+        "opinion": {"大佬观点"},
     }
     assert {category: set(rule.include_any) for category, rule in contract.items()} == EXPECTED_CATEGORY_TAGS
     assert contract["ai-models"].exclude_when

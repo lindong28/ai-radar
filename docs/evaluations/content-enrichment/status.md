@@ -2,7 +2,45 @@
 
 > [Developer] · Mutable snapshot · 2026-09-21。区分能力、实际运行与有效成绩。
 
-## 2026-09-21 接续：先做网站分类与标签
+## 当前：六类分类已建题并完成首轮优化实验（2026-09-21）
+
+已按用户要求对齐模型、产品、行业、论文、教程、观点。AIHOT 网页分开教程/观点，旧 API 把两者合为 tip；新 [aihot-category-navigation/v1](aihot-category-navigation/v1/README.md) 有361题（dev285／regression76），旧字段题库保留原义并扩至 [v2](aihot-enrichment-fields/v2/README.md)。不把旧1,673条API分类直接当六类题。
+
+### L1：实现、指标与结果
+
+独立分类输入为原始 title＋content_text 前5,000字，每题一次 `deepseek-v4-flash`，实际返回模型均 `deepseek-v4-flash-ga-260731`；JSON先reason后primary_category。类别枚举与网页映射已六类化；`enrich/prompts_v2.py`共享rubric，网站筛选、API/SSR、导航和日报支持观点；旧记录标签fallback保留，不重新标历史数据。**主生产runner仍走legacy enrich，本轮未切换或部署；独立分类成绩不等于完整enrich成绩。**
+
+判官是确定性相等比较，主指标为 `category_accuracy=正确题/全部选中题`，失败照进分母；无需LLM-as-judge。计分器的错预测、格式错误、NaN和URL误配反例已验证。三候选同开发200题/43来源，回归76题/25来源，均覆盖六类。
+
+| 候选 | 主要变化 | 开发200 | 回归76 | 处置 |
+|---|---|---|---|---|
+| A0 | 六类主要内容基线 | 138/200＝69.0% | 53/76＝69.74% | 保留为当前研究基线 |
+| A1 | 收窄模型发布；论文含研究发现；观点含转述他人看法 | 149/200＝74.5% | 未跑 | 研究候选，不据开发结果推广 |
+| A2 | 按内容贡献区分组织行动、研究、独立实测、趋势/案例解读 | 154/200＝77.0% | 52/76＝68.42% | 回归不支持替换A0 |
+
+开发三轮均199条成功、同一题被供应商 `content_filter`，整轮标为incomplete，表中是保留该失败题的端到端准确率；两轮回归各76/76调用完成。多数类恒定基线开发20.0%、回归30.26%。smoke8为6/8，只覆盖4类/6来源，用于链路验证、不当六类质量验收。
+
+A1相对A0修正15／退化4；A2相对A1修正14／退化9。A2回归相对A0修正5／退化6：观点10/23→12/23，模型7/7→6/7，行业8/9→6/9；产品17/19、论文3/5、教程8/13不变。**本轮未证明可泛化的准确率提升**，不因开发77%就将A2设默认；这不证明分类任务或Flash做不到。
+
+### L2：代码、题目和实验资产
+
+- 执行与扩题：[叶子README](../../../evals/content-enrichment/aihot-category-navigation/README.md)，含capture/build/evaluate命令；实现为 `evals/_shared/category_dataset.py`、`category_eval.py`，共享分类逻辑 `src/airadar/enrich/category.py`；候选 `evals/content-enrichment/prompts/category-a{0,1,2}.txt`。A0精确复现使用默认rubric，冻结prompt以每轮prompt.json为准。
+- 题目：`~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-category-navigation/v1/`，合并去重且按当前规则重验后输出新vN；旧API题库及六类题库不是互斥的新闻集合，不相加。
+- 本轮6个run在 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-21/`，对应机器元数据/指标在同分区 `experiments/`；UTC时间依次为smoke `10-08-04`、A0开发 `10-08-21`、A1 `10-11-22`、A2 `10-13-19`、A0回归 `10-15-13`、A2回归 `10-15-14`。
+- 每轮保存cases/prompts/predictions/reason/attempts/scores/diagnostics/conclusion，统一指标 `experiments/metrics/summary.json`。首轮support含 `study-summary.json`、可复算 `summarize.py`、真实网页证据及消费者验收记录；不把运行原件塞进docs。
+- 共760次调用、757成功/3次内容过滤、651,712已报告tokens，usage无缺失、金额未知；276个唯一计分ID，不是全量361。暂无本目标人评票，未来票优先；未改原gold。
+
+### L3：比较边界与当前接续
+
+六轮都实际执行eval-identity，code/behavior/inputs一致且终态未漂移；同dev题三个版本、同reg题两个版本各自哈希一致。开发与回归case_id不重叠，候选A2在读取回归前冻结；跨历史或同事件曝光未全面核验，只称本轮分类开发留出，不称从未见过的盲测。回归已用于诊断，未来若据此继续调参，它就是已见回归，不可再冒称未见验证。
+
+下一轮分类实施者应先检查“短原文是否缺分类所需信息”及“网页类别与合理语义的分歧”，用逐题原文/reason提出可检验规则或请用户标注；不默认剔题、猜gold或引入实时抓外链。已有错例中纯转发短句不足以说明模型/产品身份，但这是输入局限的线索，不是已证明无法分类。后续可使用尚未运行的85个dev题做开发对照，真正新增验证仍需新材料并核曝光。A1/A2不自动推广，O2继续暂停、tags仍归下一阶段；本轮没有后台模型任务。
+
+验证范围：定向170个Python测试覆盖建题、计分、六类API/SSR及共享归档；另有146个既有Web回归与真实JS renderer。隔离headless在9条fixture上实际点过两列表观点筛选和日报观点锚点，非生产/移动端/全站性能验收。独立测量链与消费者审查通过；最初NaN归档中断和URL身份缺检查已修复并复验，无遗留审查finding。
+
+## 历史接续决定（实施前）
+
+<a id="2026-09-21-接续先做网站分类与标签"></a>
 
 用户决定暂停 [O2 评分优化](../visible-score/status.md#2026-09-21-收尾评分优化暂停)，下一阶段先做网站展示的 `category` / `tags`，之后再评估这些字段是否有助评分。这里的字段属于 O3，不是 Q1–Q3 使用的评分内部信息性质分类。本次仅记录接续，没有实现或启动 O3 模型运行，没有新成绩或 gold 变更。
 

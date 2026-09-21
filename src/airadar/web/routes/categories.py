@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ...enrich.classification import SLUG_PRIMARY_CATEGORIES
+from .categories_v2 import _latest_enrich_output_clause
+
 
 @dataclass(frozen=True, slots=True)
 class TagCondition:
@@ -51,6 +54,7 @@ CATEGORY_CONTRACT = {
 }
 
 CATEGORY_TAGS = {category: set(rule.include_any) for category, rule in CATEGORY_CONTRACT.items()}
+CATEGORY_TAGS["opinion"] = {"大佬观点"}
 
 
 def _latest_enrich_tag_exists_clause(item_alias: str, eval_alias: str, tag_alias: str, condition: str) -> str:
@@ -114,7 +118,12 @@ def _tag_condition_clause(
 def category_filter_clause(category: str | None, item_alias: str = "i") -> tuple[str, list[object]]:
     if not category:
         return "", []
+    primary_category = SLUG_PRIMARY_CATEGORIES.get(category)
+    if primary_category is None:
+        return "", []
     rule = CATEGORY_CONTRACT.get(category)
+    if category == "opinion":
+        rule = CategoryRule(include_any=("大佬观点",))
     if rule is None:
         return "", []
     placeholders = ", ".join("?" for _ in rule.include_any)
@@ -135,7 +144,14 @@ def category_filter_clause(category: str | None, item_alias: str = "i") -> tuple
         )
         clauses.append(f"NOT ({exclusion_clause})")
         params.extend(exclusion_params)
-    return f"({' AND '.join(clauses)})", params
+    output = _latest_enrich_output_clause(item_alias)
+    return (
+        f"""(
+          json_extract({output}, '$.primary_category') = '{primary_category}'
+          OR (json_type({output}, '$.primary_category') IS NULL AND ({' AND '.join(clauses)}))
+        )""",
+        params,
+    )
 
 
 def deduped_item_clause(item_alias: str = "i") -> str:
@@ -164,7 +180,17 @@ def deduped_item_clause(item_alias: str = "i") -> str:
 def matches_category(item: dict[str, Any], category: str | None) -> bool:
     if not category:
         return True
+    primary_category = SLUG_PRIMARY_CATEGORIES.get(category)
+    if primary_category is None:
+        return True
+    authority = item.get("classification_projection_authority")
+    if authority == "malformed_candidate_v2":
+        return False
+    if authority == "candidate_v2" or (item.get("primary_category") is not None and authority != "legacy_v1"):
+        return item.get("primary_category") == primary_category
     rule = CATEGORY_CONTRACT.get(category)
+    if category == "opinion":
+        rule = CategoryRule(include_any=("大佬观点",))
     if rule is None:
         return True
     tags = item.get("topic_tags")

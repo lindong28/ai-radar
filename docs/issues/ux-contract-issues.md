@@ -9,6 +9,12 @@
 
 ---
 
+## [open] 2026-09-21 [expansion] 六类主分类与旧标签兼容的契约候选
+
+- Discovered: 在隔离headless浏览器使用真实create_app和9条fixture，实际点击精选/全部动态的观点筛选，均从9条缩为3条（显式观点的旧bool true/false各一条、旧观点标签一条）；日报展示六节并可点击观点目录跳转，旧标签条目仍走历史fallback。原件见 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-21/10-08-04/support/consumer-checks.md`。未部署，不是线上读数。
+- Description: 本轮按用户要求将枚举、导航和日报对齐模型、产品、行业、论文、教程、观点；显式primary_category优先，旧is_opinion及标签仅作兼容。历史记录未重标，不能承诺所有历史新闻六类互斥。
+- Recommendation: 后续契约维护者记录六类入口、显式主类优先及旧记录fallback边界。L2验收复用上述两列表真实点击和日报分节/锚点，额外覆盖“显式观点＋旧bool false”；不得把离线分类成绩当生产多字段enrich质量。本条仅候选，不直接修订契约。
+
 ## [open] 2026-08-31 [expansion] 微信搜索契约未覆盖跨字段必需词、正文检索与受控评测词同义语义
 
 - Discovered: 用户在公开 `/wechat` 搜索栏输入《即梦 Seedance 2.5 实测》后得到 0 篇；本轮用当前数据库快照复现了严格字面词错位——目标标题写“狂测”，解读写“评测”，没有字面“实测”。这是用户真实入口的失败报告；新实现尚未部署，下面的 L2 是上线后需要执行的端到端确认。
