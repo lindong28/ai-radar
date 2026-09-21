@@ -30,6 +30,16 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 smoke 验证链路，不代表质量。随后固定 seed/开发题比较 rubric（`--rubric path.txt`）；冻结候选后使用 regression，不把开发或反复选型结果称盲测。模型输入严格只有 title 与前 5,000 字正文，参考、tags、AIHOT 摘要不进入 prompt；每题一个 Flash 调用，输出 reason 后 primary_category。共享实现位于 `src/airadar/enrich/category.py`，runner 为 `evals/_shared/category_eval.py`；独立调用成绩不代表完整 enrich 或生产已上线。
 
+### 可选：原始引用输入消融
+
+默认仍只有原标题正文。要检验输入缺失，可在同一命令增加 `--quote-source ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v2`，并保持相同 dataset、split、seed、limit、config、rubric，另给 label。来源必须是题库 manifest.source_datasets 哈希绑定的直接父数据集；raw-inputs.jsonl 哈希也要匹配其 manifest，不能任意换成最新档案。
+
+只沿原始 X 元数据的 quoted 关系查一跳；每题按 provenance.observed_at 排除未来观测，实质版本不一致、无正文或查不到则不追加、不猜内容、不剔题。引用的 author/url/title/content_text（正文最多4,000字符）追加为不可信原始材料，不取 AIHOT 生成摘要/标签/参考答案。每题仍一次调用，不做实时抓取，也未接入生产。原题和gold保持不变，这是分类对象的可选检索输入配置，不是改写 benchmark/v1。
+
+新增运行原件 `quote-context.jsonl`：每行 case_id＋quotes，包含 post_id、status；available时还有 raw_sha256、observed_at、raw_run、input。完整引用原件保存在该sidecar，实际发送截断文本以prompts.jsonl为准。metadata.object_identity.behavior.quote_context 锁父manifest、raw和解析结果摘要；object_identity.inputs.quote_sources 在运行前与结束时重读源哈希，漂移则指标作废。关闭时不生成sidecar。未来扩题若更换父数据集，按新版本的source_datasets选择来源，不绕过哈希绑定。
+
+比较时分别报告“真正追加引用的题”和“未变输入的题”的修正/退化；后者单次变化不能归因到引用。多个转帖可能引用同一事件，题数不能当独立事件数。A6/A7是无引用边界实验，A8是A4＋引用主次规则；候选结果与处置见[最新状态](../../../docs/evaluations/content-enrichment/status.md)。
+
 指标全部是确定性计算，无需 LLM 判官，定义见 `metrics.json`，实现见 `evals/_shared/category_metrics.py`。整体 `category_accuracy`＝正确分类题数／全部选中题数；每类新增 `category_<name>_precision`＝TP/(TP+FP)、`category_<name>_recall`＝TP/(TP+FN)。`name` 为 model/product/industry/paper/tutorial/opinion；这是精确率与召回率，不是计入大量 TN 的 one-vs-rest accuracy。全部取值 0–1、越高越好。2026-09-21 用户新增目标：六类各自 precision、recall 均≥0.90，即十二项同时满足；整体 accuracy 不代替此目标，零分母的未计算项也不能算通过。
 
 某题误分时计入预测类 FP、真实类 FN；缺预测、调用/格式失败或未知类别只计真实类 FN，不分配预测类别，整体 accuracy 仍计错且该轮 incomplete。P/R 的零分母返回 `value: null, status: not_computed, reason: zero denominator`，不是 0 或 100%。`scores.json.category_counts` 按网页 slug 保存每类 tp/fp/fn，metric 的 denominator 是该指标分母，per_case 保留 reference/prediction/有效性。diagnostics 继续保存混淆矩阵及多数类基线。人评从稳定 `human-evals/content-enrichment/reviews.json` 按输入身份和字段优先覆盖，只作用新推理轮的计分视图，不改原始参考。

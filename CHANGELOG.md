@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-21（分类引用输入与边界实验）
+
+- 分类离线评测新增可选冻结引用原文输入，按观察时点与来源哈希校验，默认关闭；复用命令和输入边界见[评测入口](evals/content-enrichment/aihot-category-navigation/README.md)。
+- 完成三种边界prompt及引用有/无对照，共九轮1,722次Flash调用。冻结引用方案全361题准确率77.29%，同期控制75.35%，但未参与本轮调prompt的85题无净收益，六类双90未达；不引入生产依赖、不改gold或默认分类器。逐类指标、负结果与归因见[分类状态](docs/evaluations/content-enrichment/status.md)。
+
 ## 2026-09-21（分类逐类指标）
 
 - 六类分类评测保留整体 accuracy，新增每类 precision/recall 及 TP/FP/FN；失败计漏分、零分母明确未计算。

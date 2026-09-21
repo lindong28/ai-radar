@@ -20,4 +20,6 @@
 
 未来先用 capture.py 获取新的六分类页面，再用 `--base .../aihot-category-navigation/v1 --inputs <更多合格原文> --capture <新捕获> --version v2` 执行合并、去重和有效性重验。旧版本与新版本可能 overlap，不把各版本题数相加。
 
+2026-09-21新增可选原始引用消融，不改本版361题及gold：通过 `--quote-source` 读取本版直接父题库冻结raw，按每题observed_at选择一跳引用，来源/时间/版本不合格则不添加。它改变的是被测分类对象的可选输入逻辑；baseline默认标题正文不变。调用方式、运行metadata与quote-context字段含义见[执行README](../../../../../evals/content-enrichment/aihot-category-navigation/README.md#可选原始引用输入消融)。不能把该离线能力当作生产已有输入。
+
 指标保留整体 `category_accuracy`，并计算模型、产品、行业、论文、教程、观点各自的 precision 与 recall，共 13 项，均为确定性计算，无需 LLM 判官。失败仍计整体错误与真实类别 FN；零分母未计算。定义、TP/FP/FN 保存位置及旧预测零调用补算命令由[执行 README](../../../../../evals/content-enrichment/aihot-category-navigation/README.md)维护。题库输入、gold 与版本不因新增指标改变。实际评测及下一步见 [状态](../../status.md)。本轮 regression 未参与分类 prompt 开发；它是否在其它历史任务曝光过未全面核验，因此不宣称跨项目从未见过。

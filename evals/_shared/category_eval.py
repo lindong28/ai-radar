@@ -18,9 +18,27 @@ from .human_labels import apply_labels
 from .human_store import read_reviews
 from .prefilter_eval import select_cases
 from .score_type_study import preflight
+from .quote_context import QuoteContext, render_quotes
 
 TARGET = "content-enrichment"
 BENCHMARK = assets.CATEGORY_NAVIGATION
+
+
+def quoted_inputs(cases: list[dict], dataset: Path, source: Path) -> tuple[list[dict], dict]:
+    """Resolve original quotes only from a hash-bound parent dataset's raw archive."""
+    manifest = assets.read_json(dataset / "manifest.json")
+    source_manifest = assets.read_json(source / "manifest.json")
+    source_sha = assets.file_digest(source / "manifest.json")
+    if source_sha not in {row["sha256"] for row in manifest.get("source_datasets", [])}:
+        raise ValueError("quote source must be a frozen direct input parent")
+    raw_path = source / source_manifest["shared_evidence"] / "raw-inputs.jsonl"
+    if assets.file_digest(raw_path) != source_manifest.get("evidence_files", {}).get("raw-inputs.jsonl"):
+        raise ValueError("quote source raw evidence hash mismatch")
+    index = QuoteContext(raw_path)
+    rows = [{"case_id": c["case_id"], "quotes": index.resolve(c["input"], c["provenance"]["observed_at"])}
+            for c in cases]
+    return rows, {"manifest_sha256": source_sha, "raw_inputs_sha256": index.sha256,
+                  "resolved_sha256": assets.digest(rows)}
 
 
 def category_cases(cases: list[dict]) -> list[dict]:
@@ -50,7 +68,7 @@ def diagnostics(cases: list[dict], predictions: list[dict]) -> dict:
 
 def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed: str,
              label: str, chat_factory, rubric: str = RUBRIC, workers: int = 8,
-             smoke: bool = False, root: Path = assets.ROOT) -> dict:
+             smoke: bool = False, root: Path = assets.ROOT, quote_source: Path | None = None) -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
     check_metric_definitions(root)
@@ -67,6 +85,14 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
             for a in b["data"]["annotations"]], TARGET)
     cases = select_cases(category_cases(all_cases), split, limit, seed)
     prompts = {c["case_id"]: render_category_prompt(c["input"], rubric) for c in cases}
+    contexts, context_identity = [], None
+    context_paths = []
+    if quote_source is not None:
+        contexts, context_identity = quoted_inputs(cases, dataset, quote_source)
+        context_paths = [quote_source / "manifest.json", quote_source /
+                         assets.read_json(quote_source / "manifest.json")["shared_evidence"] / "raw-inputs.jsonl"]
+        for row in contexts:
+            prompts[row["case_id"]]["user"] += render_quotes(row["quotes"])
     request = {"model": config["models"]["category"], "temperature": 0, "max_tokens": 700}
     paths = ("src/airadar/enrich/category.py", "src/airadar/enrich/classification.py",
              "src/airadar/provider/judgment.py", "evals/_shared/category_eval.py",
@@ -74,14 +100,17 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              "evals/content-enrichment/aihot-category-navigation/metrics.json",
              "evals/_shared/transport.py", "evals/_shared/cli.py",
              "evals/_shared/human_labels.py", "evals/_shared/human_store.py",
-             "evals/_shared/score_type_study.py")
+             "evals/_shared/score_type_study.py", "evals/_shared/quote_context.py",
+             "evals/_shared/identity.py", "evals/_shared/dataset.py")
 
     def identity():
         return {"code": {p: assets.file_digest(assets.ROOT / p) for p in paths},
                 "behavior": {"metric_registry": check_metric_definitions(root),
                              "request": request, "transport": config["transport_identity"],
-                             "rubric": rubric, "thinking": "disabled", "retry_count": 0},
+                             "rubric": rubric, "thinking": "disabled", "retry_count": 0,
+                             "quote_context": context_identity},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
+                           "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
                            "cases": assets.digest(cases), "prompts": assets.digest(prompts),
                            "human_reviews": assets.file_digest(book_path) if book_path.exists() else None}}
 
@@ -91,6 +120,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     assets.write_json(run / "prompt.json", {"rubric": rubric})
     assets.write_jsonl(run / "cases.jsonl", cases)
     assets.write_jsonl(run / "prompts.jsonl", [{"case_id": k, "prompt": v} for k, v in prompts.items()])
+    if quote_source is not None:
+        assets.write_jsonl(run / "quote-context.jsonl", contexts)
     meta = {"target": TARGET, "benchmark": BENCHMARK, "version": manifest["version"],
             "label": assets.slug(label), "split": split, "smoke": smoke, "field": "category",
             "dataset": str(dataset), "case_identity": assets.digest(cases),
@@ -151,6 +182,7 @@ def main(argv=None):
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--env-file", type=Path)
     p.add_argument("--rubric", type=Path, help="UTF-8 candidate rubric; default is shared six-category A0 rubric")
+    p.add_argument("--quote-source", type=Path, help="Frozen direct parent dataset for as-of original quotes; offline ablation only")
     p.add_argument("--split", choices=["dev", "regression"], required=True)
     p.add_argument("--limit", type=int)
     p.add_argument("--seed", default="category-development")
@@ -163,7 +195,7 @@ def main(argv=None):
     result = evaluate(a.dataset, config=config, split=a.split, limit=a.limit, seed=a.seed,
                       label=a.label, chat_factory=transport_factory(config, a.env_file),
                       rubric=a.rubric.read_text() if a.rubric else RUBRIC, workers=a.workers,
-                      smoke=a.smoke, root=a.output_root)
+                      smoke=a.smoke, root=a.output_root, quote_source=a.quote_source)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 
