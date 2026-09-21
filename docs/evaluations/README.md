@@ -18,7 +18,7 @@
 
 判断原始数据能否使用，先按[数据充分性口径](benchmarks/object-datasets.md#data-sufficiency)分别核各对象所需的输入、参照与候选组。恢复／补采后的内容足够可以使用；“连续窗口”不等于要求每次计划抓取都成功。
 
-schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefilter 入口](../../evals/news-admission/aihot-observed-membership/README.md)支持 validate、模型 run、固定抽样与恢复归档，真实成绩见[状态](news-admission/status.md)；其余新叶子 CLI 仍只做 validate，已有预测可复用 `evals._shared.metrics.score`。旧 runner 不接独立题库；逐条评分映射、富化理由和精选阈值的推理/自动归档适配仍未完成，具体缺口归各对象 status，不属于本轮 prefilter 任务。
+schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefilter 入口](../../evals/news-admission/aihot-observed-membership/README.md)支持 validate、模型 run、固定抽样与恢复归档，真实成绩见[状态](news-admission/status.md)；O2 的[逐条评分入口](../../evals/visible-score/aihot-score-pointwise/README.md)已接通 run、自动归档及零调用 rescore。O3/O4 独立叶子 CLI 仍只做 validate，已有预测可复用 `evals._shared.metrics.score`，其推理/自动归档缺口见各对象 status；旧全池 runner 不接独立题库。
 
 后续扩题默认用 `build --base <既有版本>`，可重复传入多个 schema1/schema2 版本：合并冻结的原始输入和 AIHOT 证据，去重后按当前逐对象规则重验，输出不可覆盖的新 vN 与逐题变化清单。旧题库只用于比较，不能直接拼 cases 或把版本题数相加。完整命令与 added/retained/updated/removed 口径见[扩展操作](benchmarks/object-datasets.md#后续-session-默认合并去重按当前设计检查有效性)。
 
@@ -41,9 +41,9 @@ schema2 独立建题/校验与 schema1 全池推理分开：O1 的[独立 prefil
 - 同题逐指标比较：至少一项改善，其他不退步，无未完成题。不设绝对达标阈值，不声称统计显著或整体拟合完成。
 - 模型调用不限总次数，但必须先小规模 smoke、成功后再扩大，按身份复用有效输出，不自动换模型/供应商。
 
-## 当前独立评分入口（2026-09-20）
+## 当前阶段（2026-09-21 收尾）
 
-O2 的 schema 2 逐条评分、reason-first 原始响应归档、MAE/Spearman与零调用指标补算已接通；当前方向为作者结构启发的五维语义研究，历史校准仅保留为对照。已有固定开发200、历史回归200及最新回归100等不同题集，不是全量3,475题。当前结果、候选及生产边界见 [visible-score/status](visible-score/status.md)，复用命令见[执行入口](../../evals/visible-score/aihot-score-pointwise/README.md)。
+用户决定暂停 O2 评分优化，先做 O3 网站新闻的 category / tags，再评估我方预测字段是否有助评分。评分收尾、历史成绩和资产定位见 [visible-score/status](visible-score/status.md)；下一阶段的范围、确定性评测与输入隔离要求见 [content-enrichment/status](content-enrichment/status.md)。本次仅同步文档，没有新模型运行、O3 实现、部署或 gold 修改。
 
 ## 历史共享池实施进度（2026-09-17）
 

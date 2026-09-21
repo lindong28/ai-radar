@@ -2,6 +2,8 @@
 
 对象：`visible-score`。逐条可见 AI 分拟合；输入来自可验证 Radar raw 或 AIHOT 原文，不把参考分传入模型。
 
+2026-09-21 用户决定暂停评分优化，先做 O3 网站 category / tags；本页保留既有执行与复现接口，不表示继续跑评分实验。P1 仅为最近同题组较优研究对照，非跨历史最优或生产默认；当前收尾、原件和机器指标入口见 [O2 status](../../../docs/evaluations/visible-score/status.md#2026-09-21-收尾评分优化暂停)，下一阶段及预测字段的防泄漏边界见 [O3 status](../../../docs/evaluations/content-enrichment/status.md#2026-09-21-接续先做网站分类与标签)。
+
 本入口消费 schema 2 独立题库，版本为 `v1`、`v2`。当前版本说明见 [v1](../../../docs/evaluations/visible-score/aihot-score-pointwise/v1/README.md)，共享建题与扩展流程见 [object-datasets](../../../docs/evaluations/benchmarks/object-datasets.md)。
 
 ## 使用

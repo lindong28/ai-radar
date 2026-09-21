@@ -1,6 +1,26 @@
 # O2 · 可见评分 状态
 
-> [Developer] · Mutable snapshot · 2026-09-21。当前研发方向改为优先还原 AIHOT 作者公开的评分机制；三维 S2 保留为已测对照，生产未替换。以下历史实验成绩不因路线变化而改写。
+> [Developer] · Mutable snapshot · 2026-09-21。当前评分优化已暂停；下面各轮记录中的“当前／下一研究”属于当时结论，不覆盖顶部最新用户决定。历史成绩保留，生产未替换。
+
+## 2026-09-21 收尾：评分优化暂停
+
+用户决定先 wrap up visible-score，下一阶段转向 [O3 网站 category / tags](../content-enrichment/status.md#2026-09-21-接续先做网站分类与标签)，完成字段自身评测后再判断能否帮助评分。**MAE < 3 尚未达到**；本次是文档收尾，没有新 run、模型调用、O3 实现、部署或 gold 变更。
+
+P1（`five-editorial-boundary-v1.json`）仅保留为最近同题组中较优的研究对照，开发200／来源留出57／已见回归100的精确双指标见下方[历史编辑边界实验](#历史编辑边界few-shot独立分类与公式2026-09-21)。它不是跨历史最优或生产选择，不与不同题集、输入及映射的旧成绩排统一名次。Q1–Q3 的负结果、分类重复性与逐题归因保留在下一节；两调用没有胜过 P1，重复一致率没有分类 gold 支持，不能当准确率。
+
+### 复用定位与生产边界
+
+| 资产 | 权威入口与用途 |
+| --- | --- |
+| 题库 | `~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1/`，冻结3475题；输入、参考与版本关系见 [v1](aihot-score-pointwise/v1/README.md) |
+| 执行、prompt 与计分 | [代码叶子 README](../../../evals/visible-score/aihot-score-pointwise/README.md)、`evals/visible-score/prompts/`、`evals/_shared/score_eval.py`；CLI 默认 `dimensions`，P1 须显式选择 |
+| 五维源码 | [five.py](../../../src/airadar/scorer/five.py)：impact / novelty / substance / authority / relevance，默认百分比35/20/25/10/10，代码合成整数分；仅为离线假设 |
+| 生产代码默认 | [scorer/runner.py](../../../src/airadar/scorer/runner.py) 默认 provider 为 `deepseek_v4_flash`，仍经既有 `score_5d` / `ScoringNumeric` 链；这次只核代码，未重新测线上部署 |
+| P1 原件 | 主项目 `runs/visible-score/aihot-score-pointwise/v1/2026-09-21/05-11-43/`（开发200）与 `05-18-36/`（已见回归100）；对应 `experiments/` 同分区保存元数据及机器指标 |
+| 最新分类研究 support | 主项目 `runs/visible-score/aihot-score-pointwise/v1/2026-09-21/08-27-40/support/`；`study-summary.json` 是总账，`dev-analysis-A11-P1-P3-Q1-Q2-Q3.json` 保存同题输入、原参考、候选与 reason，`Q3-repeat/` 保存重复分类原件 |
+| 查询与归档 | `experiments/metrics/summary.json` 为已登记历史投影，逐轮指标在 `experiments/<同名分区>/metrics/summary.json`；实际存储、旧路径解析及 worktree 访问沿 [assets](../assets.md) |
+
+后续接手者先从 O3 status 执行字段自身的确定性评测，再决定同题有／无我方预测 category / tags 的评分消融；相关输入契约、oracle 隔离与恢复条件在那里单一维护。原帖引用补全、整池代表选择、跨日时效及评分维度语义等历史方向暂存，不在本轮继续，也没有后台任务。
 
 ## 最新接续：分类边界修订与固定重复（2026-09-21）
 
