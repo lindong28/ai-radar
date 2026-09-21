@@ -24,7 +24,7 @@ A1相对A0修正15／退化4；A2相对A1修正14／退化9。A2回归相对A0�
 
 ### L2：代码、题目和实验资产
 
-- 执行与扩题：[叶子README](../../../evals/content-enrichment/aihot-category-navigation/README.md)，含capture/build/evaluate命令；实现为 `evals/_shared/category_dataset.py`、`category_eval.py`，共享分类逻辑 `src/airadar/enrich/category.py`；候选 `evals/content-enrichment/prompts/category-a{0,1,2}.txt`。A0精确复现使用默认rubric，冻结prompt以每轮prompt.json为准。
+- 执行与扩题：[叶子README](../../../evals/content-enrichment/aihot-category-navigation/README.md)，含capture/build/evaluate命令；实现为 `evals/_shared/category_dataset.py`、`category_eval.py`，共享分类逻辑及当前 A0 rubric 由 `src/airadar/enrich/category.py` 持有；非默认候选为 `evals/content-enrichment/prompts/category-a1.txt`、`category-a2.txt`。冻结prompt以每轮prompt.json为准；重复 A0 文本副本已清理，默认行为未改。
 - 题目：`~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-category-navigation/v1/`，合并去重且按当前规则重验后输出新vN；旧API题库及六类题库不是互斥的新闻集合，不相加。
 - 本轮6个run在 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-21/`，对应机器元数据/指标在同分区 `experiments/`；UTC时间依次为smoke `10-08-04`、A0开发 `10-08-21`、A1 `10-11-22`、A2 `10-13-19`、A0回归 `10-15-13`、A2回归 `10-15-14`。
 - 每轮保存cases/prompts/predictions/reason/attempts/scores/diagnostics/conclusion，统一指标 `experiments/metrics/summary.json`。首轮support含 `study-summary.json`、可复算 `summarize.py`、真实网页证据及消费者验收记录；不把运行原件塞进docs。

@@ -14,7 +14,11 @@
 
 ### 活动题库与历史归档（2026-09-20）
 
-活动入口仍为 `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<benchmark>/vN/`。四个对象目录各只保留当前 benchmark：`aihot-observed-membership`、`aihot-score-pointwise`、`aihot-enrichment-fields`、`aihot-featured-threshold`。不再把旧命名迁移副本与当前题库并列展示。
+活动入口为 `~/research/video-eval-arena/data/benchmarks/ai-radar/<target>/<benchmark>/vN/`。2026-09-20 清理时四个对象目录各保留一个 benchmark：`aihot-observed-membership`、`aihot-score-pointwise`、`aihot-enrichment-fields`、`aihot-featured-threshold`。这是当日快照，不是每个对象只能有一个 benchmark 的限制；当前身份及版本查 [inventory](benchmarks/inventory.md)。不再把旧命名迁移副本与当前题库并列展示。
+
+2026-09-21 分类目录核对：六类网页参考使用独立 `content-enrichment/aihot-category-navigation/v1`，不是旧 API 五类参考的重命名副本。代码入口在 `evals/content-enrichment/aihot-category-navigation/`，共享实现由叶子 README 指向；文档在 `docs/evaluations/content-enrichment/aihot-category-navigation/v1/`；原始运行与机器指标分别在根 `runs/`、`experiments/` 的同身份及 UTC 日期/时间分区，符合 eval-workflows 的职责划分。本机 `video-eval-arena` 题库根沿用用户指定路径，不迁入 DGX 或默认 `video-arena`。
+
+本次只清理默认 A0 rubric 的重复文本副本并修正现状说明；正式实现、A1/A2 研究候选、六轮分类结果、support 内的采集原件与分析脚本保留。旧 `aihot-enrichment-fields` 仍承载其它富化字段及六类题库的原始输入来源；旧版本和证据依赖不因名称较旧而删除。题目、原始标注、用户票及历史成绩均不改写。
 
 五个旧 benchmark 目录已可恢复地移到 `~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/`，保持 `<target>/<benchmark>/<version>` 相对结构。当前评分、富化的 `v1` 也在该归档树中保留实体，活动入口的 `v1` 是相对符号链接：两份冻结 manifest 的 `shared_evidence` 仍引用同树下旧 `aihot-prefilter/v1/evidence`。该依赖不是废文件，不能删除归档树；没有修改 manifest、题目或参考字节，也没有制造新的数据版本。
 
