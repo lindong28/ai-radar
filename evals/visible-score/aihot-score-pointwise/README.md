@@ -54,6 +54,21 @@ PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluat
 
 `five-pro.json`配置只用于模型对照，不是生产默认。带示例的研究prompt包含其它开发题的原文/参考输出，保存在对应run的 `prompt.json`，不将样本复制进git或当前待测题输入；复现可直接以该文件作为 `--prompt`。扩题或选择新回归时必须同时排除示例及调参题的同源材料，不只排除run中的200个case IDs。示例集、选择规则和曝光核验随研究support保存。当前质量及全部实验位置见[status](../../../docs/evaluations/visible-score/status.md)，新增运行仍需使用冻结版本和明确题集用途。
 
+## 固定五维输出，拟合权重
+
+`evals._shared.score_weights`提供开发集拟合与冻结重放，不请求LLM。LAD把未取整MAE写成线性规划（SciPy/HiGHS），五维权重默认各5%–60%、合计100%；不添加截距、统一缩放或来源系数。最终仍由`five_score`取整，再用原O2计分器报告MAE和Spearman。连续目标最优不等于整数目标最优，两者都保存。SciPy固定在dev依赖组，供离线优化与测试，不加入生产依赖；非dev环境也可按下方`uv --with`临时启用。
+
+```bash
+PYTHONPATH=src:. uv run --with scipy==1.17.1 python -m evals._shared.score_weights fit --run <完整的five模式dev-run> --output <研究run/support/weights-lad.json>
+PYTHONPATH=src:. uv run python -m evals._shared.score_weights replay --run <同对象完整regression-run> --mapping <研究run/support/weights-lad.json> --label A11-weights-lad-regression
+```
+
+先冻结mapping，再读取回归结果；回归不能用于拟合。`fit --method grid`提供与历史相同的5个百分点网格对照（3,701组，优化整数MAE）；默认LAD无需枚举，可用于更多已完成的开发题。`--lower/--upper`只适用于LAD的实验边界，不自动改变生产。不要据回归结果反复更换边界。输出默认人读，`--json`用于程序消费；失败非零退出，历史文件不可覆盖。秒级run目录碰撞须下一秒重试。
+
+mapping中的`optimization.weights_percent`为重放权重权威；`objective`说明实际优化的目标，`unrounded_mae/rounded_mae`是该开发集的拟合结果，`fit_seconds`是求解段计时（不含依赖导入、I/O和归档，不作普遍性能保证）。`fit_run/fit_source_sha256/original_object_identity`绑定原始输入、参考和模型输出；`mapping_id`绑定整份冻结参数。重放核对来源SHA、原五维重现原总分及对象身份；回归按ID/URL/精确正文排除与拟合题重叠，不宣称事件级独立。
+
+新产物按正常`runs/...`、`experiments/...`分区追加，`mode=five-weight-replay`、`new_model_calls=0`，原推理成本仍属于source run。逐题`source_prediction`可定位原prompt、reason、五维分与原始响应，不复制usage冒充新请求。若将已冻结权重用于**新推理**，把`optimization.weights_percent`作为现有评分config的`five_weights`，仍显式选择原prompt与`--mode five`；那是有模型调用的新实验，不是本重放命令。当前实验不改变生产默认，结果见[状态](../../../docs/evaluations/visible-score/status.md)。
+
 ## 无示例与逐维独立调用
 
 2026-09-21 用户偏好无示例。A9用 `five-ai-impact-v3.json --mode five`，A11用 `five-evidence-boundary-v3.json --mode five`；均沿上方命令替换prompt，不改变题库/权重。旧示例prompt保留为历史证据，不是当前建议路线。
