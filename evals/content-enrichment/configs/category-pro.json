@@ -1,0 +1,4 @@
+{
+  "models": {"category": "deepseek-v4-pro"},
+  "transport_identity": {"provider": "ark", "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3"}
+}
