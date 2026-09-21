@@ -17,6 +17,8 @@
     "runs/human-eval-layout-migration": "runs/news-admission/aihot-observed-membership/v1/2026-09-20/10-29-30/support/human-eval-layout-migration"
   },
   "external": {
+    "~/research/ai-radar-worktrees/score-editorial-20260921/runs": "~/research/ai-radar/runs",
+    "~/research/ai-radar-worktrees/score-editorial-20260921/experiments": "~/research/ai-radar/experiments",
     "~/research/ai-radar-worktrees/score-type-20260921/runs": "~/research/ai-radar/runs",
     "~/research/ai-radar-worktrees/score-type-20260921/experiments": "~/research/ai-radar/experiments",
     "~/research/ai-radar-worktrees/score-context-20260921/runs": "~/research/ai-radar/runs",

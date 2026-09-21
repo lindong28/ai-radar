@@ -2,6 +2,8 @@
 
 > Decision · 2026-09-21 · Accepted for bounded offline experiments
 
+后续修订：用户明确提出 few-shot 后，[f6b3](20260921-f6b3-test-editorial-evidence-score-rules.md)仅在编辑机制研究中放宽无示例限制；本次已完成实验不追改。
+
 用户要求继续尝试作者机制的还原，保持MAE<3、Spearman、Flash优先、无示例、多维分与代码组合、不自动更改gold/生产。延续[b82e](20260921-b82e-test-score-source-context.md)，本次测试尚未测过的新闻类型条件，而不是再次细化已测全局权重。
 
 H-type：原始新闻的用途会改变五维组合的重要性。模型仅见A11原输入，先reason后news_type，分为release（新产品/能力/论文发布）、practice（测试/方法/技术分析）、industry（组织/交易/政策等行动）、commentary（其余观点/宣传/盘点），无法确定为unknown；这是推理辅助输出，不是人评或AIHOT分类gold。复用A11开发200的固定五维，按既有来源hash分成143训练/57内部留出。各类型训练至少15题才拟合该分支，否则global；该数仅防极小分支，不宣称统计充分。global和分支同为LAD、正权重5%–60%、和100，不加截距、缩放或公司ID偏置。只有内部留出MAE下降且Spearman上升，才全200重拟合并冻结，再运行已见100回归；不按回归再次调类型或权重。没有改善也完整记录并停止这一固定假设，不无限搜索类型。

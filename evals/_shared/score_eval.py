@@ -37,6 +37,7 @@ from .metrics import score
 from .prefilter_eval import select_cases
 from .relocations import resolve_asset_path
 from .score_dimensions import combine_calls, dimension_prompts, run_calls
+from .score_editorial import diagnosis, run_editorial, scoring_prompt
 
 TARGET = "visible-score"
 BENCHMARK = "aihot-score-pointwise"
@@ -59,7 +60,7 @@ def project_score(payload: dict, mode: str, tier: str, five_weights: dict | None
     """Validate the model's emitted order and values before any score mapping."""
     if mode == "semantic":
         return {"score": semantic_score(payload)}
-    if mode in {"five", "five-separate"}:
+    if mode in {"five", "five-separate", "five-editorial"}:
         return {"score": five_score(payload, five_weights)}
     if mode not in {"dimensions", "direct"}:
         raise ValueError("mode must be dimensions, direct, semantic or five")
@@ -96,7 +97,7 @@ def object_identity(config: dict, prompt: dict, mode: str) -> dict:
         mapping = {"function": "sum(coefficient * dimension_score)",
                    "coefficients": SEMANTIC_WEIGHTS, "dimension_domain": "integer-0..10",
                    "output_domain": "integer-0..100", "ranking_pool": False}
-    elif mode in {"five", "five-separate"}:
+    elif mode in {"five", "five-separate", "five-editorial"}:
         paths += ("src/airadar/scorer/five.py",)
         if mode == "five-separate":
             paths += ("evals/_shared/score_dimensions.py",)
@@ -106,6 +107,9 @@ def object_identity(config: dict, prompt: dict, mode: str) -> dict:
                    "ranking_pool": False}
         if mode == "five-separate":
             mapping["call_strategy"] = "five independent judgments; sequential within each case"
+        if mode == "five-editorial":
+            paths += ("evals/_shared/score_editorial.py", "evals/_shared/score_context_analysis.py")
+            mapping["call_strategy"] = "input-only editorial diagnosis then five-dimension score"
     return {
         "surface": "ordinary-nonfeatured-visible-score", "mode": mode,
         "prompt": prompt, "prompt_contract": "model-emitted-reason-first",
@@ -123,16 +127,20 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
              exclude_runs: tuple[Path, ...] = ()) -> dict:
     if not 1 <= workers <= 32:
         raise ValueError("workers must be 1..32")
-    if mode not in {"dimensions", "direct", "semantic", "five", "five-separate"}:
+    if mode not in {"dimensions", "direct", "semantic", "five", "five-separate", "five-editorial"}:
         raise ValueError("unknown pointwise scoring mode")
-    five_weights = validated_weights(config.get("five_weights")) if mode in {"five", "five-separate"} else None
-    if mode not in {"five", "five-separate"} and "five_weights" in config:
+    five_weights = validated_weights(config.get("five_weights")) if mode in {"five", "five-separate", "five-editorial"} else None
+    if mode not in {"five", "five-separate", "five-editorial"} and "five_weights" in config:
         raise ValueError("five_weights is only supported in five mode")
     expected_prompt = {"system", "user_template"} | ({"dimension_rubrics"} if mode == "five-separate" else set())
+    if mode == "five-editorial":
+        expected_prompt.add("editorial_system")
     if not isinstance(prompt, dict) or set(prompt) != expected_prompt or not all(
         isinstance(prompt.get(key), str) and prompt[key].strip() for key in ("system", "user_template")
     ):
         raise ValueError("prompt requires nonempty system/user_template and mode-specific fields only")
+    if mode == "five-editorial" and (not isinstance(prompt["editorial_system"], str) or not prompt["editorial_system"].strip()):
+        raise ValueError("editorial_system must be nonempty")
     if mode == "five-separate":
         rubrics = prompt["dimension_rubrics"]
         if not isinstance(rubrics, dict) or list(rubrics) != list(FIVE_WEIGHTS) or not all(
@@ -197,6 +205,13 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
                             or call["request"] != identity["request"] for call in calls
                         ):
                             raise ValueError("reuse dimension calls mismatch")
+                    if mode == "five-editorial":
+                        call = row["editorial_call"]
+                        if (call["prompt"] != {"system": prompt["editorial_system"], "user": prompts[row["case_id"]]["user"]}
+                                or call["request"] != identity["request"]
+                                or row["scoring_prompt"] != scoring_prompt(prompts[row["case_id"]],
+                                    diagnosis(json.loads(call["response_json"])))):
+                            raise ValueError("reuse editorial calls mismatch")
                     if row["output"] != project_score(payload, mode, case["input"]["tier"], five_weights):
                         raise ValueError("reuse output mapping mismatch")
                     if row["prompt"] != prompts.get(case["case_id"]):
@@ -252,6 +267,20 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
                         keys = {k for call in calls for k, value in call["usage"].items()
                                 if type(value) in (int, float)}
                         row["usage"] = {k: sum(call["usage"].get(k, 0) or 0 for call in calls) for k in keys}
+                elif mode == "five-editorial":
+                    response = run_editorial(key, prompts[key], prompt["editorial_system"],
+                                             identity["request"], chat_for_case, row)
+                    row.update({field: response.get(field) for field in
+                                ("raw", "usage", "model", "provider", "requested_model", "attempt_id")})
+                    payload = response["json"]
+                    row["attempt_ids"] = [row["editorial_call"]["attempt_id"], response["attempt_id"]]
+                    # Per-call usage remains authoritative; do not present one call as total cost.
+                    first_usage, last_usage = row["editorial_call"].get("usage"), response.get("usage")
+                    row["usage"] = None
+                    if isinstance(first_usage, dict) and isinstance(last_usage, dict):
+                        keys = {k for usage in (first_usage, last_usage) for k, v in usage.items()
+                                if type(v) in (int, float)}
+                        row["usage"] = {k: (first_usage.get(k, 0) or 0) + (last_usage.get(k, 0) or 0) for k in keys}
                 else:
                     response = chat_for_case(key)(stage="score", prompt=prompts[key], request=identity["request"])
                     row.update({field: response.get(field) for field in
@@ -308,7 +337,7 @@ def main(argv=None, *, benchmark=BENCHMARK) -> int:
     run.add_argument("--dataset", type=Path, required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--prompt", type=Path, required=True)
-    run.add_argument("--mode", choices=["dimensions", "direct", "semantic", "five", "five-separate"], default="dimensions")
+    run.add_argument("--mode", choices=["dimensions", "direct", "semantic", "five", "five-separate", "five-editorial"], default="dimensions")
     run.add_argument("--env-file", type=Path)
     run.add_argument("--split", choices=["dev", "regression"], required=True)
     run.add_argument("--limit", type=int)

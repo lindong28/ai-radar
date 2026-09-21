@@ -13,6 +13,7 @@ from . import assets
 from .cli import transport_factory
 from .prefilter_eval import select_cases
 from .score_eval import evaluate, object_identity, prompt_context
+from .relocations import resolve_asset_path
 
 
 def arm_deadline(seconds: int = 1800):
@@ -25,21 +26,22 @@ def arm_deadline(seconds: int = 1800):
     signal.alarm(seconds)
 
 
-def check_identity(dataset: Path, config: dict, prompt: dict, support: Path, label: str) -> dict:
+def check_identity(dataset: Path, config: dict, prompt: dict, support: Path, label: str,
+                   mode: str = "five", authority: str = "user-approved offline source ablation; ADR b82e") -> dict:
     """Freeze identity before spend, then compare a separate disk read via eval-identity."""
-    frozen = object_identity(config, prompt, "five")
+    frozen = object_identity(config, prompt, mode)
     snapshot = support / f"{label}-frozen.json"
     if snapshot.exists():
         if assets.read_json(snapshot) != frozen:
             raise ValueError("frozen object changed; use a new label")
     else:
         assets.write_json(snapshot, frozen)
-    actual = object_identity(config, prompt, "five")
+    actual = object_identity(config, prompt, mode)
     dep = assets.digest(frozen["source_sha256"])
     fields = ["request", "prompt", "mode", "mapping", "transport", "thinking", "retry_count", "fallback"]
     manifest = assets.read_json(dataset / "manifest.json")
     spec = {"run": label, "at": "before paid calls", "baseline": {
-        "id": label, "kind": "local_source", "authority": "user-approved offline source ablation; ADR b82e"},
+        "id": label, "kind": "local_source", "authority": authority},
         "sources": [
             {"id": "dep", "role": "deploy_version", "name": "runner", "count": 1, "origin": "frozen source hashes"},
             {"id": "cfg", "role": "effective_config", "name": "behavior", "count": 8, "origin": "frozen candidate"},
@@ -71,11 +73,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--baseline-run", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, default=assets.ROOT)
     parser.add_argument("--support", type=Path, required=True)
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--prompt", type=Path, required=True)
     parser.add_argument("--label", required=True)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--mode", choices=("five", "five-editorial"), default="five")
+    parser.add_argument("--authority", default="user-approved offline source ablation; ADR b82e")
     args = parser.parse_args()
     arm_deadline()
     config = assets.read_json(assets.ROOT / "evals/_shared/configs/baseline-ark.json")
@@ -84,9 +89,12 @@ def main():
     original = assets.read_jsonl(args.baseline_run / "cases.jsonl")
     _, pool = assets.load_dataset(args.dataset, "visible-score")
     seed = baseline["selection"]["seed"]
-    selected = select_cases(pool, "dev", len(original), seed, frozenset())
-    if selected != original or baseline["split"] != "dev":
-        raise ValueError("requires exact baseline dev cases")
+    exclusions = tuple(resolve_asset_path(Path(row["run"]), root=args.source_root)
+                       for row in baseline["selection"].get("exclusions", []))
+    excluded = frozenset(c["case_id"] for path in exclusions for c in assets.read_jsonl(path / "cases.jsonl"))
+    selected = select_cases(pool, baseline["split"], len(original), seed, excluded)
+    if selected != original or baseline["split"] not in ("dev", "regression"):
+        raise ValueError("requires exact baseline cases")
     # Prove expanding the allowlist did not change the original control prompts.
     old_prompt = assets.read_json(args.baseline_run / "prompt.json")
     template = Template(old_prompt["user_template"], undefined=StrictUndefined)
@@ -94,20 +102,20 @@ def main():
     for case in original:
         if template.render(**prompt_context(case["input"])) != old_rows[case["case_id"]]["prompt"]["user"]:
             raise ValueError("baseline rendered prompt changed")
-    frozen = check_identity(args.dataset, config, prompt, args.support, args.label)
     factory = transport_factory(config, args.env_file)
+    frozen = check_identity(args.dataset, config, prompt, args.support, args.label, args.mode, args.authority)
     for count, smoke in ((3, True), (len(original), False)):
         output = args.support / f"{args.label}-{count}.json"
         if output.exists():
             raise FileExistsError("existing result; do not silently repeat paid work")
-        if object_identity(config, assets.read_json(args.prompt), "five") != frozen:
+        if object_identity(config, assets.read_json(args.prompt), args.mode) != frozen:
             raise ValueError("candidate changed after identity check")
         # Persist before any paid attempt; an interrupted batch needs explicit recovery.
         with (args.support / f"{args.label}-{count}.started").open("x") as marker:
             marker.write("Inspect durable attempts before recovery; do not rerun this label.\n")
-        result = evaluate(args.dataset, config=config, prompt=prompt, split="dev", limit=count,
-                          seed=seed, label=args.label + ("-smoke" if smoke else ""), mode="five",
-                          workers=args.workers, smoke=smoke, chat_factory=factory)
+        result = evaluate(args.dataset, config=config, prompt=prompt, split=baseline["split"], limit=count,
+                          seed=seed, label=args.label + ("-smoke" if smoke else ""), mode=args.mode,
+                          workers=args.workers, smoke=smoke, chat_factory=factory, exclude_runs=exclusions)
         assets.write_json(output, result)
         if not result["complete"]:
             raise RuntimeError("incomplete; inspect and explicitly resume failures")

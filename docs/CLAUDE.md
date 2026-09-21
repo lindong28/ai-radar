@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260921-f6b3](adr/20260921-f6b3-test-editorial-evidence-score-rules.md)：基于逐题归因检验编辑边界、虚构few-shot、独立识别与条件公式；调用和重放复用入口在[pointwise README](../evals/visible-score/aihot-score-pointwise/README.md#编辑边界独立识别与公式规则)。
+
 [20260921-c4e1](adr/20260921-c4e1-test-news-type-score-combination.md)：新闻用途分类、固定来源留出条件权重与代表原文诊断；结果与复用记录在[评分状态](evaluations/visible-score/status.md)。
 
 [20260921-b82e](adr/20260921-b82e-test-score-source-context.md)：评分来源身份、条件权重、时钟和事件上下文离线消融，不修改生产或gold。上下文同40题的模型配对[v2](evaluations/visible-score/aihot-score-context/v2/README.md)及空对照[v3](evaluations/visible-score/aihot-score-context/v3/README.md)不累加计题。

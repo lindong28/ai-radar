@@ -44,6 +44,24 @@ PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluat
 
 模型输入只取case.input的原始字段白名单，正文仍最多5000字符，不读取reference/provenance。原件归 `runs/visible-score/aihot-score-pointwise/<version>/<UTC-date>/<UTC-time>/`：started/config/prompt/cases/prompts、items、predictions、attempts及scores；元数据和metrics/summary归同结构 `experiments/`。逐题reason、原始响应和实际请求保留，费用未知不归零。不得写回题库；新v2等版本可使用同命令，不写死本轮题数。
 
+## 编辑边界、独立识别与公式规则
+
+2026-09-21 用户授权测试 few-shot；本研究的示例为虚构语义边界，不含真实题目的 AIHOT 分数。三个候选 prompt 分别为 `five-editorial-boundary-v1.json`（P1）、`five-editorial-examples-v1.json`（P2）、`five-editorial-workflow-v1.json`（P3）。前两者 `--mode five`、每题一次调用；P3 使用 `--mode five-editorial`，先 reason-first 识别新闻类型，再以相同原文＋可质疑的分类辅助生成五维，共两次调用。分类是对象内部推理，不是 gold 或质量判官，unknown 不强行归类。
+
+复现同题实验可直接消费完整基线 run，重建其 split、seed、排除项和题序；支持 dev 与冻结候选后的 regression，不固定题数。每次先3题 smoke，再完整基线题集；输出必须新目录/新 label。1800秒截止、无自动重试/回退，中断后检查 attempts，通过叶子 runner 的 `--reuse` 显式恢复同身份失败题，不能删除标记重跑全批。
+
+```bash
+PYTHONPATH=src:. uv run python -m evals._shared.score_context_study --dataset <题库版本目录> --baseline-run <完整基线run> --source-root <基线所在项目根> --support <新support目录> --env-file .env --prompt evals/visible-score/prompts/five-editorial-workflow-v1.json --mode five-editorial --label P3-dev --authority 'user-approved editorial ablation; ADR f6b3' --workers 8
+PYTHONPATH=src:. uv run python -m evals._shared.score_editorial_rules fit --baseline <A11-dev-run> --editorial <同题P3-dev-run> --source-root <原件项目根> --mapping <新support目录>/rules-fit.json
+PYTHONPATH=src:. uv run python -m evals._shared.score_editorial_rules replay --baseline <A11-dev或regression-run> --editorial <同题P3-run> --source-root <原件项目根> --mapping <support目录>/rules-fit.json --family combined
+```
+
+验证P4时只需要分类，不必重复执行P3的第二次评分。先 `python -m evals._shared.score_editorial_classify --baseline <A11-regression-run> --candidate-run <冻结P3-dev-run> --output <新support目录>/reg-classifier --env-file .env --source-root <原件项目根>`（同样加 `PYTHONPATH=src:. uv run`），再将 replay 的 `--editorial` 指向这个目录。该入口与原P3核对完整对象身份，实际每题只有一次分类调用，原A11五维仍从缓存读取。辅助目录有 started/classifications/items/attempts/result；没有新评分，不冒充完整P3运行。题序、输入、原始分类、来源哈希和终态均由实际loader核验。
+
+P4规则仅改冻结A11五维，不重新抽取维度、不改变35/20/25/10/10权重。`promotion` 对 impact/novelty/substance 设上限3或4；已核官方渠道且 `substantive_release` 对 impact 设下限5或6；`promotion/official/combined` 三个 family 分别归档。参数只用既有来源hash训练分区选择，留出只检验；回归拒绝其它评分器、分类器、变动来源或开发重叠。每种规则的效果必须对同一份旧A11缓存比较，不能归因到同期重跑差异。官方名单不是逐条一手性证明，更不是无条件加分。
+
+每次真实调用保存实际 prompt/reason/raw/usage/attempt；`editorial_call` 保存第一次分类，`scoring_prompt` 保存实际第二次输入，`attempt_ids` 连接两次请求。第一次成功而第二次失败时不丢第一次证据，正式指标保持 incomplete。规则重放新增调用0；分类和原评分的调用/费用归其源run，实际使用此方案仍需分类＋评分。结果及选择边界见[状态](../../../docs/evaluations/visible-score/status.md)。
+
 ## 新闻类型条件权重研究
 
 `score_type_study`复用一个完整五维开发run，不固定200题。分类仅渲染该run原始输入模板，先输出reason再输出新闻类型；不把参考分、AIHOT分类或富化字段交给模型。其结果是辅助推理，不是gold。
