@@ -30,6 +30,42 @@ PROMPT = {"system": "Emit reason first, then score.",
           "user_template": "{{ item.title }}|{{ item.content_text }}|{{ reference|default('absent') }}"}
 
 
+def test_source_context_exposes_only_frozen_source_fields():
+    raw = {**cases()[0]["input"], "source_name": "A source", "source_kind": "x",
+           "score": 99, "source_role": "UNVERIFIED_ROLE"}
+    context = score_eval.prompt_context(raw)
+    assert context["source"] == {"source_name": "A source", "source_kind": "x"}
+    assert context["item"] == score_eval._item(raw)
+    assert "UNVERIFIED_ROLE" not in repr(context)
+    assert "SECRET" not in repr(context)
+    assert score_eval.prompt_context(cases()[0]["input"])["source"]["source_name"] == "unknown"
+
+
+def test_context_runner_uses_real_archive_and_metric_paths(tmp_path):
+    leaf = tmp_path / "data/visible-score/aihot-score-context/v1"
+    rows = cases()[:3]
+    for row in rows:
+        row["input"]["score_context"] = {"archive_first_observed_at": "2026-09-16T13:00:00Z",
+            "age_hours": 1, "neighbors": []}
+    assets.write_jsonl(leaf / "cases.jsonl", rows)
+    assets.write_json(leaf / "manifest.json", {"schema_version": 2, "target": "visible-score",
+        "benchmark": assets.SCORE_CONTEXT, "version": "v1", "evaluation_mode": "pointwise-context",
+        "case_count": 3, "files": {"cases.jsonl": assets.file_digest(leaf / "cases.jsonl")},
+        "shared_evidence": ".", "evidence_files": {}})
+    metric = Path("evals/visible-score/aihot-score-context/metrics.json")
+    assets.write_json(tmp_path / metric, assets.read_json(assets.ROOT / metric))
+    captured = []
+    result = score_eval.evaluate(leaf, config=config(), prompt={**PROMPT,
+        "user_template": "{{ item.title }} age={{ clock.age_hours }}"}, split="dev", limit=None,
+        seed="test", chat_factory=durable_fixture(lambda _: {"reason": "test", "impact": 5,
+        "novelty": 5, "substance": 5, "authority": 5, "relevance": 5}, captured),
+        label="context-test", mode="five", root=tmp_path)
+    assert result["complete"] and len(captured) == 3
+    assert "/aihot-score-context/v1/" in result["run"]
+    saved = assets.read_json(Path(result["run"]) / "scores.json")
+    assert saved["metrics"]["mae"]["value"] == 40
+
+
 def fixture_root(root):
     path = root / f"evals/{score_eval.TARGET}/{score_eval.BENCHMARK}/metrics.json"
     path.parent.mkdir(parents=True)

@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260921-b82e](adr/20260921-b82e-test-score-source-context.md)：评分来源身份、条件权重、时钟和事件上下文离线消融，不修改生产或gold。上下文同40题的模型配对[v2](evaluations/visible-score/aihot-score-context/v2/README.md)及空对照[v3](evaluations/visible-score/aihot-score-context/v3/README.md)不累加计题。
+
 [20260921-a93c](adr/20260921-a93c-test-no-example-score-rubrics-and-dimension-calls.md)：无示例评分的impact刻度、逐维独立调用和证据边界对照；20题人评页不自动改gold。
 
 [20260921-52af](adr/20260921-52af-test-author-inspired-five-dimension-scores.md)：五维语义假设、代码组合与MAE<3离线研究。
@@ -49,6 +51,10 @@
 | [20260916-d362](adr/20260916-d362-defer-busy-outbox-cleanup.md) | Decision | 已确认队列副本清理争锁时延后，不阻塞后续导入 |
 
 ### docs/evaluations/ [Developer]
+
+[评分上下文实验设计](evaluations/visible-score/context-design.md)：来源身份、条件化组合、时效、事件聚合的顺序消融与数据边界，2026-09-21 用户批准离线研究。
+
+[归档上下文评分题](evaluations/visible-score/aihot-score-context/v1/README.md)：区别于单条评分的时钟/当时事件候选输入契约、建题和运行入口，40题局部开发诊断。
 
 [多维语义评分](evaluations/visible-score/semantic-design.md)：影响、信息增量、实质支撑的刻度与组合；离线边界见 [ae72](adr/20260920-ae72-test-semantic-score-dimensions.md)。
 

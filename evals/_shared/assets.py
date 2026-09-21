@@ -28,11 +28,13 @@ OBJECT_BENCHMARKS = {
     "featured-members": "aihot-featured-threshold",
 }
 OBSERVED_ADMISSION = "aihot-observed-membership"
+SCORE_CONTEXT = "aihot-score-context"
 
 
 def benchmark_pairs():
     """Legacy and object-specific consumer contracts, without rewriting history."""
-    return (*BENCHMARKS.items(), *OBJECT_BENCHMARKS.items(), ("news-admission", OBSERVED_ADMISSION))
+    return (*BENCHMARKS.items(), *OBJECT_BENCHMARKS.items(), ("news-admission", OBSERVED_ADMISSION),
+            ("visible-score", SCORE_CONTEXT))
 
 
 def dataset_version(value: str) -> str:
@@ -104,10 +106,11 @@ def load_dataset(path: Path, target: str | None = None) -> tuple[dict, list[dict
     if target is not None and target != selected:
         raise ValueError("dataset belongs to another target")
     schema = manifest.get("schema_version")
-    if manifest["benchmark"] in {OBJECT_BENCHMARKS[selected], OBSERVED_ADMISSION}:
+    if manifest["benchmark"] in {OBJECT_BENCHMARKS[selected], OBSERVED_ADMISSION, SCORE_CONTEXT}:
         if schema != 2:
             raise ValueError("object benchmark requires schema 2")
-        expected_mode = "pointwise-threshold" if selected == "featured-members" else "pointwise"
+        expected_mode = ("pointwise-context" if manifest["benchmark"] == SCORE_CONTEXT else
+                         "pointwise-threshold" if selected == "featured-members" else "pointwise")
         if manifest.get("evaluation_mode") != expected_mode:
             raise ValueError("evaluation mode differs from benchmark consumer contract")
         dataset_version(manifest["version"])
@@ -162,7 +165,7 @@ def create_run(root: Path, target: str, version: str, *, benchmark: str | None =
     benchmark = BENCHMARKS[target] if benchmark is None else benchmark
     if (target, benchmark) not in benchmark_pairs():
         raise ValueError("unknown target/benchmark pairing")
-    if benchmark in {OBJECT_BENCHMARKS[target], OBSERVED_ADMISSION}:
+    if benchmark in {OBJECT_BENCHMARKS[target], OBSERVED_ADMISSION, SCORE_CONTEXT}:
         dataset_version(version)
     instant = created_at or datetime.now(UTC)
     if instant.tzinfo is None:

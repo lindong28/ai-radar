@@ -13,6 +13,8 @@
 
 建题／扩题统一用 `scripts/build_eval_datasets.py`，其 `build` 默认使用当前准入口径；详见[操作说明](../docs/evaluations/benchmarks/object-datasets.md)。内容富化和精选成员的独立推理适配缺口仍归各对象 status，不因评分入口接通而变为已实现。
 
+可见评分另有 [aihot-score-context](visible-score/aihot-score-context/README.md) 离线上下文诊断，建题用 `score_context_dataset`，时钟/事件配对用 `score_context_run`；输入消费者契约不同，不能把它的40题作为主题库新增40条。来源字段消融和条件权重的代码为 `_shared/score_context_study.py`、`score_context_analysis.py`、`score_context_validate.py`，结果与复用边界见[评分状态](../docs/evaluations/visible-score/status.md)。
+
 ## 共享实现与候选资产
 
 - `_shared/`：loader、建题、指标、推理、判官和归档的单一实现；各 benchmark 的 evaluate.py 只负责选择消费者入口。

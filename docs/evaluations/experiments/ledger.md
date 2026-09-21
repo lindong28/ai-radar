@@ -1,5 +1,11 @@
 # 运行台账
 
+## 2026-09-21：评分来源、时钟与事件上下文
+
+10个标准run：7个pointwise/v1（3个真实推理、4个维度重放），context/v1/v2/v3各1个推理；40次同事件配对另存support。共463次成功调用、535,390已报告tokens、300个不同计分ID，金额未知。开发200、已见回归100、其中40题上下文诊断及空对照，不是新的独立集或全量。
+
+pointwise/v1 UTC分区：smoke02-34-02、dev02-34-08、reg03-12-17、重放03-12-59至03-13-02；context/v1@03-15-41、v2@03-16-13、v3@03-18-26。研究原件在pointwise/v1/2026-09-21/02-35-00/support，run/experiment遵循根目录标准布局，逐轮conclusion和统一指标同步。完整成绩、负结果、重复推理波动及后续入口见[状态](../visible-score/status.md#当前接续上下文实验2026-09-21)。本轮不部署、没有遗留模型长跑。
+
 > [Developer] · 真实运行台账，时间列为UTC。不同benchmark与题集版本分段，不跨身份相减。根 `experiments/<target>/<benchmark>/<version>/<date>/<time>/` 与 `runs/` 同分区。
 
 2026-09-20 路径与清退说明：下文保留历史记录中的原位置和当时结论；旧共享池 33 份实验原件已按用户要求清退，对应 85 行指标不再进入查询，不能再按下文旧路径回读或视作当前基线。prefilter 实验及顶层 preflight 的 support 材料仍保留，可用 `python -m evals._shared.relocations <旧路径>` 定位。范围及恢复边界见[资产说明](../assets.md#原始参照历史运行与-support-分区)。未产生新模型成绩。

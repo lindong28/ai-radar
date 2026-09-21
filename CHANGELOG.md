@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-21（评分上下文消融）
+
+- 增加可复用的来源身份、来源条件权重、归档时钟和同事件上下文离线实验脚本，保留冻结版本和reason-first原件；设计与复用入口见[上下文设计](docs/evaluations/visible-score/context-design.md)。
+- 完成463次Flash调用与4次零调用重放，来源/条件规则未改善已有100题回归；40题上下文诊断的空prompt对照揭示重复推理波动，未证明值得引入生产依赖，MAE<3未达。完整MAE/Spearman与归因见[评分状态](docs/evaluations/visible-score/status.md)。
+
 ## 2026-09-21（固定五维输出的权重优化）
 
 - 新增可复用的开发集LAD线性规划权重拟合和零调用重放命令，保留同域网格对照；冻结参数与原件绑定，回归集不参与拟合。

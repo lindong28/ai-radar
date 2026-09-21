@@ -4,6 +4,8 @@
 
 当前独立 benchmark 为 [aihot-score-pointwise / v1](aihot-score-pointwise/v1/README.md)，缺少 Radar raw 时可使用获准的 AIHOT 原标题与绑定原文。这个来源扩展不改变消费者输入/参考契约，因此不是另一个 benchmark。历史 `aihot-visible-score` 的共享池排名映射依赖完整池，与当前逐条消费方式不同，保留为独立 benchmark。
 
+2026-09-21 新增 [aihot-score-context / v1](aihot-score-context/v1/README.md) 局部诊断：输入额外依赖当时归档时钟和候选原文，与单条契约不同，因此独立命名；不是替换或重复扩充主题库。[顺序消融设计](context-design.md)保存来源、条件权重、时间与事件机制的假设、反证和采用边界。
+
 ## 对象与边界
 
 固定原始新闻 → scorer + 明确固定的逐条展示分映射 → 预测可见分。2026-09-20 用户选择当前普通条目展示公式作为基线：六维加权×10后按UI整数化；prompt采用reason-first适配。独立入口已接通。精选新闻另有完整池排名映射，不在本benchmark内，不把独立题临时拼成生产池。决定见 [6a27](../../adr/20260920-6a27-evaluate-pointwise-visible-scores.md)。

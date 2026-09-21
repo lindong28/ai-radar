@@ -18,6 +18,7 @@ from airadar.scorer.semantic import SEMANTIC_WEIGHTS, semantic_score
 
 from .assets import (
     ROOT,
+    SCORE_CONTEXT,
     archive_metrics,
     create_run,
     digest,
@@ -41,9 +42,17 @@ TARGET = "visible-score"
 BENCHMARK = "aihot-score-pointwise"
 
 
-def prompt_context(raw: dict) -> dict:
-    """Only the production item allowlist is available to a prompt."""
-    return {"item": _item(raw)}
+def prompt_context(raw: dict, *, contextual: bool = False) -> dict:
+    """Original item and frozen source metadata; never derived reference fields."""
+    result = {"item": _item(raw), "source": {
+        field: raw.get(field) or "unknown" for field in ("source_name", "source_kind")
+    }}
+    if contextual:
+        context = raw["score_context"]
+        result["clock"] = {k: context[k] for k in ("archive_first_observed_at", "age_hours")}
+        result["neighbors"] = [{k: n[k] for k in ("id", "source_id", "title", "url", "content_text")}
+                               for n in context["neighbors"]]
+    return result
 
 
 def project_score(payload: dict, mode: str, tier: str, five_weights: dict | None = None) -> dict:
@@ -134,8 +143,9 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
         raise ValueError("pointwise baseline uses current production weights")
     dataset = resolve_asset_path(dataset.expanduser(), root=root)
     manifest, pool = load_dataset(dataset, TARGET)
-    if manifest["benchmark"] != BENCHMARK:
-        raise ValueError("this runner requires the independent score-pointwise benchmark")
+    benchmark = manifest["benchmark"]
+    if benchmark not in {BENCHMARK, SCORE_CONTEXT}:
+        raise ValueError("this runner requires a registered score benchmark")
     exclusions = [{"run": str(path.resolve()), "cases_sha256": file_digest(path / "cases.jsonl"),
                    "case_ids": [case["case_id"] for case in read_jsonl(path / "cases.jsonl")]}
                   for path in exclude_runs]
@@ -154,13 +164,13 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
         key = case["case_id"]
         try:
             prompts[key] = {"system": prompt["system"],
-                            "user": template.render(**prompt_context(case["input"]))}
+                            "user": template.render(**prompt_context(case["input"], contextual=benchmark == SCORE_CONTEXT))}
             if mode == "five-separate":
                 prompts[key] = dimension_prompts(prompt, prompts[key]["user"])
         except Exception as exc:
             preparation_errors[key] = type(exc).__name__
     scorer_identity = {p: file_digest(ROOT / p) for p in (
-        "evals/_shared/metrics.py", f"evals/{TARGET}/{BENCHMARK}/metrics.json")}
+        "evals/_shared/metrics.py", f"evals/{TARGET}/{benchmark}/metrics.json")}
     cached = {}
     if reuse is not None:
         reuse = resolve_asset_path(reuse.expanduser(), root=root)
@@ -192,9 +202,9 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
                     if row["prompt"] != prompts.get(case["case_id"]):
                         raise ValueError("reuse rendered prompt mismatch")
                     cached[row["case_id"]] = row
-    run, experiment = create_run(root, TARGET, manifest["version"], benchmark=BENCHMARK)
+    run, experiment = create_run(root, TARGET, manifest["version"], benchmark=benchmark)
     metadata = {
-        "target": TARGET, "benchmark": BENCHMARK, "version": manifest["version"], "label": label,
+        "target": TARGET, "benchmark": benchmark, "version": manifest["version"], "label": label,
         "dataset": str(dataset.resolve()), "dataset_manifest_sha256": file_digest(dataset / "manifest.json"),
         "dataset_cases_sha256": file_digest(dataset / "cases.jsonl"),
         "case_identity": digest(cases), "case_ids": [case["case_id"] for case in cases],
@@ -204,7 +214,7 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
         "selection": {"seed": seed, "limit": limit, "method": "label-blind-hash-order", "exclusions": exclusions},
         "started_at": utc_now(), "directory_timestamp_utc": "/".join(run.parts[-2:]),
         "directory_time_source": "run_created", "workers": workers, "reuse_run": str(reuse) if reuse else None,
-        "scope": "smoke only" if smoke else "fixed selected split; pointwise score only",
+        "scope": "smoke only" if smoke else "fixed selected split; " + manifest["evaluation_mode"],
         "cost_usd": None, "cost_reason": "unpriced; usage and all attempts retained",
     }
     write_json(run / "started.json", metadata)
@@ -285,7 +295,7 @@ def evaluate(dataset: Path, *, config: dict, prompt: dict, split: str,
             "metrics": result["metrics"], "elapsed_seconds": metadata["elapsed_seconds"]}
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, benchmark=BENCHMARK) -> int:
     parser = argparse.ArgumentParser(description="离线逐条评分：reason-first；不执行排名映射或修改生产。")
     sub = parser.add_subparsers(dest="command", required=True)
     validate = sub.add_parser("validate")
@@ -311,7 +321,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "validate":
         from .object_entry import main as validate_main
-        return validate_main(target=TARGET, benchmark=BENCHMARK,
+        return validate_main(target=TARGET, benchmark=benchmark,
                              argv=["validate", "--dataset", str(args.dataset)])
     if args.command == "rescore":
         from .score_rescore import rescore as rescore_saved
