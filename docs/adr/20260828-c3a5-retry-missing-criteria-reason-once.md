@@ -1,6 +1,6 @@
 # ADR-20260828-c3a5：微信解读仅对缺失 criteria_reason 立即重试一次
 
-Status: Accepted
+Status: Superseded for same-round summary retry by [ADR-20260922-7d82](20260922-7d82-route-llm-calls-through-gateway.md); cross-round backoff remains unchanged.
 
 Date: 2026-08-28
 

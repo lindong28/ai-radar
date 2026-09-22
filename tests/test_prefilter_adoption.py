@@ -5,7 +5,6 @@ import os
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from jinja2 import Template
@@ -15,6 +14,7 @@ from airadar.fetcher.dedup import FetchedItem, upsert_item
 from airadar.prefilter import policy, prompts
 from airadar.prefilter.runner import run_prefilter
 from airadar.provider import deepseek_v32
+from airadar.provider.deepseek_chat import ChatJsonResult
 from airadar.sources.loader import SourceConfig
 from airadar.sources.sync import sync_to_db
 from evals._shared import assets, human_labels, inference, metrics
@@ -62,7 +62,7 @@ def test_ingestion_to_prefilter_uses_existing_metadata(tmp_path, monkeypatch, ki
     calls = []
     def chat(**kw):
         calls.append(kw)
-        return SimpleNamespace(json={"reason": "fixture model reason", "is_ai_related": True,
+        return ChatJsonResult(json={"reason": "fixture model reason", "is_ai_related": True,
                                      "confidence": .9}, provider="ark", model="fixture-flash")
     monkeypatch.setattr(deepseek_v32, "chat_json", chat)
     result = run_prefilter(conn, provider=deepseek_v32.DeepSeekV32Prefilter(), item_ids=[item_id])
@@ -126,7 +126,7 @@ def test_refetched_web_uses_observed_facts_without_changing_publication(tmp_path
     item_id, published, fetched = conn.execute("SELECT id,published_at,fetched_at FROM items").fetchone()
     assert published == first.published_at
     assert fetched == latest.fetched_at
-    monkeypatch.setattr(deepseek_v32, "chat_json", lambda **kw: SimpleNamespace(
+    monkeypatch.setattr(deepseek_v32, "chat_json", lambda **kw: ChatJsonResult(
         json={"reason": "AI launch", "is_ai_related": True, "confidence": .9},
         provider="fixture", model="fixture-flash"))
     result = run_prefilter(conn, provider=deepseek_v32.DeepSeekV32Prefilter(), item_ids=[item_id])
@@ -186,7 +186,7 @@ def test_replay_selected_frozen_run_through_db_consumer(tmp_path, monkeypatch):
         assert kw["max_tokens"] == started["object_identity"]["request"]["max_tokens"]
         calls.append(key)
         raw_response = predictions[key]["stage_results"]["prefilter"]["raw"]
-        return SimpleNamespace(json=json.loads(raw_response["choices"][0]["message"]["content"]),
+        return ChatJsonResult(json=json.loads(raw_response["choices"][0]["message"]["content"]),
                                provider="frozen-replay", model=raw_response["model"])
     monkeypatch.setenv("ARK_API_KEY", "fixture")
     monkeypatch.delenv("AI_RADAR_FORCE_HEURISTIC", raising=False)

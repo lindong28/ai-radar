@@ -7,18 +7,17 @@ from ..scorer.prompts import render_scoring_prompt
 from .base import EnrichResult, ProviderItem, ScoringResult
 from .deepseek_chat import chat_json
 from .heuristics import heuristic_score
+from .llm_gateway import gateway_smoke_status
 
 
 class DeepSeekV4FlashScorer:
     model_id = "deepseek-v4-flash"
 
     def smoke_test(self) -> str:
-        return "ok" if os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY") else "ok (offline fallback)"
+        return gateway_smoke_status(heuristic=True)
 
     def score_5d(self, item: ProviderItem) -> ScoringResult:
-        if not (os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY")) or os.environ.get(
-            "AI_RADAR_FORCE_HEURISTIC"
-        ):
+        if os.environ.get("AI_RADAR_FORCE_HEURISTIC"):
             return heuristic_score(item)
         prompt = render_scoring_prompt(item)
         input_char_count = len(prompt["system"]) + len(prompt["user"])
@@ -46,7 +45,8 @@ class DeepSeekV4FlashScorer:
             significance=(None if payload.get("significance") is None else float(payload["significance"])),
             reasoning=str(payload.get("reasoning", "")),
             topics=tuple(str(tag) for tag in payload.get("topics", [])),
-            raw={"provider": result.provider, "model": result.model, "json": payload},
+            raw={"provider": result.provider, "model": result.model, "json": payload,
+                 "llm_gateway": result.gateway, "sent_request_id": result.sent_request_id},
         )
 
 
@@ -54,7 +54,7 @@ class DeepSeekV4FlashEnricher:
     model_id = "deepseek-v4-flash"
 
     def smoke_test(self) -> str:
-        return "ok" if os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY") else "skipped (missing key)"
+        return gateway_smoke_status()
 
     def enrich(self, item: ProviderItem) -> EnrichResult:
         prompt = render_enrich_prompt(item)
@@ -78,5 +78,6 @@ class DeepSeekV4FlashEnricher:
             summary_zh=str(parsed.get("summary_zh", "")),
             why_recommend=str(parsed.get("why_recommend", "")),
             tags=tuple(str(tag) for tag in parsed.get("tags", [])),
-            raw={"provider": result.provider, "model": result.model, "json": parsed},
+            raw={"provider": result.provider, "model": result.model, "json": parsed,
+                 "llm_gateway": result.gateway, "sent_request_id": result.sent_request_id},
         )

@@ -31,6 +31,7 @@ from ..wechat_text import (
     wechat_identity_title,
     wechat_slug_seed,
 )
+from .engine.paths import kb_root, stored_path, tags_path
 
 DEFAULT_INTERPRET_USER = "default"
 # Articles interpreted at once. Each one is dominated by external subprocess
@@ -45,8 +46,7 @@ INTERPRET_CONCURRENCY_MAX = 16
 ERROR_RETRY_MAX = 8
 ERROR_RETRY_BASE_MINUTES = 15
 DISABLED_MESSAGE = "interpret disabled (set AI_RADAR_ENABLE_INTERPRET=true)"
-MISSING_ROOT_MESSAGE = "interpret enabled but AI_ASSISTANT_ROOT is not set"
-SUMMARY_AGENT_DIR = Path("agents") / "summary-agent"
+MISSING_ROOT_MESSAGE = "interpret enabled but AI_RADAR_KB_ROOT is not set (AI_ASSISTANT_ROOT data-path compatibility is supported)"
 SUMMARY_AGENT_INTERPRET_MODEL = "ai-radar-interpret-deepseek"
 MISSING_CRITERIA_REASON_ERROR = "summary JSON missing non-empty criteria_reason"
 JSON_CRITERIA_REASON_SOURCE = "json"
@@ -76,7 +76,7 @@ def _env_flag_enabled(name: str) -> bool:
 def _assistant_root(value: str | Path | None) -> Path | None:
     configured = value or os.environ.get("AI_ASSISTANT_ROOT")
     if not configured:
-        return None
+        return db.PROJECT_ROOT if os.environ.get("AI_RADAR_KB_ROOT") else None
     return Path(configured).expanduser().resolve()
 
 
@@ -85,18 +85,28 @@ def _interpret_user(value: str | None) -> str:
 
 
 def _summary_agent_scripts(root: Path) -> tuple[Path, Path]:
-    agent_dir = root / SUMMARY_AGENT_DIR
+    # root is a legacy data location, never a code checkout dependency.
+    agent_dir = db.PROJECT_ROOT / "scripts" / "interpret"
     return agent_dir / "summarize.sh", agent_dir / "run.sh"
 
 
-def _preflight(root: Path) -> tuple[bool, str]:
+def _preflight(root: Path, *, user: str | None = None) -> tuple[bool, str]:
     summarize_script, run_script = _summary_agent_scripts(root)
     if not root.exists():
-        return False, f"skip interpret: AI_ASSISTANT_ROOT does not exist: {root}"
+        return False, f"skip interpret: configured data root does not exist: {root}"
     if not summarize_script.exists() or not os.access(summarize_script, os.X_OK):
         return False, f"skip interpret: summarize.sh is missing or not executable: {summarize_script}"
     if not run_script.exists() or not os.access(run_script, os.X_OK):
         return False, f"skip interpret: run.sh is missing or not executable: {run_script}"
+    user_root = kb_root(root) / _interpret_user(user)
+    required = (
+        user_root / "index.json", user_root / "persona.md", tags_path(root),
+        user_root / "article_summaries/building_effective_agents_output.md",
+        user_root / "article_summaries/软件工程师头衔要没了ClaudeCode之父YC访谈_output.md",
+    )
+    for path in required:
+        if not path.is_file():
+            return False, f"skip interpret: required KB context missing: {path}"
     # The egress selector must be live before any article text leaves this process.
     # This raises EgressPreflightError rather than skipping: a dead exit port is loud.
     require_selector_policy()
@@ -116,8 +126,8 @@ def _json_loads(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
-# The summarizer is an external script; it gets the process basics, the
-# assistant root, and this project's own LLM provider keys -- not the rest of
+# The in-repo engine gets the process basics, explicit KB data paths and
+# local gateway configuration -- not provider credentials or the rest of
 # the environment (X bearer token, EdgeOne keys, Feishu webhooks, admin token,
 # the image-proxy URL with its credentials, or anything another project put in
 # the shared dotenv).
@@ -134,15 +144,15 @@ _SUBPROCESS_ENV_PASSTHROUGH = frozenset(
         "TMPDIR",
         "TERM",
         "AI_ASSISTANT_ROOT",
-        "AI_RADAR_ARK_BREAKER_STATE",
-        "AI_RADAR_ARK_BREAKER_COOLDOWN_SECONDS",
-        "AI_RADAR_ARK_THINKING",
-        "DEEPSEEK_API_KEY",
-        "DEEPSEEK_BASE_URL",
-        "ARK_API_KEY",
-        "ARK_BASE_URL",
-        "OPENAI_API_KEY",
-        "GLM_API_KEY",
+        "AI_RADAR_KB_ROOT",
+        "AI_RADAR_INTERPRET_TAGS_PATH",
+        "AI_RADAR_INTERPRET_MODEL",
+        "AI_RADAR_DEEPSEEK_INTERPRET_MODEL",
+        "AI_RADAR_DEEPSEEK_THINKING",
+        "AI_RADAR_LLM_GATEWAY_BASE_URL",
+        "AI_RADAR_LLM_GATEWAY_PROJECT",
+        "AI_RADAR_LLM_GATEWAY_SESSION",
+        "SUMMARIZER_TAG_SIMILARITY_THRESHOLD",
     }
 )
 _SUBPROCESS_ENV_PREFIXES = ("LC_", "UV_", "PYTHON", "XDG_")
@@ -173,7 +183,6 @@ def _subprocess_env(*, callsite_id: str) -> dict[str, str]:
         callsite_id=callsite_id,
     )
     env.pop("VIRTUAL_ENV", None)
-    env.setdefault("AI_RADAR_ARK_BREAKER_STATE", str(db.PROJECT_ROOT / "data" / "ark-breaker.json"))
     return env
 
 
@@ -201,13 +210,16 @@ def _scrub_error(message: str) -> str:
 
 
 def _run_json(cmd: list[str], *, cwd: Path, callsite_id: str) -> dict[str, Any]:
+    env = _subprocess_env(callsite_id=callsite_id)
+    env["AI_RADAR_KB_ROOT"] = str(kb_root(cwd))
+    env["AI_RADAR_INTERPRET_TAGS_PATH"] = str(tags_path(cwd))
     completed = subprocess.run(
         cmd,
         cwd=str(cwd),
         check=True,
         text=True,
         capture_output=True,
-        env=_subprocess_env(callsite_id=callsite_id),
+        env=env,
         timeout=SUBPROCESS_TIMEOUT_S,
     )
     stdout = (completed.stdout or "").strip()
@@ -401,11 +413,17 @@ def _read_summary_file(path: Path) -> str:
 
 def _path_from_ai_assistant(root: Path, value: str) -> Path:
     path = Path(value)
-    return _confined(root, path if path.is_absolute() else root / path, "summary_file_path")
+    if not path.is_absolute() and not value.startswith("data/summary_agent/"):
+        path = root / path
+    else:
+        path = stored_path(value, kb_root(root))
+    if path.resolve().is_relative_to(kb_root(root).resolve()):
+        return _confined(kb_root(root), path, "summary_file_path")
+    return _confined(root, path, "summary_file_path")
 
 
 def _summary_agent_index_path(root: Path, user: str) -> Path:
-    return root / "data" / "summary_agent" / user / "index.json"
+    return kb_root(root) / user / "index.json"
 
 
 def _summary_file_slug(value: str) -> str:
@@ -462,7 +480,7 @@ def _index_entry_for_summary_file(root: Path, user: str, summary_file: str) -> d
 
 
 def _index_entry_for_summary_file_any_user(root: Path, summary_file: str) -> dict[str, Any] | None:
-    summary_agent_root = root / "data" / "summary_agent"
+    summary_agent_root = kb_root(root)
     if not summary_agent_root.is_dir():
         return None
     for index_path in sorted(summary_agent_root.glob("*/index.json")):
@@ -812,37 +830,11 @@ def _summarize_item(
         "--output-dir",
         requested_batch_dir,
     ]
-    recovered_after_criteria_retry = False
-    try:
-        summary_payload = _run_json(
-            summarize_cmd,
-            cwd=root,
-            callsite_id="interpret.runner.summarize",
-        )
-    except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
-        if MISSING_CRITERIA_REASON_ERROR not in (stderr or ""):
-            raise
-        print(f"interpret item={row['id']} retrying summary once: missing criteria_reason (attempt 2/2)")
-        try:
-            summary_payload = _run_json(
-                summarize_cmd,
-                cwd=root,
-                callsite_id="interpret.runner.summarize",
-            )
-        except subprocess.CalledProcessError as retry_exc:
-            retry_stderr = (
-                retry_exc.stderr.decode("utf-8", errors="replace")
-                if isinstance(retry_exc.stderr, bytes)
-                else retry_exc.stderr
-            )
-            if MISSING_CRITERIA_REASON_ERROR in (retry_stderr or ""):
-                print(
-                    f"interpret item={row['id']} immediate retry exhausted: "
-                    "missing criteria_reason (attempt 2/2)"
-                )
-            raise
-        recovered_after_criteria_retry = True
+    summary_payload = _run_json(
+        summarize_cmd,
+        cwd=root,
+        callsite_id="interpret.runner.summarize",
+    )
     result = summary_payload.get("result")
     if not isinstance(result, dict):
         raise ValueError("summarize.sh JSON missing result object")
@@ -932,7 +924,6 @@ def _summarize_item(
         "llm_metadata": result.get("llm_metadata"),
         "kb_synced": kb_synced,
         "saved": kb_synced,
-        "recovered_after_criteria_retry": recovered_after_criteria_retry,
     }
 
 
@@ -1100,8 +1091,6 @@ def _process_row(
                 criteria_reason_source=criteria_reason_source,
                 interpret_user=interpret_user,
             )
-        if result.get("recovered_after_criteria_retry"):
-            print(f"interpret item={row['id']} recovered after one immediate retry: missing criteria_reason")
         return True
     except Exception as exc:  # noqa: BLE001 - per-item fail-safe is the contract.
         with db_lock:
@@ -1128,7 +1117,7 @@ def run_interpret(
     if root is None:
         return InterpretSummary(skipped=True, message=MISSING_ROOT_MESSAGE)
 
-    ready, message = _preflight(root)
+    ready, message = _preflight(root, user=user)
     if not ready:
         print(message)
         return InterpretSummary(skipped=True, message=message)
@@ -1188,5 +1177,3 @@ def run_interpret(
     processed = sum(1 for stored in outcomes if stored)
     errors = len(outcomes) - processed
     return InterpretSummary(processed=processed, errors=errors, message=f"processed={processed} errors={errors}")
-
-

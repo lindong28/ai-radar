@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260922-7d82](./20260922-7d82-route-llm-calls-through-gateway.md) | 仓内模型与评测统一接入 LLM Gateway，明确模型身份与仓外边界 | accepted for local implementation | 2026-09-22 |
 | [20260922-c931](./20260922-c931-continue-category-research-from-best-candidate.md) | 逐轮择优接续分类研究，研究边界与冻结来源输入消融 | accepted for offline experiment | 2026-09-22 |
 | [20260922-5f6a](./20260922-5f6a-test-category-contribution-and-review.md) | A4+分类主线的引用主次、全文、贡献边界及条件复核消融 | accepted for offline experiment | 2026-09-22 |
 | [20260921-e38b](./20260921-e38b-align-six-category-evaluation.md) | 网站六类分类、实际导航金标、独立 Flash 分类评测与消费者兼容 | accepted；不部署或切换生产调用 | 2026-09-21 |
@@ -101,7 +102,7 @@
 | [063-aihot-dates](./063-require-ordered-public-response-dates-in-aihot-captures.md) | AIHOT capture 的 RSS/OpenAPI public response Date 按声明顺序非递减 | accepted; clarifies [060-aihot-manifest](./060-normalize-and-freeze-aihot-benchmark-manifests-before-v1.md) and [061-aihot-reports](./061-split-shared-ssr-responses-and-discriminate-aihot-reports.md) | 2026-08-20 |
 | [20260826-68e2](./20260826-68e2-route-ai-radar-through-domain-selector.md) | AI Radar 经 status 验证的域名 selector 隔离出网 | accepted; **部分失效 2026-09-11** — interpret 收据跳过那条 consequence 已不成立，其余有效 | 2026-08-26 |
 | [20260828-f8d9](./20260828-f8d9-replay-frozen-wechat-interpretations-in-bounded-cohorts.md) | 先修零向量，再按有界 cohort 回放冻结的微信解读 | accepted | 2026-08-28 |
-| [20260828-c3a5](./20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 | accepted | 2026-08-28 |
+| [20260828-c3a5](./20260828-c3a5-retry-missing-criteria-reason-once.md) | 微信解读仅对缺失 criteria_reason 立即重试一次 | superseded by 20260922-7d82（同轮重发） | 2026-08-28 |
 | [20260829-c0e8](./20260829-c0e8-bind-egress-receipt-to-implementation-and-paths.md) | 将 AI Assistant 出网收据绑定到实现闭包与生产路径 | accepted; **retired 2026-09-11** — 收据与 receipt_writer 已移除，AI_ASSISTANT_ROOT 由所有者裁定为可信第一方代码 | 2026-08-29 |
 | [20260829-a7f1](./20260829-a7f1-suppress-actionless-x-silence.md) | 用新鲜终态收据抑制无处置价值的 X 来源静默告警 | accepted | 2026-08-29 |
 | [20260831-30ad](./20260831-30ad-hybrid-wechat-search-and-kb-archive-import.md) | 微信搜索采用多词混合检索，并显式补录 ai-assistant KB 归档 | accepted | 2026-08-31 |

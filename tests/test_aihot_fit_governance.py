@@ -113,7 +113,7 @@ def test_run_rejects_identity_before_reading_provider_credentials(monkeypatch, t
         return {}
 
     monkeypatch.setattr(run_module, "run_identity_preflight", reject)
-    monkeypatch.setattr(run_module, "require_ark_only", credentials)
+    monkeypatch.setattr(run_module, "require_gateway", credentials)
 
     with pytest.raises(IdentityRejected):
         run_module.run_stages(

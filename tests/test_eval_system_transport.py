@@ -37,13 +37,23 @@ def records(directory):
 def fake_factory(create, created):
     def factory(**kwargs):
         created.append(kwargs)
-        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)), close=lambda: None)
+        def create_with_identity(**request):
+            result = create(**request)
+            result.model_extra.setdefault("llm_gateway", {
+                "projection_version": 1,
+                "logical_request_id": request["extra_headers"]["X-LLM-Request-ID"],
+                "attempt_id": "fixture-gateway-attempt", "provider_id": "fixture-provider",
+                "actual_model": result.model, "requested_logical_model": request["model"],
+            })
+            return result
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_with_identity)),
+                               close=kwargs["http_client"].close)
     return factory
 
 
 def chat(directory, factory, **changes):
-    return transport.DurableChat(directory, provider="deepseek", base_url="https://api.example.test/v1",
-                                 api_key=SECRET, case_id="case-a", client_factory=factory, **changes)
+    return transport.DurableChat(directory, provider="llm-gateway", base_url="http://127.0.0.1:39011/v1",
+                                 project="ai-radar", case_id="case-a", client_factory=factory, **changes)
 
 
 def test_success_is_durable_before_request_and_before_parse(tmp_path, monkeypatch):
@@ -71,14 +81,18 @@ def test_success_is_durable_before_request_and_before_parse(tmp_path, monkeypatc
     assert result["json"] == {"answer": True}
     assert result["model"] == "served-alias" and result["requested_model"] == REQUEST["model"]
     assert requests[0]["model"] == REQUEST["model"]
-    assert requests[0]["response_format"] == {"type": "json_object"}
-    assert requests[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "response_format" not in requests[0]
+    assert requests[0]["extra_body"]["thinking"] == {"type": "disabled"}
     assert clients[0]["max_retries"] == 0
-    assert clients[0]["callsite_id"] == "provider.deepseek_chat.chat_json"
+    assert clients[0]["default_headers"] == {"X-LLM-Project": "ai-radar"}
+    assert "callsite_id" not in clients[0]
+    assert clients[0]["api_key"] == "llm-gateway-local-placeholder"
     final = records(tmp_path)[0]
     assert final["status"] == "ok" and final["completed_at"]
     assert final["usage"]["prompt_tokens_details"]["cached_tokens"] == 9
     assert final["cost_usd"] is None and final["cost_status"] == "unpriced"
+    assert final["gateway_request_id"] == requests[0]["extra_headers"]["X-LLM-Request-ID"]
+    assert final["llm_gateway"]["logical_request_id"] == final["gateway_request_id"]
 
 
 def test_parse_failure_keeps_raw_usage_and_models(tmp_path):
@@ -100,12 +114,15 @@ def test_actual_sdk_http_failure_is_one_attempt_and_retains_usage(tmp_path):
     def handler(request):
         requests.append(request)
         assert records(tmp_path)[0]["status"] == "started"
-        return httpx.Response(500, json={"error": {"message": SECRET}, "usage": {"total_tokens": 7}, "model": "error-served"})
+        return httpx.Response(500, json={"error": {"code": "fixture_failure", "action": "inspect ledger"},
+                                        "usage": {"total_tokens": 7}, "model": "error-served"})
 
     def factory(**kwargs):
         clients.append(kwargs)
+        kwargs["http_client"].close()
         return OpenAI(api_key=kwargs["api_key"], base_url=kwargs["base_url"], max_retries=kwargs["max_retries"],
-                      http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+                      default_headers=kwargs["default_headers"],
+                      http_client=httpx.Client(transport=httpx.MockTransport(handler), trust_env=False))
 
     with pytest.raises(transport.TransportError) as caught:
         chat(tmp_path, factory)(stage="score", prompt=PROMPT, request=REQUEST)
@@ -114,6 +131,10 @@ def test_actual_sdk_http_failure_is_one_attempt_and_retains_usage(tmp_path):
     assert snapshot["status"] == "error" and snapshot["http_status"] == 500
     assert snapshot["usage"] == {"total_tokens": 7}
     assert snapshot["actual_model"] == "error-served"
+    assert snapshot["error_code"] == "fixture_failure"
+    assert snapshot["error_action"] == "inspect ledger"
+    assert requests[0].headers["X-LLM-Project"] == "ai-radar"
+    assert requests[0].headers["X-LLM-Request-ID"] == snapshot["gateway_request_id"]
     assert SECRET not in str(caught.value)
     assert all(SECRET not in path.read_text() for path in tmp_path.iterdir())
 
@@ -144,15 +165,14 @@ def test_unknown_usage_stays_null_on_success(tmp_path):
     assert output["usage"] is None and records(tmp_path)[0]["usage"] is None
 
 
-def test_ark_request_omits_json_format_and_keeps_exact_requested_model(tmp_path):
+def test_gateway_request_omits_json_format_and_keeps_exact_requested_model(tmp_path):
     requests = []
 
     def create(**kwargs):
         requests.append(kwargs)
         return completion(actual_model="actual-ark-model")
 
-    instance = transport.DurableChat(tmp_path, provider="ark", base_url="https://ark.example.test/api/v3",
-                                     api_key=SECRET, client_factory=fake_factory(create, []))
+    instance = chat(tmp_path, fake_factory(create, []))
     result = instance(stage="enrich", prompt=PROMPT, request={"model": "caller-pinned-model", "temperature": 0.2})
     assert "response_format" not in requests[0]
     assert "max_tokens" not in requests[0]
@@ -162,24 +182,28 @@ def test_ark_request_omits_json_format_and_keeps_exact_requested_model(tmp_path)
 
 
 @pytest.mark.parametrize("provider,endpoint", [
-    ("unknown", "https://example.test/v1"), ("deepseek", "https://user:secret@example.test/v1"),
-    ("deepseek", "https://example.test/v1?api_key=secret"), ("deepseek", "not-an-endpoint"),
+    ("deepseek", "http://127.0.0.1:39011/v1"), ("ark", "http://127.0.0.1:39011/v1"),
+    ("llm-gateway", "https://api.example.test/v1"), ("llm-gateway", "https://user:secret@localhost/v1"),
+    ("llm-gateway", "https://localhost/v1?api_key=secret"), ("llm-gateway", "not-an-endpoint"),
 ])
 def test_invalid_provider_or_endpoint_never_creates_client_or_attempt(tmp_path, provider, endpoint):
     clients = []
     with pytest.raises(ValueError):
-        transport.DurableChat(tmp_path, provider=provider, base_url=endpoint, api_key=SECRET,
+        transport.DurableChat(tmp_path, provider=provider, base_url=endpoint,
                               client_factory=fake_factory(lambda **_: completion(), clients))
     assert not clients and not records(tmp_path)
 
 
-def test_key_never_enters_repr_metadata_or_returned_payload(tmp_path):
-    instance = chat(tmp_path, fake_factory(lambda **_: completion(json.dumps({"echo": SECRET})), []))
-    output = instance(stage="score", prompt={"system": SECRET, "user": "raw"}, request=REQUEST)
+def test_provider_key_never_enters_client_metadata_or_returned_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", SECRET)
+    monkeypatch.setenv("ARK_API_KEY", SECRET)
+    clients = []
+    instance = chat(tmp_path, fake_factory(lambda **_: completion(), clients))
+    output = instance(stage="score", prompt=PROMPT, request=REQUEST)
     assert SECRET not in repr(instance)
     assert SECRET not in json.dumps(output)
     assert all(SECRET not in path.read_text() for path in tmp_path.iterdir())
-    assert records(tmp_path)[0]["raw"]["choices"][0]["message"]["content"] == '{"echo": "[REDACTED]"}'
+    assert clients[0]["api_key"] != SECRET
 
 
 def test_attempt_write_failure_prevents_network_request(tmp_path, monkeypatch):
@@ -200,3 +224,24 @@ def test_repeated_calls_create_distinct_attempt_records(tmp_path):
     second = instance(stage="score", prompt=PROMPT, request=REQUEST)
     assert first["attempt_id"] != second["attempt_id"]
     assert len(records(tmp_path)) == 2
+
+
+@pytest.mark.parametrize("identity", [None, {"projection_version": 2},
+                                      {"projection_version": 1, "logical_request_id": "different"}])
+def test_invalid_identity_preserves_raw_before_failure_and_never_resends(tmp_path, identity):
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        result = completion()
+        result.model_extra["llm_gateway"] = identity
+        return result
+
+    with pytest.raises(transport.TransportError):
+        chat(tmp_path, fake_factory(create, []))(stage="score", prompt=PROMPT, request=REQUEST)
+    assert len(calls) == 1
+    snapshot = records(tmp_path)[0]
+    assert snapshot["status"] == "error"
+    assert snapshot["gateway_request_id"] == calls[0]["extra_headers"]["X-LLM-Request-ID"]
+    assert snapshot["raw"]["llm_gateway"] == identity
+    assert snapshot["usage"]["total_tokens"] == 22

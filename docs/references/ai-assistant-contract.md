@@ -1,5 +1,7 @@
 # ai-assistant summary-agent integration
 
+> Historical compatibility reference (superseded for execution on 2026-09-22). Current code, configuration and commands are maintained in [interpretation-engine.md](interpretation-engine.md). AI Radar now executes its own `scripts/interpret/` and `airadar.interpret.engine` code; `AI_ASSISTANT_ROOT` only locates legacy data. The old external script launch, direct provider examples and immediate summary retry below describe the previous implementation, not the current execution path. Existing KB record formats remain compatibility inputs.
+
 > Reader: [Developer] — whoever implements an external summary-agent consumed by AI Radar's `interpret` stage or manual KB archive importer. This file is the cross-repository interface contract; production enablement and general operator runbooks belong to [operations/wechat-ingestion.md](../operations/wechat-ingestion.md).
 
 `./run.sh interpret` can call an external article-summary implementation that is compatible with the `ai-assistant` summary-agent scripts. Separately, `./run.sh admin wechat-kb import` can consume the versioned read-only catalog described below to copy missing WeChat archive articles into AI Radar. The live interpretation integration is optional and disabled by default; the archive importer is an explicit maintenance command and is never part of `pipeline.sh`.

@@ -21,7 +21,7 @@ PYTHONPATH=src:. uv run python evals/news-admission/aihot-prefilter/evaluate.py 
 ```bash
 PYTHONPATH=src:. uv run python evals/news-admission/aihot-prefilter/evaluate.py run \
   --dataset ~/research/video-eval-arena/data/benchmark-archives/ai-radar/20260920-cleanup/news-admission/aihot-prefilter/v1 \
-  --config evals/_shared/configs/baseline-ark.json --env-file .env \
+  --config evals/_shared/configs/baseline-gateway.json --env-file .env \
   --split dev --limit 600 --seed prefilter-20260919 --workers 8 --label baseline-dev
 ```
 

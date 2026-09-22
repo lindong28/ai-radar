@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCAN_ROOTS = (ROOT / "src" / "airadar", ROOT / "scripts", ROOT / "tests" / "playwright")
 NETWORK_CALLEES = {
     "OpenAI",
+    "gateway_client",
     "direct_subprocess_env",
     "managed_subprocess_env",
     "open_external_url",
@@ -38,6 +39,7 @@ NETWORK_API_PREFIXES = {
 }
 
 HELPER_ROUTE_CONTRACTS = {
+    "gateway_client": {"loopback-explicit-direct"},
     "direct_subprocess_env": {"managed-direct-env"},
     "managed_subprocess_env": {"managed-standard-env"},
     "open_external_url": {"selector-or-loopback", "selector-owned"},

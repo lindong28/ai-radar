@@ -154,24 +154,24 @@ WHERE s.kind='wechat' AND s.enabled=1;
 ```bash
 ./run.sh interpret            # 默认关闭时输出 skipped=true 并成功退出
 AI_RADAR_ENABLE_INTERPRET=true \
-AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
+AI_RADAR_KB_ROOT=/path/to/summary_agent \
 ./run.sh interpret            # 增量，跳过已有 wechat_interpretations 行
 AI_RADAR_ENABLE_INTERPRET=true \
-AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
+AI_RADAR_KB_ROOT=/path/to/summary_agent \
 ./run.sh interpret --backfill # 回填启用源全集；已处理行仍跳过
 ```
 
-跨 repo 依赖：
+解读引擎与数据依赖：
 
-- **默认关闭且 fail-open**：未设 `AI_RADAR_ENABLE_INTERPRET=true`、未设 `AI_ASSISTANT_ROOT`、或两个 summary-agent 脚本缺失/不可执行时，interpret 一律打印 skipped 并 exit 0，不读取任何外部路径、不阻断前置 pipeline。启用后 `AI_ASSISTANT_ROOT` 必填，`AI_RADAR_INTERPRET_USER` 未设时为 `default`。
-- 启用条件、脚本布局、`summarize.sh` / `run.sh --check-url` / `--save-from-batch` 的调用形态、stdout JSON、summary markdown 与 index.json 的完整契约见 [`../references/ai-assistant-contract.md`](../references/ai-assistant-contract.md)。
+- **默认关闭**：只有 `AI_RADAR_ENABLE_INTERPRET=true` 才执行解读。引擎和脚本现由本仓维护，`AI_RADAR_KB_ROOT` 指向各用户知识库目录的父目录；旧 `AI_ASSISTANT_ROOT` 只兼容定位 `<root>/data/summary_agent`，不执行外部代码。用户 persona 和参考解读必须保留在所选知识库，不能用一个空目录代替。
+- 当前调用方式和维护入口见 [`../references/interpretation-engine.md`](../references/interpretation-engine.md)，旧格式兼容说明保留在 [`../references/ai-assistant-contract.md`](../references/ai-assistant-contract.md)。
 
 数据约定：
 
 - `wechat_interpretations.save_decision=1` 是 `/wechat` 展示与 KB 回写的唯一闸门。
 - `summary_md`、`abstract`、`tags_json` 在 `radar.db` 内保留独立网站副本；Web 请求不读取 ai-assistant 文件系统。
 - `save_decision=0` 的文章只落库为已处理记录，不展示、不写 KB，避免每轮重复消耗 LLM。
-- fresh summarize 若精确报 `summary JSON missing non-empty criteria_reason`，会立刻原样重试一次；日志用 `retrying` / `recovered` / `exhausted` 区分三种结果。其它错误不走这次即时重试，仍按既有 DB 退避处理。
+- fresh summarize 返回缺失 `criteria_reason` 等解析错误时不再同轮重发；记录失败并保留既有 DB 跨轮退避处理。Gateway 统一拥有单个请求的供应商重试/回退。
 - cron 内不 git commit/push ai-assistant data 子模块；本地 KB 文件和 embedding 立即可被 `search-knowledgebase` 使用，提交子模块留给人工低频处理。
 
 详情页 `/wechat/<slug>` 使用 `markdown-it-py==4.0.0` 渲染 markdown，并用 `nh3==0.3.1` sanitize。LLM 生成的 `summary_md` 一律视为不可信 HTML 输入。
@@ -195,38 +195,35 @@ AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root \
 
 ### dry-run 与实际导入
 
-从 AI Radar 仓库根目录运行。`--assistant-root` 必须指向包含 `agents/summary-agent/run.sh` 的 ai-assistant checkout 根目录，不是 `data/summary_agent/` 知识库目录；同时显式写出 Summary Agent user 与目标数据库：
+从 AI Radar 仓库根目录运行。先设置 `AI_RADAR_KB_ROOT=/path/to/summary_agent`，再显式指定 user 与目标数据库；不再要求 ai-assistant checkout 或其中的脚本。旧 `--assistant-root /path/to/ai-assistant` 仍可定位其 `data/summary_agent`，但与新变量同时出现时新变量优先：
 
 ```bash
 # 预演：检查全部候选，不写数据库
+export AI_RADAR_KB_ROOT=/path/to/summary_agent
 ./run.sh admin wechat-kb import \
   --dry-run \
-  --assistant-root /path/to/ai-assistant \
   --user your-summary-agent-user \
   --db-path /path/to/radar.db
 
 # 实际导入全部仍缺失的合格文章
 ./run.sh admin wechat-kb import \
-  --assistant-root /path/to/ai-assistant \
   --user your-summary-agent-user \
   --db-path /path/to/radar.db
 
 # 分批示例：本次由操作者选择最多导入 100 篇；按输出提示重跑，直到 remaining=0
 ./run.sh admin wechat-kb import \
   --limit 100 \
-  --assistant-root /path/to/ai-assistant \
   --user your-summary-agent-user \
   --db-path /path/to/radar.db
 ```
 
 首次操作或切换实例时，每条命令都显式写 `--db-path`；省略时 CLI 会使用 `data/radar.db`，但成功输出不会回显实际路径，容易把正确收据误归到错误实例。`--limit` 接受任意正整数，只限制本批实际导入数，不改变 `eligible` 总数；分批运行看到 `remaining>0` 时继续执行同一条实际导入命令。dry-run 是当时目录的预览，不会冻结候选；实际导入会重新读取目录。命令按 canonical URL 幂等，重跑不会重复导入已有文章。
 
-`Skipped reasons` 只给按原因聚合的数量，不列文章标题。若你在找某一篇，先在 ai-assistant 仓完整导出 catalog，再按标题或 URL 查看该行的三个状态；不要把 exporter 直接接 `head`，它要求消费者完整读取 stdout：
+`Skipped reasons` 只给按原因聚合的数量，不列文章标题。若你在找某一篇，在本仓用同一个 `AI_RADAR_KB_ROOT` 完整导出 catalog，再按标题或 URL 查看该行的三个状态；不要把 exporter 直接接 `head`，它要求消费者完整读取 stdout：
 
 ```bash
-cd /path/to/ai-assistant
 mkdir -p tmp
-./agents/summary-agent/run.sh --list-article-records --user your-summary-agent-user \
+./scripts/interpret/run.sh --list-article-records --user your-summary-agent-user \
   > tmp/summary-agent-article-catalog.jsonl
 jq 'select(.record_type == "article" and (.title | contains("目标标题片段"))) |
     {title, url, entry_status, file_status, vector_status}' \
@@ -314,15 +311,15 @@ curl -s 'http://localhost:8010/api/v1/wechat?q=歸藏' | jq '.data.total'
 curl -s 'http://localhost:8010/api/v1/wechat?q=合集' | jq '.data.total' # 应为 0；不匹配 Mp2RSS 合集源名
 
 # KB 去重/可检索前置检查
-cd "$AI_ASSISTANT_ROOT"
-./agents/summary-agent/run.sh --check-url '<wechat-url>' --user "${AI_RADAR_INTERPRET_USER:-default}"
+./scripts/interpret/run.sh --check-url '<wechat-url>' --user "${AI_RADAR_INTERPRET_USER:-default}"
 ```
 
 ## 相关参考
 
 - [README.md §信源](../../README.md#信源) — 用户视角的 `wechat` kind 说明
 - [README.md §微信文章解读](../../README.md#微信文章解读) — `/wechat` 与 ai-assistant KB 回写说明
-- [docs/references/ai-assistant-contract.md](../references/ai-assistant-contract.md) — 可选 summary-agent 脚本契约
+- [docs/references/interpretation-engine.md](../references/interpretation-engine.md) — 本仓解读引擎、配置和脚本入口
+- [docs/references/ai-assistant-contract.md](../references/ai-assistant-contract.md) — 历史 KB 数据兼容契约
 - [docs/operations/services.md](services.md) — 服务清单（以该文件的服务表为准；`wewe` 已移除，附回滚说明）
 - [docs/references/wechat-discovery-evidence.md](../references/wechat-discovery-evidence.md) — 后台发现候选与微信读书 canary 的历史证据台账（已停止推进）
 - [deploy/wechat2rss/RUNBOOK.md](../../deploy/wechat2rss/RUNBOOK.md) — 自建 Wechat2RSS 部署与运维手册

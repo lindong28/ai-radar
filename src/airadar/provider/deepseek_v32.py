@@ -7,18 +7,17 @@ from .base import PrefilterResult, ProviderItem
 from .deepseek_chat import chat_json
 from .heuristics import heuristic_prefilter
 from .judgment import require_reason_first
+from .llm_gateway import gateway_smoke_status
 
 
 class DeepSeekV32Prefilter:
     model_id = "deepseek-v4-flash"
 
     def smoke_test(self) -> str:
-        return "ok" if os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY") else "ok (offline fallback)"
+        return gateway_smoke_status(heuristic=True)
 
     def is_ai_related(self, item: ProviderItem) -> PrefilterResult:
-        if not (os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY")) or os.environ.get(
-            "AI_RADAR_FORCE_HEURISTIC"
-        ):
+        if os.environ.get("AI_RADAR_FORCE_HEURISTIC"):
             return heuristic_prefilter(item)
         prompt = render_prefilter_prompt(item)
         input_char_count = len(prompt["system"]) + len(prompt["user"])
@@ -42,5 +41,6 @@ class DeepSeekV32Prefilter:
             reason=reason,
             is_ai_related=bool(payload.get("is_ai_related")),
             confidence=max(0.0, min(1.0, float(payload.get("confidence", 0.0)))),
-            raw={"provider": result.provider, "model": result.model, "json": payload},
+            raw={"provider": result.provider, "model": result.model, "json": payload,
+                 "llm_gateway": result.gateway, "sent_request_id": result.sent_request_id},
         )

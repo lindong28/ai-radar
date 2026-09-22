@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from ..egress import selector_openai_client as OpenAI
 from .base import ProviderItem, ScoringResult
 from .heuristics import heuristic_score
+from .llm_gateway import gateway_client, gateway_error, gateway_headers, gateway_identity, gateway_smoke_status
+
+logger = logging.getLogger(__name__)
 
 
 class _OpenAIScoringResponse(BaseModel):
@@ -23,26 +27,27 @@ class CodexGptMiniScorer:
     model_id = "codex-gpt-mini"
 
     def smoke_test(self) -> str:
-        return "ok" if os.environ.get("OPENAI_API_KEY") else "ok (offline heuristic fallback)"
+        return gateway_smoke_status(heuristic=True)
 
     def score_5d(self, item: ProviderItem) -> ScoringResult:
-        if os.environ.get("OPENAI_API_KEY") and not os.environ.get("AI_RADAR_FORCE_HEURISTIC"):
-            try:
-                return self._score_with_openai(item)
-            except Exception:
-                if not os.environ.get("AI_RADAR_ALLOW_LLM_FALLBACK", "1"):
-                    raise
-        return heuristic_score(item)
+        if os.environ.get("AI_RADAR_FORCE_HEURISTIC"):
+            return heuristic_score(item)
+        return self._score_with_openai(item)
 
     def _score_with_openai(self, item: ProviderItem) -> ScoringResult:
-        client = OpenAI(
-            callsite_id="provider.codex_gpt_mini.score",
-            api_key=str(os.environ.get("OPENAI_API_KEY", "")),
-            timeout=float(os.environ.get("AI_RADAR_OPENAI_TIMEOUT", "30")),
-        )
+        request_id = str(uuid4())
+        client = None
+        completion = None
         model = os.environ.get("AI_RADAR_OPENAI_SCORER_MODEL", "gpt-4o-mini")
         try:
-            completion = client.chat.completions.parse(
+            timeout = float(os.environ.get("AI_RADAR_OPENAI_TIMEOUT", "30"))
+            client = gateway_client(
+                callsite_id="provider.codex_gpt_mini.score",
+                timeout=timeout,
+            )
+            schema = _OpenAIScoringResponse.model_json_schema()
+            schema["additionalProperties"] = False
+            completion = client.chat.completions.create(
                 model=model,
                 messages=[
                     {
@@ -71,13 +76,28 @@ class CodexGptMiniScorer:
                         ),
                     },
                 ],
-                response_format=_OpenAIScoringResponse,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "_OpenAIScoringResponse", "strict": True, "schema": schema},
+                },
+                extra_headers=gateway_headers(request_id),
+                extra_body={"timeout": timeout},
             )
-            parsed = completion.choices[0].message.parsed
+            identity = gateway_identity(completion, request_id)
+            if identity["requested_logical_model"] != model:
+                raise ValueError("gateway requested logical model does not match the sent model")
+            content = completion.choices[0].message.content
+            if content is None:
+                raise ValueError("Gateway response did not include scoring content")
+            parsed = _OpenAIScoringResponse.model_validate_json(content)
+        except Exception as exc:
+            raise gateway_error(exc, request_id, completion=completion) from exc
         finally:
-            client.close()
-        if parsed is None:
-            raise ValueError("OpenAI response did not parse into scoring schema")
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as exc:
+                    logger.warning("LLM Gateway client close failed request_id=%s error_type=%s", request_id, type(exc).__name__)
         return ScoringResult(
             relevance=parsed.relevance,
             density=parsed.density,
@@ -86,5 +106,8 @@ class CodexGptMiniScorer:
             engineering=parsed.engineering,
             reasoning=parsed.reasoning,
             topics=(),
-            raw={"provider": "openai", "model": model, "json": json.loads(parsed.model_dump_json())},
+            raw={
+                "provider": identity["provider_id"], "model": identity["actual_model"],
+                "json": json.loads(parsed.model_dump_json()), "llm_gateway": identity, "sent_request_id": request_id,
+            },
         )

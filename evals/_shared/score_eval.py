@@ -84,7 +84,7 @@ def object_identity(config: dict, prompt: dict, mode: str) -> dict:
     paths = (
         "evals/_shared/score_eval.py", "evals/_shared/prefilter_eval.py",
         "evals/_shared/inference.py", "evals/_shared/transport.py", "evals/_shared/cli.py",
-        "src/airadar/provider/base.py", "src/airadar/provider/judgment.py",
+        "src/airadar/provider/base.py", "src/airadar/provider/judgment.py", "src/airadar/provider/llm_gateway.py",
         "src/airadar/provider/deepseek_chat.py", "src/airadar/scorer/prompts.py",
         "src/airadar/curator/score.py", "src/airadar/curator/weights.py", "web/static/app.js",
     )

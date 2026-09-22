@@ -1,0 +1,72 @@
+请根据下面的文章、用户画像、标签词汇表、参考输出和已有关键词，生成结构化摘要。
+
+## 用户画像
+
+{{ persona }}
+
+## 标签词汇表
+
+{{ tags_doc }}
+
+## 参考输出（仅格式参考）
+
+以下内容只示范输出结构和表达形式。其推荐档位和理由可能来自旧判据，不得复用或类比；对本文必须按 criteria v2 独立重判。
+
+{% for reference in reference_outputs %}
+### 参考 {{ loop.index }}
+
+{{ reference }}
+{% endfor %}
+
+## 推荐等级判断（criteria v2）
+
+- 从 AI 雷达读者视角判断原文是否值得占用阅读时间，不要以是否有个人 KB 可操作项代替阅读价值。
+- 依次考察信息增量、深度/实现细节和时效相关性；默认为 `可跳过`，只有原文保留了会实质改变理解、决策或复现结果，且摘要无法安全代替的内容时才升档。
+- 仅有额外例子、数据点、叙事细节或可转化的产品联想，都不足以从 `可跳过` 升档。
+- 若发布日期为空且正文没有其他可靠时间锚点，不猜测新旧，也不用时效相关性作为升档证据。
+- 在有代表性的文章集合上，用 `必读` 5-15%、`值得一看` 20-40%、`可跳过` 占其余且为多数作为校准带；这不是单篇或小批次的硬配额。
+- 在 `**推荐等级**` 的一句话理由中，明确引用上述至少一个维度的证据。
+
+## 保存判断规则
+
+以下是与推荐等级独立的个人知识库保存轴，语义保持不变：
+
+- 有 primary `✅可实现` 项：保存。
+- 推荐等级为 `必读` 或 `值得一看`：保存。
+- 推荐等级为 `可跳过` 但有 secondary `✅可实现` 项：保存。
+- 推荐等级为 `可跳过` 且无 meaningful `✅可实现` 项：不保存。
+
+JSON metadata 形状：
+
+```json
+{
+  "recommendation": "必读|值得一看|可跳过",
+  "criteria_reason": "只解释推荐档位的一句话理由",
+  "save_decision": true,
+  "save_reason": "一句话理由",
+  "tags": ["标签1", "标签2"],
+  "keywords": ["关键词1", "关键词2"],
+  "projects": [
+    {"name": "项目名", "url": "真实URL或空字符串", "description": "为什么值得追踪", "tags": ["标签"], "keywords": ["关键词"]}
+  ]
+}
+```
+
+## 已有关键词
+
+{% for keyword in existing_keywords -%}
+- {{ keyword }}
+{% endfor %}
+
+## 文章元数据
+
+- 标题：{{ article.title }}
+- 来源：{{ article.source }}
+- URL：{{ article.url }}
+- 发布日期：{{ article.publish_date or "" }}
+
+## 文章全文
+
+{{ article_content }}
+
+请在输出末尾保留完整 JSON metadata，且七个字段必须齐全：recommendation、criteria_reason、save_decision、save_reason、tags、keywords、projects。

@@ -18,9 +18,9 @@ import json_repair
 from ..curator.score import weighted_score as compute_weighted_score
 from ..curator.weights import DEFAULT_WEIGHTS
 from ..db import PROJECT_ROOT
-from ..egress import selector_httpx_client
 from ..enrich.schema import EnrichOutput
 from ..provider.deepseek_chat import chat_json
+from ..provider.llm_gateway import gateway_error
 from ..topics import CONTROLLED_VOCABULARY, deterministic_tags, is_in_vocabulary, topic_tags
 from .compare_renderer import render_compare_html
 from .distribution import display_score, score_distribution
@@ -164,51 +164,30 @@ class CompareAuditProvider(Protocol):
     def audit_compare(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
-def _deepseek_base_url() -> str:
-    configured = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
-    if configured.endswith("/chat/completions"):
-        configured = configured[: -len("/chat/completions")]
-    if configured == "https://api.deepseek.com":
-        configured = f"{configured}/v1"
-    return configured
-
-
 class DeepSeekV4ProJudge:
     model_id = "deepseek-v4-pro"
 
     def judge_pair(self, pair: MatchedPair) -> JudgeScores:
-        api_key = os.environ.get("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise RuntimeError("DEEPSEEK_API_KEY is required for eval judge")
         system, user = render_judge_prompt(pair)
-        last_error: Exception | None = None
-        for _ in range(2):
-            try:
-                base_url = _deepseek_base_url()
-                with selector_httpx_client(
-                    callsite_id="eval.judge.deepseek",
-                    request_url=base_url,
-                    timeout=float(os.environ.get("AI_RADAR_DEEPSEEK_TIMEOUT", "60")),
-                ) as client:
-                    response = client.post(
-                        f"{base_url}/chat/completions",
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                        json={
-                            "model": os.environ.get("AI_RADAR_DEEPSEEK_JUDGE_MODEL", self.model_id),
-                            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                            "response_format": {"type": "json_object"},
-                            "temperature": 0,
-                            "max_tokens": int(os.environ.get("AI_RADAR_EVAL_MAX_TOKENS", "1200")),
-                        },
-                    )
-                response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
-                if content is None:
-                    raise ValueError("DeepSeek judge response did not include message content")
-                return parse_judge_response(_loads_json_object(content))
-            except (json.JSONDecodeError, ValueError) as exc:
-                last_error = exc
-        raise ValueError(f"DeepSeek judge returned invalid JSON after retry: {last_error}")
+        result = chat_json(
+            system=system,
+            user=user,
+            default_model=self.model_id,
+            model_env="AI_RADAR_DEEPSEEK_JUDGE_MODEL",
+            ark_model_env="AI_RADAR_ARK_JUDGE_MODEL",
+            temperature=0,
+            max_tokens=int(os.environ.get("AI_RADAR_EVAL_MAX_TOKENS", "1200")),
+        )
+        try:
+            return parse_judge_response({
+                **result.json, "provider": result.provider, "model": result.model,
+                "llm_gateway": result.gateway, "sent_request_id": result.sent_request_id,
+            })
+        except (KeyError, TypeError, ValueError) as exc:
+            raise gateway_error(
+                exc, result.sent_request_id or "unavailable",
+                completion={"llm_gateway": result.gateway, "json": result.json},
+            ) from exc
 
 
 class DeepSeekV4ProCompareAudit:
@@ -230,7 +209,8 @@ class DeepSeekV4ProCompareAudit:
             temperature=0.0,
             max_tokens=1200,
         )
-        return {"provider": result.provider, "model": result.model, **result.json}
+        return {**result.json, "provider": result.provider, "model": result.model,
+                "llm_gateway": result.gateway, "sent_request_id": result.sent_request_id}
 
 
 def _loads_json_object(content: str) -> dict[str, Any]:

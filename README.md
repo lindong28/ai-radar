@@ -39,10 +39,11 @@ with sync_playwright() as p:
 cp .env.example .env
 ```
 
-编辑 `.env`，填入一个 LLM API Key——`prefilter` / `score` / `enrich` 的默认后端只认 `DEEPSEEK_API_KEY` 或 `ARK_API_KEY`（详见下文「LLM Provider」）：
+`prefilter` / `score` / `enrich` 通过运行机器上的 llm-gateway 调用模型；供应商凭据只配置在 gateway，AI Radar 不需要填写这些密钥：
 
 ```
-DEEPSEEK_API_KEY=sk-xxx
+AI_RADAR_LLM_GATEWAY_BASE_URL=http://127.0.0.1:39011/v1
+AI_RADAR_LLM_GATEWAY_PROJECT=ai-radar
 ```
 
 其他配置项都有可用的默认值，第一次本地试跑不用动（部署到公网前再按下文「站点身份与最小配置」改）。X 信源要 `X_BEARER_TOKEN`；微信抓取配置可以先不填，此时本 checkout 不会主动抓取微信新文，已有数据库里的历史微信文章仍可查看。待发布的来源角色与恢复要求见下文「信源」。
@@ -149,7 +150,7 @@ RSS / X / 微信公众号源（待发布配置：Wechat2RSS 主动抓取；pause
 ai-assistant KB 文章目录 → 手动 `admin wechat-kb import` → 内部微信归档 → web 展示
 ```
 
-各阶段做什么见「快速开始 → 4. 运行数据处理流水线」的命令注释；`interpret` 是可选阶段，启用后对微信公众号文章调用 ai-assistant 兼容的 summary-agent 脚本，保存独立解读数据并把值得阅读的文章回写外部知识库（见下文「微信文章解读」）。
+各阶段做什么见「快速开始 → 4. 运行数据处理流水线」的命令注释；`interpret` 是可选阶段，启用后调用本仓维护的解读引擎，保存独立解读数据并把值得阅读的文章回写兼容知识库（见下文「微信文章解读」）。
 
 ### 数据库维护
 
@@ -180,7 +181,7 @@ AI_ASSISTANT_ROOT=
 AI_RADAR_INTERPRET_USER=default
 ```
 
-部署到公网时把 `AI_RADAR_SITE_DOMAIN` 设为你的域名（不带协议，例如 `example.com`），仓库链接与维护者链接改成你自己的：此时 CORS 会允许 `https://example.com`，抓取 User-Agent 会变为 `ai-radar/0.1 (+https://example.com)`。微信文章解读是可选外部集成，默认关闭；只有在你提供 ai-assistant 兼容实现时才设置 `AI_RADAR_ENABLE_INTERPRET=true` 和 `AI_ASSISTANT_ROOT`。
+部署到公网时把 `AI_RADAR_SITE_DOMAIN` 设为你的域名（不带协议，例如 `example.com`），仓库链接与维护者链接改成你自己的：此时 CORS 会允许 `https://example.com`，抓取 User-Agent 会变为 `ai-radar/0.1 (+https://example.com)`。微信文章解读默认关闭；配置好同机 gateway 和既有知识库后，设置 `AI_RADAR_ENABLE_INTERPRET=true` 和 `AI_RADAR_KB_ROOT`，不再需要外部 summary-agent 代码。
 
 ### 信源
 
@@ -232,7 +233,7 @@ uv run python scripts/capture_aihot_dataset.py validate --report-json data/aihot
 
 `interpret` 阶段只处理启用的微信公众号源。**该外部集成默认关闭**：未设置 `AI_RADAR_ENABLE_INTERPRET=true` 时，`./run.sh interpret` 打印 `interpret skipped=true` 并成功退出，不读取任何外部路径。
 
-启用时需设置 `AI_ASSISTANT_ROOT=/path/to/ai-assistant-compatible-root`，可用 `AI_RADAR_INTERPRET_USER` 指定外部知识库 user（默认 `default`）。被判定值得保存的文章展示到 `/wechat` 并回写外部知识库，其余只在 `radar.db` 留处理记录。`/wechat` 的 `?q=` 会把查询拆成必需词，每个词可跨标题、公众号、正文、abstract、tags 与完整 summary 命中；评测类记忆词有受控同义扩展，分页和详情页返回链接会保留搜索状态。
+启用时设置 `AI_RADAR_KB_ROOT=/path/to/summary_agent`（各用户目录的父目录），用 `AI_RADAR_INTERPRET_USER` 指定知识库 user（默认 `default`）。用户 persona、参考解读和已有知识库仍由该目录管理；旧 `AI_ASSISTANT_ROOT` 仅兼容定位数据，不执行其中的代码。引擎、模板与维护入口见 [解读引擎](docs/references/interpretation-engine.md)。被判定值得保存的文章展示到 `/wechat` 并回写知识库，其余只在 `radar.db` 留处理记录。`/wechat` 的 `?q=` 会把查询拆成必需词，每个词可跨标题、公众号、正文、abstract、tags 与完整 summary 命中；评测类记忆词有受控同义扩展，分页和详情页返回链接会保留搜索状态。
 
 本地 ai-assistant 知识库里已有、但 AI Radar 从未摄取的微信文章，可由维护者用 `./run.sh admin wechat-kb import` 显式补录。
 
@@ -248,15 +249,9 @@ AI_RADAR_SCORER=deepseek_v4_flash   # scoring 阶段（默认值；另可选 dee
 AI_RADAR_ENRICHER=deepseek_v4_pro   # enrichment 阶段（默认值）
 ```
 
-上面写的就是各阶段不设置时的默认后端，**三个默认后端都只认 `DEEPSEEK_API_KEY` 或 `ARK_API_KEY`**（两个都设置时先试 ARK、失败再落回 DeepSeek）。`OPENAI_API_KEY` 与 `GLM_API_KEY` 只服务特定备选后端，必须显式改变量才会被读到：`AI_RADAR_SCORER=codex_gpt_mini` 用 `OPENAI_API_KEY`，`AI_RADAR_PREFILTER=glm` 用 `GLM_API_KEY`。`enrich` 只有 deepseek 系实现，缺 key 时该阶段直接失败（`DEEPSEEK_API_KEY or ARK_API_KEY is required for DeepSeek provider`）。
+这些名称选择业务实现，不再选择供应商连接。所有仓内 LLM 客户端统一发送至同机 gateway，保留 Flash/Pro 等明确的 logical model；原 `AI_RADAR_ARK_*_MODEL` 覆盖不再生效。Gateway 按已登记的 `ai-radar` / `personal` 策略选择凭据与供应商，应用不直接 fallback、不做 SDK 或同轮富化自动重试。缺少 gateway 或模型未登记会报错，不因缺 key 静默退回规则；离线规则模式仍可显式设置 `AI_RADAR_FORCE_HEURISTIC=1`。
 
-**`prefilter` 与 `score` 缺 key 时不会失败，而是逐条静默退回内置的纯规则打分**（也可用 `AI_RADAR_FORCE_HEURISTIC=1` 强制），质量不代表启用 LLM 的结果。它的输出读数（`processed=… errors=…`）与走 LLM 时完全相同，日志里也没有区分标记——**要判断这一轮是不是真的走了 LLM，只能确认 key 存在**：
-
-```bash
-grep -c '^DEEPSEEK_API_KEY=.\|^ARK_API_KEY=.' .env   # 返回 0 表示这两个阶段跑的是纯规则
-```
-
-（key 也可能来自进程环境或 `~/.claude/.env`，这几处都要看过才算确认。）
+接入前分别检查 gateway `/health` 与 exact logical-model discovery；成功响应携带的 `llm_gateway` 身份才用于关联实际请求与 attempt。配置存在或 `provider smoke` 的配置检查不等于模型已可用。设置、验证命令与微信解读的 chat/embedding 接入见 [LLM Gateway 接入](docs/operations/llm-gateway.md)。
 
 LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_USAGE_DB` 覆盖）的 `llm_usage` 表。**页面、周报和告警里的金额是按已加载 tariff 派生的记录行估算，不是账单**，各项合计只是全部付费调用的下界。这项口径的完整定义、命令与当前已知缺口见 [监控与告警 runbook 的 LLM 成本段](docs/operations/monitoring-alerting.md#llm-成本报表与对账)，规范 owner 见 [ADR-023](docs/adr/023-define-recorded-row-measurement-scope.md)。
 

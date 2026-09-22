@@ -121,7 +121,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              "src/airadar/provider/judgment.py", "evals/_shared/category_eval.py",
              "evals/_shared/metrics.py", "evals/_shared/category_metrics.py",
              "evals/content-enrichment/aihot-category-navigation/metrics.json",
-             "evals/_shared/transport.py", "evals/_shared/cli.py",
+             "evals/_shared/transport.py", "evals/_shared/cli.py", "src/airadar/provider/llm_gateway.py",
              "evals/_shared/human_labels.py", "evals/_shared/human_store.py",
              "evals/_shared/score_type_study.py", "evals/_shared/quote_context.py",
              "evals/_shared/identity.py", "evals/_shared/dataset.py", "evals/_shared/category_review.py")

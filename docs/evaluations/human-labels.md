@@ -132,7 +132,7 @@ PYTHONPATH=src:. uv run python -m evals._shared.cli index
 ```bash
 PYTHONPATH=src:. uv run python scripts/eval/run_prefilter_human_feedback.py \
   --source-run runs/news-admission/aihot-observed-membership/v1/2026-09-20/01-19-03 \
-  --config evals/_shared/configs/baseline-ark.json \
+  --config evals/_shared/configs/baseline-gateway.json \
   --env-file /Users/lindong/research/ai-radar/.env \
   --prompt evals/news-admission/prompts/human-information-value-contextual.json \
   --reviews human-evals/news-admission/reviews.json \

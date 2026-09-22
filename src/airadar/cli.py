@@ -2779,7 +2779,11 @@ def build_parser() -> argparse.ArgumentParser:
     wechat_kb_import.add_argument("--limit", type=_positive_int)
     wechat_kb_import.add_argument(
         "--assistant-root",
-        default=os.environ.get("AI_ASSISTANT_ROOT", str(Path.home() / "research" / "ai-assistant")),
+        default=(
+            str(db.PROJECT_ROOT)
+            if os.environ.get("AI_RADAR_KB_ROOT")
+            else os.environ.get("AI_ASSISTANT_ROOT", str(Path.home() / "research" / "ai-assistant"))
+        ),
     )
     wechat_kb_import.add_argument("--user", default=os.environ.get("AI_RADAR_INTERPRET_USER", "dong_lin"))
     wechat_kb_import.add_argument("--db-path", default=str(db.DEFAULT_DB_PATH))

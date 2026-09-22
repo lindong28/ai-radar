@@ -23,7 +23,8 @@ def cases():
 
 def config():
     return {"models": {"score": "fixture-model"},
-            "transport_identity": {"provider": "ark", "base_url": "https://example.org/v1"}}
+            "transport_identity": {"provider": "llm-gateway", "base_url": "http://127.0.0.1:39011/v1",
+                                   "project": "ai-radar"}}
 
 
 PROMPT = {"system": "Emit reason first, then score.",
@@ -87,6 +88,12 @@ def dataset(tmp_path):
     return leaf
 
 
+def gateway_companion(request):
+    return {"projection_version": 1, "logical_request_id": request["extra_headers"]["X-LLM-Request-ID"],
+            "attempt_id": "fixture-gateway-attempt", "provider_id": "fixture-provider",
+            "actual_model": "fixture-model", "requested_logical_model": request["model"]}
+
+
 def durable_fixture(answer, captured):
     """Replace only the HTTP client; execute real request and attempt persistence."""
     def factory(attempts):
@@ -97,17 +104,21 @@ def durable_fixture(answer, captured):
                 if not isinstance(content, str):
                     content = json.dumps(content)
                 raw = {"model": "fixture-model", "choices": [{"message": {"content": content}}],
-                       "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+                       "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                       "llm_gateway": gateway_companion(kwargs)}
                 return SimpleNamespace(
                     model=raw["model"], usage=raw["usage"],
                     choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+                    model_extra={"llm_gateway": raw["llm_gateway"]},
                     model_dump=lambda **kw: raw,
                 )
             def client_factory(**kwargs):
                 assert kwargs["max_retries"] == 0
-                return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)), close=lambda: None)
-            return DurableChat(attempts, provider="ark", base_url="https://example.org/v1",
-                               api_key="fixture-key", case_id=key, client_factory=client_factory)
+                assert kwargs["default_headers"] == {"X-LLM-Project": "ai-radar"}
+                return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+                                       close=kwargs["http_client"].close)
+            return DurableChat(attempts, **config()["transport_identity"],
+                               case_id=key, client_factory=client_factory)
         return for_case
     return factory
 

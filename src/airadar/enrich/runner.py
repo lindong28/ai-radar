@@ -146,7 +146,7 @@ def _evaluate_item(
     attempts = 0
     last_output: dict[str, Any] = {}
     last_error: str | None = None
-    while attempts < 2:
+    while attempts < 1:
         attempts += 1
         try:
             result = provider.enrich(item)
@@ -156,12 +156,12 @@ def _evaluate_item(
             latency_ms = int((time.monotonic() - start) * 1000)
             return enriched, output, None, latency_ms
         except ValidationError as exc:
-            last_error = f"schema validation failed after retry: {exc}" if attempts == 2 else str(exc)
+            last_error = f"schema validation failed: {exc}"
         except (ValueError, TypeError) as exc:
             # Deterministic output rejection (normalizer / vocabulary), not a transport failure.
-            last_error = f"output rejected after retry: {exc}" if attempts == 2 else str(exc)
+            last_error = f"output rejected: {exc}"
         except Exception as exc:
-            last_error = f"enrich failed after retry: {exc}" if attempts == 2 else str(exc)
+            last_error = f"enrich failed: {exc}"
     latency_ms = int((time.monotonic() - start) * 1000)
     return None, {**last_output, "attempts": attempts}, last_error, latency_ms
 

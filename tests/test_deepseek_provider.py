@@ -16,6 +16,24 @@ from airadar.provider.deepseek_v4_pro import DeepSeekV4ProEnricher, DeepSeekV4Pr
 from airadar.provider.deepseek_v32 import DeepSeekV32Prefilter
 
 
+def _identity(kwargs, *, provider="deepseek", model="deepseek-v4-flash"):
+    return {"llm_gateway": {"projection_version": 1, "logical_request_id": kwargs["extra_headers"]["X-LLM-Request-ID"],
+                            "attempt_id": "fixture-attempt", "provider_id": provider, "actual_model": model,
+                            "requested_logical_model": kwargs["model"]}}
+
+
+class _FakeClient:
+    def close(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gateway_env(monkeypatch):
+    for key in ("AI_RADAR_FORCE_HEURISTIC", "AI_RADAR_DEEPSEEK_PREFILTER_MODEL", "AI_RADAR_DEEPSEEK_SCORER_MODEL",
+                "AI_RADAR_DEEPSEEK_ENRICH_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_prefilter_default_model_uses_current_deepseek_v4_flash() -> None:
     assert DeepSeekV32Prefilter.model_id == "deepseek-v4-flash"
 
@@ -36,15 +54,16 @@ def test_chat_json_disables_deepseek_v4_thinking_for_json_mode(monkeypatch) -> N
 
             class Completion:
                 choices = [Choice()]
+                model_extra = _identity(kwargs)
 
             return Completion()
 
-    class FakeOpenAI:
+    class FakeOpenAI(_FakeClient):
         def __init__(self, **kwargs):  # noqa: ANN001
             client_calls.append(kwargs)
             self.chat = type("Chat", (), {"completions": FakeCompletions()})()
 
-    monkeypatch.setattr(deepseek_chat, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(deepseek_chat, "gateway_client", FakeOpenAI)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("AI_RADAR_DEEPSEEK_THINKING", raising=False)
@@ -61,7 +80,8 @@ def test_chat_json_disables_deepseek_v4_thinking_for_json_mode(monkeypatch) -> N
 
     assert result.json == {"ok": True}
     assert result.model == "deepseek-v4-flash"
-    assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert calls[0]["extra_body"]["thinking"] == {"type": "disabled"}
+    assert calls[0]["extra_body"]["timeout"] == 90
     assert client_calls[0]["callsite_id"] == "provider.deepseek_chat.chat_json"
 
 
@@ -87,14 +107,15 @@ def test_chat_json_persists_completion_usage_for_attributed_call(monkeypatch, tm
                 model = "deepseek-v4-flash-response"
                 usage = Usage()
                 choices = [Choice()]
+                model_extra = _identity(kwargs, model=model)
 
             return Completion()
 
-    class FakeOpenAI:
+    class FakeOpenAI(_FakeClient):
         def __init__(self, **kwargs):  # noqa: ANN001
             self.chat = type("Chat", (), {"completions": FakeCompletions()})()
 
-    monkeypatch.setattr(deepseek_chat, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(deepseek_chat, "gateway_client", FakeOpenAI)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.delenv("ARK_API_KEY", raising=False)
 
@@ -127,6 +148,7 @@ def test_chat_json_persists_completion_usage_for_attributed_call(monkeypatch, tm
     assert row[:10] == ("prefilter", "deepseek", "deepseek-v4-flash-response", "item-1", 123, 45, 168, 1, 37, None)
     assert row[10] == 23
     assert json.loads(row[11])["cached_input_tokens"] == 23
+    assert json.loads(row[11])["llm_gateway"]["logical_request_id"] == result.sent_request_id
 
 
 def test_chat_json_preserves_paid_result_when_metering_write_fails(
@@ -147,7 +169,6 @@ def test_chat_json_preserves_paid_result_when_metering_write_fails(
         )
 
     calls: list[str] = []
-    breaker_failures: list[Exception] = []
 
     class Usage:
         prompt_tokens = 10
@@ -171,24 +192,19 @@ def test_chat_json_preserves_paid_result_when_metering_write_fails(
                 model = "paid-result-model"
                 usage = Usage()
                 choices = [Choice()]
+                model_extra = _identity(kwargs, provider="ark", model=model)
 
             return Completion()
 
-    class FakeOpenAI:
+    class FakeOpenAI(_FakeClient):
         def __init__(self, **kwargs):  # noqa: ANN001
             self.chat = type(
                 "Chat",
                 (),
-                {"completions": FakeCompletions(str(kwargs["base_url"]))},
+                {"completions": FakeCompletions("gateway")},
             )()
 
-    monkeypatch.setattr(deepseek_chat, "OpenAI", FakeOpenAI)
-    monkeypatch.setattr(deepseek_chat.ark_breaker, "is_open", lambda: False)
-    monkeypatch.setattr(
-        deepseek_chat.ark_breaker,
-        "record_failure",
-        breaker_failures.append,
-    )
+    monkeypatch.setattr(deepseek_chat, "gateway_client", FakeOpenAI)
     monkeypatch.setenv("AI_RADAR_DB", str(main_db))
     monkeypatch.setenv("AI_RADAR_LLM_USAGE_DB", str(usage_db))
     monkeypatch.setenv("ARK_API_KEY", "ark-test-key")
@@ -211,8 +227,7 @@ def test_chat_json_preserves_paid_result_when_metering_write_fails(
 
     assert result.json == {"ok": True}
     assert result.provider == "ark"
-    assert calls == ["https://ark.cn-beijing.volces.com/api/v3"]
-    assert breaker_failures == []
+    assert calls == ["gateway"]
     assert caplog.messages == [
         "llm_usage_metering_failure stage=prefilter provider=ark "
         "model=paid-result-model item_id=item-paid error=IntegrityError:injected metering failure"
@@ -236,8 +251,8 @@ def test_deepseek_providers_tag_usage_by_pipeline_stage(monkeypatch, tmp_path: P
     class FakeCompletions:
         def create(self, **kwargs):  # noqa: ANN001
             max_tokens = kwargs.get("max_tokens")
-            if max_tokens == 200:
-                payload = '{"is_ai_related": true, "confidence": 0.88}'
+            if max_tokens == 500:
+                payload = '{"reason": "AI benchmark", "is_ai_related": true, "confidence": 0.88}'
             elif max_tokens == 600:
                 payload = (
                     '{"relevance": 8, "density": 7, "recency": 6, '
@@ -259,14 +274,15 @@ def test_deepseek_providers_tag_usage_by_pipeline_stage(monkeypatch, tmp_path: P
                 model = kwargs["model"]
                 usage = Usage()
                 choices = [Choice()]
+                model_extra = _identity(kwargs, model=model)
 
             return Completion()
 
-    class FakeOpenAI:
+    class FakeOpenAI(_FakeClient):
         def __init__(self, **kwargs):  # noqa: ANN001
             self.chat = type("Chat", (), {"completions": FakeCompletions()})()
 
-    monkeypatch.setattr(deepseek_chat, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(deepseek_chat, "gateway_client", FakeOpenAI)
     item = ProviderItem(
         id="item-abc",
         title="LLM benchmark",

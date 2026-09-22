@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-22（LLM Gateway 调用通道）
+
+- 仓内 prefilter、score、enrich、备选 OpenAI scorer 和评测调用接入同机 llm-gateway；发送前生成请求 ID，保留 gateway/实际模型身份，不再用应用内供应商密钥、直接 fallback 或 SDK 自动重试。
+- 富化失败不再同轮重发，缺少凭据不再静默切规则模式；显式离线 heuristic 模式保留。新评测使用 gateway 配置，冻结历史实验不变。
+- 微信解读所需引擎、模板和 KB 工具迁入本仓，chat 与 1536 维 embedding 统一走 gateway；不再执行 ai-assistant checkout 中的代码。`AI_RADAR_KB_ROOT` 指定既有知识库，旧根路径保留数据兼容；缺 `criteria_reason` 不再同轮重发摘要。
+- 本机 gateway 已登记模型并加载配置；本地验证不等于生产已切换，执行主机状态与请求对账见 [Gateway 运维](docs/operations/llm-gateway.md)。
+
 ## 2026-09-22（分类F阶段贡献边界修复）
 
 - 完成F1/F2/F3三轮开发及F3/C5同期全361题检查，共1,322次Flash调用；开发正确数151→160→163，保留局部收益并记录新增退化。

@@ -83,7 +83,7 @@ def main():
     parser.add_argument("--authority", default="user-approved offline source ablation; ADR b82e")
     args = parser.parse_args()
     arm_deadline()
-    config = assets.read_json(assets.ROOT / "evals/_shared/configs/baseline-ark.json")
+    config = assets.read_json(assets.ROOT / "evals/_shared/configs/baseline-gateway.json")
     prompt = assets.read_json(args.prompt)
     baseline = assets.read_json(args.baseline_run / "started.json")
     original = assets.read_jsonl(args.baseline_run / "cases.jsonl")

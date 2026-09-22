@@ -220,8 +220,9 @@ def main() -> None:
     args = parser.parse_args()
 
     _load_runtime_env()
-    if not (os.environ.get("ARK_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")):
-        raise SystemExit("ARK_API_KEY or DEEPSEEK_API_KEY is required for real prefilter calls")
+    from airadar.provider.llm_gateway import gateway_base_url
+
+    gateway_base_url()  # Credentials and dispatch readiness belong to the gateway.
 
     main_db = db.resolve_db_path(args.db)
     usage_db = Path(args.usage_db) if args.usage_db else db.PROJECT_ROOT / "data" / "llm_usage.db"

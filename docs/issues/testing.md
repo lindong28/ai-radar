@@ -3,6 +3,14 @@
 > 测试套件自身的红项与基线债——与具体功能 domain 无关、但会污染每一次改动的验收读数。
 > 协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
 
+## [open] 2026-09-22：egress exact-registry 基线仍缺三项子进程调用
+
+- Type: test baseline debt · Priority: medium · Owner: 后续 egress 清单维护任务
+
+Gateway 迁移的独立审查和主线程分别运行 `tests/test_egress_callsite_registry.py::test_checked_in_network_callsites_match_classified_registry_exactly`，额外调用均为 `scripts/collection_supervisor.py` 的 `subprocess.Popen` / `subprocess.run` 与 `src/airadar/fetcher/raw_capture.py` 的 `subprocess.check_output`。这两份实现文件与基线 `11af554` 的 SHA256 一致；迁移未新增这些调用。该项属于基线独立、非边界 finding，本轮不扩修；组合测试显式排除此项，同时保留其单跑失败结果。后续维护须按实际用途补清单，不通过忽略调用让 exact 检查变绿。
+
+同次定向 lint 的 14 个既有诊断分布于 `evals/_shared/{category_eval,inference,prefilter_eval,score_context_run,score_context_study,score_context_validate,score_type_study}.py`、`tests/test_prefilter_eval.py`、`tests/test_score_editorial.py`。分别对当前文件与 `git show 11af554:<path>` 的内容运行 Ruff，逐文件 code/message 集合一致（I001、E702、E731）；本次未顺带格式化这些历史片段。后续 lint 维护归本账，不能将定向新代码通过称为仓库 lint 全绿。
+
 ## [open] 2026-09-13：全量套件有 9 条常红，与改动无关，会淹掉每次改动的验收信号
 
 - Type: test baseline debt · Priority: medium · Discovered: 2026-09-13 给 `docs/adr/20260913-e21a` 做基线归因时

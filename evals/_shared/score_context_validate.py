@@ -102,7 +102,7 @@ def main():
     saved = {r["case_id"]: r["prompt"] for r in assets.read_jsonl(a.baseline_regression / "prompts.jsonl")}
     if any(renderer.render(**prompt_context(c["input"])) != saved[c["case_id"]]["user"] for c in selected):
         raise ValueError("baseline rendering changed")
-    config = assets.read_json(assets.ROOT / "evals/_shared/configs/baseline-ark.json")
+    config = assets.read_json(assets.ROOT / "evals/_shared/configs/baseline-gateway.json")
     prompt = assets.read_json(assets.ROOT / "evals/visible-score/prompts/five-source-context-v1.json")
     check_identity(a.dataset, config, prompt, a.support, "A12-regression")
     with (a.support / "A12-regression.started").open("x") as f:

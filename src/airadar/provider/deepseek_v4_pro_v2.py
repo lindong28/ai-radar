@@ -8,18 +8,17 @@ from .base import ProviderItem, ScoringResult
 from .base_v2 import EnrichResultV2
 from .deepseek_chat import chat_json
 from .heuristics import heuristic_score
+from .llm_gateway import gateway_smoke_status
 
 
 class DeepSeekV4ProScorer:
     model_id = "deepseek-v4-pro"
 
     def smoke_test(self) -> str:
-        return "ok" if os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY") else "ok (offline fallback)"
+        return gateway_smoke_status(heuristic=True)
 
     def score_5d(self, item: ProviderItem) -> ScoringResult:
-        if not (os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY")) or os.environ.get(
-            "AI_RADAR_FORCE_HEURISTIC"
-        ):
+        if os.environ.get("AI_RADAR_FORCE_HEURISTIC"):
             return heuristic_score(item)
         prompt = render_scoring_prompt(item)
         input_char_count = len(prompt["system"]) + len(prompt["user"])
@@ -47,7 +46,8 @@ class DeepSeekV4ProScorer:
             significance=(None if payload.get("significance") is None else float(payload["significance"])),
             reasoning=str(payload.get("reasoning", "")),
             topics=tuple(str(tag) for tag in payload.get("topics", [])),
-            raw={"provider": result.provider, "model": result.model, "json": payload},
+            raw={"provider": result.provider, "model": result.model, "json": payload,
+                 "llm_gateway": result.gateway, "sent_request_id": result.sent_request_id},
         )
 
 
@@ -55,7 +55,7 @@ class DeepSeekV4ProEnricherV2:
     model_id = "deepseek-v4-pro"
 
     def smoke_test(self) -> str:
-        return "ok" if os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ARK_API_KEY") else "skipped (missing key)"
+        return gateway_smoke_status()
 
     def enrich(self, item: ProviderItem) -> EnrichResultV2:
         prompt = render_enrich_prompt(item)
@@ -83,5 +83,6 @@ class DeepSeekV4ProEnricherV2:
             tags=tuple(str(tag) for tag in payload.get("tags", [])),
             primary_category=str(payload["primary_category"]),
             is_opinion=bool(payload["is_opinion"]),
-            raw={"provider": result.provider, "model": result.model, "json": result.json},
+            raw={"provider": result.provider, "model": result.model, "json": result.json,
+                 "llm_gateway": result.gateway, "sent_request_id": result.sent_request_id},
         )

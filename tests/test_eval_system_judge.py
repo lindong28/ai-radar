@@ -85,6 +85,30 @@ def test_transport_failure_has_no_secret_exception_body():
     assert "secret-token" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("mutation", [None, "logical_model", "request_id", "missing"])
+def test_gateway_judge_checks_logical_identity_not_native_model_alias(mutation):
+    def gateway_transport(**kwargs):
+        response = transport(**kwargs)
+        response.update(provider="llm-gateway", model="provider-native-build-123", gateway_request_id="request-1")
+        response["llm_gateway"] = {
+            "projection_version": 1, "logical_request_id": "request-1", "attempt_id": "attempt-1",
+            "requested_logical_model": kwargs["request"]["model"],
+            "actual_model": "provider-native-build-123", "provider_id": "fixture-provider",
+        }
+        if mutation == "logical_model":
+            response["llm_gateway"]["requested_logical_model"] = "another-model"
+        elif mutation == "request_id":
+            response["llm_gateway"]["logical_request_id"] = "another-request"
+        elif mutation == "missing":
+            response.pop("llm_gateway")
+        return response
+
+    result = judge_text("case", "title", {}, "reference", "reference",
+                        chat=gateway_transport, provider="llm-gateway")
+    assert result["status"] == ("ok" if mutation is None else "error")
+    assert result["call"]["model"] == "provider-native-build-123"
+
+
 def test_prompt_injection_stays_in_data_and_model_is_explicit():
     seen = {}
 

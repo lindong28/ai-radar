@@ -18,6 +18,10 @@
 
 ### docs/ [Developer]
 
+[20260922-7d82](adr/20260922-7d82-route-llm-calls-through-gateway.md)：仓内 LLM 业务与评测统一接入 gateway，保留模型身份与历史实验；配置、验证及仓外边界见 [LLM Gateway 接入](operations/llm-gateway.md)。
+
+[解读引擎](references/interpretation-engine.md)：迁入的 summary/KB 引擎、用户数据根路径、gateway chat/embedding 和维护入口；旧 [ai-assistant 契约](references/ai-assistant-contract.md) 仅保留历史数据兼容说明。
+
 [20260922-c931](adr/20260922-c931-continue-category-research-from-best-candidate.md)：分类逐轮择优、边界与来源上下文消融；研究选择与因果收益分开，原件和复用入口由[分类状态](evaluations/content-enrichment/status.md)定位。
 
 [20260922-5f6a](adr/20260922-5f6a-test-category-contribution-and-review.md)：A4+主线的正文/引用投影与条件复核，固定开发与已见回归，不改gold或生产；运行方法归[分类执行入口](../evals/content-enrichment/aihot-category-navigation/README.md)。

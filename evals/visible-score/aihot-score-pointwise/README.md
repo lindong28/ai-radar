@@ -50,7 +50,7 @@ PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluat
 在项目根运行基线（`--env-file` 指向本机现有凭据文件，不复制进配置）：
 
 ```bash
-PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-ark.json --env-file .env --prompt evals/visible-score/prompts/baseline-reason-first.json --mode dimensions --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label B0-dev200
+PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-gateway.json --env-file .env --prompt evals/visible-score/prompts/baseline-reason-first.json --mode dimensions --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label B0-dev200
 ```
 
 - 首次新执行链先将 `--limit` 改为小样本并加 `--smoke`；该标志只声明用途，不自动减少题量。
@@ -99,7 +99,7 @@ PYTHONPATH=src:. uv run python -m evals._shared.score_type_study fit --run <同�
 `--mode five` 对应2026-09-21的离线研究：一次LLM调用先输出 `reason`，然后输出 `impact / novelty / substance / authority / relevance` 五个0–10整数，由[纯函数](../../../src/airadar/scorer/five.py)计算 `floor(sum(weight_percent * dimension) / 10 + 0.5)`。默认权重35/20/25/10/10；可在config的 `five_weights` 给出恰好这五个键、有限非负且合计100的百分比。错误权重在模型调用前拒绝；有效权重进入对象身份，变化后不能借 `--reuse` 复用旧对象。没有截距、后置校准、来源乘数或排名池。字段名称及精确权重是本项目的可检验假设，不是作者公开的五维定义；出处和研究边界见[52af](../../../docs/adr/20260921-52af-test-author-inspired-five-dimension-scores.md)。
 
 ```bash
-PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-ark.json --env-file .env --prompt evals/visible-score/prompts/five-news-value-v2.json --mode five --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label A2-five-dev200
+PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-gateway.json --env-file .env --prompt evals/visible-score/prompts/five-news-value-v2.json --mode five --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label A2-five-dev200
 ```
 
 `five-pro.json`配置只用于模型对照，不是生产默认。带示例的研究prompt包含其它开发题的原文/参考输出，保存在对应run的 `prompt.json`，不将样本复制进git或当前待测题输入；复现可直接以该文件作为 `--prompt`。扩题或选择新回归时必须同时排除示例及调参题的同源材料，不只排除run中的200个case IDs。示例集、选择规则和曝光核验随研究support保存。当前质量及全部实验位置见[status](../../../docs/evaluations/visible-score/status.md)，新增运行仍需使用冻结版本和明确题集用途。
@@ -142,7 +142,7 @@ PYTHONPATH=src:. uv run python -m evals._shared.score_review --source-run <A2冻
 判断标准、权重及与旧六维的区别见[设计](../../../docs/evaluations/visible-score/semantic-design.md)。一次调用按影响、信息增量、实质支撑分别输出 `{"reason": "…", "score": 0}`，每维分数为0–10整数；顶层先给总理由，再给三维对象。`--mode semantic` 用代码计算 `5*impact + 3*information_gain + 2*evidence`，不使用校准、来源系数或排名池。
 
 ```bash
-PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-ark.json --env-file .env --prompt evals/visible-score/prompts/semantic-news-value-v2.json --mode semantic --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label S2-semantic-dev200
+PYTHONPATH=src:. uv run python evals/visible-score/aihot-score-pointwise/evaluate.py run --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/visible-score/aihot-score-pointwise/v1 --config evals/_shared/configs/baseline-gateway.json --env-file .env --prompt evals/visible-score/prompts/semantic-news-value-v2.json --mode semantic --split dev --limit 200 --seed score-dev-20260920 --workers 8 --label S2-semantic-dev200
 ```
 
 同标尺的直接总分control使用 `semantic-direct-control-v1.json --mode direct`，仅对应初版S1的机制对照。扩题后替换dataset路径、冻结对应版本和抽样seed；候选冻结前不读回归结果。选新回归时用 `--exclude-run` 排除已用于诊断的历史题。题数不是写死在实现里的。所有新运行保留原始维度理由和分数于 `items/*.json` 的 `response_json`，预测总分在 `output.score`；失败不返回伪分数。

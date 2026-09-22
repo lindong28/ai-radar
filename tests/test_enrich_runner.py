@@ -7,6 +7,8 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from airadar.db import migrate
 from airadar.enrich.prompts import SYSTEM_PROMPT
 from airadar.enrich.runner import run_enrich
@@ -308,8 +310,30 @@ def test_evaluate_item_classifies_normalizer_rejection_as_output_rejected() -> N
     enriched, output, error, _latency = runner_v2._evaluate_item(RejectingProvider(), item)  # type: ignore[arg-type]
 
     assert enriched is None
-    assert error is not None and error.startswith("output rejected after retry: tags must contain")
-    assert output["attempts"] == 2
+    assert error is not None and error.startswith("output rejected: tags must contain")
+    assert output["attempts"] == 1
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("failure", [TimeoutError("uncertain dispatch"), RuntimeError("upstream 500"), ValueError("invalid output")])
+def test_enrich_does_not_repeat_a_failed_llm_invocation(version, failure) -> None:
+    from airadar.enrich import runner, runner_v2
+
+    class FailingProvider:
+        calls = 0
+
+        def enrich(self, item):
+            self.calls += 1
+            raise failure
+
+    provider = FailingProvider()
+    item = ProviderItem(id="i", title="t", url="https://example.com/t", source_id="example",
+                        tier="T1.5", author=None, published_at=_recent_iso(1), content_text="body")
+    module = runner if version == 1 else runner_v2
+    result, output, error, _latency = module._evaluate_item(provider, item)
+    assert result is None and error
+    assert provider.calls == 1
+    assert output["attempts"] == 1
 
 
 def test_candidate_rows_serve_new_items_before_recomputing_old_ones(tmp_path: Path) -> None:

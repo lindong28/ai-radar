@@ -10,19 +10,18 @@ from .assets import DEFAULT_DATA_ROOT, ROOT, read_json, rebuild_index, validate_
 
 
 def transport_factory(config: dict, env_file: Path | None):
-    from airadar.runtime_env import load_runtime_env, read_value
+    from airadar.runtime_env import load_runtime_env
 
     from .transport import DurableChat
 
     load_runtime_env(project_env=env_file)
     provider = config["transport_identity"]["provider"]
-    key = read_value("ARK_API_KEY" if provider == "ark" else "DEEPSEEK_API_KEY", project_env=env_file)
-    if not key:
-        raise ValueError("configured provider credential is missing; no fallback attempted")
+    if provider != "llm-gateway":
+        raise ValueError("new evaluations require llm-gateway transport; old frozen configs remain historical evidence")
 
     def factory(attempts):
         return lambda case_id: DurableChat(attempts, provider=provider, base_url=config["transport_identity"]["base_url"],
-                                           api_key=key, case_id=case_id)
+                                           project=config["transport_identity"]["project"], case_id=case_id)
     return factory
 
 
@@ -41,7 +40,7 @@ def main(argv: list[str] | None = None, *, entry_target: str | None = None) -> i
     build.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     run = sub.add_parser("run", help="执行新推理；先 --smoke 3，再完整池；已有成功阶段自动复用")
     run.add_argument("--dataset", type=Path, required=True)
-    run.add_argument("--config", type=Path, required=True, help="显式模型与固定供应商配置，不含凭据")
+    run.add_argument("--config", type=Path, required=True, help="显式逻辑模型与 llm-gateway 项目配置，不含凭据")
     run.add_argument("--env-file", type=Path)
     run.add_argument("--smoke", type=int)
     run.add_argument("--workers", type=int, default=8)

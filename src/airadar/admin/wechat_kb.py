@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import subprocess
@@ -18,11 +17,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from ..fetcher.dedup import content_hash
+from ..interpret.engine.paths import kb_root
 from ..interpret.runner import (
     _abstract_from_summary,
     _recommendation_from_summary,
     _safe_tags,
     _subprocess_env_source,
+    _summary_agent_scripts,
 )
 from ..wechat_archive import (
     ARCHIVE_SOURCE_ID,
@@ -102,12 +103,11 @@ def _is_wechat_article_url(value: str) -> bool:
 
 
 def load_catalog(assistant_root: Path, user: str) -> CatalogSnapshot:
-    run_script = assistant_root / "agents" / "summary-agent" / "run.sh"
-    if not run_script.is_file() or not os.access(run_script, os.X_OK):
-        raise FileNotFoundError(f"summary-agent run.sh is missing or not executable: {run_script}")
+    _, run_script = _summary_agent_scripts(assistant_root)
     env = _subprocess_env_source()
     env.pop("VIRTUAL_ENV", None)
     env["UV_OFFLINE"] = "1"
+    env["AI_RADAR_KB_ROOT"] = str(kb_root(assistant_root))
     completed = subprocess.run(
         [str(run_script), "--list-article-records", "--user", user],
         cwd=assistant_root,

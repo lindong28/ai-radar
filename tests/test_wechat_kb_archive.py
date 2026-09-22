@@ -58,7 +58,7 @@ def test_catalog_loader_uses_the_versioned_local_offline_command(
 
     assert len(snapshot.articles) == 1
     assert observed["command"] == [
-        str(run_script),
+        str(wechat_kb._summary_agent_scripts(assistant_root)[1]),
         "--list-article-records",
         "--user",
         "dong_lin",

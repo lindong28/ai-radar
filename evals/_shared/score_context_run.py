@@ -94,7 +94,7 @@ def main():
         raise ValueError("shared study capacity is 1..8")
     arm_deadline()
     a.support.mkdir(parents=True, exist_ok=True)
-    config = assets.read_json(assets.ROOT / "evals/_shared/configs/baseline-ark.json")
+    config = assets.read_json(assets.ROOT / "evals/_shared/configs/baseline-gateway.json")
     original = assets.read_json(assets.ROOT / "evals/visible-score/prompts/five-evidence-boundary-v3.json")
     factory = transport_factory(config, a.env_file)
     time_prompt = {**original, "system": original["system"] +

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_score_eval import config, dataset  # noqa: F401 — shared real-runner fixture
+from test_score_eval import config, dataset, gateway_companion  # noqa: F401 — shared real-runner fixture
 
 from evals._shared import assets, score_eval
 from evals._shared.score_dimensions import combine_calls, dimension_prompts
@@ -31,12 +31,15 @@ def factory(captured, failure=None):
                         payload = {name: 2, "reason": "late"}
                     content = json.dumps(payload)
                     raw = {"model": "fixture-model", "choices": [{"message": {"content": content}}],
-                           "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+                           "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                           "llm_gateway": gateway_companion(kwargs)}
                     return SimpleNamespace(model="fixture-model", usage=raw["usage"],
+                        model_extra={"llm_gateway": raw["llm_gateway"]},
                         choices=[SimpleNamespace(message=SimpleNamespace(content=content))], model_dump=lambda **kw: raw)
-                return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-            return DurableChat(attempts, provider="ark", base_url="https://example.org/v1",
-                               api_key="fixture-secret", case_id=key, client_factory=client_factory)
+                return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+                                       close=kwargs["http_client"].close)
+            return DurableChat(attempts, **config()["transport_identity"],
+                               case_id=key, client_factory=client_factory)
         return for_case
     return for_directory
 

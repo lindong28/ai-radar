@@ -76,7 +76,7 @@ def classify(run: Path, output: Path, env_file: Path, workers: int, source_root:
         raise ValueError("workers must be 1..8 for this shared offline study")
     output.mkdir(parents=True, exist_ok=False)
     source, metadata, cases, _, hashes = source_rows(run, root=source_root)
-    config = assets.read_json(assets.ROOT/"evals/_shared/configs/baseline-ark.json")
+    config = assets.read_json(assets.ROOT/"evals/_shared/configs/baseline-gateway.json")
     prompt = assets.read_json(source/"prompt.json")
     candidate = {"system": SYSTEM, "user_template": prompt["user_template"]}
     def identity():

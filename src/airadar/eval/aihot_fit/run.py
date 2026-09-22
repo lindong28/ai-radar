@@ -31,7 +31,7 @@ from .common import (
     load_questions_bytes,
     model_selection_env,
     redact,
-    require_ark_only,
+    require_gateway,
     sha256_file,
     utc_now,
     write_json,
@@ -215,14 +215,6 @@ def planned_behavior_identity(
     }
 
 
-def _cash_signal(output: dict[str, Any]) -> str | None:
-    raw = output.get("raw") if isinstance(output, dict) else None
-    provider = raw.get("provider") if isinstance(raw, dict) else None
-    if provider is not None and provider != "ark":
-        return f"provider={provider} is a pay-per-token path"
-    return None
-
-
 def _evaluate(stage: str, provider: Any, item: ProviderItem, tier: str) -> dict[str, Any]:
     record: dict[str, Any]
     if stage == "prefilter":
@@ -263,7 +255,7 @@ def _run_stages_impl(
         raise ValueError(f"unknown stages: {unknown}")
     if require_reference is not None and require_reference not in REFERENCE_FIELD:
         raise ValueError(f"unknown reference dimension: {require_reference}")
-    credentials = require_ark_only()
+    credentials = require_gateway()
     side_effects = isolate_side_effects()
     pool = list(questions_snapshot)
     pool_total = len(pool)
@@ -296,11 +288,8 @@ def _run_stages_impl(
                 record = _evaluate(stage, providers[stage], item, item.tier)
             except Exception as exc:  # provider raised outside the runner's own handling
                 record = {"output": None, "error": redact(f"{type(exc).__name__}: {exc}"), "latency_ms": None}
-            cash = _cash_signal(record.get("output") or {})
             reason = None
-            if cash:
-                reason = f"{stage}: cash signal: {cash}"
-            elif is_stop_signal(record.get("error")):
+            if is_stop_signal(record.get("error")):
                 reason = f"{stage}: {record['error']}"
             if reason:
                 with lock:

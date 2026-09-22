@@ -13,7 +13,7 @@ from pathlib import Path
 
 from airadar.provider.judgment import require_reason_first
 
-DEFAULT_MODEL = "deepseek-v4-flash-ga-260731"
+DEFAULT_MODEL = "deepseek-v4-flash"
 FIELDS = ("title", "summary", "reason")
 PROMPT = """Evaluate how closely the candidate field matches the visible reference,
 using the raw input to check factual support. Judge only the requested field.
@@ -85,8 +85,18 @@ def judge_text(
         return {**result, "error": f"transport failed: {type(exc).__name__}"}
     if not isinstance(response, dict):
         return {**result, "error": "transport response is not a mapping"}
-    result["call"] = {key: response.get(key) for key in ("model", "provider", "usage", "raw", "attempt_id")}
-    if response.get("model") != model or response.get("provider") != provider:
+    result["call"] = {key: response.get(key) for key in
+                      ("model", "provider", "usage", "raw", "attempt_id", "gateway_request_id", "llm_gateway")}
+    observed_model = response.get("model")
+    if provider == "llm-gateway":
+        from airadar.provider.llm_gateway import gateway_identity
+
+        try:
+            companion = gateway_identity(response, response.get("gateway_request_id"))
+        except Exception as exc:
+            return {**result, "error": f"judge gateway identity invalid: {type(exc).__name__}"}
+        observed_model = companion["requested_logical_model"]
+    if observed_model != model or response.get("provider") != provider:
         return {**result, "error": "judge model/provider identity mismatch"}
     payload = response.get("json")
     if (

@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_score_eval import config, dataset  # noqa: F401
+from test_score_eval import config, dataset, gateway_companion  # noqa: F401
 
 from evals._shared import assets, score_eval
 from evals._shared.score_editorial import adjusted_dimensions, diagnosis
@@ -29,12 +29,14 @@ def factory(captured, failure=None):
                         payload = {"news_value_type": "analysis", "reason": "late"}
                     content = json.dumps(payload)
                     raw = {"model": "fixture-model", "usage": {"total_tokens": 15},
-                           "choices": [{"message": {"content": content}}]}
+                           "choices": [{"message": {"content": content}}], "llm_gateway": gateway_companion(kwargs)}
                     return SimpleNamespace(model="fixture-model", usage=raw["usage"],
+                        model_extra={"llm_gateway": raw["llm_gateway"]},
                         choices=[SimpleNamespace(message=SimpleNamespace(content=content))], model_dump=lambda **kw: raw)
-                return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-            return DurableChat(attempts, provider="ark", base_url="https://example.org/v1",
-                api_key="fixture-secret", case_id=key, client_factory=client_factory)
+                return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+                                       close=kwargs["http_client"].close)
+            return DurableChat(attempts, **config()["transport_identity"],
+                               case_id=key, client_factory=client_factory)
         return case
     return directory
 

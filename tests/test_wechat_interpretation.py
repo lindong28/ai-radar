@@ -49,6 +49,9 @@ Agent, 工程化, 自动化
 
 @pytest.fixture(autouse=True)
 def _isolated_selector_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_RADAR_INTERPRET_USER", "default")
+    monkeypatch.delenv("AI_RADAR_KB_ROOT", raising=False)
+    monkeypatch.delenv("AI_RADAR_INTERPRET_TAGS_PATH", raising=False)
     monkeypatch.setattr(
         "airadar.interpret.runner.require_selector_policy",
         lambda: SelectorPolicy(
@@ -420,6 +423,14 @@ def _assistant_root(tmp_path: Path) -> Path:
     shared_dir = root / "shared"
     shared_dir.mkdir()
     (shared_dir / "project_env.py").write_text("def load_env(): return None\n", encoding="utf-8")
+    user_dir = root / "data/summary_agent/default"
+    (user_dir / "article_summaries").mkdir(parents=True)
+    (user_dir / "index.json").write_text("[]", encoding="utf-8")
+    (user_dir / "persona.md").write_text("test persona", encoding="utf-8")
+    (script_dir / "docs").mkdir()
+    (script_dir / "docs/tags.md").write_text("test tags", encoding="utf-8")
+    for name in ("building_effective_agents_output.md", "软件工程师头衔要没了ClaudeCode之父YC访谈_output.md"):
+        (user_dir / "article_summaries" / name).write_text("test reference", encoding="utf-8")
     return root
 
 
@@ -1488,7 +1499,7 @@ def test_interpret_runner_uses_ai_radar_model_and_records_llm_usage(
     assert "https://mp.weixin.qq.com/s/test" not in output
 
 
-def test_interpret_runner_retries_missing_criteria_reason_once_and_recovers(
+def test_interpret_runner_does_not_replay_paid_summary_on_missing_reason(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1545,15 +1556,15 @@ def test_interpret_runner_retries_missing_criteria_reason_once_and_recovers(
         row = conn.execute("SELECT * FROM wechat_interpretations WHERE item_id='item-1'").fetchone()
 
     output = capsys.readouterr().out
-    assert summary.processed == 1
-    assert summary.errors == 0
-    assert summarize_calls == 2
-    assert row["error"] is None
-    assert "interpret item=item-1 retrying summary once: missing criteria_reason (attempt 2/2)" in output
-    assert "interpret item=item-1 recovered after one immediate retry: missing criteria_reason" in output
+    assert summary.processed == 0
+    assert summary.errors == 1
+    assert summarize_calls == 1
+    assert "criteria_reason" in row["error"]
+    assert "retrying summary once" not in output
+    assert "recovered after one immediate retry" not in output
 
 
-def test_interpret_runner_stops_after_second_missing_criteria_reason_failure(
+def test_interpret_runner_stops_after_first_missing_criteria_reason_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1587,10 +1598,10 @@ def test_interpret_runner_stops_after_second_missing_criteria_reason_failure(
     output = capsys.readouterr().out
     assert summary.processed == 0
     assert summary.errors == 1
-    assert summarize_calls == 2
+    assert summarize_calls == 1
     assert "summary JSON missing non-empty criteria_reason" in row["error"]
-    assert output.count("retrying summary once: missing criteria_reason") == 1
-    assert "immediate retry exhausted: missing criteria_reason (attempt 2/2)" in output
+    assert "retrying summary once: missing criteria_reason" not in output
+    assert "immediate retry exhausted" not in output
     assert "recovered after one immediate retry" not in output
 
 
@@ -1643,9 +1654,9 @@ def test_interpret_runner_does_not_report_recovered_before_retry_result_is_valid
     output = capsys.readouterr().out
     assert summary.processed == 0
     assert summary.errors == 1
-    assert summarize_calls == 2
-    assert "summarize.sh JSON missing batch_dir" in row["error"]
-    assert "retrying summary once: missing criteria_reason" in output
+    assert summarize_calls == 1
+    assert "criteria_reason" in row["error"]
+    assert "retrying summary once: missing criteria_reason" not in output
     assert "recovered after one immediate retry" not in output
 
 
@@ -2000,7 +2011,7 @@ def test_interpret_runner_retries_concurrent_duplicate_kb_slug_with_unique_slug(
     (batch_dir / "existing-slug_meta.json").write_text("{}", encoding="utf-8")
     kb_summary_rel = Path("data/summary_agent/default/article_summaries/existing-slug_output.md")
     kb_summary = assistant_root / kb_summary_rel
-    kb_summary.parent.mkdir(parents=True)
+    kb_summary.parent.mkdir(parents=True, exist_ok=True)
     kb_summary.write_text(SUMMARY_MD, encoding="utf-8")
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -2287,7 +2298,7 @@ def test_interpret_runner_enabled_without_assistant_root_skips(
 
     assert summary.skipped is True
     assert summary.processed == 0
-    assert summary.message == "interpret enabled but AI_ASSISTANT_ROOT is not set"
+    assert "AI_RADAR_KB_ROOT is not set" in summary.message
 
 
 def test_interpret_runner_enabled_with_valid_root_uses_preflight(
@@ -2300,7 +2311,7 @@ def test_interpret_runner_enabled_with_valid_root_uses_preflight(
     assistant_root = _assistant_root(tmp_path)
     seen_root: list[Path] = []
 
-    def fake_preflight(root: Path) -> tuple[bool, str]:
+    def fake_preflight(root: Path, *, user: str | None = None) -> tuple[bool, str]:
         seen_root.append(root)
         return False, "sentinel preflight skip"
 
@@ -2354,10 +2365,13 @@ def test_preflight_keeps_egress_failure_loud_instead_of_skipping(
 
 
 @pytest.mark.parametrize("script", ("summarize.sh", "run.sh"))
-def test_preflight_rejects_missing_summary_agent_script(tmp_path: Path, script: str) -> None:
+def test_preflight_rejects_missing_summary_agent_script(tmp_path: Path, script: str, monkeypatch) -> None:
     from airadar.interpret.runner import _preflight
 
     assistant_root = _assistant_root(tmp_path)
+    monkeypatch.setattr("airadar.interpret.runner._summary_agent_scripts", lambda _root: (
+        assistant_root / "agents/summary-agent/summarize.sh", assistant_root / "agents/summary-agent/run.sh"
+    ))
     (assistant_root / "agents" / "summary-agent" / script).unlink()
 
     ready, message = _preflight(assistant_root)
@@ -2367,10 +2381,13 @@ def test_preflight_rejects_missing_summary_agent_script(tmp_path: Path, script: 
 
 
 @pytest.mark.parametrize("script", ("summarize.sh", "run.sh"))
-def test_preflight_rejects_non_executable_summary_agent_script(tmp_path: Path, script: str) -> None:
+def test_preflight_rejects_non_executable_summary_agent_script(tmp_path: Path, script: str, monkeypatch) -> None:
     from airadar.interpret.runner import _preflight
 
     assistant_root = _assistant_root(tmp_path)
+    monkeypatch.setattr("airadar.interpret.runner._summary_agent_scripts", lambda _root: (
+        assistant_root / "agents/summary-agent/summarize.sh", assistant_root / "agents/summary-agent/run.sh"
+    ))
     (assistant_root / "agents" / "summary-agent" / script).chmod(0o644)
 
     ready, message = _preflight(assistant_root)

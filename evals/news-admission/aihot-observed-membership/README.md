@@ -38,6 +38,6 @@ AI_RADAR_DB="/tmp/prefilter-adoption-tests.db" PREFILTER_ADOPTION_SOURCE_RUN="<�
 
 `--prompt evals/news-admission/prompts/professional-sharing.json` 是C9，`professional-sharing-business-focus.json` 是C10；均与 `--quote-context` 配合，仅供离线实验，不改变生产默认。C9允许依据专业上下文理解短分享，C10再检验一般投资商业报道的AI主次关系，依据和边界见[决策](../../../docs/adr/20260920-91bd-test-prefilter-professional-sharing.md)。
 
-沿用本入口的 `run --dataset ... --config evals/_shared/configs/baseline-ark.json --env-file ... --split dev --limit ... --seed ... --label ... --prompt ... --quote-context`。新验收须用重复的 `--exclude-run <历史run>` 排除全部已见身份（含开发、诊断、先前验收以及另存的规则校验 `cases.jsonl`）；原split与实际实验角色分别记录。失败恢复添加 `--reuse <本次同身份run>`，只补失败，不抹掉原attempt；确定性规则用 `PYTHONPATH=src:. uv run python -m evals._shared.admission_policy --source-run <完整模型run> --label ...`，零新增调用。
+沿用本入口的 `run --dataset ... --config evals/_shared/configs/baseline-gateway.json --env-file ... --split dev --limit ... --seed ... --label ... --prompt ... --quote-context`。新验收须用重复的 `--exclude-run <历史run>` 排除全部已见身份（含开发、诊断、先前验收以及另存的规则校验 `cases.jsonl`）；原split与实际实验角色分别记录。失败恢复添加 `--reuse <本次同身份run>`，只补失败，不抹掉原attempt；确定性规则用 `PYTHONPATH=src:. uv run python -m evals._shared.admission_policy --source-run <完整模型run> --label ...`，零新增调用。
 
 归档按UTC秒命名；同对象同版本的并行启动若碰撞会在调用前拒绝，不能覆盖旧目录。模型运行和零调用投影都占该分区；确认首路已输出独立运行目录、且UTC秒已变更后再启动下一路，之后模型调用可并发。实际质量与预算以[对象状态](../../../docs/evaluations/news-admission/status.md)为准，不从候选名称推断已达标。

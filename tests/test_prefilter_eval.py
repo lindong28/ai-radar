@@ -1,10 +1,10 @@
 """Independent O1 consumer tests, including production-call parity and failure controls."""
 import copy
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
+from airadar.provider.deepseek_chat import ChatJsonResult
 from evals._shared import assets, prefilter_eval
 from evals._shared.inference import _item, predict_one
 
@@ -150,7 +150,7 @@ def test_production_prompt_request_and_conversion_parity(monkeypatch, answer):
     payload = {"reason": "fixture evidence", "is_ai_related": answer, "confidence": 0.7}
     def production_call(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(json=payload, model="deepseek-v4-flash", provider="ark")
+        return ChatJsonResult(json=payload, model="deepseek-v4-flash", provider="ark")
     monkeypatch.setattr(deepseek_v32, "chat_json", production_call)
     raw = {**cases()[0]["input"], "reference": "SECRET_REFERENCE_MUST_NOT_BE_RENDERED"}
     expected = deepseek_v32.DeepSeekV32Prefilter().is_ai_related(_item(raw))

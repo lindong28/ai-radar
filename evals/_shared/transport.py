@@ -1,23 +1,29 @@
-"""One explicit endpoint, one SDK attempt, durable run-local accounting.
+"""One gateway request, durable run-local evidence, no consumer retries.
 
-The caller loads credentials/environment and supplies the attempt directory.
-No production DB, shared usage ledger, retry or endpoint fallback is used.
+Gateway owns provider credentials, routing and authoritative attempt accounting.
+Local records retain prompts/responses and correlate via the logical request ID.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import uuid4
 
-from airadar.egress import selector_openai_client
 from airadar.provider.deepseek_chat import _parse_json_object
+from airadar.provider.llm_gateway import (
+    gateway_base_url,
+    gateway_client,
+    gateway_error,
+    gateway_headers,
+    gateway_identity,
+)
 
 CALLSITE_ID = "provider.deepseek_chat.chat_json"
 
@@ -66,8 +72,7 @@ class TransportError(RuntimeError):
 class DurableChat:
     """Inject as inference config['chat']; construct per case for explicit linkage.
 
-    ``provider`` controls only request syntax, not model or endpoint selection.
-    Credentials are constructor-only, omitted from repr and every saved record.
+    ``provider`` must identify the gateway, never an upstream provider.
     ``thinking`` is explicit because environment loading belongs to the caller.
     """
 
@@ -77,43 +82,29 @@ class DurableChat:
         *,
         provider: str,
         base_url: str,
-        api_key: str,
+        project: str = "ai-radar",
         timeout: float = 90,
         thinking: str = "disabled",
         case_id: str | None = None,
         client_factory: Callable[..., Any] | None = None,
     ) -> None:
-        if provider not in {"deepseek", "ark"}:
-            raise ValueError("provider must be explicitly deepseek or ark")
-        endpoint = urlsplit(base_url)
-        if endpoint.scheme not in {"http", "https"} or not endpoint.hostname:
-            raise ValueError("base_url must be an explicit HTTP(S) endpoint")
-        if endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
-            raise ValueError("base_url must not contain credentials, query, or fragment")
-        if not api_key:
-            raise ValueError("api_key is required")
-        if timeout <= 0:
-            raise ValueError("timeout must be positive")
+        if provider != "llm-gateway":
+            raise ValueError("new evaluations require provider=llm-gateway; migrate the config, not frozen runs")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be positive and finite")
+        if not project:
+            raise ValueError("gateway project is required")
         self.attempts_dir = Path(attempts_dir)
         self.provider = provider
-        self.base_url = base_url
+        self.base_url = gateway_base_url(base_url)
+        self.project = project
         self.timeout = timeout
         self.thinking = thinking
         self.case_id = case_id
-        self._api_key = api_key
-        self._client_factory = client_factory or selector_openai_client
-
-    def _redact(self, value: Any) -> Any:
-        if isinstance(value, str):
-            return value.replace(self._api_key, "[REDACTED]")
-        if isinstance(value, dict):
-            return {self._redact(str(key)): self._redact(item) for key, item in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [self._redact(item) for item in value]
-        return value
+        self._client_factory = client_factory
 
     def _save(self, path: Path, record: dict[str, Any], *, first: bool = False) -> None:
-        _persist(path, self._redact(record), first=first)
+        _persist(path, record, first=first)
 
     def __call__(self, *, stage: str, prompt: dict[str, str], request: dict[str, Any]) -> dict[str, Any]:
         model = request["model"]
@@ -124,18 +115,17 @@ class DurableChat:
         if unknown:
             raise ValueError("unsupported request fields")
         messages = [{"role": role, "content": prompt[key]} for role, key in (("system", "system"), ("user", "user"))]
-        api_request: dict[str, Any] = {**request, "messages": messages}
-        if self.provider == "ark":
-            api_request["extra_body"] = {"thinking": {"type": self.thinking}}
-        else:
-            api_request["response_format"] = {"type": "json_object"}
-            if model.startswith("deepseek-v4") or model in {"deepseek-chat", "deepseek-reasoner"}:
-                api_request["extra_body"] = {"thinking": {"type": self.thinking}}
+        api_request: dict[str, Any] = {**request, "messages": messages, "extra_body": {"timeout": self.timeout}}
+        # These controls belong to the requested model, not the chosen provider.
+        # ARK's native endpoint rejects json_object; prompts already request JSON.
+        if model.startswith("deepseek"):
+            api_request["extra_body"]["thinking"] = {"type": self.thinking}
         attempt_id = uuid4().hex
         self.attempts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = self.attempts_dir / f"{attempt_id}.json"
         record: dict[str, Any] = {
             "attempt_id": attempt_id, "case_id": self.case_id, "stage": stage,
+            "gateway_request_id": attempt_id, "gateway_project": self.project, "llm_gateway": None,
             "provider": self.provider, "base_url": self.base_url, "callsite_id": CALLSITE_ID,
             "requested_model": model, "actual_model": None,
             "request_parameters": {key: value for key, value in api_request.items() if key != "messages"},
@@ -147,29 +137,35 @@ class DurableChat:
         self._save(path, record, first=True)
         client = None
         try:
-            client = self._client_factory(
-                callsite_id=CALLSITE_ID, api_key=self._api_key, base_url=self.base_url,
-                timeout=self.timeout, max_retries=0,
+            client = gateway_client(
+                callsite_id=CALLSITE_ID, base_url=self.base_url, project=self.project,
+                timeout=self.timeout, client_factory=self._client_factory,
             )
-            completion = client.chat.completions.create(**api_request)
+            completion = client.chat.completions.create(**api_request, extra_headers=gateway_headers(attempt_id))
             # Capture usage before content/schema access; an empty choices list is still paid.
             record["usage"] = _json_value(getattr(completion, "usage", None))
             record["actual_model"] = getattr(completion, "model", None)
             record["raw"] = _json_value(completion)
             record.update(status="response_received", response_received_at=_now())
             self._save(path, record)
+            record["llm_gateway"] = gateway_identity(completion, attempt_id)
+            self._save(path, record)
+            if record["llm_gateway"]["requested_logical_model"] != model:
+                raise ValueError("gateway requested logical model differs from sent model")
             content = completion.choices[0].message.content
             if not isinstance(content, str):
                 raise ValueError("completion has no text content")
             parsed = _parse_json_object(content)
             record.update(status="ok", completed_at=_now())
             self._save(path, record)
-            return self._redact({
+            return {
                 "json": parsed, "model": record["actual_model"], "requested_model": model,
                 "provider": self.provider, "usage": record["usage"], "raw": record["raw"],
                 "attempt_id": attempt_id,
-            })
+                "gateway_request_id": attempt_id, "llm_gateway": record["llm_gateway"],
+            }
         except Exception as exc:
+            gateway_failure = gateway_error(exc, attempt_id)
             if record["raw"] is None:
                 # SDK errors can carry usage even though no ChatCompletion was returned.
                 body = getattr(exc, "body", None)
@@ -183,7 +179,12 @@ class DurableChat:
                 if isinstance(body, dict):
                     record["usage"] = body.get("usage", record["usage"])
                     record["actual_model"] = body.get("model", record["actual_model"])
+                    record["llm_gateway"] = body.get("llm_gateway")
             record.update(status="error", completed_at=_now(), error_type=type(exc).__name__)
+            record["error_code"] = gateway_failure.code
+            record["error_action"] = gateway_failure.action
+            if gateway_failure.identity:
+                record["llm_gateway"] = gateway_failure.identity
             if isinstance(getattr(exc, "status_code", None), int):
                 record["http_status"] = exc.status_code
             self._save(path, record)

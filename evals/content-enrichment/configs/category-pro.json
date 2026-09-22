@@ -1,4 +1,4 @@
 {
   "models": {"category": "deepseek-v4-pro"},
-  "transport_identity": {"provider": "ark", "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3"}
+  "transport_identity": {"provider": "llm-gateway", "project": "ai-radar", "base_url": "http://127.0.0.1:39011/v1"}
 }

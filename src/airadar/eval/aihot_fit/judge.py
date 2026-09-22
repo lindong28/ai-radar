@@ -1,19 +1,18 @@
-"""LLM judge (DeepSeek via ARK) for title / summary / reason closeness to AIHOT."""
+"""LLM judge via Gateway for title / summary / reason closeness to AIHOT."""
 
 from __future__ import annotations
 
 import hashlib
 import inspect
 import json
-import os
 import statistics
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
-from ...provider.deepseek_chat import _ark_base_url, chat_json
+from ...provider.deepseek_chat import chat_json
+from ...provider.llm_gateway import gateway_base_url
 from . import judge_prompts
 from .common import (
     DEFAULT_WORKERS,
@@ -26,7 +25,7 @@ from .common import (
     read_jsonl,
     read_jsonl_bytes,
     redact,
-    require_ark_only,
+    require_gateway,
     sha256_file,
     sha256_text,
     utc_now,
@@ -42,7 +41,7 @@ from .governance import (
     start_attempt,
 )
 
-DEFAULT_JUDGE_MODEL = "deepseek-v4-flash-ga-260731"
+DEFAULT_JUDGE_MODEL = "deepseek-v4-flash"
 JUDGE_TEMPERATURE = 0.0
 JUDGE_MAX_TOKENS = 512
 DIMENSIONS: tuple[str, ...] = ("title", "summary", "reason")
@@ -50,7 +49,6 @@ DEFAULT_DIMENSIONS: tuple[str, ...] = ("summary", "reason")
 CALIBRATED_DIMENSIONS: tuple[str, ...] = ("summary", "reason")
 POSITIVE_MIN_MEAN = 80.0
 NEGATIVE_MAX_MEAN = 40.0
-_JUDGE_MODEL_ENV = "AI_RADAR_FIT_JUDGE_MODEL"
 _JUDGE_ARK_MODEL_ENV = "AI_RADAR_ARK_FIT_JUDGE_MODEL"
 
 
@@ -66,7 +64,7 @@ def judge_identity(model: str, dimensions: tuple[str, ...] = DEFAULT_DIMENSIONS)
         "temperature": JUDGE_TEMPERATURE,
         "max_tokens": JUDGE_MAX_TOKENS,
         "prompt_sha256": {dimension: judge_prompts.prompt_sha256(dimension) for dimension in dimensions},
-        "ark_host": urlsplit(_ark_base_url()).hostname,
+        "gateway_base_url": gateway_base_url(),
         "provider_module_sha256": sha256_file(Path(provider_file)) if provider_file else None,
         "usage_recorded": False,
     }
@@ -90,15 +88,13 @@ def judge_once(
         system=judge_prompts.system_prompt(dimension),
         user=user,
         default_model=model,
-        model_env=_JUDGE_MODEL_ENV,
+        model_env=None,  # Explicit run identity wins without mutating process-wide environment.
         ark_model_env=_JUDGE_ARK_MODEL_ENV,
         temperature=JUDGE_TEMPERATURE,
         max_tokens=JUDGE_MAX_TOKENS,
         stage=None,
     )
     payload = result.json
-    if result.provider != "ark":
-        raise RuntimeError(f"cash signal: provider={result.provider}")
     raw_closeness = payload.get("closeness")
     try:
         closeness = int(round(float(raw_closeness)))
@@ -108,7 +104,8 @@ def judge_once(
     return {
         "closeness": closeness,
         "rationale": str(payload.get("rationale", "")),
-        "raw": {"provider": result.provider, "model": result.model, "json": payload},
+        "raw": {"provider": result.provider, "model": result.model, "json": payload,
+                "llm_gateway": result.gateway},
     }
 
 
@@ -257,10 +254,8 @@ def _run_judge_impl(
     rows_snapshot: list[dict[str, Any]],
     run_meta_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    credentials = require_ark_only()
+    credentials = require_gateway()
     side_effects = isolate_side_effects()
-    # Pin the ARK model for this process so a global AI_RADAR_ARK_DEEPSEEK_MODEL cannot swap the judge.
-    os.environ[_JUDGE_ARK_MODEL_ENV] = model
     questions = dict(questions_snapshot)
     rows = sorted(rows_snapshot, key=lambda row: str(row["question_id"]))
     if limit is not None:

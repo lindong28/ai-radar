@@ -4,10 +4,11 @@
     "score": "deepseek-v4-flash",
     "enrich": "deepseek-v4-pro"
   },
-  "judge_model": "deepseek-v4-flash-ga-260731",
+  "judge_model": "deepseek-v4-flash",
   "transport_identity": {
-    "provider": "ark",
-    "base_url": "https://ark.cn-beijing.volces.com/api/plan/v3"
+    "provider": "llm-gateway",
+    "project": "ai-radar",
+    "base_url": "http://127.0.0.1:39011/v1"
   },
   "selection": {}
 }

@@ -57,7 +57,8 @@ def object_identity(config: dict, prompt: dict | None) -> dict:
 
     paths = ["src/airadar/prefilter/policy.py", "src/airadar/provider/judgment.py", "src/airadar/prefilter/prompts.py", "src/airadar/provider/deepseek_v32.py",
              "src/airadar/prefilter/runner.py", "evals/_shared/inference.py",
-             "evals/_shared/prefilter_eval.py", "evals/_shared/transport.py"]
+             "evals/_shared/prefilter_eval.py", "evals/_shared/transport.py",
+             "src/airadar/provider/llm_gateway.py"]
     return {"baseline": "isolated-current-source-prefilter", "surface": "prefilter-boolean-only",
             "admission_policy": POLICY if config.get("prefilter_policy", prompt is None) else None,
             "request": _request("prefilter", config), "transport": config["transport_identity"],

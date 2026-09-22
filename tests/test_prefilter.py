@@ -94,8 +94,8 @@ def test_run_prefilter_writes_numeric_evaluations(tmp_path: Path) -> None:
 
 
 def test_invalid_llm_reason_is_archived_without_aborting_batch(tmp_path, monkeypatch):
-    from types import SimpleNamespace
     from airadar.provider import deepseek_v32
+    from airadar.provider.deepseek_chat import ChatJsonResult
 
     monkeypatch.setenv("ARK_API_KEY", "fixture")
     monkeypatch.delenv("AI_RADAR_FORCE_HEURISTIC", raising=False)
@@ -105,7 +105,7 @@ def test_invalid_llm_reason_is_archived_without_aborting_batch(tmp_path, monkeyp
         {"reason": "concrete new model capability", "is_ai_related": True, "confidence": .9},
     ]
     responses = iter(payloads)
-    monkeypatch.setattr(deepseek_v32, "chat_json", lambda **kw: SimpleNamespace(
+    monkeypatch.setattr(deepseek_v32, "chat_json", lambda **kw: ChatJsonResult(
         json=next(responses), provider="ark", model="fixture"))
     conn = _db(tmp_path)
     for i in range(3):

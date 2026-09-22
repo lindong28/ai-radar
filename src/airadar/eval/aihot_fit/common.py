@@ -36,7 +36,6 @@ DEFAULT_RUNS_DIR = db.PROJECT_ROOT / "data" / "eval-fit" / "runs"
 # `isolate_side_effects()` still redirected the ledger. Nothing writes it now -- kept so the
 # file on disk has a name in the code rather than looking orphaned.
 EVAL_USAGE_DB = DEFAULT_RUNS_DIR.parent / "llm-usage-eval.db"
-EVAL_BREAKER_STATE = DEFAULT_RUNS_DIR.parent / "ark-breaker-eval.json"
 
 # Runs are reproducible from the evalset plus prompt version, and each run's key readings
 # and sha256 are recorded in ADR-499e, so pruning drops reproducible bulk rather than
@@ -85,31 +84,8 @@ def prune_old_runs(runs_dir: Path | None = None, *, retain_days: int | None = No
 
 
 def isolate_side_effects() -> dict[str, str]:
-    """Point the ARK breaker at an eval-local file. Leave the usage ledger alone.
-
-    The two used to be redirected together, on the reasoning that an eval run writes
-    `llm_usage` rows under production stage names -- 970 of them for three small runs, 23.9%
-    of that day's table and indistinguishable from real traffic in cost reports.
-
-    **The user ruled against that on 2026-09-11**: "不用区分评测和生产，我只关心来自这个项目的
-    总体 LLM usage." Eval calls are spend by this project, so they belong in the project's
-    ledger; redirecting them made the total under-count. So the ledger is no longer redirected,
-    and the indistinguishability above is accepted rather than fixed.
-
-    The breaker is a different kind of thing and stays redirected: it is not a ledger but a
-    *state* that production reads on every call. One 429 from an eval run trips it and pushes
-    production onto the pay-per-token endpoint for 7200 seconds.
-
-    **Redirecting the state file narrows that hole, it does not close it.** The eval run and
-    production share the ARK endpoint, so an eval-induced 429 can still be served to a
-    production call, which then trips production's own breaker. What limits that is the eval
-    run's concurrency, not this redirect.
-
-    Returns the paths in effect, for the run identity record.
-    """
-    os.environ["AI_RADAR_ARK_BREAKER_STATE"] = str(EVAL_BREAKER_STATE)
-    EVAL_BREAKER_STATE.parent.mkdir(parents=True, exist_ok=True)
-    return {"ark_breaker_state": str(EVAL_BREAKER_STATE)}
+    """Retain project-wide metering; Gateway now owns provider circuit state."""
+    return {}
 
 
 # Single owner of the AIHOT category slug -> PrimaryCategory mapping used by the
@@ -241,22 +217,19 @@ def is_stop_signal(error: str | None) -> bool:
     return bool(error) and bool(_STOP_PATTERN.search(error or ""))
 
 
-def require_ark_only() -> dict[str, Any]:
-    """Make chat_json ARK-only for this process and report the credential surface.
+def require_gateway() -> dict[str, Any]:
+    """Record the consumer boundary without reading provider credentials.
 
-    The production provider falls back to the pay-per-token DeepSeek endpoint when
-    ``DEEPSEEK_API_KEY`` is set; an evaluation run must never take that path, so the
-    fallback key is removed from this process's environment before any call.
+    This validates configuration, not live gateway/model readiness. Exact
+    provider and native model identity comes from each response companion.
     """
-    had_deepseek = "DEEPSEEK_API_KEY" in os.environ
-    os.environ.pop("DEEPSEEK_API_KEY", None)
-    ark_key = os.environ.get("ARK_API_KEY")
-    if not ark_key:
-        raise RuntimeError("ARK_API_KEY is not set; aihot-fit only calls the ARK subscription endpoint")
+    from airadar.provider.llm_gateway import gateway_base_url
+
     return {
-        "ark_only": True,
-        "ark_api_key_present": True,
-        "deepseek_fallback_removed": had_deepseek,
+        "transport": "llm-gateway",
+        "base_url": gateway_base_url(),
+        "project": os.environ.get("AI_RADAR_LLM_GATEWAY_PROJECT", "ai-radar"),
+        "consumer_retries": 0,
     }
 
 
@@ -267,7 +240,7 @@ def model_selection_env() -> dict[str, str]:
         "AI_RADAR_SCORER",
         "AI_RADAR_ENRICHER",
         "AI_RADAR_ENRICH_V2",
-        "AI_RADAR_ARK_THINKING",
+        "AI_RADAR_DEEPSEEK_THINKING",
     }
     selected: dict[str, str] = {}
     for key, value in sorted(os.environ.items()):

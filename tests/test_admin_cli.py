@@ -12,6 +12,17 @@ from airadar.admin.cost_audit import CostAuditReport
 from airadar.db import migrate
 
 
+@pytest.mark.parametrize("kb_root", [None, "/configured/summary_agent"])
+def test_wechat_kb_parser_prefers_explicit_data_root(monkeypatch: pytest.MonkeyPatch, kb_root: str | None) -> None:
+    monkeypatch.setenv("AI_ASSISTANT_ROOT", "/legacy/assistant")
+    if kb_root is None:
+        monkeypatch.delenv("AI_RADAR_KB_ROOT", raising=False)
+    else:
+        monkeypatch.setenv("AI_RADAR_KB_ROOT", kb_root)
+    args = cli.build_parser().parse_args(["admin", "wechat-kb", "import", "--dry-run"])
+    assert args.assistant_root == (str(cli.db.PROJECT_ROOT) if kb_root else "/legacy/assistant")
+
+
 def test_admin_alert_check_command_prints_ruleset_and_results(monkeypatch, capsys, tmp_path: Path) -> None:  # noqa: ANN001
     signals = AlertSignals(
         upstream_sample_size=1,

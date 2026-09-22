@@ -16,12 +16,17 @@ def test_judge_and_durable_transport_share_real_request_contract(tmp_path):
         result = SimpleNamespace(model=judge.DEFAULT_MODEL, usage=None,
                                  choices=[SimpleNamespace(message=SimpleNamespace(content='{"reason":"compared", "score":1}'))])
         result.model_dump = lambda **_: {"model": result.model, "choices": [{"message": {"content": result.choices[0].message.content}}]}
+        result.model_extra = {"llm_gateway": {
+            "projection_version": 1, "logical_request_id": kwargs["extra_headers"]["X-LLM-Request-ID"],
+            "attempt_id": "gateway-attempt", "requested_logical_model": kwargs["model"],
+            "actual_model": result.model, "provider_id": "fixture-provider",
+        }}
         return result
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)), close=lambda: None)
-    chat = DurableChat(tmp_path, provider="ark", base_url="https://example.invalid/v3", api_key="fixture-secret",
+    chat = DurableChat(tmp_path, provider="llm-gateway", base_url="http://127.0.0.1:39011/v1",
                        client_factory=lambda **_: client)
-    result = judge.judge_text("id", "title", {"title": "original"}, "reference", "candidate", chat=chat, provider="ark")
+    result = judge.judge_text("id", "title", {"title": "original"}, "reference", "candidate", chat=chat, provider="llm-gateway")
     assert result["status"] == "ok" and result["score"] == 1
     assert len(requests) == 1
     record = assets.read_json(next(tmp_path.glob("*.json")))

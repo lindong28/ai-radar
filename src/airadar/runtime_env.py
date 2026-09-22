@@ -27,10 +27,6 @@ RUNTIME_ENV_PREFIXES = ("AI_RADAR_",)
 RUNTIME_ENV_KEYS = frozenset(
     {
         "AI_ASSISTANT_ROOT",
-        "ARK_API_KEY",
-        "ARK_BASE_URL",
-        "DEEPSEEK_API_KEY",
-        "DEEPSEEK_BASE_URL",
         "DEBUG_QUOTA",
         "EDGEONE_SECRET_ID",
         "EDGEONE_SECRET_KEY",
@@ -39,7 +35,7 @@ RUNTIME_ENV_KEYS = frozenset(
         "FEISHU_GENERAL_NOTIFICATION_WEBHOOK",
         "GLM_API_KEY",
         "MP2RSS_FEED_URL",
-        "OPENAI_API_KEY",
+        "SUMMARIZER_TAG_SIMILARITY_THRESHOLD",
         "TIKHUB_API_KEY",
         "WECHAT2RSS_FEED_URL",
         "X_BEARER_TOKEN",

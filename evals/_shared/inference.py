@@ -277,7 +277,7 @@ def identity(config: dict[str, Any]) -> dict[str, Any]:
     """Source/model provenance only; never serialize credentials or the chat callable."""
     root = Path(__file__).resolve().parents[2]
     paths = [
-        "evals/_shared/inference.py", "src/airadar/prefilter/prompts.py",
+        "evals/_shared/inference.py", "src/airadar/prefilter/prompts.py", "src/airadar/provider/llm_gateway.py",
         "src/airadar/prefilter/runner.py", "src/airadar/prefilter/policy.py", "src/airadar/provider/base.py",
         "src/airadar/scorer/prompts.py", "src/airadar/scorer/schema.py",
         "src/airadar/enrich/prompts_v2.py", "src/airadar/enrich/schema_v2.py",
@@ -296,5 +296,5 @@ def identity(config: dict[str, Any]) -> dict[str, Any]:
         "prefilter_policy": config.get("prefilter_policy", True),
         "selection": config.get("selection", {}), "weights": config.get("weights", DEFAULT_WEIGHTS.as_record()),
         "now": config.get("now"), "archive_initial": config.get("archive_initial"),
-        "retry_policy": "caller-owned; one invocation per stage",
+        "retry_policy": "gateway-owned; one consumer invocation per stage",
     }
