@@ -118,7 +118,7 @@ class DurableChat:
         api_request: dict[str, Any] = {**request, "messages": messages, "extra_body": {"timeout": self.timeout}}
         # These controls belong to the requested model, not the chosen provider.
         # ARK's native endpoint rejects json_object; prompts already request JSON.
-        if model.startswith("deepseek"):
+        if model.split("::", 1)[-1].startswith("deepseek"):
             api_request["extra_body"]["thinking"] = {"type": self.thinking}
         attempt_id = uuid4().hex
         self.attempts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

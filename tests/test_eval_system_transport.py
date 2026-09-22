@@ -56,7 +56,9 @@ def chat(directory, factory, **changes):
                                  project="ai-radar", case_id="case-a", client_factory=factory, **changes)
 
 
-def test_success_is_durable_before_request_and_before_parse(tmp_path, monkeypatch):
+@pytest.mark.parametrize("model", ["deepseek-v4-pro", "personal_ark::deepseek-v4-pro-ga-260813",
+                                  "personal_ark::deepseek-v4-flash-ga-260731"])
+def test_success_is_durable_before_request_and_before_parse(tmp_path, monkeypatch, model):
     clients, requests = [], []
 
     def create(**kwargs):
@@ -77,10 +79,11 @@ def test_success_is_durable_before_request_and_before_parse(tmp_path, monkeypatc
         return production_parse(text)
 
     monkeypatch.setattr(transport, "_parse_json_object", parse)
-    result = chat(tmp_path, fake_factory(create, clients))(stage="score", prompt=PROMPT, request=REQUEST)
+    request = {**REQUEST, "model": model}
+    result = chat(tmp_path, fake_factory(create, clients))(stage="score", prompt=PROMPT, request=request)
     assert result["json"] == {"answer": True}
-    assert result["model"] == "served-alias" and result["requested_model"] == REQUEST["model"]
-    assert requests[0]["model"] == REQUEST["model"]
+    assert result["model"] == "served-alias" and result["requested_model"] == model
+    assert requests[0]["model"] == model
     assert "response_format" not in requests[0]
     assert requests[0]["extra_body"]["thinking"] == {"type": "disabled"}
     assert clients[0]["max_retries"] == 0
@@ -106,6 +109,20 @@ def test_parse_failure_keeps_raw_usage_and_models(tmp_path):
     assert snapshot["usage"]["total_tokens"] == 22
     assert snapshot["actual_model"] == "served-alias"
     assert len(clients) == 1
+
+
+@pytest.mark.parametrize("model", ["gemini-flash", "personal_other::gemini-flash"])
+def test_non_deepseek_selector_does_not_receive_thinking_control(tmp_path, model):
+    requests = []
+
+    def create(**request):
+        requests.append(request)
+        return completion()
+
+    chat(tmp_path, fake_factory(create, []))(stage="score", prompt=PROMPT,
+                                           request={**REQUEST, "model": model})
+    assert "thinking" not in requests[0]["extra_body"]
+    assert requests[0]["model"] == model
 
 
 def test_actual_sdk_http_failure_is_one_attempt_and_retains_usage(tmp_path):

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-23（J2指定Ark模型对照）
+
+- 修复离线评测对`profile::native_model`精确模型名漏传DeepSeek thinking控制的问题，增加普通名/精确名及非DeepSeek回归覆盖；不改生产调用链。
+- J2同361题Ark Pro为76.45%、同期Flash为79.22%；Pro修复部分旧错但引入更多新错，不切换方案。完整指标、逐例理由与可复现资产见[分类状态](docs/evaluations/content-enrichment/status.md)。
+
 ## 2026-09-22（分类J阶段材料结构路由）
 
 - 分类评测器增加默认关闭的首轮路由指导参数，保存全文身份并保持二轮输入隔离；两种候选均实际评测。

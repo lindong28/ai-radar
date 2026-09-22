@@ -25,6 +25,8 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 ### 当前整体主方案：C5；J阶段已测试材料结构路由
 
+2026-09-23补充同题模型比较：J2精确Ark Pro276/361（76.45%）、同期Flash286/361（79.22%），未采用Pro。[最新逐题/逐类结果](../../../docs/evaluations/content-enrichment/status.md#2026-09-23j2-ark-pro与flash同题对照)。
+
 J阶段C5/J1/J2同200题165/162/161对。冻结J2全361为282对（78.12%），同次首轮281对，184复核修13/退12、覆盖47/80首轮错误；送达改善而复核净收益不足。保留J2路由＋I2局部复核原则作为研究起点，不采用完整J2、不切生产，六类双90未达。复现见下方J阶段参数；完整[状态及逐类指标](../../../docs/evaluations/content-enrichment/status.md#2026-09-22j阶段材料结构路由)。本阶段全库只有J2，C5同期仅200；以下I/H是历史，不冒充J阶段全库控制。
 
 最新I阶段实现可选blind review与仅用于复核的局部guidance。C5同期200题166对，I1/I2开发161/159对；冻结I2全361同次首轮284→最终286（79.22%），26次复核修6/退4，但77个首轮错误只覆盖12个，已见回归76题净退2。整体不替换C5，保留I2局部指导作研究组件；双90未达。复现用下文I阶段命令，不将其当生产默认；实际prompt/模型身份以各run为准，完整数据见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22i阶段条件盲复核)。下面H阶段全361 C5是最近历史全量，不是本轮新全量控制。
@@ -95,6 +97,10 @@ body_limit（null表示全文）、quote_contribution和conditional_review进入
 I阶段复现：在C5命令追加`--conditional-review --blind-review`为I1；再加`--review-guidance evals/content-enrichment/prompts/category-i2-review.txt`为I2。给每轮新label，不覆盖run。`blind_review`及指导全文进入behavior身份；未开启conditional-review时传两者会在调用前拒绝。默认无指导、仍保留既有带初判复核；这两个实验不是默认推荐或生产变更。解释结果须同时看路由覆盖的首轮错题、复核修正/退化和整体逐类P/R；两个arm首轮重跑时，不把差异全部归因于指导词。
 
 ### 可选：原始引用输入消融
+
+指定Ark版本重跑J2：保持下述J2全部参数，将`--config`设为`evals/content-enrichment/configs/category-ark-pro-260813.json`或`category-ark-flash-260731.json`，分别给新label。精确`personal_ark::native_model`经gateway已存在的direct selector固定provider与版本、禁止静默fallback；transport先去除profile段再应用既有DeepSeek thinking=disabled控制。调用前用gateway scoped discovery核ready，调用后以attempt里的provider_id、actual_model及request_parameters核实，不把普通逻辑别名视为永久版本pin。每个模型分别运行`--split dev`（不设limit，285题）和`--split regression`（76题），其它沿J2；`--limit 2 --smoke`只作链路诊断、不作成绩。原始输出落独立UTC分区。
+
+本轮零调用复算：运行`runs/content-enrichment/aihot-category-navigation/v1/2026-09-22/16-11-05/support/compare-models.py --old <旧dev运行目录> <旧regression运行目录> --flash <新Flash-dev> <新Flash-regression> --pro <Pro-dev> <Pro-regression> --output <未存在的JSON路径>`，使用`PYTHONPATH=src:. uv run python`。该脚本明确绑定本次361题/旧79错分层，不是扩题脚本；扩题后另定义比较窗口，不能沿用旧79分母。输出逐题核验gold/prompt相同，canonical重算各run，配对组名为`old_bad`、`old_good`，并保留实际模型/用量/失败；题目与旧运行不覆盖。
 
 J阶段复现：在I2命令追加`--routing-guidance evals/content-enrichment/prompts/category-j1-routing.txt`为J1，替换为`category-j2-routing.txt`为J2，给新label。J2用材料同时含具体事实与测量/讲解/评价的结构触发；二次仍用I2指导，不附首轮路由文本。默认空值保持既有prompt，未开conditional时拒绝。旧路由已要求竞争证据，J1只是细化未充分兑现的判断，两者都不是独立错误检测器。分别检查首轮变化、复核错误覆盖和同次首轮/最终修正退化；不能用跨轮总分单独证明路由因果。全库用`--split dev`不设limit及`--split regression`分开运行，均为已曝光题，不称独立验证。
 

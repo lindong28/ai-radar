@@ -1,0 +1,4 @@
+{
+  "models": {"category": "personal_ark::deepseek-v4-pro-ga-260813"},
+  "transport_identity": {"provider": "llm-gateway", "project": "ai-radar", "base_url": "http://127.0.0.1:39011/v1"}
+}

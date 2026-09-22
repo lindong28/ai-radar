@@ -1,6 +1,47 @@
 # O3 · 字段富化 状态
 
-> [Developer] · Mutable snapshot · 2026-09-22。区分能力、实际运行与有效成绩。
+> [Developer] · Mutable snapshot · 2026-09-23。区分能力、实际运行与有效成绩。
+
+## 2026-09-23：J2 Ark Pro与Flash同题对照
+
+没有看到把完整J2换成Pro的整体收益。固定J2/C1/I2提示、全文/冻结引用、temperature=0、max_tokens=700、thinking=disabled及gold，仅两阶段模型一起替换。Ark精确版本为Pro `deepseek-v4-pro-ga-260813`与Flash `deepseek-v4-flash-ga-260731`。每模型完整跑361题（dev285＋已见regression76）；全部已用于开发，不称独立泛化。
+
+### L1：质量与逐例归因
+
+| 同题方案 | 旧79错题中答对 | 旧282正确题中新错 | 全361正确 / accuracy | 首轮→最终正确 |
+|---|---:|---:|---:|---:|
+| 旧冻结J2 Flash | 0 | 0 | 282 / 78.12% | 281→282 |
+| 同期J2 Flash | 13（16.46%） | 9 | 286 / 79.22% | 281→286 |
+| 同期J2 Pro | 18（22.78%） | 24 | 276 / 76.45% | 275→276 |
+
+旧79错含1次调用失败。Pro比同期Flash在旧错子集净多对5题（12修/7退），但在旧正确子集净少15题（5修/20退），全库17修/27退、净少10题（−2.77个百分点）。Flash重复自身也修13个旧错，不能把Pro修18题全归因于升级。两模型各只跑一遍正式对照，不声明稳定显著差异；六类precision/recall同时90%仍未达。
+
+| 类别 | 同期Flash precision / recall | Pro precision / recall |
+|---|---:|---:|
+| 模型 | 74.55% / 91.11% | 71.67% / 95.56% |
+| 产品 | 89.09% / 81.67% | 75.81% / 78.33% |
+| 行业 | 77.97% / 76.67% | 88.89% / 66.67% |
+| 论文 | 72.92% / 76.09% | 72.00% / 78.26% |
+| 教程 | 94.55% / 77.61% | 93.88% / 68.66% |
+| 观点 | 72.41% / 75.90% | 67.37% / 77.11% |
+
+具体收益：`31d459c3` Artificial Analysis的GPT-Live-1独立评测，Pro识别为面向使用者的基准比较（教程），旧/新Flash均模型；`8ff6ff7a`生物实验室转帖，Pro按公司行动判行业，旧/新Flash按风险提问判观点；`81ace90b`8GB模型短介绍，Pro模型、旧/新Flash观点。但同源Gemini长评测`ab6f6ed7`仍被Pro按开头发布句判模型，代码粗糙度`0f1f0004`仍按研究判论文；后者语义边界可供未来人评，本轮未改gold或剔题。
+
+具体退化：`1d2b8d56` MiniMax Code CLI开源，输入明确为客户端工具，Pro reason混称“模型/工具版本”后输出模型，Flash正确产品；`51f50b3b`导出权重页面含创建桶、写数据、运行模型三步curl示例，Pro产品、Flash教程；`75b1ebf2`无人机部署、`bcb495cd`卫星发射新闻，Pro按系统能力判产品、Flash行业。材料已在实际prompt中，不能据此归因为缺正文；观察到的是主体与报道行为的边界仍被不同模型以不同方式解释，不证明单靠更换模型可以解决建模问题。
+
+Pro触发107次复核、修7/退6；Flash触发183次、修15/退10。模型同时影响首轮分类、路由及二轮，不能把总差归因到单独复核。整体研究对照仍C5，生产A0不变；不晋级Pro、不改提示词。后续可沿J2路由/I2有效局部机制，针对报道行为与产品/模型实体边界形成最小干预，以此轮反例作开发对照。本轮未启动后续实验。
+
+### L2：资产、成本与复现
+
+UTC根`{runs,experiments}/content-enrichment/aihot-category-navigation/v1/2026-09-22/`：Pro dev `16-11-05`（218/285）、Pro regression `16-13-36`（58/76）、Flash dev `16-14-29`（231/285）、Flash regression `16-16-50`（55/76）。`16-11-05/support/ark-model-summary.json`是最终配对汇总，包含361条输入、三版本预测/reason及修复/退化ID；同目录`compare-models.py`复用canonical scorer和既有配对函数，复算指定新输出。`model-comparison.json`为早期同值快照，分组沿用helper通用键名；日常消费用语义明确的`ark-model-summary.json`。各run保存实际prompt、首轮、复核、attempt、指标及conclusion，元数据与13指标进入experiments索引。精确配置和命令见[执行入口](../../../evals/content-enrichment/aihot-category-navigation/README.md)。
+
+Pro正式468调用、815,191 tokens；Flash正式544调用、940,195 tokens。Pro少调用是触发复核少，不证明每call便宜；金额仍未定价。两split批次elapsed之和Pro160.17秒、Flash171.15秒，包含不同数量复核，不能外推单call或生产延迟。正式共1,012调用、1,755,386 tokens，usage均有记录。Pro零失败；Flash两题`1d3eb980`、`f5649de5`失败留分母、不补跑挑分，dev标incomplete而不是完整成功。
+
+### L3：身份及执行链修复
+
+首次Pro smoke `16-08-30`发现精确selector不匹配transport原有`startswith("deepseek")`，漏传thinking控制，1题reasoning耗尽700输出token；该诊断批不参与质量比较，费用/原件保留。最小修复只让`profile::native_model`继承既有DeepSeek控制，不改prompt或全局gateway。修复后smoke `16-10-34`两题/三次调用均成功、reasoning token为0。正式四轮全部attempt核验Ark、精确native版本及disabled控制，逐轮身份未漂移。
+
+三臂361条题目/gold及首轮prompt逐条相同；模型、精确pin及transport兼容修复如上披露，旧结果不覆盖。普通模型名与两个精确selector的测试从1过/2失败变为全过，非DeepSeek两种名称不增加thinking控制；相关transport/分类测试55例通过。没有新增人票、改题或部署。全部本轮调用已终态，原始资产留本机标准分区，不进Git；代码、精确配置和记录本地提交。
 
 ## 2026-09-22：J阶段材料结构路由
 

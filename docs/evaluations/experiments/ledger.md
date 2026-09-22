@@ -1,5 +1,13 @@
 # 运行台账
 
+## 2026-09-23：J2 Ark Pro / Flash指定版本对照
+
+固定J2工作流各跑完整361已见题。Pro276/361（76.45%）、同期Flash286/361（79.22%）、旧J2 Flash282/361（78.12%）。旧79错题分别修18/13，旧282正确题分别退24/9；Pro对同期Flash全库17修/27退。单次试验不支持整体升级，不晋级或部署，不改gold。六类P/R、案例理由及后续研究边界见[状态](../content-enrichment/status.md#2026-09-23j2-ark-pro与flash同题对照)。
+
+UTC日期`2026-09-22`，正式Pro分区`16-11-05`、`16-13-36`，Flash`16-14-29`、`16-16-50`；标准根`{runs,experiments}/content-enrichment/aihot-category-navigation/v1/`。共1,012次调用、1,755,386 tokens，2个Flash失败留分母，0个Pro失败。Pro107次复核修7/退6，Flash183次修15/退10。输入与gold及首轮prompt逐条一致，实际Ark精确版本与关闭thinking均核验，四轮身份未漂移。
+
+调用诊断`16-08-30`两题因selector漏thinking控制产生1次截断，不混入质量比较；修复后`16-10-34`两题/三次调用零reasoning token。两批均保存原件。正式汇总与复算脚本在`16-11-05/support/ark-model-summary.json`、`compare-models.py`；每轮conclusion及机器指标各归原分区。所有任务终态，没有后台续跑承诺。
+
 ## 2026-09-22：J阶段材料结构路由（最新快照）
 
 五轮UTC `14-32-51`、`14-37-18`、`14-42-48`、`14-45-30`、`14-48-34`，标准根`{runs,experiments}/content-enrichment/aihot-category-navigation/v1/2026-09-22/`。C5/J1/J2开发200题165/162/161对；J2冻结285+76题227+55=282/361（78.12%）。同次首轮281对，184复核修13/退12，覆盖47/80首轮错题。整体仍C5，J2路由机制保留为下一研究组件，不采用完整J2，六类双90未达；详细P/R和逐例复核退化见[状态](../content-enrichment/status.md#2026-09-22j阶段材料结构路由)。
