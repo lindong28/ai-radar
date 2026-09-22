@@ -23,9 +23,11 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 <a id="当前研究配置c5"></a>
 
-### 当前整体主方案：C5；保留F3/G3局部修复分支
+### 当前整体主方案：C5；H阶段已实际测试局部修复组合
 
-2026-09-22整体最有支持的方案仍为C5，不是生产默认：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。全361历史290/288/289对，本轮新gateway链路294对（81.44%），原方案未变，差值不是优化收益。G3同期282对、16修正/28退化；F3上轮288对，二者局部机制保留但未证明整体更好。下一研究以C5作整体主方案/对照，吸收F3/G3的具体归因与条件化修复方向，不直接采用完整G3或丢弃已获局部支持的机制。均未达六类双90。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
+最新H阶段已实现`category-h1.txt`至`category-h3.txt`：C5骨架迁入局部边界→reason先识别作者动作→修正为承载证据、取消原创作者门槛。开发同200为156/160/156对，本轮C5为163对。冻结H3全361为274对（75.90%），C5为286对（79.22%），13修正/25退化；H3局部收益保留但不整体采用。当前实际整体主方案仍为下方C5命令，不存在一个已验证更好的“C5＋所有修复”默认版本。生产仍A0；详情见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22h阶段实际组合局部修复)。以下G阶段数字保留历史语义，不是最新快照。
+
+C5完整身份：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。全361历史290/288/289/294对，最新H阶段286对；原方案未变，重复差值不是优化收益。G阶段G3为282对、对同期C5修16/退28；F阶段F3为288对，局部机制保留但未证明整体更好。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
 
 ```bash
 PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/evaluate.py \
@@ -42,7 +44,9 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 ### D阶段候选复现
 
-本节亦包含E/F/G阶段修复分支；各自状态不同，不能将文件存在理解为已采用。
+本节亦包含E/F/G/H阶段修复分支；各自状态不同，不能将文件存在理解为已采用。
+
+H阶段复现：沿上方C5命令，将rubric换为`evals/content-enrichment/prompts/category-h1.txt`、`category-h2.txt`或`category-h3.txt`，使用新label；其它参数不变。去掉limit、分别dev及regression可重跑285＋76题。H3冻结run为`13-23-08`/`13-24-39`，C5为`13-25-05`/`13-26-27`。`runs/content-enrichment/aihot-category-navigation/v1/2026-09-22/13-15-58/support/summarize-h.py --output /path/to/new-summary.json`在`PYTHONPATH=src:. uv run python`下复算七轮，按case_id连接并检查canonical分数、原题和实际prompt；输出路径必须未占用。失败仍留分母，已见回归不称独立验证，不覆盖既有原件。全361 H3/C5 tokens分别565,600/466,193，局部提高不抵消整体退化与成本。
 
 G阶段复现：沿上方C5命令换为`evals/content-enrichment/prompts/category-g1.txt`、`category-g2.txt`或`category-g3.txt`，给新label；其它参数不变，当前配置走gateway。G1仅增强reason证据一致，G2重构读者贡献定义，G3回F3骨架保留技术讲解/短研究/产品附安装边界。同200为155/151/158对，新链路F3控制155对。G3冻结dev285/reg76为226/56对（`12-36-26`/`12-38-07`），C5同期235/59对（`12-38-47`/`12-40-32`）；G3全库tokens567,044、C5为466,026。去掉limit并切split可重跑全库，旧原件不能覆盖、已有曝光不能改称独立验证。首轮`12-26-44/support/summarize-g.py`复用canonical scorer生成配对与分歧，既有最终summary只读，新复算应另存新输出路径。
 
