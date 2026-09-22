@@ -38,6 +38,12 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 冻结后去掉`--limit`可覆盖dev285；另用`--split regression`覆盖76题，明确二者已有曝光。同期B1对照改为`--rubric .../category-a4.txt --body-limit 5000`，其它参数相同。隔离worktree运行可传`--output-root /path/to/main-checkout`归档，代码仍来自当前cwd。不会自动启用新数据抓取或改变线上分类。
 
+### D阶段候选复现
+
+2026-09-22四个开发干预均未取代C5，最新C5全361题288对（79.78%）；上次290对（80.33%）保留为历史，不覆盖成新分数。使用上述C5命令，只替换`--rubric`和`--label`即可复现D1/D2/D3：rubric取项目相对路径`evals/content-enrichment/prompts/category-d<N>.txt`（N为1、2、3）。D4使用`evals/content-enrichment/prompts/category-d4.txt`并追加`--source-context`；其它参数不变。它们各自以C5为父，不串联叠加，不进入生产默认。
+
+四轮同200题；C5同期对照复用本阶段dev285的固定200子集，余85与regression76分开报告。全361题已曝光，重复不是独立验证。输入、prompt、reason、尝试和失败仍由原runner归档，不改变题库版本；D2/D4的content_filter失败留在分母，不静默换模型或重试。逐类成绩、修正/退化及当前接续见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22d阶段完成仍以c5为研究起点)。
+
 ### 默认基线与smoke
 
 ```bash
