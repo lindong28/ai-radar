@@ -1,5 +1,7 @@
 # 分类实验提示
 
+F阶段当前保留C5整体成绩对照，研究修复主分支选`category-f3.txt`。F1保留D2研究机制并统一主题/贡献定义，F2修行业过度吸入，F3修短观察与发布/测评主次；同200题151/160/163对。冻结F3全361为288对，同期C5为289对，未证明整体更好；F3论文/教程P/R提高但行业P和观点R退化，保留局部收益继续修复而非整案删除。三者均为单Flash＋冻结全文/as-of引用＋贡献主次，不加source-context/conditional-review，不是生产默认。读数及原件见[状态](../../../docs/evaluations/content-enrichment/status.md)，运行方式见[执行入口](../aihot-category-navigation/README.md#d阶段候选复现)。
+
 E阶段区分C5整体最优对照与D2保留修复分支。`category-e1.txt`保留D2的研究发现主次并修成果/预测边界，`category-e2.txt`收窄预测并要求reason对比，`category-e3.txt`在E1上核对类别范围；同200题79.0/79.0/78.5%，没有整体替代C5。D2首次全361题78.39%，C5历史79.78/80.33%；D2关于新发现与附带评论的局部收益继续保留，不因总分落后删除方向。详见[执行入口](../aihot-category-navigation/README.md#d阶段候选复现)和[状态](../../../docs/evaluations/content-enrichment/status.md)。
 
 D阶段保留四个未晋级的C5干预：D1正文证据贡献、D2新发现/分析区别、D3内嵌转帖主次、D4来源角色（必须另开`--source-context`）。都使用冻结全文及引用贡献；没有把D1叠到D2或D3。D1–D4同200题80.0/81.5/80.0/79.5%，同期C5为82.5%；这是历史D阶段读数，不改默认，不按编号更大自动采用。
