@@ -134,10 +134,12 @@ def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tm
                     assert key == "available"
                     assert ('"needs_review"' not in kwargs["prompt"]["user"]) is blind
                     assert kwargs["prompt"]["system"].endswith("SECOND_ONLY_GUIDANCE")
+                    assert "FIRST_ONLY_GUIDANCE" not in str(kwargs["prompt"])
                     if review_failure:
                         raise RuntimeError("fixture failed review")
                     return {"json": {"reason": "revised evidence", "primary_category": "model"}}
                 assert "SECOND_ONLY_GUIDANCE" not in str(kwargs["prompt"])
+                assert kwargs["prompt"]["system"].endswith("FIRST_ONLY_GUIDANCE")
                 return {"json": {"reason": "initial evidence", "needs_review": key == "available",
                                  "primary_category": "product" if key == "available" else "model"}}
             return chat
@@ -146,11 +148,13 @@ def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tm
     result = evaluate(leaf, config={"models": {"category": "fixture"}, "transport_identity": "fixture"},
                       split="dev", limit=None, seed="fixture", label="conditional", chat_factory=factory,
                       workers=2, root=tmp_path, quote_source=source, conditional_review=True,
-                      blind_review=blind, review_guidance="SECOND_ONLY_GUIDANCE")
+                      blind_review=blind, review_guidance="SECOND_ONLY_GUIDANCE",
+                      routing_guidance="FIRST_ONLY_GUIDANCE")
     run = Path(result["run"])
     behavior = assets.read_json(run / "started.json")["object_identity"]["behavior"]
     assert behavior["blind_review"] is blind
     assert behavior["review_guidance"] == "SECOND_ONLY_GUIDANCE"
+    assert behavior["routing_guidance"] == "FIRST_ONLY_GUIDANCE"
     expected = [("available", "category"), ("future", "category")]
     if failure_mode != "archive":
         expected.append(("available", "category_review"))
@@ -167,7 +171,7 @@ def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tm
         assert p["status"] == "error" and p["output"] == {}
 
 
-@pytest.mark.parametrize("options", [{"blind_review": True}, {"review_guidance": "rule"}])
+@pytest.mark.parametrize("options", [{"blind_review": True}, {"review_guidance": "rule"}, {"routing_guidance": "route"}])
 def test_review_options_require_route_before_loading_or_calls(tmp_path, options):
     with pytest.raises(ValueError, match="require conditional review"):
         evaluate(tmp_path / "missing", config={}, split="dev", limit=None, seed="test",

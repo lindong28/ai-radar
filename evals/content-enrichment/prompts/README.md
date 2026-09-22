@@ -1,5 +1,7 @@
 # 分类实验提示
 
+J阶段新增`category-j1-routing.txt`和`category-j2-routing.txt`，只能通过`--routing-guidance`用于首轮，不是完整rubric。第二轮继续I2指导。J2按材料结构触发，冻结全361题184次复核覆盖47/80错，但仅281→282（13修/12退），不替换C5整体主方案或生产A0；保留该路由作为后续复核研究组件。J1/J2开发162/161对，同期C5为165/200；全部已见，双90未达。逐类指标、成本、归因和下一研究路线见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22j阶段材料结构路由)。下方I/H等均为历史阶段记录。
+
 I阶段最新研究组件是`category-i2-review.txt`，仅供`--conditional-review --blind-review --review-guidance`的第二次调用使用，不能代替完整`--rubric`。保留C5首轮，用传播形式/承载证据分离、短论文证据和研究/实践边界指导复核。冻结361题首轮284→最终286，修6/退4，77错只路由12个；已见回归净退2，故不整体晋级。I1无guidance开发161/200、I2有guidance159/200，首轮也变动，不把两者差值单独归因guidance。整体主方案仍C5，生产A0不变；下方H/G/F等为历史记录，详见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22i阶段条件盲复核)。
 
 H阶段最新整体对照仍C5：同期全361为286对（79.22%），H3为274对（75.90%），13修正/25退化。`category-h1.txt`是真正的C5＋F3/G3局部边界实现；H2保留它并先识别作者动作，H3取消错误的原创作者门槛、按承载证据分类。三个开发arm156/160/156对，H3独立测评等收益可复用但完整方案未晋级；下方G阶段294对属于历史读数，不覆盖本轮。三者均单Flash/全文/as-of引用贡献，不加第二call或新字段，不是生产默认。复现见[入口](../aihot-category-navigation/README.md#d阶段候选复现)，逐例归因和下一结构研究见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22h阶段实际组合局部修复)。

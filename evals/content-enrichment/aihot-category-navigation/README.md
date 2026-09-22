@@ -23,7 +23,9 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 <a id="当前研究配置c5"></a>
 
-### 当前整体主方案：C5；I阶段已实际测试条件盲复核
+### 当前整体主方案：C5；J阶段已测试材料结构路由
+
+J阶段C5/J1/J2同200题165/162/161对。冻结J2全361为282对（78.12%），同次首轮281对，184复核修13/退12、覆盖47/80首轮错误；送达改善而复核净收益不足。保留J2路由＋I2局部复核原则作为研究起点，不采用完整J2、不切生产，六类双90未达。复现见下方J阶段参数；完整[状态及逐类指标](../../../docs/evaluations/content-enrichment/status.md#2026-09-22j阶段材料结构路由)。本阶段全库只有J2，C5同期仅200；以下I/H是历史，不冒充J阶段全库控制。
 
 最新I阶段实现可选blind review与仅用于复核的局部guidance。C5同期200题166对，I1/I2开发161/159对；冻结I2全361同次首轮284→最终286（79.22%），26次复核修6/退4，但77个首轮错误只覆盖12个，已见回归76题净退2。整体不替换C5，保留I2局部指导作研究组件；双90未达。复现用下文I阶段命令，不将其当生产默认；实际prompt/模型身份以各run为准，完整数据见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22i阶段条件盲复核)。下面H阶段全361 C5是最近历史全量，不是本轮新全量控制。
 
@@ -82,6 +84,7 @@ A4+指`--rubric evals/content-enrichment/prompts/category-a4.txt`加上下面的
 | `--conditional-review` | 首轮用语义歧义flag，true才追加一次同模型复核 | first-pass-predictions.jsonl、first-pass-scores.json、review-prompts/<case_id>.json及每阶段attempts |
 | `--blind-review` | 需同时开启conditional-review；二次只看原始输入/rubric，不看初判category/reason | review-prompts中保留实际二次输入；原文不删改 |
 | `--review-guidance <UTF-8文件>` | 需同时开启conditional-review；指导文本只追加到二次system | 完整文本进入metadata.object_identity.behavior.review_guidance |
+| `--routing-guidance <UTF-8文件>` | 需同时开启conditional-review；指导文本只追加到首轮system，不进入二次 | 完整文本进入metadata.object_identity.behavior.routing_guidance |
 
 组合调用示例：在上面的命令追加`--rubric evals/content-enrichment/prompts/category-a4.txt --quote-source <冻结父题库路径> --quote-contribution --body-limit 0`。若测试复核，再加`--conditional-review`；是否有效须查状态记录，开关存在不表示推荐采用。
 
@@ -92,6 +95,8 @@ body_limit（null表示全文）、quote_contribution和conditional_review进入
 I阶段复现：在C5命令追加`--conditional-review --blind-review`为I1；再加`--review-guidance evals/content-enrichment/prompts/category-i2-review.txt`为I2。给每轮新label，不覆盖run。`blind_review`及指导全文进入behavior身份；未开启conditional-review时传两者会在调用前拒绝。默认无指导、仍保留既有带初判复核；这两个实验不是默认推荐或生产变更。解释结果须同时看路由覆盖的首轮错题、复核修正/退化和整体逐类P/R；两个arm首轮重跑时，不把差异全部归因于指导词。
 
 ### 可选：原始引用输入消融
+
+J阶段复现：在I2命令追加`--routing-guidance evals/content-enrichment/prompts/category-j1-routing.txt`为J1，替换为`category-j2-routing.txt`为J2，给新label。J2用材料同时含具体事实与测量/讲解/评价的结构触发；二次仍用I2指导，不附首轮路由文本。默认空值保持既有prompt，未开conditional时拒绝。旧路由已要求竞争证据，J1只是细化未充分兑现的判断，两者都不是独立错误检测器。分别检查首轮变化、复核错误覆盖和同次首轮/最终修正退化；不能用跨轮总分单独证明路由因果。全库用`--split dev`不设limit及`--split regression`分开运行，均为已曝光题，不称独立验证。
 
 默认仍只有原标题正文。要检验输入缺失，可在同一命令增加 `--quote-source ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v2`，并保持相同 dataset、split、seed、limit、config、rubric，另给 label。来源必须是题库 manifest.source_datasets 哈希绑定的直接父数据集；raw-inputs.jsonl 哈希也要匹配其 manifest，不能任意换成最新档案。
 

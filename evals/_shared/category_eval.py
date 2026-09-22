@@ -84,11 +84,12 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              smoke: bool = False, root: Path = assets.ROOT, quote_source: Path | None = None,
              body_limit: int | None = 5000, quote_contribution: bool = False,
              conditional_review: bool = False, include_source_context: bool = False,
-             blind_review: bool = False, review_guidance: str = "") -> dict:
+             blind_review: bool = False, review_guidance: str = "",
+             routing_guidance: str = "") -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
-    if (blind_review or review_guidance) and not conditional_review:
-        raise ValueError("blind review and review guidance require conditional review")
+    if (blind_review or review_guidance or routing_guidance) and not conditional_review:
+        raise ValueError("blind review, review guidance and routing guidance require conditional review")
     check_metric_definitions(root)
     manifest, all_cases = assets.load_dataset(dataset, TARGET)
     if manifest["benchmark"] != BENCHMARK:
@@ -118,7 +119,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                 prompts[row["case_id"]]["system"] += "\n" + QUOTE_CONTRIBUTION
     base_prompts = prompts
     if conditional_review:
-        prompts = {key: routing_prompt(prompt) for key, prompt in base_prompts.items()}
+        prompts = {key: routing_prompt(prompt, guidance=routing_guidance) for key, prompt in base_prompts.items()}
     request = {"model": config["models"]["category"], "temperature": 0, "max_tokens": 700}
     paths = ("src/airadar/enrich/category.py", "src/airadar/enrich/classification.py",
              "src/airadar/provider/judgment.py", "evals/_shared/category_eval.py",
@@ -137,6 +138,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                              "quote_context": context_identity, "body_limit": body_limit,
                              "quote_contribution": quote_contribution, "conditional_review": conditional_review,
                              "blind_review": blind_review, "review_guidance": review_guidance,
+                             "routing_guidance": routing_guidance,
                              "include_source_context": include_source_context},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
@@ -241,6 +243,7 @@ def main(argv=None):
     p.add_argument("--conditional-review", action="store_true", help="Ask for semantic uncertainty and review only flagged cases; preserve same-call control")
     p.add_argument("--blind-review", action="store_true", help="With --conditional-review, withhold the first decision and reason from the second call")
     p.add_argument("--review-guidance", type=Path, help="With --conditional-review, append this UTF-8 guidance only to the second call")
+    p.add_argument("--routing-guidance", type=Path, help="With --conditional-review, append this UTF-8 guidance only to the first call")
     p.add_argument("--split", choices=["dev", "regression"], required=True)
     p.add_argument("--limit", type=int)
     p.add_argument("--seed", default="category-development")
@@ -257,7 +260,8 @@ def main(argv=None):
                       body_limit=None if a.body_limit == 0 else a.body_limit,
                       quote_contribution=a.quote_contribution, conditional_review=a.conditional_review,
                       include_source_context=a.source_context, blind_review=a.blind_review,
-                      review_guidance=a.review_guidance.read_text() if a.review_guidance else "")
+                      review_guidance=a.review_guidance.read_text() if a.review_guidance else "",
+                      routing_guidance=a.routing_guidance.read_text() if a.routing_guidance else "")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

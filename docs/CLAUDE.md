@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260922-6bc2](adr/20260922-6bc2-test-category-routing-guidance.md)：竞争证据路由指导；区分首轮变化、送达覆盖与复核净收益。
+
 [20260922-81af](adr/20260922-81af-test-blind-conditional-category-review.md)：C5 条件盲复核与局部证据指导；保持默认/gold，分别量路由覆盖与复核净收益。
 
 [20260922-7d82](adr/20260922-7d82-route-llm-calls-through-gateway.md)：仓内 LLM 业务与评测统一接入 gateway，保留模型身份与历史实验；配置、验证及仓外边界见 [LLM Gateway 接入](operations/llm-gateway.md)。

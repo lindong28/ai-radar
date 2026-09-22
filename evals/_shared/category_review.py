@@ -13,8 +13,11 @@ REVIEW = """你现在复核一条有类别边界疑问的初判。以下初判�
 BLIND_REVIEW = """独立进行一次编辑分类：仅根据提供的原始材料和六类定义，识别文章承载的主要新增信息及其证据，不按报道形式或提到的对象直接归类。不猜外链内容。先在reason中说明支持所选类别、而非最接近类别的具体依据，再输出primary_category；只输出JSON。"""
 
 
-def routing_prompt(prompt: dict[str, str]) -> dict[str, str]:
-    return {**prompt, "system": prompt["system"] + "\n" + ROUTING}
+def routing_prompt(prompt: dict[str, str], *, guidance: str = "") -> dict[str, str]:
+    system = prompt["system"] + "\n" + ROUTING
+    if guidance:
+        system += "\n" + guidance
+    return {**prompt, "system": system}
 
 
 def routing_output(payload: dict) -> dict[str, str]:

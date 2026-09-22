@@ -32,6 +32,15 @@ def test_prompt_projection_preserves_original_and_first_decision():
     assert original == {"system": "rubric", "user": "original article"}
 
 
+def test_routing_guidance_changes_only_first_system():
+    original = {"system": "rubric", "user": "original article"}
+    default = routing_prompt(original)
+    result = routing_prompt(original, guidance="ROUTE_ONLY")
+    assert result == {**default, "system": default["system"] + "\nROUTE_ONLY"}
+    assert routing_prompt(original, guidance="") == default
+    assert original == {"system": "rubric", "user": "original article"}
+
+
 @pytest.mark.parametrize("guidance", ["", "local evidence guidance"])
 def test_blind_review_ignores_first_decision_and_preserves_original(guidance):
     original = {"system": "rubric", "user": "original article"}
