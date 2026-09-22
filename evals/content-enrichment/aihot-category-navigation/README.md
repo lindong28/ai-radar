@@ -21,9 +21,11 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 ## 真实模型评测
 
-### 当前研究配置：C5
+<a id="当前研究配置c5"></a>
 
-2026-09-22研究选择为C5，不是生产默认：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
+### 当前整体对照：C5；保留修复分支：D2
+
+2026-09-22整体最好读数仍为C5，不是生产默认：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。E阶段保留D2关于研究发现与附带评论的主次机制做退化修复，不将整体对照与研究分支强制视作同一方案。C5全361题288/290对两轮，D2全361题283对；均未达六类双90。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
 
 ```bash
 PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/evaluate.py \
@@ -39,6 +41,10 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 冻结后去掉`--limit`可覆盖dev285；另用`--split regression`覆盖76题，明确二者已有曝光。同期B1对照改为`--rubric .../category-a4.txt --body-limit 5000`，其它参数相同。隔离worktree运行可传`--output-root /path/to/main-checkout`归档，代码仍来自当前cwd。不会自动启用新数据抓取或改变线上分类。
 
 ### D阶段候选复现
+
+本节亦包含其E阶段修复分支；各自状态不同，不能将文件存在理解为已采用。
+
+E阶段复现：沿上方C5命令，将rubric换为`evals/content-enrichment/prompts/category-e1.txt`、`category-e2.txt`或`category-e3.txt`并给新label；其它参数不变。E1源于D2，E2源于E1，E3保留E1收益并加入范围核对；三者200题158/158/157对，不是推荐替换版。D2冻结复现改用`category-d2.txt`，去掉limit分别跑dev285与regression76；本轮两run为`05-24-16`/`05-25-41`。旧失败、原prompt/reason与比较记录保留，不在复现时覆盖。后续局部修复既要检查保住的收益，也要检验全体类别退化，不按每轮总分是否第一决定删除方向。
 
 2026-09-22四个开发干预均未取代C5，最新C5全361题288对（79.78%）；上次290对（80.33%）保留为历史，不覆盖成新分数。使用上述C5命令，只替换`--rubric`和`--label`即可复现D1/D2/D3：rubric取项目相对路径`evals/content-enrichment/prompts/category-d<N>.txt`（N为1、2、3）。D4使用`evals/content-enrichment/prompts/category-d4.txt`并追加`--source-context`；其它参数不变。它们各自以C5为父，不串联叠加，不进入生产默认。
 
