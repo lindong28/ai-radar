@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-22（分类C阶段接续）
+
+- 分类离线评测增加默认关闭的原始来源字段投影；保留C1研究边界、C2/C3负实验及C5全文组合，提供当前研究配置的完整复用命令。
+- 完成十轮1,922次Flash调用：C5全361题80.33%，同期B1为76.73%，选C5作为后续研究起点；六类双90仍未达到，不改gold或生产。逐轮指标、局部与组合归因、成本及退化项见[分类状态](docs/evaluations/content-enrichment/status.md)。
+
 ## 2026-09-22（A4+分类结构消融）
 
 - 分类离线评测新增可选引用贡献主次、冻结全文与条件二次复核，保留首轮对照、实际二轮prompt及失败；默认行为不变，复用见[执行入口](evals/content-enrichment/aihot-category-navigation/README.md)。

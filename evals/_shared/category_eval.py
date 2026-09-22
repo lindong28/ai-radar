@@ -27,6 +27,16 @@ BENCHMARK = assets.CATEGORY_NAVIGATION
 QUOTE_CONTRIBUTION = """引用关系：先识别当前帖自身交付了什么。当前帖有独立的实测、步骤或论证时，按当前贡献分类，引用只交代背景；当前帖仅简短转述、赞同或指代而没有独立贡献时，用引用原帖补足所报道的事实，再按该事实分类。不要因为引用更长就让它覆盖当前主体，也不要因为当前帖短就忽略已提供的引用。reason说明实际采用的主体证据。"""
 
 
+def source_context(raw: dict) -> str:
+    """Expose existing original-source facts, never gold or enrichment fields."""
+    fields = {key: raw[key] for key in ("url", "author", "source_kind", "source_name")
+              if isinstance(raw.get(key), str) and raw[key].strip()}
+    if not fields:
+        return ""
+    return ("\n\nCollected source context (author may be a feed submitter; "
+            "source_name is the collection channel):\n" + json.dumps(fields, ensure_ascii=False))
+
+
 def quoted_inputs(cases: list[dict], dataset: Path, source: Path) -> tuple[list[dict], dict]:
     """Resolve original quotes only from a hash-bound parent dataset's raw archive."""
     manifest = assets.read_json(dataset / "manifest.json")
@@ -73,7 +83,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              label: str, chat_factory, rubric: str = RUBRIC, workers: int = 8,
              smoke: bool = False, root: Path = assets.ROOT, quote_source: Path | None = None,
              body_limit: int | None = 5000, quote_contribution: bool = False,
-             conditional_review: bool = False) -> dict:
+             conditional_review: bool = False, include_source_context: bool = False) -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
     check_metric_definitions(root)
@@ -90,6 +100,9 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
             for a in b["data"]["annotations"]], TARGET)
     cases = select_cases(category_cases(all_cases), split, limit, seed)
     prompts = {c["case_id"]: render_category_prompt(c["input"], rubric, body_limit=body_limit) for c in cases}
+    if include_source_context:
+        for case in cases:
+            prompts[case["case_id"]]["user"] += source_context(case["input"])
     contexts, context_identity = [], None
     context_paths = []
     if quote_source is not None:
@@ -119,7 +132,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                              "request": request, "transport": config["transport_identity"],
                              "rubric": rubric, "thinking": "disabled", "retry_count": 0,
                              "quote_context": context_identity, "body_limit": body_limit,
-                             "quote_contribution": quote_contribution, "conditional_review": conditional_review},
+                             "quote_contribution": quote_contribution, "conditional_review": conditional_review,
+                             "include_source_context": include_source_context},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
                            "cases": assets.digest(cases), "prompts": assets.digest(prompts),
@@ -218,6 +232,7 @@ def main(argv=None):
     p.add_argument("--quote-source", type=Path, help="Frozen direct parent dataset for as-of original quotes; offline ablation only")
     p.add_argument("--body-limit", type=int, default=5000, help="Frozen body characters; 0 means full body (offline only)")
     p.add_argument("--quote-contribution", action="store_true", help="Separate current-post contribution from available quoted background")
+    p.add_argument("--source-context", action="store_true", help="Append existing original URL, author, source kind/name; no network retrieval")
     p.add_argument("--conditional-review", action="store_true", help="Ask for semantic uncertainty and review only flagged cases; preserve same-call control")
     p.add_argument("--split", choices=["dev", "regression"], required=True)
     p.add_argument("--limit", type=int)
@@ -233,7 +248,8 @@ def main(argv=None):
                       rubric=a.rubric.read_text() if a.rubric else RUBRIC, workers=a.workers,
                       smoke=a.smoke, root=a.output_root, quote_source=a.quote_source,
                       body_limit=None if a.body_limit == 0 else a.body_limit,
-                      quote_contribution=a.quote_contribution, conditional_review=a.conditional_review)
+                      quote_contribution=a.quote_contribution, conditional_review=a.conditional_review,
+                      include_source_context=a.source_context)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

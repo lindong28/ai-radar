@@ -16,6 +16,8 @@
 
 ## 重建、扩充、运行
 
+2026-09-22接续说明：本版361题未增加或改标；如今285dev与76reg均已有分类实验曝光，不再将下方建题时的“本轮未参与”当作当前独立性证明。来源上下文、正文全文与引用主次均是被测输入配置，不创建新benchmark版本；最新配置与成绩由[状态](../../status.md)及[执行入口](../../../../../evals/content-enrichment/aihot-category-navigation/README.md)维护。
+
 命令的唯一维护入口在 [执行 README](../../../../../evals/content-enrichment/aihot-category-navigation/README.md)。本版使用该 build.py、`--inputs .../aihot-enrichment-fields/v2 --capture data/category-navigation-evidence/20260921 --version v1` 生成；当时capture目录现已归档至 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-21/10-08-04/support/category-navigation-evidence/20260921`，重跑时以此替换 `--capture`，并另用空的 `--data-root`。捕获原件也已冻结在本数据版本 evidence 中，不依赖临时网页服务存活；manifest保留当时命令，不改写历史路径。
 
 未来先用 capture.py 获取新的六分类页面，再用 `--base .../aihot-category-navigation/v1 --inputs <更多合格原文> --capture <新捕获> --version v2` 执行合并、去重和有效性重验。旧版本与新版本可能 overlap，不把各版本题数相加。

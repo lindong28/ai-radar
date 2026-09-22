@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260922-c931](adr/20260922-c931-continue-category-research-from-best-candidate.md)：分类逐轮择优、边界与来源上下文消融；研究选择与因果收益分开，原件和复用入口由[分类状态](evaluations/content-enrichment/status.md)定位。
+
 [20260922-5f6a](adr/20260922-5f6a-test-category-contribution-and-review.md)：A4+主线的正文/引用投影与条件复核，固定开发与已见回归，不改gold或生产；运行方法归[分类执行入口](../evals/content-enrichment/aihot-category-navigation/README.md)。
 
 [20260921-f6b3](adr/20260921-f6b3-test-editorial-evidence-score-rules.md)：基于逐题归因检验编辑边界、虚构few-shot、独立识别与条件公式；调用和重放复用入口在[pointwise README](../evals/visible-score/aihot-score-pointwise/README.md#编辑边界独立识别与公式规则)。

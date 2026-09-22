@@ -21,6 +21,25 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 ## 真实模型评测
 
+### 当前研究配置：C5
+
+2026-09-22研究选择为C5，不是生产默认：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
+
+```bash
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/evaluate.py \
+  --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-category-navigation/v1 \
+  --config evals/content-enrichment/configs/category-flash.json \
+  --env-file /path/to/project/.env \
+  --rubric evals/content-enrichment/prompts/category-c1.txt \
+  --quote-source ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v2 \
+  --quote-contribution --body-limit 0 \
+  --split dev --limit 200 --seed category-development --label category-c5-development --workers 8
+```
+
+冻结后去掉`--limit`可覆盖dev285；另用`--split regression`覆盖76题，明确二者已有曝光。同期B1对照改为`--rubric .../category-a4.txt --body-limit 5000`，其它参数相同。隔离worktree运行可传`--output-root /path/to/main-checkout`归档，代码仍来自当前cwd。不会自动启用新数据抓取或改变线上分类。
+
+### 默认基线与smoke
+
 ```bash
 PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/evaluate.py \
   --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-category-navigation/v1 \
@@ -59,6 +78,12 @@ body_limit（null表示全文）、quote_contribution和conditional_review进入
 指标全部是确定性计算，无需 LLM 判官，定义见 `metrics.json`，实现见 `evals/_shared/category_metrics.py`。整体 `category_accuracy`＝正确分类题数／全部选中题数；每类新增 `category_<name>_precision`＝TP/(TP+FP)、`category_<name>_recall`＝TP/(TP+FN)。`name` 为 model/product/industry/paper/tutorial/opinion；这是精确率与召回率，不是计入大量 TN 的 one-vs-rest accuracy。全部取值 0–1、越高越好。2026-09-21 用户新增目标：六类各自 precision、recall 均≥0.90，即十二项同时满足；整体 accuracy 不代替此目标，零分母的未计算项也不能算通过。
 
 某题误分时计入预测类 FP、真实类 FN；缺预测、调用/格式失败或未知类别只计真实类 FN，不分配预测类别，整体 accuracy 仍计错且该轮 incomplete。P/R 的零分母返回 `value: null, status: not_computed, reason: zero denominator`，不是 0 或 100%。`scores.json.category_counts` 按网页 slug 保存每类 tp/fp/fn，metric 的 denominator 是该指标分母，per_case 保留 reference/prediction/有效性。diagnostics 继续保存混淆矩阵及多数类基线。人评从稳定 `human-evals/content-enrichment/reviews.json` 按输入身份和字段优先覆盖，只作用新推理轮的计分视图，不改原始参考。
+
+## 原始来源上下文消融
+
+`--source-context` 默认关闭；开启时仅将冻结 `input` 中非空字符串 `url`、`author`、`source_kind`、`source_name` 追加到实际 user prompt，不访问网络，不包含 tier、tags、score、参考分类或其它富化字段。`author` 可能是 feed 提交者，`source_name` 是采集渠道，不等于核实过的原作者／官方机构。不开启时正文与此前逐字一致；可与 `--quote-source`、`--quote-contribution` 组合。新增 `metadata.object_identity.behavior.include_source_context` 记录开关，实际取值由 `prompts.jsonl` 及 `object_identity.inputs.prompts` 绑定；缺字段不造值，全部缺失则不追加段落。
+
+该开关只服务离线输入诊断，既不建立来源到类别的查表，也不改变生产输入。C阶段候选 rubric、研究选择与真实结果见[状态](../../../docs/evaluations/content-enrichment/status.md)。未来使用新题库仍通过同一命令显式指定 dataset；不因路径存在就外推已验证生产收益。
 
 ## 用冻结预测补算指标（零模型调用）
 
