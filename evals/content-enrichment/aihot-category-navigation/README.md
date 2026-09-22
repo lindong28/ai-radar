@@ -23,9 +23,9 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 <a id="当前研究配置c5"></a>
 
-### 当前整体对照：C5；研究修复主分支：F3
+### 当前整体主方案：C5；保留F3/G3局部修复分支
 
-2026-09-22整体最好记录仍为C5，不是生产默认：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。C5三次全361题290/288/289对，F3同期288对、对C5修正21/退化22，未证明整体更好。F3继承D2研究主次并修复行业过度吸入和短观察/测评边界，论文/教程局部有益；选作下一研究修复主分支，同时保留C5对照和F3行业/观点退化记录，不按最新编号晋级。均未达六类双90。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
+2026-09-22整体最有支持的方案仍为C5，不是生产默认：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。全361历史290/288/289对，本轮新gateway链路294对（81.44%），原方案未变，差值不是优化收益。G3同期282对、16修正/28退化；F3上轮288对，二者局部机制保留但未证明整体更好。下一研究以C5作整体主方案/对照，吸收F3/G3的具体归因与条件化修复方向，不直接采用完整G3或丢弃已获局部支持的机制。均未达六类双90。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
 
 ```bash
 PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/evaluate.py \
@@ -42,9 +42,11 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 ### D阶段候选复现
 
-本节亦包含E/F阶段修复分支；各自状态不同，不能将文件存在理解为已采用。
+本节亦包含E/F/G阶段修复分支；各自状态不同，不能将文件存在理解为已采用。
 
-F阶段复现：沿上方C5命令，将rubric换为`evals/content-enrichment/prompts/category-f3.txt`并给新label，即当前研究分支；换`category-f1.txt`或`category-f2.txt`可复现局部修复历史，其它参数不变。F1→F2→F3同200为151→160→163；冻结F3去掉limit，分别dev285及regression76为229/285、59/76（UTC `05-51-35`/`05-53-15`），同期C5为232/285、57/76（`05-56-53`/`05-58-36`）。F3含一次content_filter仍留分母，不称完整成功推理。原件不覆盖；已曝光回归不是独立集，看到冻结结果后不得把改动版仍称冻结F3。全361调用tokens为F3 532,795、C5 466,102，成本和局部退化也参与下一轮选择。
+G阶段复现：沿上方C5命令换为`evals/content-enrichment/prompts/category-g1.txt`、`category-g2.txt`或`category-g3.txt`，给新label；其它参数不变，当前配置走gateway。G1仅增强reason证据一致，G2重构读者贡献定义，G3回F3骨架保留技术讲解/短研究/产品附安装边界。同200为155/151/158对，新链路F3控制155对。G3冻结dev285/reg76为226/56对（`12-36-26`/`12-38-07`），C5同期235/59对（`12-38-47`/`12-40-32`）；G3全库tokens567,044、C5为466,026。去掉limit并切split可重跑全库，旧原件不能覆盖、已有曝光不能改称独立验证。首轮`12-26-44/support/summarize-g.py`复用canonical scorer生成配对与分歧，既有最终summary只读，新复算应另存新输出路径。
+
+F阶段复现：沿上方C5命令，将rubric换为`evals/content-enrichment/prompts/category-f3.txt`并给新label，即保留的研究分支；换`category-f1.txt`或`category-f2.txt`可复现局部修复历史，其它参数不变。F1→F2→F3同200为151→160→163；冻结F3去掉limit，分别dev285及regression76为229/285、59/76（UTC `05-51-35`/`05-53-15`），同期C5为232/285、57/76（`05-56-53`/`05-58-36`）。F3含一次content_filter仍留分母，不称完整成功推理。原件不覆盖；已曝光回归不是独立集，看到冻结结果后不得把改动版仍称冻结F3。全361调用tokens为F3 532,795、C5 466,102，成本和局部退化也参与下一轮选择。
 
 E阶段复现：沿上方C5命令，将rubric换为`evals/content-enrichment/prompts/category-e1.txt`、`category-e2.txt`或`category-e3.txt`并给新label；其它参数不变。E1源于D2，E2源于E1，E3保留E1收益并加入范围核对；三者200题158/158/157对，不是推荐替换版。D2冻结复现改用`category-d2.txt`，去掉limit分别跑dev285与regression76；本轮两run为`05-24-16`/`05-25-41`。旧失败、原prompt/reason与比较记录保留，不在复现时覆盖。后续局部修复既要检查保住的收益，也要检验全体类别退化，不按每轮总分是否第一决定删除方向。
 

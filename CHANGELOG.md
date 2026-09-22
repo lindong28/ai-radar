@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-22（分类G阶段同链路实验）
+
+- 完成三个开发候选及G3/C5全361题对照，共1,522次Flash调用；有效边界修复和新增退化一起留档。
+- 同期C5为81.44%、G3为78.12%，当前整体主方案保留C5，F3/G3局部机制保留研究。双90未达，未改生产或gold；完整指标、经验与复用方式见[分类状态](docs/evaluations/content-enrichment/status.md)。
+
 ## 2026-09-22（LLM Gateway 调用通道）
 
 - 仓内 prefilter、score、enrich、备选 OpenAI scorer 和评测调用接入同机 llm-gateway；发送前生成请求 ID，保留 gateway/实际模型身份，不再用应用内供应商密钥、直接 fallback 或 SDK 自动重试。

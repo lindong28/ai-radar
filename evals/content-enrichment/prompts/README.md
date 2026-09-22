@@ -1,5 +1,7 @@
 # 分类实验提示
 
+G阶段最新整体主方案/对照仍为C5（本轮全361为294对），F3/G3保留局部研究，不直接采用完整G3。`category-g1.txt`增加正面证据及reason/decision一致性，`category-g2.txt`重构读者贡献定义，`category-g3.txt`用F3骨架迁回技术讲解、短研究和产品附安装的局部边界；同200题155/151/158对，新链路F3控制155对。G3冻结全库282对，较同期C5修16/退28，tokens多21.68%；保住四个目标例不等于整体改善。G3与C5都单Flash、全文/as-of引用/贡献主次；不新增抓取或第二call，不是生产默认。后续以C5对照检验有效局部边界的条件化兑现，详见[状态](../../../docs/evaluations/content-enrichment/status.md)。下方各阶段选择保留当时语义，不覆盖为最新结论。
+
 F阶段当前保留C5整体成绩对照，研究修复主分支选`category-f3.txt`。F1保留D2研究机制并统一主题/贡献定义，F2修行业过度吸入，F3修短观察与发布/测评主次；同200题151/160/163对。冻结F3全361为288对，同期C5为289对，未证明整体更好；F3论文/教程P/R提高但行业P和观点R退化，保留局部收益继续修复而非整案删除。三者均为单Flash＋冻结全文/as-of引用＋贡献主次，不加source-context/conditional-review，不是生产默认。读数及原件见[状态](../../../docs/evaluations/content-enrichment/status.md)，运行方式见[执行入口](../aihot-category-navigation/README.md#d阶段候选复现)。
 
 E阶段区分C5整体最优对照与D2保留修复分支。`category-e1.txt`保留D2的研究发现主次并修成果/预测边界，`category-e2.txt`收窄预测并要求reason对比，`category-e3.txt`在E1上核对类别范围；同200题79.0/79.0/78.5%，没有整体替代C5。D2首次全361题78.39%，C5历史79.78/80.33%；D2关于新发现与附带评论的局部收益继续保留，不因总分落后删除方向。详见[执行入口](../aihot-category-navigation/README.md#d阶段候选复现)和[状态](../../../docs/evaluations/content-enrichment/status.md)。
