@@ -27,6 +27,51 @@ class FakePrefilter:
         return "ok"
 
 
+def test_gateway_failure_is_recorded_without_retry_or_aborting_batch(tmp_path: Path) -> None:
+    from airadar.provider.llm_gateway import GatewayRequestError
+
+    conn = _db(tmp_path)
+    ids = [_seed_item(conn, title, "LLM news") for title in ("LLM invalid", "LLM timeout", "LLM valid")]
+
+    class MixedPrefilter(FakePrefilter):
+        calls: list[str] = []
+
+        def is_ai_related(self, item: ProviderItem) -> PrefilterResult:
+            self.calls.append(item.id)
+            if item.id in ids[:2]:
+                raise GatewayRequestError(
+                    "request-" + item.id,
+                    code="ValueError" if item.id == ids[0] else "APITimeoutError",
+                    body={"choices": [{"message": {"content": "[]"}}]} if item.id == ids[0] else None,
+                    identity={"attempt_id": "attempt-1"} if item.id == ids[0] else None,
+                )
+            return super().is_ai_related(item)
+
+    provider = MixedPrefilter()
+    summary = run_prefilter(conn, provider=provider, ruleset_version="gateway-isolation")
+    assert (summary.processed, summary.errors) == (3, 2)
+    assert sorted(provider.calls) == sorted(ids)
+    rows = {row[0]: row[1:] for row in conn.execute(
+        "SELECT item_id,numeric_json,output_json,error FROM item_evaluations"
+    )}
+    for item_id in ids[:2]:
+        numeric, output, error = rows[item_id]
+        assert numeric is None
+        assert "request-" + item_id in error
+        raw = json.loads(output)["raw"]
+        assert raw["sent_request_id"] == "request-" + item_id
+        assert "is_ai_related" not in json.loads(output)
+    assert json.loads(rows[ids[0]][1])["raw"]["response_body"]["choices"][0]["message"]["content"] == "[]"
+    assert json.loads(rows[ids[1]][1])["raw"]["response_body"] is None
+    assert rows[ids[2]][2] is None
+    assert json.loads(rows[ids[2]][0])["is_ai_related"] is True
+    recovered = run_prefilter(conn, provider=FakePrefilter(), ruleset_version="gateway-isolation")
+    assert (recovered.processed, recovered.errors) == (2, 0)
+    assert conn.execute("SELECT COUNT(*) FROM item_evaluations WHERE error IS NOT NULL").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM item_evaluations WHERE error IS NULL").fetchone()[0] == 3
+    assert run_prefilter(conn, provider=FakePrefilter(), ruleset_version="gateway-isolation").processed == 0
+
+
 def _recent_iso(minutes_ago: int) -> str:
     return (
         (datetime.now(UTC) - timedelta(minutes=minutes_ago)).replace(microsecond=0).isoformat().replace("+00:00", "Z")

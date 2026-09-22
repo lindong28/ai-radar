@@ -14,6 +14,7 @@ from ..provider.base import PrefilterProvider, PrefilterResult, ProviderItem
 from ..provider.deepseek_v32 import DeepSeekV32Prefilter
 from ..provider.glm import GLMPrefilter
 from ..provider.judgment import JudgmentFormatError
+from ..provider.llm_gateway import GatewayRequestError
 from ..ruleset import current_version
 from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
@@ -67,6 +68,7 @@ def _candidate_rows(
       AND NOT EXISTS (
         SELECT 1 FROM item_evaluations e
         WHERE e.item_id=i.id AND e.stage='prefilter' AND e.ruleset_version=?
+          AND e.error IS NULL
       )
     """
     )
@@ -109,6 +111,12 @@ def _evaluate_item(
 
     try:
         result: PrefilterResult = provider.is_ai_related(item)
+    except GatewayRequestError as exc:
+        output = {"raw": {
+            "sent_request_id": exc.sent_request_id, "llm_gateway": exc.identity,
+            "response_body": exc.body, "error_code": exc.code,
+        }}
+        return None, output, str(exc), int((time.monotonic() - start) * 1000)
     except JudgmentFormatError as exc:
         return None, {"raw": {"json": exc.payload}}, str(exc), int((time.monotonic() - start) * 1000)
     output = {

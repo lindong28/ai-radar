@@ -24,6 +24,8 @@ curl --noproxy '*' --fail http://127.0.0.1:39011/health
 
 ## 失败、重试与用量
 
+2026-09-22 的 17:45 scheduled pipeline 暴露一条非对象 JSON 响应中断 prefilter 整批的问题（gateway request `1b9e870c-e9e2-433c-9842-c2c7177d3021`，供应商成功不等于业务解析成功）。prefilter 现在把 `GatewayRequestError` 保存为该条 evaluation 的 error，保留 request ID、响应与 companion，不生成负例、不在本轮重发，继续处理其余候选。同 ruleset 只跳过成功评价，失败项在仍属候选时间窗时可于下一轮重试，保留失败历史；不把全部调用失败的一轮报为零错误。
+
 SDK `max_retries=0`，应用不在供应商之间 fallback；同轮富化失败也不重发。Gateway 是一次请求的供应商重试/回退 owner。不确定是否已派发时，先按发送前生成的请求 ID 查询 gateway ledger，不立即重跑任务。既有跨轮失败队列调度不等于同一请求的幂等重放；手工重跑或重新调度产生新业务尝试，可能再次计费。
 
 响应中的 `llm_gateway` 记录真实 provider、native model、route、credential profile 与 revision。业务异常保留发送 ID；评测本地 attempt 在发送前落盘，响应解析失败仍保留 raw/usage/identity。Gateway ledger 是 provider attempt 账；本项目 `llm_usage.db` 保留成功响应的业务归因兼容投影，不升级宣称为完整账单，也不与 gateway 数字相加。未知费用保持未知。
