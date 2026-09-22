@@ -83,9 +83,12 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              label: str, chat_factory, rubric: str = RUBRIC, workers: int = 8,
              smoke: bool = False, root: Path = assets.ROOT, quote_source: Path | None = None,
              body_limit: int | None = 5000, quote_contribution: bool = False,
-             conditional_review: bool = False, include_source_context: bool = False) -> dict:
+             conditional_review: bool = False, include_source_context: bool = False,
+             blind_review: bool = False, review_guidance: str = "") -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
+    if (blind_review or review_guidance) and not conditional_review:
+        raise ValueError("blind review and review guidance require conditional review")
     check_metric_definitions(root)
     manifest, all_cases = assets.load_dataset(dataset, TARGET)
     if manifest["benchmark"] != BENCHMARK:
@@ -133,6 +136,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                              "rubric": rubric, "thinking": "disabled", "retry_count": 0,
                              "quote_context": context_identity, "body_limit": body_limit,
                              "quote_contribution": quote_contribution, "conditional_review": conditional_review,
+                             "blind_review": blind_review, "review_guidance": review_guidance,
                              "include_source_context": include_source_context},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
@@ -176,7 +180,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                 if row["needs_review"]:
                     # Includes prompt construction/archival failures, not only API errors.
                     row.update(status="error", output={})
-                    second_prompt = review_prompt(base_prompts[key], response["json"])
+                    second_prompt = review_prompt(base_prompts[key], response["json"],
+                                                  blind=blind_review, guidance=review_guidance)
                     assets.write_json(run / "review-prompts" / (key + ".json"), second_prompt)
                     # A failed review is a failed workflow, never an implicit fallback.
                     second = chat(key)(stage="category_review", prompt=second_prompt, request=request)
@@ -234,6 +239,8 @@ def main(argv=None):
     p.add_argument("--quote-contribution", action="store_true", help="Separate current-post contribution from available quoted background")
     p.add_argument("--source-context", action="store_true", help="Append existing original URL, author, source kind/name; no network retrieval")
     p.add_argument("--conditional-review", action="store_true", help="Ask for semantic uncertainty and review only flagged cases; preserve same-call control")
+    p.add_argument("--blind-review", action="store_true", help="With --conditional-review, withhold the first decision and reason from the second call")
+    p.add_argument("--review-guidance", type=Path, help="With --conditional-review, append this UTF-8 guidance only to the second call")
     p.add_argument("--split", choices=["dev", "regression"], required=True)
     p.add_argument("--limit", type=int)
     p.add_argument("--seed", default="category-development")
@@ -249,7 +256,8 @@ def main(argv=None):
                       smoke=a.smoke, root=a.output_root, quote_source=a.quote_source,
                       body_limit=None if a.body_limit == 0 else a.body_limit,
                       quote_contribution=a.quote_contribution, conditional_review=a.conditional_review,
-                      include_source_context=a.source_context)
+                      include_source_context=a.source_context, blind_review=a.blind_review,
+                      review_guidance=a.review_guidance.read_text() if a.review_guidance else "")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

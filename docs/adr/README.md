@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260922-81af](./20260922-81af-test-blind-conditional-category-review.md) | C5 条件盲复核与仅二次生效的局部证据指导实验 | accepted for offline experiment | 2026-09-22 |
 | [20260922-7d82](./20260922-7d82-route-llm-calls-through-gateway.md) | 仓内模型与评测统一接入 LLM Gateway，明确模型身份与仓外边界 | accepted for local implementation | 2026-09-22 |
 | [20260922-c931](./20260922-c931-continue-category-research-from-best-candidate.md) | 逐轮择优接续分类研究，研究边界与冻结来源输入消融 | accepted for offline experiment | 2026-09-22 |
 | [20260922-5f6a](./20260922-5f6a-test-category-contribution-and-review.md) | A4+分类主线的引用主次、全文、贡献边界及条件复核消融 | accepted for offline experiment | 2026-09-22 |

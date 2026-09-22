@@ -1,5 +1,7 @@
 # 分类实验提示
 
+I阶段最新研究组件是`category-i2-review.txt`，仅供`--conditional-review --blind-review --review-guidance`的第二次调用使用，不能代替完整`--rubric`。保留C5首轮，用传播形式/承载证据分离、短论文证据和研究/实践边界指导复核。冻结361题首轮284→最终286，修6/退4，77错只路由12个；已见回归净退2，故不整体晋级。I1无guidance开发161/200、I2有guidance159/200，首轮也变动，不把两者差值单独归因guidance。整体主方案仍C5，生产A0不变；下方H/G/F等为历史记录，详见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22i阶段条件盲复核)。
+
 H阶段最新整体对照仍C5：同期全361为286对（79.22%），H3为274对（75.90%），13修正/25退化。`category-h1.txt`是真正的C5＋F3/G3局部边界实现；H2保留它并先识别作者动作，H3取消错误的原创作者门槛、按承载证据分类。三个开发arm156/160/156对，H3独立测评等收益可复用但完整方案未晋级；下方G阶段294对属于历史读数，不覆盖本轮。三者均单Flash/全文/as-of引用贡献，不加第二call或新字段，不是生产默认。复现见[入口](../aihot-category-navigation/README.md#d阶段候选复现)，逐例归因和下一结构研究见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22h阶段实际组合局部修复)。
 
 G阶段最新整体主方案/对照仍为C5（本轮全361为294对），F3/G3保留局部研究，不直接采用完整G3。`category-g1.txt`增加正面证据及reason/decision一致性，`category-g2.txt`重构读者贡献定义，`category-g3.txt`用F3骨架迁回技术讲解、短研究和产品附安装的局部边界；同200题155/151/158对，新链路F3控制155对。G3冻结全库282对，较同期C5修16/退28，tokens多21.68%；保住四个目标例不等于整体改善。G3与C5都单Flash、全文/as-of引用/贡献主次；不新增抓取或第二call，不是生产默认。后续以C5对照检验有效局部边界的条件化兑现，详见[状态](../../../docs/evaluations/content-enrichment/status.md)。下方各阶段选择保留当时语义，不覆盖为最新结论。

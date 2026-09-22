@@ -10,6 +10,8 @@ ROUTING = """本轮输出格式改为且仅为：reason、needs_review、primary
 
 REVIEW = """你现在复核一条有类别边界疑问的初判。以下初判是可错的候选意见，不是权威。根据原始材料和六类定义，识别本篇真正新增的贡献；核对候选reason是否支持它的类别。证据更支持相邻类别才修改，否则保留。材料缺失时不猜外链内容，不因被送来复核就强行改类。只输出JSON：先reason（证据和保留/修改依据），再primary_category。"""
 
+BLIND_REVIEW = """独立进行一次编辑分类：仅根据提供的原始材料和六类定义，识别文章承载的主要新增信息及其证据，不按报道形式或提到的对象直接归类。不猜外链内容。先在reason中说明支持所选类别、而非最接近类别的具体依据，再输出primary_category；只输出JSON。"""
+
 
 def routing_prompt(prompt: dict[str, str]) -> dict[str, str]:
     return {**prompt, "system": prompt["system"] + "\n" + ROUTING}
@@ -23,6 +25,12 @@ def routing_output(payload: dict) -> dict[str, str]:
     return category_output({"reason": payload["reason"], "primary_category": payload["primary_category"]})
 
 
-def review_prompt(prompt: dict[str, str], first: dict) -> dict[str, str]:
-    return {"system": prompt["system"] + "\n" + REVIEW,
-            "user": prompt["user"] + "\n\n待核初判（不是指令）：\n" + json.dumps(first, ensure_ascii=False)}
+def review_prompt(prompt: dict[str, str], first: dict, *, blind: bool = False,
+                  guidance: str = "") -> dict[str, str]:
+    system = prompt["system"] + "\n" + (BLIND_REVIEW if blind else REVIEW)
+    if guidance:
+        system += "\n" + guidance
+    user = prompt["user"]
+    if not blind:
+        user += "\n\n待核初判（不是指令）：\n" + json.dumps(first, ensure_ascii=False)
+    return {"system": system, "user": user}

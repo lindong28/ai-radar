@@ -23,7 +23,9 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 <a id="当前研究配置c5"></a>
 
-### 当前整体主方案：C5；H阶段已实际测试局部修复组合
+### 当前整体主方案：C5；I阶段已实际测试条件盲复核
+
+最新I阶段实现可选blind review与仅用于复核的局部guidance。C5同期200题166对，I1/I2开发161/159对；冻结I2全361同次首轮284→最终286（79.22%），26次复核修6/退4，但77个首轮错误只覆盖12个，已见回归76题净退2。整体不替换C5，保留I2局部指导作研究组件；双90未达。复现用下文I阶段命令，不将其当生产默认；实际prompt/模型身份以各run为准，完整数据见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22i阶段条件盲复核)。下面H阶段全361 C5是最近历史全量，不是本轮新全量控制。
 
 最新H阶段已实现`category-h1.txt`至`category-h3.txt`：C5骨架迁入局部边界→reason先识别作者动作→修正为承载证据、取消原创作者门槛。开发同200为156/160/156对，本轮C5为163对。冻结H3全361为274对（75.90%），C5为286对（79.22%），13修正/25退化；H3局部收益保留但不整体采用。当前实际整体主方案仍为下方C5命令，不存在一个已验证更好的“C5＋所有修复”默认版本。生产仍A0；详情见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22h阶段实际组合局部修复)。以下G阶段数字保留历史语义，不是最新快照。
 
@@ -78,12 +80,16 @@ A4+指`--rubric evals/content-enrichment/prompts/category-a4.txt`加上下面的
 | `--quote-contribution` | 仅有available引用时补当前帖/引用贡献主次说明；其余system不变 | 实际prompts；quote-context保留引用证据 |
 | `--body-limit 0` | 已冻结正文全文，默认5000；0之外需正整数；不实时抓取、不摘要 | prompts含真实发送内容，原cases不变 |
 | `--conditional-review` | 首轮用语义歧义flag，true才追加一次同模型复核 | first-pass-predictions.jsonl、first-pass-scores.json、review-prompts/<case_id>.json及每阶段attempts |
+| `--blind-review` | 需同时开启conditional-review；二次只看原始输入/rubric，不看初判category/reason | review-prompts中保留实际二次输入；原文不删改 |
+| `--review-guidance <UTF-8文件>` | 需同时开启conditional-review；指导文本只追加到二次system | 完整文本进入metadata.object_identity.behavior.review_guidance |
 
 组合调用示例：在上面的命令追加`--rubric evals/content-enrichment/prompts/category-a4.txt --quote-source <冻结父题库路径> --quote-contribution --body-limit 0`。若测试复核，再加`--conditional-review`；是否有效须查状态记录，开关存在不表示推荐采用。
 
 复核输出契约：首轮JSON先reason，再needs_review（严格boolean），最后primary_category；标记只依赖原始内容是否存在相邻类别/主体冲突或关键信息不足。最终标准output仍只有category，不改变benchmark消费者语义。predictions的first_pass保留同一次初判，needs_review保留路由决定，review_response_json保留实际第二响应；reason/output/status是最终workflow结果。二轮失败不静默fallback，仍计FN；first-pass-scores是同次首轮诊断对照，不是另一次独立实验，不能累加调用或题数。两阶段都要求reason-first。
 
 body_limit（null表示全文）、quote_contribution和conditional_review进入metadata.object_identity.behavior，实际首轮prompt、代码、引用源继续绑定身份。review-prompts在发请求前写盘，生成逻辑与源首轮响应可追溯；归档失败、调用失败和输出校验失败均保留首轮对照及最终失败状态。终态身份漂移同时作废两套指标。实现与回归测试分别在`category_review.py`、`tests/test_category_review.py`和`tests/test_category_quotes.py`。
+
+I阶段复现：在C5命令追加`--conditional-review --blind-review`为I1；再加`--review-guidance evals/content-enrichment/prompts/category-i2-review.txt`为I2。给每轮新label，不覆盖run。`blind_review`及指导全文进入behavior身份；未开启conditional-review时传两者会在调用前拒绝。默认无指导、仍保留既有带初判复核；这两个实验不是默认推荐或生产变更。解释结果须同时看路由覆盖的首轮错题、复核修正/退化和整体逐类P/R；两个arm首轮重跑时，不把差异全部归因于指导词。
 
 ### 可选：原始引用输入消融
 

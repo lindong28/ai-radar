@@ -30,3 +30,19 @@ def test_prompt_projection_preserves_original_and_first_decision():
     assert reviewed["user"].startswith(original["user"])
     assert '"primary_category": "paper"' in reviewed["user"]
     assert original == {"system": "rubric", "user": "original article"}
+
+
+@pytest.mark.parametrize("guidance", ["", "local evidence guidance"])
+def test_blind_review_ignores_first_decision_and_preserves_original(guidance):
+    original = {"system": "rubric", "user": "original article"}
+    first = {"reason": "INITIAL_SENTINEL", "needs_review": True, "primary_category": "paper"}
+    result = review_prompt(original, first, blind=True, guidance=guidance)
+    other = review_prompt(original, {"reason": "DIFFERENT", "primary_category": "model"},
+                          blind=True, guidance=guidance)
+    assert result == other
+    assert result["user"] == original["user"]
+    assert "INITIAL_SENTINEL" not in str(result)
+    assert result["system"].startswith(original["system"])
+    if guidance:
+        assert result["system"].endswith(guidance)
+    assert original == {"system": "rubric", "user": "original article"}
