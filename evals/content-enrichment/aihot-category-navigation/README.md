@@ -28,7 +28,23 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
   --env-file /path/to/project/.env --split dev --limit 8 --smoke --label category-smoke --workers 8
 ```
 
-smoke 验证链路，不代表质量。随后固定 seed/开发题比较 rubric（`--rubric path.txt`）；冻结候选后使用 regression，不把开发或反复选型结果称盲测。模型输入严格只有 title 与前 5,000 字正文，参考、tags、AIHOT 摘要不进入 prompt；每题一个 Flash 调用，输出 reason 后 primary_category。共享实现位于 `src/airadar/enrich/category.py`，runner 为 `evals/_shared/category_eval.py`；独立调用成绩不代表完整 enrich 或生产已上线。
+smoke 验证链路，不代表质量。随后固定 seed/开发题比较 rubric（`--rubric path.txt`）；冻结候选后使用 regression，不把开发或反复选型结果称盲测。默认模型输入只有 title 与前 5,000 字正文，参考、tags、AIHOT 摘要不进入 prompt；默认每题一个 Flash 调用，输出 reason 后 primary_category。共享实现位于 `src/airadar/enrich/category.py`，runner 为 `evals/_shared/category_eval.py`；独立调用成绩不代表完整 enrich 或生产已上线。
+
+### A4+主线的结构消融（2026-09-22）
+
+A4+指`--rubric evals/content-enrichment/prompts/category-a4.txt`加上下面的`--quote-source`，不是默认A0。以下开关可组合，默认都不启用；同题同seed一次只改变一个因素，另给label：
+
+| 参数 | 被测变化 | 运行原件 |
+|---|---|---|
+| `--quote-contribution` | 仅有available引用时补当前帖/引用贡献主次说明；其余system不变 | 实际prompts；quote-context保留引用证据 |
+| `--body-limit 0` | 已冻结正文全文，默认5000；0之外需正整数；不实时抓取、不摘要 | prompts含真实发送内容，原cases不变 |
+| `--conditional-review` | 首轮用语义歧义flag，true才追加一次同模型复核 | first-pass-predictions.jsonl、first-pass-scores.json、review-prompts/<case_id>.json及每阶段attempts |
+
+组合调用示例：在上面的命令追加`--rubric evals/content-enrichment/prompts/category-a4.txt --quote-source <冻结父题库路径> --quote-contribution --body-limit 0`。若测试复核，再加`--conditional-review`；是否有效须查状态记录，开关存在不表示推荐采用。
+
+复核输出契约：首轮JSON先reason，再needs_review（严格boolean），最后primary_category；标记只依赖原始内容是否存在相邻类别/主体冲突或关键信息不足。最终标准output仍只有category，不改变benchmark消费者语义。predictions的first_pass保留同一次初判，needs_review保留路由决定，review_response_json保留实际第二响应；reason/output/status是最终workflow结果。二轮失败不静默fallback，仍计FN；first-pass-scores是同次首轮诊断对照，不是另一次独立实验，不能累加调用或题数。两阶段都要求reason-first。
+
+body_limit（null表示全文）、quote_contribution和conditional_review进入metadata.object_identity.behavior，实际首轮prompt、代码、引用源继续绑定身份。review-prompts在发请求前写盘，生成逻辑与源首轮响应可追溯；归档失败、调用失败和输出校验失败均保留首轮对照及最终失败状态。终态身份漂移同时作废两套指标。实现与回归测试分别在`category_review.py`、`tests/test_category_review.py`和`tests/test_category_quotes.py`。
 
 ### 可选：原始引用输入消融
 

@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260922-5f6a](./20260922-5f6a-test-category-contribution-and-review.md) | A4+分类主线的引用主次、全文、贡献边界及条件复核消融 | accepted for offline experiment | 2026-09-22 |
 | [20260921-e38b](./20260921-e38b-align-six-category-evaluation.md) | 网站六类分类、实际导航金标、独立 Flash 分类评测与消费者兼容 | accepted；不部署或切换生产调用 | 2026-09-21 |
 | [20260921-f6b3](./20260921-f6b3-test-editorial-evidence-score-rules.md) | 编辑边界、虚构few-shot、独立识别与条件公式四类评分实验 | accepted for offline experiment | 2026-09-21 |
 | [20260921-c4e1](./20260921-c4e1-test-news-type-score-combination.md) | 新闻类型条件权重与代表原文自身gold诊断；不改生产或gold | accepted for offline experiment | 2026-09-21 |

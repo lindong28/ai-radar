@@ -13,6 +13,7 @@ from airadar.enrich.classification import PRIMARY_CATEGORY_SLUGS
 
 from . import assets
 from .category_metrics import check_metric_definitions, score_categories
+from .category_review import review_prompt, routing_output, routing_prompt
 from .cli import transport_factory
 from .human_labels import apply_labels
 from .human_store import read_reviews
@@ -22,6 +23,8 @@ from .quote_context import QuoteContext, render_quotes
 
 TARGET = "content-enrichment"
 BENCHMARK = assets.CATEGORY_NAVIGATION
+
+QUOTE_CONTRIBUTION = """引用关系：先识别当前帖自身交付了什么。当前帖有独立的实测、步骤或论证时，按当前贡献分类，引用只交代背景；当前帖仅简短转述、赞同或指代而没有独立贡献时，用引用原帖补足所报道的事实，再按该事实分类。不要因为引用更长就让它覆盖当前主体，也不要因为当前帖短就忽略已提供的引用。reason说明实际采用的主体证据。"""
 
 
 def quoted_inputs(cases: list[dict], dataset: Path, source: Path) -> tuple[list[dict], dict]:
@@ -68,7 +71,9 @@ def diagnostics(cases: list[dict], predictions: list[dict]) -> dict:
 
 def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed: str,
              label: str, chat_factory, rubric: str = RUBRIC, workers: int = 8,
-             smoke: bool = False, root: Path = assets.ROOT, quote_source: Path | None = None) -> dict:
+             smoke: bool = False, root: Path = assets.ROOT, quote_source: Path | None = None,
+             body_limit: int | None = 5000, quote_contribution: bool = False,
+             conditional_review: bool = False) -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
     check_metric_definitions(root)
@@ -84,7 +89,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         all_cases, human = apply_labels(all_cases, [a for b in book["batches"]
             for a in b["data"]["annotations"]], TARGET)
     cases = select_cases(category_cases(all_cases), split, limit, seed)
-    prompts = {c["case_id"]: render_category_prompt(c["input"], rubric) for c in cases}
+    prompts = {c["case_id"]: render_category_prompt(c["input"], rubric, body_limit=body_limit) for c in cases}
     contexts, context_identity = [], None
     context_paths = []
     if quote_source is not None:
@@ -93,6 +98,11 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                          assets.read_json(quote_source / "manifest.json")["shared_evidence"] / "raw-inputs.jsonl"]
         for row in contexts:
             prompts[row["case_id"]]["user"] += render_quotes(row["quotes"])
+            if quote_contribution and any(q["status"] == "available" for q in row["quotes"]):
+                prompts[row["case_id"]]["system"] += "\n" + QUOTE_CONTRIBUTION
+    base_prompts = prompts
+    if conditional_review:
+        prompts = {key: routing_prompt(prompt) for key, prompt in base_prompts.items()}
     request = {"model": config["models"]["category"], "temperature": 0, "max_tokens": 700}
     paths = ("src/airadar/enrich/category.py", "src/airadar/enrich/classification.py",
              "src/airadar/provider/judgment.py", "evals/_shared/category_eval.py",
@@ -101,14 +111,15 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              "evals/_shared/transport.py", "evals/_shared/cli.py",
              "evals/_shared/human_labels.py", "evals/_shared/human_store.py",
              "evals/_shared/score_type_study.py", "evals/_shared/quote_context.py",
-             "evals/_shared/identity.py", "evals/_shared/dataset.py")
+             "evals/_shared/identity.py", "evals/_shared/dataset.py", "evals/_shared/category_review.py")
 
     def identity():
         return {"code": {p: assets.file_digest(assets.ROOT / p) for p in paths},
                 "behavior": {"metric_registry": check_metric_definitions(root),
                              "request": request, "transport": config["transport_identity"],
                              "rubric": rubric, "thinking": "disabled", "retry_count": 0,
-                             "quote_context": context_identity},
+                             "quote_context": context_identity, "body_limit": body_limit,
+                             "quote_contribution": quote_contribution, "conditional_review": conditional_review},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
                            "cases": assets.digest(cases), "prompts": assets.digest(prompts),
@@ -142,9 +153,23 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         try:
             response = chat(key)(stage="category", prompt=prompts[key], request=request)
             row["response_json"] = json.dumps(response, ensure_ascii=False)
-            row["output"] = category_output(response["json"])
+            row["output"] = (routing_output if conditional_review else category_output)(response["json"])
             row["reason"] = response["json"]["reason"]
             row["status"] = "ok"
+            if conditional_review:
+                row["needs_review"] = response["json"]["needs_review"]
+                row["first_pass"] = dict(row)
+                if row["needs_review"]:
+                    # Includes prompt construction/archival failures, not only API errors.
+                    row.update(status="error", output={})
+                    second_prompt = review_prompt(base_prompts[key], response["json"])
+                    assets.write_json(run / "review-prompts" / (key + ".json"), second_prompt)
+                    # A failed review is a failed workflow, never an implicit fallback.
+                    second = chat(key)(stage="category_review", prompt=second_prompt, request=request)
+                    row["review_response_json"] = json.dumps(second, ensure_ascii=False)
+                    row["output"] = category_output(second["json"])
+                    row["reason"] = second["json"]["reason"]
+                    row["status"] = "ok"
         except Exception as exc:
             row["error_type"] = type(exc).__name__
             row["attempt_id"] = getattr(exc, "attempt_id", None)
@@ -161,11 +186,19 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     predictions.sort(key=lambda p: p["case_id"])
     assets.write_jsonl(run / "predictions.jsonl", predictions)
     result = score_categories(cases, predictions)
+    first_result = None
+    if conditional_review:
+        first_predictions = [p.get("first_pass", p) for p in predictions]
+        assets.write_jsonl(run / "first-pass-predictions.jsonl", first_predictions)
+        first_result = score_categories(cases, first_predictions)
     unchanged = frozen == identity()
     if not unchanged:
-        result["complete"] = False
-        for metric in result["metrics"].values():
-            metric.update(value=None, status="not_computed", reason="object identity changed")
+        for invalid in [result] + ([first_result] if first_result is not None else []):
+            invalid["complete"] = False
+            for metric in invalid["metrics"].values():
+                metric.update(value=None, status="not_computed", reason="object identity changed")
+    if first_result is not None:
+        assets.write_json(run / "first-pass-scores.json", first_result)
     assets.write_json(run / "diagnostics.json", diagnostics(cases, predictions))
     meta.update(status="complete" if result["complete"] else "incomplete",
                 ended_at=assets.utc_now(), elapsed_seconds=time.monotonic() - start,
@@ -183,6 +216,9 @@ def main(argv=None):
     p.add_argument("--env-file", type=Path)
     p.add_argument("--rubric", type=Path, help="UTF-8 candidate rubric; default is shared six-category A0 rubric")
     p.add_argument("--quote-source", type=Path, help="Frozen direct parent dataset for as-of original quotes; offline ablation only")
+    p.add_argument("--body-limit", type=int, default=5000, help="Frozen body characters; 0 means full body (offline only)")
+    p.add_argument("--quote-contribution", action="store_true", help="Separate current-post contribution from available quoted background")
+    p.add_argument("--conditional-review", action="store_true", help="Ask for semantic uncertainty and review only flagged cases; preserve same-call control")
     p.add_argument("--split", choices=["dev", "regression"], required=True)
     p.add_argument("--limit", type=int)
     p.add_argument("--seed", default="category-development")
@@ -195,7 +231,9 @@ def main(argv=None):
     result = evaluate(a.dataset, config=config, split=a.split, limit=a.limit, seed=a.seed,
                       label=a.label, chat_factory=transport_factory(config, a.env_file),
                       rubric=a.rubric.read_text() if a.rubric else RUBRIC, workers=a.workers,
-                      smoke=a.smoke, root=a.output_root, quote_source=a.quote_source)
+                      smoke=a.smoke, root=a.output_root, quote_source=a.quote_source,
+                      body_limit=None if a.body_limit == 0 else a.body_limit,
+                      quote_contribution=a.quote_contribution, conditional_review=a.conditional_review)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

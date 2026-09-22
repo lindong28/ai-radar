@@ -73,3 +73,87 @@ def test_runner_context_gold_and_terminal_identity(dataset, tmp_path, mode):
     assert (run / "quote-context.jsonl").exists() == (mode != "disabled")
     assert result["complete"] == (mode != "drift")
     assert result["category_accuracy"]["value"] == (None if mode == "drift" else 1)
+
+
+def test_quote_contribution_changes_only_available_prompts(dataset, tmp_path):
+    from evals._shared.category_eval import QUOTE_CONTRIBUTION
+    leaf, source, _ = dataset
+    captured = {}
+
+    def factory(_):
+        def for_case(key):
+            def chat(**kwargs):
+                captured[key] = kwargs["prompt"]
+                return {"json": {"reason": "source evidence", "primary_category": "model"}}
+            return chat
+        return for_case
+
+    evaluate(leaf, config={"models": {"category": "fixture"}, "transport_identity": "fixture"},
+             split="dev", limit=None, seed="fixture", label="quote-role", chat_factory=factory,
+             workers=2, root=tmp_path, quote_source=source, quote_contribution=True)
+    assert QUOTE_CONTRIBUTION in captured["available"]["system"]
+    assert QUOTE_CONTRIBUTION not in captured["future"]["system"]
+
+
+@pytest.mark.parametrize("length", [10, 5000, 5001, 12000])
+def test_body_limit_projection(length):
+    from airadar.enrich.category import render_category_prompt
+    body = "x" * length
+    raw_input = {"title": "original", "content_text": body, "category": "DO_NOT_LEAK"}
+    default = render_category_prompt(raw_input)
+    full = render_category_prompt(raw_input, body_limit=None)
+    assert default["user"].endswith("Content:\n" + body[:5000])
+    assert full["user"].endswith("Content:\n" + body)
+    assert default["system"] == full["system"]
+    assert "DO_NOT_LEAK" not in str(full)
+    with pytest.raises(ValueError):
+        render_category_prompt(raw_input, body_limit=-1)
+
+
+@pytest.mark.parametrize("failure_mode", ["none", "api", "archive"])
+def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tmp_path, monkeypatch, failure_mode):
+    leaf, source, cases = dataset
+    calls = []
+    review_failure = failure_mode != "none"
+    if failure_mode == "archive":
+        original_write = assets.write_json
+
+        def fail_review_archive(path, value):
+            if path.parent.name == "review-prompts":
+                raise OSError("fixture archive failure")
+            return original_write(path, value)
+
+        monkeypatch.setattr(assets, "write_json", fail_review_archive)
+
+    def factory(_):
+        def for_case(key):
+            def chat(**kwargs):
+                calls.append((key, kwargs["stage"]))
+                if kwargs["stage"] == "category_review":
+                    assert key == "available"
+                    if review_failure:
+                        raise RuntimeError("fixture failed review")
+                    return {"json": {"reason": "revised evidence", "primary_category": "model"}}
+                return {"json": {"reason": "initial evidence", "needs_review": key == "available",
+                                 "primary_category": "product" if key == "available" else "model"}}
+            return chat
+        return for_case
+
+    result = evaluate(leaf, config={"models": {"category": "fixture"}, "transport_identity": "fixture"},
+                      split="dev", limit=None, seed="fixture", label="conditional", chat_factory=factory,
+                      workers=2, root=tmp_path, quote_source=source, conditional_review=True)
+    run = Path(result["run"])
+    expected = [("available", "category"), ("future", "category")]
+    if failure_mode != "archive":
+        expected.append(("available", "category_review"))
+    assert sorted(calls) == sorted(expected)
+    assert assets.read_json(run / "first-pass-scores.json")["metrics"]["category_accuracy"]["value"] == .5
+    assert result["category_accuracy"]["value"] == (.5 if review_failure else 1.)
+    assert result["category_accuracy"]["denominator"] == 2
+    assert result["complete"] is not review_failure
+    assert (run / "review-prompts/available.json").exists() == (failure_mode != "archive")
+    assert not (run / "review-prompts/future.json").exists()
+    p = {p["case_id"]: p for p in assets.read_jsonl(run / "predictions.jsonl")}["available"]
+    assert p["first_pass"]["output"] == {"category": "ai-products"}
+    if review_failure:
+        assert p["status"] == "error" and p["output"] == {}

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-22（A4+分类结构消融）
+
+- 分类离线评测新增可选引用贡献主次、冻结全文与条件二次复核，保留首轮对照、实际二轮prompt及失败；默认行为不变，复用见[执行入口](evals/content-enrichment/aihot-category-navigation/README.md)。
+- 完成十轮1,938次Flash调用。B1全361题78.39%、同期A4+为76.18%，但真正改prompt的15题均13对，净增均出现在未改输入组，未确认新机制收益。保留A4+研究主线、不改gold/生产；逐类双90未达，负结果与完整归因见[分类状态](docs/evaluations/content-enrichment/status.md)。
+
 ## 2026-09-21（分类引用输入与边界实验）
 
 - 分类离线评测新增可选冻结引用原文输入，按观察时点与来源哈希校验，默认关闭；复用命令和输入边界见[评测入口](evals/content-enrichment/aihot-category-navigation/README.md)。

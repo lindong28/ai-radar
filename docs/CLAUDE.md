@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260922-5f6a](adr/20260922-5f6a-test-category-contribution-and-review.md)：A4+主线的正文/引用投影与条件复核，固定开发与已见回归，不改gold或生产；运行方法归[分类执行入口](../evals/content-enrichment/aihot-category-navigation/README.md)。
+
 [20260921-f6b3](adr/20260921-f6b3-test-editorial-evidence-score-rules.md)：基于逐题归因检验编辑边界、虚构few-shot、独立识别与条件公式；调用和重放复用入口在[pointwise README](../evals/visible-score/aihot-score-pointwise/README.md#编辑边界独立识别与公式规则)。
 
 [20260921-c4e1](adr/20260921-c4e1-test-news-type-score-combination.md)：新闻用途分类、固定来源留出条件权重与代表原文诊断；结果与复用记录在[评分状态](evaluations/visible-score/status.md)。
