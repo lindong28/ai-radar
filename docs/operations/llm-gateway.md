@@ -2,6 +2,8 @@
 
 > Reader: [User] — 配置、验证与排查后端模型调用。决策见 [ADR-7d82](../adr/20260922-7d82-route-llm-calls-through-gateway.md)。
 
+当前发布结果见 [2026-09-22 发布结果](#2026-09-22-发布结果)；下方“本地迁移验证”中的未部署表述只描述当时的历史检查状态。
+
 ## 调用范围
 
 仓内 prefilter、score、enrich、OpenAI 备选 scorer、旧评测判官及 `evals/_shared/transport.py` 使用 `src/airadar/provider/llm_gateway.py`，不直接连接供应商。业务 prompt 和评分/分类规则不在此次变更范围。历史实验中的 provider、配置及实际模型身份保持原样，新运行使用 gateway 配置。
@@ -54,3 +56,18 @@ SDK `max_retries=0`，应用不在供应商之间 fallback；同轮富化失败�
 迁入后的组合兼容测试 208 passed、1 deselected（上述 egress 基线），覆盖两个 gateway endpoint × 六种响应结果、有效/无效摘要、真实 CLI 读取临时旧布局 catalog、KB 锁与两阶段写、已有微信消费者，以及新旧数据路径两态。新引擎/脚本、gateway 接入层、runtime env 与 CLI 的定向 Ruff 和 shell 语法检查通过。摘要两份 Jinja 模板的字节摘要与来源一致，没有借迁移调整业务 prompt。
 
 最终定向组合回归为 532 passed、1 skipped、1 deselected；skip 是未提供 `PREFILTER_ADOPTION_SOURCE_RUN` 的冻结 300 题 replay，deselect 是上述已单独确认的 egress 基线债。覆盖前述各输入面，另有 KB/词表 × 新/旧布局四种真实文件锁争用与释放反例：修前四题失败、修后通过。独立 reviewer 复核关闭锁身份 HIGH，无新增 finding、无承重未核实项；没有在真实用户 KB 上执行并发写入。
+
+## 2026-09-22 发布结果
+
+用户已授权 push 与部署。以下为主线程当日现场记录，截至 18:16 +08；不是文档编辑时重新探活。
+
+| 发布面 | 已确认结果 |
+|---|---|
+| GitHub | AI Radar `origin/main=e70d39bf4526d2919d61a3e44c22c8a24eee7ee3`；ai-agent-config `origin/main=2209fc45610ede2c98ac50620922ac1943b88bb8`，均已 push。 |
+| 腾讯代码 | 已发布 `0aff4f57faa0be2ef47e0d0d9b9f772bdc97d28c`，父节点 `03837af593aa78708482184e00649be289443dc9`；75 文件的最小 gateway backport，保留生产安全加固与旧 prompt 业务规则。 |
+| 腾讯运行态 | `.deployed-sha` 与 code-deploy journal 的 `idle/deployed` 均对应上述发布 SHA；`serve@8000` active、PID `544072`，备用 `8001` inactive 为正常状态。公网 health 为 success/ok，`/` 与 `/wechat` 均 HTTP 200；仅证明 HTTP 可用性，不是视觉验收。 |
+| Mac mini gateway | `live.lindong.llm-gateway` healthy；file/loaded revision 均为 `52ca62398d61c244d1e7c7265bed0a1be24d8670f93a1d3e0fa7d4ed104d8044`。定时 pipeline 在 Mac 执行，腾讯仅运行网站及 DB 副本，未在腾讯新增 gateway 服务。 |
+
+导出的腾讯提交树定向测试为 440 passed、2 deselected，覆盖 gateway 成功/失败身份、摘要解析、KB 新旧布局与四种锁争用、provider、admin/runtime-env、部署及安全回归；故意撤销错误隔离后出现 1 failed，确认测试消费导出源码。两项排除均为部署基线独立失败：`test_source_pause_runbook_documents_internal_resolution_ledger_query` 的文档字面串不匹配，以及 `test_checked_in_network_callsites_match_classified_registry_exactly` 中既有 `scripts/eval/measure_curated_composition.py:103` 的 `subprocess.run` 未登记，不宣称全套测试通过。
+
+保留的 MEDIUM 边界：腾讯旧 prefilter 成功 `raw` 尚未像 main 一样附加 `sent_request_id/llm_gateway`，但 `llm_usage` 归因与 gateway ledger 有身份；不影响派发或本次失败记录，未借部署改变其成功输出契约。未手动同步 DB、未改业务候选或 gold、未做真实 KB 写入验收。18:00 prefilter 成功早于 `e70d39b` 修复，不归因于该补丁；18:15 轮在观察时刚开始，不记录为完成。
