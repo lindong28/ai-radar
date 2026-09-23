@@ -23,7 +23,9 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 <a id="当前研究配置c5"></a>
 
-### 当前整体主方案：C5；J阶段已测试材料结构路由
+### 当前整体主方案：C5；K阶段检验分类边界
+
+2026-09-23用户选择继续使用Ark Flash。K1/K2沿C5单次调用，分别测试放宽对象介绍定义和收窄后的局部边界，不使用J2条件复核。开发200题C5/K1/K2为167/154/166对；K2冻结全361为285对（78.95%，2失败计错）。K2开发时修好的短模型和长独立测评在重复时又错，不能称为稳定修复；完整同期对照、逐类指标与下一研究问题以[最新状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-23k阶段单调用边界实验)为准。下面J/I/H/G保留历史，不作为本轮控制。
 
 2026-09-23补充同题模型比较：J2精确Ark Pro276/361（76.45%）、同期Flash286/361（79.22%），未采用Pro。[最新逐题/逐类结果](../../../docs/evaluations/content-enrichment/status.md#2026-09-23j2-ark-pro与flash同题对照)。
 
@@ -33,12 +35,12 @@ J阶段C5/J1/J2同200题165/162/161对。冻结J2全361为282对（78.12%），�
 
 最新H阶段已实现`category-h1.txt`至`category-h3.txt`：C5骨架迁入局部边界→reason先识别作者动作→修正为承载证据、取消原创作者门槛。开发同200为156/160/156对，本轮C5为163对。冻结H3全361为274对（75.90%），C5为286对（79.22%），13修正/25退化；H3局部收益保留但不整体采用。当前实际整体主方案仍为下方C5命令，不存在一个已验证更好的“C5＋所有修复”默认版本。生产仍A0；详情见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22h阶段实际组合局部修复)。以下G阶段数字保留历史语义，不是最新快照。
 
-C5完整身份：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。全361历史290/288/289/294对，最新H阶段286对；原方案未变，重复差值不是优化收益。G阶段G3为282对、对同期C5修16/退28；F阶段F3为288对，局部机制保留但未证明整体更好。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
+C5完整身份：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。全361历史290/288/289/294对，H阶段286对，本次K阶段291对；原方案未变，重复差值不是优化收益。G阶段G3为282对、对同期C5修16/退28；F阶段F3为288对，局部机制保留但未证明整体更好。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
 
 ```bash
 PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/evaluate.py \
   --dataset ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-category-navigation/v1 \
-  --config evals/content-enrichment/configs/category-flash.json \
+  --config evals/content-enrichment/configs/category-ark-flash-260731.json \
   --env-file /path/to/project/.env \
   --rubric evals/content-enrichment/prompts/category-c1.txt \
   --quote-source ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v2 \
@@ -49,6 +51,10 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 冻结后去掉`--limit`可覆盖dev285；另用`--split regression`覆盖76题，明确二者已有曝光。同期B1对照改为`--rubric .../category-a4.txt --body-limit 5000`，其它参数相同。隔离worktree运行可传`--output-root /path/to/main-checkout`归档，代码仍来自当前cwd。不会自动启用新数据抓取或改变线上分类。
 
 ### D阶段候选复现
+
+K阶段复现：沿上述C5命令，rubric替换为`evals/content-enrichment/prompts/category-k1.txt`或`category-k2.txt`，使用新label；不开source-context和conditional-review，其余保持不变。精确模型为`personal_ark::deepseek-v4-flash-ga-260731`，不是普通逻辑别名。K1取消发布前提的宽定义未采用；K2保留短对象简介例外、研究/方法独立贡献以及独立测评不要求操作步骤的局部边界，仅为研究资产，不是默认。
+
+K阶段零调用复算脚本在`runs/content-enrichment/aihot-category-navigation/v1/2026-09-23/01-14-12/support/analyze.py`：`PYTHONPATH=src:. uv run python <脚本> --arm C5=/absolute/run --arm K2=/absolute/run --output /path/to/new.json`。同一arm可重复指定不重叠的dev/regression分区；检查每轮canonical分数、原题/gold和实际user prompt，同ID配对，拒绝重复题或输入漂移。不同规模比较只用明确列出的共同ID，不把200题分数冒充361。输出含各arm十三指标、逐题原输入/两边reason、修复/退化ID、调用与tokens；新路径独占写，不覆盖运行原件。开发与冻结结果分别归`development.json`、`frozen.json`，同提示复跑归`repeats.json`。
 
 本节亦包含E/F/G/H阶段修复分支；各自状态不同，不能将文件存在理解为已采用。
 
