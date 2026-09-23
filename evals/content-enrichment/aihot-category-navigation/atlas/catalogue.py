@@ -68,6 +68,22 @@ def assessment(id, label, candidate, baseline='', baseline_label='', subset='unk
         seeds=seeds.split()))
 
 
+# Runs used only as controls, identified from the experiment ledger.
+CONTROL_RUN_OWNERS = {
+    '2026-09-21/10-15-13': 'A0',
+    '2026-09-21/14-11-41': 'A4',
+    '2026-09-21/14-19-50': 'A4',
+    '2026-09-21/14-21-36': 'A4',
+    '2026-09-22/01-25-05': 'A4+',
+    '2026-09-22/01-39-56': 'A4+',
+    '2026-09-22/01-41-20': 'A4+',
+    '2026-09-22/02-55-14': 'B1',
+    '2026-09-22/02-56-35': 'B1',
+    '2026-09-22/12-26-44': 'F3',
+    '2026-09-22/14-01-16': 'C5',
+    '2026-09-23/01-14-12': 'C5',
+}
+
 # A comparison is an observation, not an assertion that the DAG parent was rerun.
 DEV = '''A0|21/10-08-21||初始基线
 A1|21/10-11-22|21/10-08-21|A0

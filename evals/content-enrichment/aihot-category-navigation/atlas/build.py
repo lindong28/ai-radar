@@ -8,7 +8,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from catalogue import NODES, NOTES
+from catalogue import CONTROL_RUN_OWNERS, NODES, NOTES
 from evals._shared.category_metrics import score_categories
 
 HERE = Path(__file__).resolve().parent
@@ -96,6 +96,30 @@ def join(data, ids):
     return combined
 
 
+def annotate_comparisons(nodes, controls):
+    """Resolve comparison identity from run ownership, never display labels."""
+    owners = dict(controls)
+    known = {node['id'] for node in nodes}
+    for node in nodes:
+        for assessment in node['assessments']:
+            for run in assessment['runs']:
+                if run in owners and owners[run] != node['id']:
+                    raise ValueError(f'conflicting run ownership: {run}')
+                owners[run] = node['id']
+    if not set(owners.values()) <= known:
+        raise ValueError('unknown control candidate')
+    for node in nodes:
+        for assessment in node['assessments']:
+            try:
+                identities = sorted({owners[run] for run in assessment['baseline']})
+            except KeyError as error:
+                raise ValueError(f'unknown baseline run ownership: {error}') from error
+            assessment['baseline_candidates'] = identities
+            assessment['comparison_role'] = (
+                'unpaired' if not identities else
+                'parent' if identities == [node['parent']] else 'auxiliary')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive-root', type=Path, required=True)
@@ -103,6 +127,7 @@ def main():
     args = parser.parse_args()
     if args.output.exists():
         parser.error('output must be a new directory; existing reports are never overwritten')
+    annotate_comparisons(NODES, CONTROL_RUN_OWNERS)
     data = {}
     for node in NODES:
         for a in node['assessments']:
