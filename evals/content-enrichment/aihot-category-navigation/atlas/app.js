@@ -8,7 +8,7 @@ const pct = (a,n) => n ? (100*a/n).toFixed(2)+'%' : '—';
 const signed = n => (n>0?'+':'')+n;
 const cache = new Map();
 let manifest, nodes, current, selectedAssessment, paired=[], baselineAvailable=false, targetKnown=false;
-let requestEpoch=0, zoom=1, limit=30, activeCase=null, currentMode='baseline', feedback={}, storageOK=true;
+let requestEpoch=0, graphView, limit=30, activeCase=null, currentMode='baseline', feedback={}, storageOK=true;
 const STORAGE='ai-radar-category-atlas-feedback-v1';
 const ENTRY_PREFIX=STORAGE+':entry:';
 function readFeedback(){if(!storageOK)return feedback;const saved={};try{for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i);if(key?.startsWith(ENTRY_PREFIX)){const value=JSON.parse(localStorage.getItem(key));if(value&&typeof value==='object')saved[key.slice(ENTRY_PREFIX.length)]=value;}}feedback=saved;}catch{storageOK=false;}return feedback;}
@@ -21,26 +21,13 @@ function metric(rows,side){let right=0,failed=0;const classes=Object.fromEntries
 async function run(id){if(!cache.has(id)){cache.set(id,fetch(manifest.runs[id].file).then(r=>{if(!r.ok)throw Error(`无法读取 ${id}: ${r.status}`);return r.json();}).catch(e=>{cache.delete(id);throw e;}));}return cache.get(id);}
 async function collection(ids){const result=new Map();for(const r of await Promise.all(ids.map(run))){for(const c of r.cases){if(result.has(c.id))throw Error('运行分区存在重复题');result.set(c.id,{...c,run:r});}}return result;}
 function nav(){const q=$('node-search').value.trim().toLowerCase();$('nav').innerHTML=manifest.nodes.filter(n=>(n.id+' '+n.title+' '+n.change).toLowerCase().includes(q)).map(n=>`<button data-node="${E(n.id)}" class="${current?.id===n.id?'active':''}"><b>${E(n.id)}</b><span>${E(n.title)}</span></button>`).join('');}
-function graph(){
-  const shown=new Set();
-  function ancestry(id){if(shown.has(id)||!nodes[id])return;shown.add(id);if(nodes[id].parent)ancestry(nodes[id].parent);nodes[id].inspiration.forEach(ancestry);}
-  if($('focus').checked){ancestry(current.id);manifest.nodes.filter(n=>n.parent===current.id).forEach(n=>shown.add(n.id));}else manifest.nodes.forEach(n=>shown.add(n.id));
-  const depth={};function level(n){if(depth[n.id]!=null)return depth[n.id];return depth[n.id]=n.parent?level(nodes[n.parent])+1:0;}
-  const groups={};manifest.nodes.filter(n=>shown.has(n.id)).forEach(n=>(groups[level(n)]??=[]).push(n));
-  const pos={},min=Math.min(...Object.keys(groups).map(Number));
-  for(const [d,list] of Object.entries(groups))list.forEach((n,i)=>pos[n.id]={x:24+(Number(d)-min)*184,y:24+i*76});
-  const width=Math.max(...Object.values(pos).map(p=>p.x))+172,height=Math.max(264,...Object.values(pos).map(p=>p.y+76));
-  let svg='<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#9baec5"/></marker></defs>';
-  for(const n of manifest.nodes.filter(n=>shown.has(n.id))){for(const [parent,inspiration]of [[n.parent,false],...n.inspiration.map(x=>[x,true])]){if(!pos[parent])continue;const p=pos[parent],q=pos[n.id],mid=(p.x+148+q.x)/2;svg+=`<path class="dag-edge ${inspiration?'inspiration':''}" d="M${p.x+148},${p.y+25} C${mid},${p.y+25} ${mid},${q.y+25} ${q.x},${q.y+25}" marker-end="url(#arrow)"/>`;}}
-  for(const n of manifest.nodes.filter(n=>shown.has(n.id))){const p=pos[n.id];svg+=`<g class="dag-node ${n.id===current.id?'selected':''} ${n.id==='C5'?'control':''}" transform="translate(${p.x},${p.y})" data-node="${E(n.id)}" tabindex="0" role="button" aria-label="查看 ${E(n.id+' '+n.title)}"><rect width="148" height="52" rx="8"/><text x="12" y="21" font-size="14" font-weight="650">${E(n.id)}</text><text x="12" y="40" font-size="11">${E(n.title)}</text></g>`;}
-  $('graph').innerHTML=svg;$('graph').setAttribute('viewBox',`0 0 ${width} ${height}`);$('graph').style.width=width*zoom+'px';$('graph').style.height=height*zoom+'px';
-}
+function graph(){graphView.select(current.id,{focus:$('focus').checked});}
 function selectNode(id){if(!nodes[id])id='C5';current=nodes[id];location.hash=encodeURIComponent(id);nav();graph();const full=current.assessments.filter(a=>a.n===361);const latest=full.at(-1);
   $('candidate').innerHTML=`<div class="candidate-heading"><h2>${E(current.id)} · ${E(current.title)}</h2><span class="tag">${current.id==='C5'?'整体研究控制':'历史研究候选'}</span><span class="muted">${latest?`最新单次全量 ${latest.correct}/${latest.n} · ${pct(latest.correct,latest.n)}`:'未跑全量'}</span></div><div class="lineage">直接上游：${current.parent?`<button data-node="${E(current.parent)}">${E(current.parent)}</button>`:'无（初始基线）'}${current.inspiration.length?'　借鉴：'+current.inspiration.map(x=>`<button data-node="${E(x)}">${E(x)}</button>`).join(''):''}</div><div class="explanation"><div><h4>具体改了什么</h4><p>${E(current.change)}</p></div><div><h4>为什么做这个实验</h4><p>${E(current.rationale)}</p></div></div><div class="conclusion"><strong>历史归纳 · 不是新增实验证明</strong>${E(current.conclusion)}</div>`;
   const parentComparisons=current.assessments.filter(a=>a.comparison_role==='parent');
   const primary=parentComparisons.filter(a=>a.n===361).at(-1)||parentComparisons.at(-1);
   const initial=primary?current.assessments.indexOf(primary):latest?current.assessments.indexOf(latest):current.assessments.length-1;loadAssessment(Math.max(0,initial));
-  const selected=$('graph').querySelector('.selected');if(selected){const transform=selected.transform.baseVal.consolidate().matrix;$('graph-wrap').scrollTo({left:Math.max(0,transform.e*zoom-$('graph-wrap').clientWidth/2+74*zoom),top:Math.max(0,transform.f*zoom-100)});}
+  Atlas.renderDownstream($('downstream'), manifest.downstream[id], selectNode);
 }
 async function loadAssessment(index, mode='baseline'){
   const epoch=++requestEpoch;selectedAssessment=index;currentMode=mode;paired=[];activeCase=null;const a=current.assessments[index];$('results').innerHTML='<div class="loading">正在读取实际运行、核对逐题比较…</div>';$('case-list').innerHTML='';$('case-count').textContent='载入中';$('case-detail').innerHTML='<p class="muted">正在读取证据…</p>';
@@ -104,10 +91,12 @@ window.addEventListener('storage',e=>{if(e.key===null||e.key.startsWith(ENTRY_PR
 $('copy').onclick=async()=>{const text=exportFeedback();try{await navigator.clipboard.writeText(text);notice('全部反馈已复制。粘回对话即可；尚未修改金标或指标。');}catch{const box=document.createElement('textarea');box.value=text;box.style.position='fixed';box.style.left='-9999px';document.body.append(box);box.select();const ok=document.execCommand('copy');box.remove();notice(ok?'全部反馈已复制，可粘回对话。':'浏览器不允许复制，请使用“下载 JSON”后把文件交回。');}};
 $('download').onclick=()=>{const url=URL.createObjectURL(new Blob([exportFeedback()],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='category-atlas-feedback.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);notice('已生成完整反馈 JSON 下载；尚未修改题库。');};
 document.addEventListener('click',e=>{const node=e.target.closest('[data-node]');if(node)selectNode(node.dataset.node);const item=e.target.closest('[data-case]');if(item)detail(item.dataset.case);});
-$('graph').addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const n=e.target.closest('[data-node]');if(n){e.preventDefault();selectNode(n.dataset.node);}}});
-$('node-search').oninput=nav;$('focus').onchange=()=>{zoom=1;graph();};$('zoom-in').onclick=()=>{zoom=Math.min(2,zoom+.2);graph();};$('zoom-out').onclick=()=>{zoom=Math.max(.4,zoom-.2);graph();};$('graph-reset').onclick=()=>{const svg=$('graph');zoom=Math.max(.4,Math.min(1,$('graph-wrap').clientWidth/svg.viewBox.baseVal.width));graph();$('graph-wrap').scrollTo(0,0);};
+$('node-search').oninput=nav;$('focus').onchange=graph;
+$('zoom-in').onclick=()=>graphView.scale(1.25);$('zoom-out').onclick=()=>graphView.scale(.8);$('graph-reset').onclick=()=>graphView.fit();$('graph-actual').onclick=()=>graphView.actualSize();
+function expandGraph(expanded){document.querySelector('.graph-section').classList.toggle('expanded',expanded);$('graph-expand').textContent=expanded?'收起画布':'展开画布';$('graph-expand').setAttribute('aria-pressed',String(expanded));requestAnimationFrame(()=>graphView.fit());}
+$('graph-expand').onclick=()=>expandGraph($('graph-expand').getAttribute('aria-pressed')!=='true');document.addEventListener('keydown',e=>{if(e.key==='Escape')expandGraph(false);});
 $('method-toggle').onclick=()=>{$('method').open=!$('method').open;$('method').scrollIntoView({block:'center'});};
 for(const id of ['outcome','subset','category'])$(id).onchange=()=>{limit=30;renderCases();};$('case-search').oninput=()=>{limit=30;renderCases();};$('more').onclick=()=>{limit+=30;renderCases();};
 window.addEventListener('hashchange',()=>{const id=decodeURIComponent(location.hash.slice(1));if(nodes?.[id]&&current?.id!==id)selectNode(id);});
-async function init(){try{const response=await fetch('manifest.json');if(!response.ok)throw Error('manifest unavailable');manifest=await response.json();nodes=Object.fromEntries(manifest.nodes.map(n=>[n.id,n]));$('node-count').textContent=manifest.nodes.length;$('category').innerHTML+=Object.entries(LABELS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');$('snapshot').textContent=`快照 ${manifest.snapshot_sha256} · 生成于 ${manifest.generated_at}`;$('footer').textContent=`${manifest.nodes.length} 个候选 · ${Object.keys(manifest.runs).length} 份运行原件 · ${manifest.benchmark}。只读历史展示，未新增模型调用，未修改 gold。`;feedbackCount();selectNode(decodeURIComponent(location.hash.slice(1))||'C5');if(!storageOK)notice('浏览器持久存储不可用，反馈请及时复制或下载。');}catch(e){$('footer').textContent='载入失败：'+e.message;notice('无法加载报告数据，请检查本机服务。');}}
+async function init(){try{const response=await fetch('manifest.json');if(!response.ok)throw Error('manifest unavailable');manifest=await response.json();nodes=Object.fromEntries(manifest.nodes.map(n=>[n.id,n]));$('node-count').textContent=manifest.nodes.length;$('category').innerHTML+=Object.entries(LABELS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');$('snapshot').textContent=`快照 ${manifest.snapshot_sha256} · 生成于 ${manifest.generated_at}`;$('footer').textContent=`${manifest.nodes.length} 个候选 · ${Object.keys(manifest.runs).length} 份运行原件 · ${manifest.benchmark}。只读历史展示，未新增模型调用，未修改 gold。`;graphView=new Atlas.Graph({wrap:$('graph-wrap'),svg:$('graph'),nodes:manifest.nodes,onSelect:selectNode,controlId:'C5'});feedbackCount();selectNode(decodeURIComponent(location.hash.slice(1))||'C5');graphView.fit();if(!storageOK)notice('浏览器持久存储不可用，反馈请及时复制或下载。');}catch(e){$('footer').textContent='载入失败：'+e.message;notice('无法加载报告数据，请检查本机服务。');}}
 init();

@@ -4,11 +4,12 @@
 
 ## 重新生成
 
-在项目根执行，`--archive-root` 指向实际保存历史 `runs/` 的 checkout，`--output` 必须是尚不存在的路径：
+在项目根执行，`--archive-root` 指向实际保存历史 `runs/` 的 checkout，`--output` 必须是尚不存在的路径。`--atlas-skill` 指向含 `scripts/bundle_experiment_atlas.py` 与 `assets/experiment-atlas/` 的 `eval-workflows` skill 根，省略时默认 `~/.claude/skills/eval-workflows`；使用尚未安装的开发版本时显式指向该工作树中的 skill：
 
 ```bash
 PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/atlas/build.py \
   --archive-root /Users/lindong/research/ai-radar \
+  --atlas-skill "$HOME/.claude/skills/eval-workflows" \
   --output /Users/lindong/research/ai-radar/.label-serve/category-atlas-new
 ```
 
@@ -18,6 +19,7 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 ## 数据与口径
 
+- `presentation.json` 提供标题、范围和方法说明；共享 skill 生成 `index.html` 并复制 `atlas.css`、`atlas.js`。本项目维护 `build.py` 的原件读取与 canonical 指标、`catalogue.py` 的实验目录，以及 `app.js` 的逐题证据和反馈适配。生成清单分别记录项目代码、打包器和共享资产 SHA-256，历史报告不依赖后续安装的 skill 版本。
 - `build.py` 从原始 cases、predictions、prompts 与可选 first-pass/review 原件读取。调用现有 canonical scorer 复算，核对已保存的每个指标；早期未保存的逐类指标列入 `newly_computed_metrics`。比较双方同 ID 必须 input/gold 相等，组合 dev/regression 不得重叠。
 - `manifest.json` 是该次报告的冻结目录、解释与原件 SHA-256。每个 `data/<date>_<time>.json` 是一份运行的只读投影；保留完整原始 input、实际 prompt、reason、首轮/复核证据和原始 conclusion，不输出 transport 配置或凭据。页面按需加载，不一次取全部原文。
 - 浏览器从预测确定性计算准确率、六类 Precision/Recall、修复与回退；失败保留分母。全部题库为 361 题，开发常用 200 题。没有全量记录的候选明确显示未跑全量。
@@ -25,6 +27,10 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 - C5 全量对 B1 同时包含边界与全文变化，全文子集只是一种分层，不是独立因果验证。不同运行存在随机波动，已曝光的回归题不称盲测。没有逐题解释的分歧标成“归因尚未记录”，不能从 reason 反推真实内部因果。
 
 ## 浏览与反馈
+
+默认展示全部 45 个方案；实线上游决定纵向层级，借鉴虚线保留但不拉长层级。左键拖动画布平移，单击节点进入详情；可缩放、适配全图或展开画布，Esc 收起。“聚焦上下游”保留当前方案的全部传递上游与下游（含借鉴路径），不会截成一层邻居。
+
+“全部下游方案”表中的差值统一相对当前所选方案。每个方案在已登记 assessments 中先取题目覆盖最多、再取 run 时间最新的快照，不挑最高分；每行在共同 ID 且 input/gold 相等的题上用 canonical scorer 重算准确率与六类 Precision/Recall，保留失败预测分母。两侧原题数、配对数、排除数与实际 run 同行可查，差值单位 `pp` 是百分点。任一共同题出现 input/gold 漂移，整行标为不可配对；缺运行或无共同题也不填零差值。不同下游行的共同题覆盖可能不同，不构成统一排行榜。点击下游方案后详情仍按下段选择主比较，因此下游表与详情的运行组合可能不同。
 
 选节点默认显示直接上游的主比较：有已登记全量配对时取其中最新项，否则取最近的上游配对。没有上游配对时明确标“上游对照待补”，展示已有全量或开发记录，不将它冒充主比较。顶部“最新单次全量”与当前配对分开。可以切换辅助对照、无配对重复运行，以及条件复核的同次首轮视图；同次首轮复核不自动成为默认对照。
 
@@ -65,3 +71,11 @@ C5 默认展示 C1→C5 的开发 200 题（165→167，修7／退5）；B1→C5
 2026-09-23 直接上游比较修订：默认 C5 展示 C1→C5 的开发 200 题（165→167，修复 7、回退 5）；B1→C5 全量 361 题仍可作为辅助比较，最新无配对运行不再遮住历史主比较。浏览器核对 C5/J2/A0 三个方案、直接上游／辅助／单次／同次首轮四种比较及真实调用失败，确认无对照时禁用配对变化筛选；C5 配对“仍错”28 题与“候选错误”33 题分开。缺上游证据另用浏览器内构造反例验证，没有改动原件。桌面 1440×1000 与窄屏 390×844 已查看；两标签页反馈、刷新恢复、整份导出和复制按钮已操作，验收用反馈已清空，未写入人评资产。新报告快照放在本机 `.label-serve/category-atlas-parent-20260923-v3/`；不据本次展示修订宣称新的模型收益。
 
 生成器归属标注的回归测试命令：`PYTHONPATH=src:. uv run python -m unittest discover -s evals/content-enrichment/aihot-category-navigation/atlas -p test_build.py`。四个用例覆盖现有目录、展示名变化、未知对照归属和冲突归属，不需要模型调用或历史数据归档。
+
+2026-09-23 可复用组件修订的验证口径：以上浏览器记录对应此前快照，不自动覆盖本次完整 DAG、左键拖动、展开画布与所选方案下游表。当前生成器测试在上述四项之外增加代表快照的覆盖／时间选择、传递后代、失败分母、input/gold 漂移、无共同题及借鉴路径反例；共享组件测试命令为 skill 根下的 `node --test assets/experiment-atlas/atlas.test.cjs`。这些离线检查不能替代新报告在桌面与窄屏的真实操作：需核对全图／聚焦、拖动与点击区别、缩放／展开、两侧运行与 200/361 等不同覆盖的同题差值，并复验逐题反馈。新版浏览器验收结果须按实际报告快照另行记录，不沿用历史结论。
+
+本次修订追加读数：主执行 session 在桌面 1440×1000 实测切换 A0/C5 后全图仍为 45 节点，C5 下游表为 23 行，聚焦显示 34 节点且保留 J2-Pro；真实鼠标左键拖动改变滚动位置但不改变所选方案，K2 叶子显示下游空态。下游表使用最高 560px 的滚动区域，逐类 Precision/Recall 折叠展开，避免长表把详情推远。共享 Node 测试当前 4 项覆盖传递关系、层级与非法依赖、不可比差值／转义，以及画布外释放后不继续误拖动；打包器另实测 HTML 转义、字面占位符保留和拒绝覆盖三个行为。本段不代表新版手机布局或全部交互组合已验收。
+
+最终快照 `.label-serve/category-atlas-reusable-20260923-v4/`（SHA-256 `3f487fc2722601dc0be2360e3180e1faafb62ff3b0604a689a75f8a37db78881`）由 45 个方案、95 份运行、65 个已有比较生成，增加 471 行相对所选锚点的下游比较。独立审查复算 200/200、200/361、361/200、361/361 四种覆盖组合；发现的画布外松手残留拖动及共享接口文档缺 `new` 已修复。主执行 session 用真实 CDP 鼠标操作复验最终页：A0 为 44 个下游、C5 为 23 个下游，均保留 45 个图节点；画布外松手后无按键移回，滚动坐标保持 `(62,100)`；K2 空态、临时反馈输入／导出及复制按钮成功提示均可用，验收意见已清空、未进入人评资产。新版桌面 1440×1000 与窄屏 390×844 已实际浏览并查看截图；窄屏全图缩小后需放大阅读节点文字，提供缩放与平移，不以“全图可见”冒称所有标签同时可读。下游表的逐类指标折叠可展开、对照运行可查，重复的因果警告移至表头一次说明，逐行分母仍保留。
+
+本轮测试为共享组件 4 项、项目构建器 8 项，范围为上述图关系／事件状态与配对数据条件，不代表全部浏览器或所有交互组合；浏览器操作使用隔离 headless Chromium，未验证真实手机触摸、Safari 或用户侧网络。最终页六个指定交互区域经可见性探针检查，探针不替代人工阅读；无模型重跑、无 gold 或生产逻辑变更。

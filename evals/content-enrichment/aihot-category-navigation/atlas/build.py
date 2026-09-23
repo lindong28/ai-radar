@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import importlib.util
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -120,10 +121,77 @@ def annotate_comparisons(nodes, controls):
                 'parent' if identities == [node['parent']] else 'auxiliary')
 
 
+def descendants(nodes, anchor, inspiration=True):
+    found = set()
+    pending = [anchor]
+    while pending:
+        parent = pending.pop()
+        for node in nodes:
+            links = [node['parent']] + (node.get('inspiration', []) if inspiration else [])
+            if parent in links and node['id'] not in found:
+                found.add(node['id'])
+                pending.append(node['id'])
+    found.discard(anchor)
+    return found
+
+
+def representative(node, data):
+    """Largest coverage, then latest run timestamp; never pick by metric."""
+    if not node['assessments']:
+        return []
+    return max(node['assessments'], key=lambda a: (len(join(data, a['runs'])), max(a['runs'], default='')))['runs']
+
+
+def projected_scores(cases, ids):
+    originals = [dict(case_id=id, input=cases[id][0]['input'], reference={'category': cases[id][0]['gold']}) for id in ids]
+    predictions = [dict(case_id=id, status=cases[id][0]['prediction']['status'], output={'category': cases[id][0]['prediction']['category']}) for id in ids]
+    return score_categories(originals, predictions)['metrics']
+
+
+def downstream_tables(nodes, data):
+    chosen = {node['id']: representative(node, data) for node in nodes}
+    tables = {}
+    labels = [('category_accuracy', '准确率')]
+    for slug, title in [('model','模型'),('product','产品'),('industry','行业'),('paper','论文'),('tutorial','教程'),('opinion','观点')]:
+        labels.extend((f'category_{slug}_{metric}', title + ' ' + metric.title()) for metric in ['precision', 'recall'])
+    fmt = lambda value: '—' if value is None else f'{100*value:.2f}%'
+    for node in nodes:
+        anchor = node['id']
+        downstream = descendants(nodes, anchor)
+        direct = descendants(nodes, anchor, inspiration=False)
+        baseline = join(data, chosen[anchor])
+        rows_out = []
+        for candidate in nodes:
+            if candidate['id'] not in downstream:
+                continue
+            candidate_runs = chosen[candidate['id']]
+            target = join(data, candidate_runs)
+            common = sorted(set(baseline) & set(target))
+            drift = [id for id in common if baseline[id][0]['input'] != target[id][0]['input'] or baseline[id][0]['gold'] != target[id][0]['gold']]
+            row = dict(id=candidate['id'], title=candidate['title'], relation='实现后代' if candidate['id'] in direct else '含借鉴路径的后代',
+                baseline_runs=chosen[anchor], candidate_runs=candidate_runs, baseline_n=len(baseline), candidate_n=len(target), paired_n=len(common), metrics=[])
+            if not common or drift:
+                row.update(status='unavailable', scope='无法建立同输入、同参考的配对', note=f'{len(drift)} 题 input/gold 漂移；不计算差值' if drift else '无共同题目或缺运行')
+            else:
+                before, after = projected_scores(baseline, common), projected_scores(target, common)
+                for key, title in labels:
+                    b, c = before[key]['value'], after[key]['value']
+                    row['metrics'].append(dict(label=title, baseline=fmt(b), candidate=fmt(c), delta=None if b is None or c is None else f'{100*(c-b):+.2f} pp', direction='higher'))
+                correct = lambda case: case['prediction']['status'] == 'ok' and case['prediction']['category'] == case['gold']
+                fixes = sum(not correct(baseline[id][0]) and correct(target[id][0]) for id in common)
+                regressions = sum(correct(baseline[id][0]) and not correct(target[id][0]) for id in common)
+                row.update(status='paired', scope=f'共同题目 {len(common)} 题',
+                    note=f'修复 {fixes} / 回退 {regressions}；所选排除 {len(baseline)-len(common)} 题，下游排除 {len(target)-len(common)} 题。')
+            rows_out.append(row)
+        tables[anchor] = dict(anchor=anchor, rows=rows_out)
+    return tables
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--atlas-skill', type=Path, default=Path.home() / '.claude/skills/eval-workflows')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('output must be a new directory; existing reports are never overwritten')
@@ -156,12 +224,17 @@ def main():
         provenance=['docs/evaluations/content-enrichment/status.md','docs/evaluations/experiments/hypotheses.md'],
         runs={id:dict(file=f'data/{id.replace("/","_")}.json',model=r['model'],hashes=r['hashes']) for id,r in data.items()})
     manifest['editorial_source_hashes'] = {name: digest(args.archive_root / name) for name in manifest['provenance']}
-    manifest['report_code_hashes'] = {name: digest(HERE / name) for name in ['catalogue.py','build.py','app.js','index.html','style.css']}
+    manifest['downstream'] = downstream_tables(NODES, data)
+    manifest['report_code_hashes'] = {name: digest(HERE / name) for name in ['catalogue.py','build.py','app.js','presentation.json']}
+    bundler_path = args.atlas_skill / 'scripts/bundle_experiment_atlas.py'
+    spec = importlib.util.spec_from_file_location('atlas_bundle', bundler_path)
+    bundler = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bundler)
+    manifest['shared_assets_sha256'] = bundler.bundle(args.output, json.loads((HERE / 'presentation.json').read_text()))
+    manifest['bundler_sha256'] = digest(bundler_path)
     manifest['snapshot_sha256'] = hashlib.sha256(json.dumps(manifest,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
-    args.output.mkdir(parents=True)
     (args.output / 'data').mkdir()
-    for name in ['index.html','style.css','app.js']:
-        shutil.copyfile(HERE / name, args.output / name)
+    shutil.copyfile(HERE / 'app.js', args.output / 'app.js')
     for id, run in data.items():
         (args.output / manifest['runs'][id]['file']).write_text(json.dumps(run,ensure_ascii=False))
     (args.output / 'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
