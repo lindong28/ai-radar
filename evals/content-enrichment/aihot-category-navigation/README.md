@@ -4,6 +4,8 @@ O3 的六类网站分类：模型、产品、行业、论文、教程、观点�
 
 ## 题集与复用
 
+历史实验交互浏览：见 [分类实验图谱](atlas/README.md)。从既有归档生成本地 HTML，可浏览 A0–K2 的依赖、比较指标、目标子集、逐题 prompt/reason 与人评反馈；不调用模型、不改 gold。新实验通过 catalogue 登记后重新生成新快照。
+
 只使用已通过原始输入建题规则的原标题、正文。参考是六个网页过滤入口实际返回的同 AIHOT item_id；保留页面原件、哈希、请求 URL、观察时间及原输入来源。按原新闻 case_id 去重，保留原 dev/regression split。新增材料用 `--base` 合并、按实质正文检查冲突，不覆盖旧 vN。大资产在本机 video-eval-arena，版本说明在 `docs/evaluations/content-enrichment/aihot-category-navigation/vN/README.md`。
 
 ```bash
