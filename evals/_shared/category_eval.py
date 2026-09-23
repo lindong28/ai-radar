@@ -85,9 +85,14 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              body_limit: int | None = 5000, quote_contribution: bool = False,
              conditional_review: bool = False, include_source_context: bool = False,
              blind_review: bool = False, review_guidance: str = "",
-             routing_guidance: str = "") -> dict:
+             routing_guidance: str = "", thinking: str = "disabled",
+             reasoning_effort: str | None = None, max_tokens: int = 700) -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
+    if thinking not in {"disabled", "enabled"} or max_tokens <= 0:
+        raise ValueError("invalid thinking mode or max_tokens")
+    if reasoning_effort is not None and (thinking != "enabled" or reasoning_effort not in {"low", "medium", "high", "max"}):
+        raise ValueError("reasoning_effort requires enabled thinking and a supported level")
     if (blind_review or review_guidance or routing_guidance) and not conditional_review:
         raise ValueError("blind review, review guidance and routing guidance require conditional review")
     check_metric_definitions(root)
@@ -120,7 +125,11 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     base_prompts = prompts
     if conditional_review:
         prompts = {key: routing_prompt(prompt, guidance=routing_guidance) for key, prompt in base_prompts.items()}
-    request = {"model": config["models"]["category"], "temperature": 0, "max_tokens": 700}
+    request = {"model": config["models"]["category"], "temperature": 0, "max_tokens": max_tokens}
+    if thinking != "disabled":
+        request["thinking"] = thinking
+    if reasoning_effort is not None:
+        request["reasoning_effort"] = reasoning_effort
     paths = ("src/airadar/enrich/category.py", "src/airadar/enrich/classification.py",
              "src/airadar/provider/judgment.py", "evals/_shared/category_eval.py",
              "evals/_shared/metrics.py", "evals/_shared/category_metrics.py",
@@ -134,7 +143,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         return {"code": {p: assets.file_digest(assets.ROOT / p) for p in paths},
                 "behavior": {"metric_registry": check_metric_definitions(root),
                              "request": request, "transport": config["transport_identity"],
-                             "rubric": rubric, "thinking": "disabled", "retry_count": 0,
+                             "rubric": rubric, "thinking": thinking, "retry_count": 0,
                              "quote_context": context_identity, "body_limit": body_limit,
                              "quote_contribution": quote_contribution, "conditional_review": conditional_review,
                              "blind_review": blind_review, "review_guidance": review_guidance,
@@ -249,6 +258,9 @@ def main(argv=None):
     p.add_argument("--seed", default="category-development")
     p.add_argument("--label", required=True)
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--thinking", choices=["disabled", "enabled"], default="disabled")
+    p.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"])
+    p.add_argument("--max-tokens", type=int, default=700)
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--output-root", type=Path, default=assets.ROOT)
     a = p.parse_args(argv)
@@ -261,7 +273,8 @@ def main(argv=None):
                       quote_contribution=a.quote_contribution, conditional_review=a.conditional_review,
                       include_source_context=a.source_context, blind_review=a.blind_review,
                       review_guidance=a.review_guidance.read_text() if a.review_guidance else "",
-                      routing_guidance=a.routing_guidance.read_text() if a.routing_guidance else "")
+                      routing_guidance=a.routing_guidance.read_text() if a.routing_guidance else "",
+                      thinking=a.thinking, reasoning_effort=a.reasoning_effort, max_tokens=a.max_tokens)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

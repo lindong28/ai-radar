@@ -111,15 +111,23 @@ class DurableChat:
         if not isinstance(model, str) or not model:
             raise ValueError("request.model is required")
         # Narrow input prevents hidden stream/retry/header overrides through request.
-        unknown = set(request) - {"model", "temperature", "max_tokens"}
+        unknown = set(request) - {"model", "temperature", "max_tokens", "thinking", "reasoning_effort"}
         if unknown:
             raise ValueError("unsupported request fields")
+        thinking = request.get("thinking", self.thinking)
+        if thinking not in {"enabled", "disabled", "auto"}:
+            raise ValueError("unsupported thinking mode")
+        if "reasoning_effort" in request and thinking != "enabled":
+            raise ValueError("explicit reasoning_effort requires thinking=enabled")
         messages = [{"role": role, "content": prompt[key]} for role, key in (("system", "system"), ("user", "user"))]
         api_request: dict[str, Any] = {**request, "messages": messages, "extra_body": {"timeout": self.timeout}}
+        api_request.pop("thinking", None)
         # These controls belong to the requested model, not the chosen provider.
         # ARK's native endpoint rejects json_object; prompts already request JSON.
         if model.split("::", 1)[-1].startswith("deepseek"):
-            api_request["extra_body"]["thinking"] = {"type": self.thinking}
+            api_request["extra_body"]["thinking"] = {"type": thinking}
+        elif "thinking" in request or "reasoning_effort" in request:
+            raise ValueError("reasoning overrides are supported only for explicit DeepSeek requests")
         attempt_id = uuid4().hex
         self.attempts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = self.attempts_dir / f"{attempt_id}.json"

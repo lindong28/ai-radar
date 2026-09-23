@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-23（C5 Flash thinking 参数消融）
+
+- 分类离线评测器新增 `--thinking`、`--reasoning-effort` 与 `--max-tokens`，默认仍关闭thinking、上限700；请求参数和实际reasoning用量随运行归档。
+- 同361题关闭thinking与high/32768均77.29%，配对修19/退19，后者总token多22.06%；未替换默认或生产。六组开发、旧错分析与完整逐类指标见[分类状态](docs/evaluations/content-enrichment/status.md#2026-09-23c5-thinking-参数消融)。
+
 ## 2026-09-23（分类实验交互图谱）
 
 - 图谱默认显示全部 45 个方案，按实现上游分层并保留借鉴虚线；增加左键拖动、展开画布和完整上下游聚焦。下游表统一相对当前选择计算共同题目的指标、修复与回退，标明双方原题数、排除数与实际运行；原件或参考漂移时明确不可比较。HTML/CSS/JS 复用共享 skill 资产，分类指标与原件适配仍由本项目维护。

@@ -111,6 +111,31 @@ def test_parse_failure_keeps_raw_usage_and_models(tmp_path):
     assert len(clients) == 1
 
 
+@pytest.mark.parametrize("effort", ["low", "high", "max"])
+def test_explicit_reasoning_controls_are_sent_and_archived(tmp_path, effort):
+    requests = []
+
+    def create(**request):
+        requests.append(request)
+        return completion()
+
+    request = {**REQUEST, "model": "personal_ark::deepseek-v4-flash-ga-260731",
+               "thinking": "enabled", "reasoning_effort": effort, "max_tokens": 8192}
+    chat(tmp_path, fake_factory(create, []))(stage="category", prompt=PROMPT, request=request)
+    actual = requests[0]
+    assert actual["extra_body"]["thinking"] == {"type": "enabled"}
+    assert "thinking" not in actual
+    assert actual["reasoning_effort"] == effort and actual["max_tokens"] == 8192
+    assert records(tmp_path)[0]["request_parameters"]["reasoning_effort"] == effort
+
+
+def test_effort_without_enabled_thinking_fails_before_call(tmp_path):
+    with pytest.raises(ValueError, match="requires thinking"):
+        chat(tmp_path, fake_factory(lambda **_: pytest.fail("must not call"), []))(
+            stage="category", prompt=PROMPT, request={**REQUEST, "reasoning_effort": "high"})
+    assert records(tmp_path) == []
+
+
 @pytest.mark.parametrize("model", ["gemini-flash", "personal_other::gemini-flash"])
 def test_non_deepseek_selector_does_not_receive_thinking_control(tmp_path, model):
     requests = []

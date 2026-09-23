@@ -23,9 +23,17 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 ## 真实模型评测
 
+### Flash thinking 参数消融
+
+在既有 [C5 命令](#c5-command)上追加 `--thinking enabled --reasoning-effort high --max-tokens 8192` 即可测试思考模式；省略时保持历史默认 `disabled / 不传 effort / 700`。`--reasoning-effort` 只允许与 enabled 同用，可显式传 low/medium/high/max，CLI 接受不等于供应商保证该档位语义，实际可用性与效果须读该轮 attempt。2026-09-23 的 Ark 精确 Flash smoke 已接受 low/high/max，且返回非零 reasoning tokens；medium 本轮未测。temperature 仍为0，单调用、90秒超时、无重试或provider fallback。
+
+`max_tokens` 是请求上限，不是实际消耗或保证思考量。实际请求归 `attempts/*.json.request_parameters`，实际用量归 `usage.completion_tokens_details.reasoning_tokens`，截断归 `raw.choices[].finish_reason`；这些与 `object_identity.behavior.request` 一起归档。保持题目和 system/user prompt 完全一致再比较，失败留分母；不因 max 名称推定它比 high 更好或实际思考更多。开发/冻结记录及复算入口见[分类状态](../../../docs/evaluations/content-enrichment/status.md)。不改变生产模型或默认分类逻辑。
+
 <a id="当前研究配置c5"></a>
 
-### 当前整体主方案：C5；K阶段检验分类边界
+### 当前整体主方案：C5（关闭thinking）
+
+最新参数消融已完成：关闭thinking与开发后冻结的high/32768各279/361，修19/退19，总token后者多22.06%；不替换默认。开发六组、旧错子集和逐类P/R见[thinking完整记录](../../../docs/evaluations/content-enrichment/status.md#2026-09-23c5-thinking-参数消融)。以下K及更早阶段保留历史身份，不冒充本轮分数。
 
 2026-09-23用户选择继续使用Ark Flash。K1/K2沿C5单次调用，分别测试放宽对象介绍定义和收窄后的局部边界，不使用J2条件复核。开发200题C5/K1/K2为167/154/166对；K2冻结全361为285对（78.95%，2失败计错）。K2开发时修好的短模型和长独立测评在重复时又错，不能称为稳定修复；完整同期对照、逐类指标与下一研究问题以[最新状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-23k阶段单调用边界实验)为准。下面J/I/H/G保留历史，不作为本轮控制。
 
@@ -38,6 +46,8 @@ J阶段C5/J1/J2同200题165/162/161对。冻结J2全361为282对（78.12%），�
 最新H阶段已实现`category-h1.txt`至`category-h3.txt`：C5骨架迁入局部边界→reason先识别作者动作→修正为承载证据、取消原创作者门槛。开发同200为156/160/156对，本轮C5为163对。冻结H3全361为274对（75.90%），C5为286对（79.22%），13修正/25退化；H3局部收益保留但不整体采用。当前实际整体主方案仍为下方C5命令，不存在一个已验证更好的“C5＋所有修复”默认版本。生产仍A0；详情见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22h阶段实际组合局部修复)。以下G阶段数字保留历史语义，不是最新快照。
 
 C5完整身份：C1 rubric＋冻结一跳引用＋引用贡献主次＋冻结正文全文，每题一次Flash；不开source-context或conditional-review。全361历史290/288/289/294对，H阶段286对，本次K阶段291对；原方案未变，重复差值不是优化收益。G阶段G3为282对、对同期C5修16/退28；F阶段F3为288对，局部机制保留但未证明整体更好。完整结果与选择边界见[状态](../../../docs/evaluations/content-enrichment/status.md)。以后扩大题库时替换dataset与其manifest绑定的quote-source，沿用同一入口，不向旧版本覆盖写题。
+
+<a id="c5-command"></a>
 
 ```bash
 PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/evaluate.py \
