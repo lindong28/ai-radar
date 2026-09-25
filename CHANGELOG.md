@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-25（A1 识别方舟 token plan 失效）
+
+- A1「上游模型不可用」的错误判据新增 gateway 转发的 ARK `InvalidSubscription`（token plan 停止/未续费）。此前该错误码不在判据内：2026-09-25 00:06–16:35 全部 LLM 调用失败 16.5 小时，A1 全程报健康、未 page，用户凭方舟账户自行发现。对照读数：故障窗口上游错误率 1.000，故障前 0.004，续费后 0.000。同轮 A2 因 09-24 07:48 起的旧 episode 仍在 firing 而未再通知，记入 [告警台账](docs/issues/alerting.md#issue-alert-20260925-a1a2--同-episode-内烈度跃升不再通知)。
+
 ## 2026-09-23（C5 Flash thinking 参数消融）
 
 - 分类离线评测器新增 `--thinking`、`--reasoning-effort` 与 `--max-tokens`，默认仍关闭thinking、上限700；请求参数和实际reasoning用量随运行归档。

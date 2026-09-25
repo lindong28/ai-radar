@@ -655,3 +655,14 @@ A5 在微信解读被配置关闭时可从既有 firing 直接进入 resolved，
 - **不要停用它**（`data/sources.toml:83`，T1，`enabled=true`）——停用会丢掉它确实能取到的内容。
 - 正确处置就是已上线的按源去抖：瞬时上游故障不再 page，而真正的持续不可用仍会在三轮后报出。
 - F7 剩下的那一半仍然成立且未解：**没有任何规则度量按源的抓取成功率**，A7 的阈值是 13–37 小时的内容静默，接不住「能发但一半抓不到」这一档。
+
+## ISSUE-ALERT-20260925-a1a2 · 同 episode 内烈度跃升不再通知
+
+**状态**：open · **优先级**：high · **原则**：P7 / P1
+
+2026-09-25 00:06–16:35 火山方舟 token plan 停止，gateway 把每次调用都记成 `HTTP 400 ProviderStreamError` / 业务错误 `code=InvalidSubscription`，25,875 次尝试零成功；prefilter / enrich / interpret 全部错误率 100%，首页归档与 `/wechat` 从 00:01 起没有新内容。整段时间**没有任何投递**（`data/alert-events.jsonl` 当天只有 A7）。两条独立原因：
+
+1. **A1 判据不识别 gateway 转发的账户类错误码**——已修（`calibration.py` `UPSTREAM_ERROR_RE` 加 `invalidsubscription`，回归测试 `test_upstream_error_classifier_recognizes_gateway_account_errors`）。gateway 迁移（ADR-7d82，2026-09-22）后错误文案从供应商原文变成 `code=<Code>`，旧正则只覆盖 DeepSeek 时代的 `404 InvalidEndpoint` 与 `insufficient`；其它账户类 code（余额欠费、配额）尚未出现过，出现时同样漏判——这是模式匹配自然语言错误文案的固有形态，长期方向是让 gateway 在 companion 里给出结构化的错误类别（账户 / 模型 / 传输 / 解析），A1 读类别而不读文案。
+2. **A2 的 episode 语义遮住了烈度跃升**：A2 page 自 2026-09-24 07:48 因「prefilter 错误率 55.6% > 30%」firing，按 ADR-acdd「同一 episode 持续 firing 不再按时间重复提醒」，今天升到 prefilter 100% / enrich 100% 只是同一 episode 的延续，不再投递。低烈度 firing 一天没人处理，就把随后的完全中断也一起静音了。**未修**。候选方向：把「触发阈值的阶段集合」或「错误率跨过 ≥95% 档」纳入 episode 身份（跃升即新事故），或给同 episode 加一次「烈度升级」通知；两者都要过 acdd 的去噪判据，不在本次范围内。
+
+另一处只记不改：`pipeline.sh` 的 `PIPELINE DONE (failed=N)` 只数阶段退出码，`prefilter processed=400 errors=400` 的一轮照样 `failed=0`——日志级别的"全绿"与 LLM 全挂同形，靠 A1/A2 兜底而它们恰好都没响。

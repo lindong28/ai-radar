@@ -98,3 +98,18 @@ def test_calibrate_thresholds_derives_baselines_for_all_alerts(tmp_path: Path) -
     assert calibration["thresholds"]["a2"]["stage_p95_latency_ms"]["scoring"] == 9000
     assert calibration["thresholds"]["a3"]["server_error_rate"] == 0.5
     assert calibration["thresholds"]["a4"]["daily_inserted_floor"] == 1
+
+
+def test_upstream_error_classifier_recognizes_gateway_account_errors() -> None:
+    from airadar.admin.calibration import _is_upstream_error
+
+    gateway_prefix = "enrich failed: LLM Gateway request failed: request_id=cf3f0d34 "
+    # 2026-09-25: ARK token plan lapsed; every call came back through the
+    # gateway as code=InvalidSubscription and A1 stayed "healthy" for 16.5h.
+    assert _is_upstream_error(gateway_prefix + "code=InvalidSubscription; Inspect the gateway ledger")
+    assert _is_upstream_error("all DeepSeek provider endpoints failed: 404 InvalidEndpoint")
+    # Business-side parse failures surface with the same prefix but are not
+    # provider outages; schema noise stays excluded as before.
+    assert not _is_upstream_error(gateway_prefix + "code=ValueError; Inspect the gateway ledger")
+    assert not _is_upstream_error("schema validation failed: missing field")
+    assert not _is_upstream_error(None)

@@ -10,7 +10,12 @@ from .. import db
 from .access_log import aggregate_access_log
 from .metrics import SHANGHAI_TZ, _load_pipeline_runs, _parse_dt, _percentile_ms
 
-UPSTREAM_ERROR_RE = re.compile(r"(endpoints failed|invalidendpoint|404|insufficient)", re.IGNORECASE)
+# Provider outage signatures A1 counts. The first group is the pre-gateway
+# DeepSeek wording; `invalidsubscription` is ARK's lapsed-token-plan code as the
+# gateway relays it (`code=InvalidSubscription`, 2026-09-25: 16.5h unpaged).
+UPSTREAM_ERROR_RE = re.compile(
+    r"(endpoints failed|invalidendpoint|404|insufficient|invalidsubscription)", re.IGNORECASE
+)
 SCHEMA_ERROR_RE = re.compile(r"schema validation failed", re.IGNORECASE)
 
 
