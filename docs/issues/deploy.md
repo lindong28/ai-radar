@@ -207,3 +207,11 @@ apply 的 retry authority 三元组含 `VERIFIER_VERSION` 常量，verifier-rele
 | C | 外审另指出：放宽 gitlink 规则会让落在 `web/templates`、`web/static` 等**惰性读取**路径上的 submodule「部署成功」而整站 500——`checkout-index` 建出空目录，服务照常启动、`/api/v1/healthz` 返回 200，候选闸的 `import airadar.cli` 不覆盖 `airadar.web.app`。所以 A/B 才是方向，不要用放宽该规则来解 |
 
 生产线与 main 的差异现已包含：`tencent/main` 不含 `benchmarks/aihot`（`.gitmodules` 保留但无对应条目，inert）。
+
+## [open] 2026-09-26：磁盘 100% 使 pipeline 连续失败；DB sync 的 7.3 GiB 工作快照从不清理
+
+13:15–13:45 三轮 pipeline 以 `sqlite3.OperationalError: database or disk is full` 失败（`logs/pipeline-20260926-13*.log`），Data 卷剩 821 MiB；14:00 起用户侧释放空间后（6.2 GiB）恢复。没有任何告警覆盖磁盘水位。
+
+盘点读数（`du -x`，2026-09-26 13:58）：`data/radar.db.snapshot` **7.3 GiB**——`deploy/sync/sync-db-to-server.sh:46` 的固定路径工作快照，每 5 小时重建、脚本不删除，常驻占用与主库同体积；`data/radar.db.shipping` 4.0 GiB（设计内的持久 base-only 副本）；`data/recovery/` 4.7 GiB（其中 08-28 那份 4.1 GiB 被 ADR-f8d9 当执行基线锚定）；`data/raw-capture` 5.1 GiB（30 天保留）；`~/research/ai-radar-data-staging/radar-prod-snapshot-20260821` 3.6 GiB 与 `ai-radar-worktrees/t3-eval-regression/plans/.../radar.db` 3.6 GiB 两份 08-22 生产库副本；`~/.cache/uv` 5.6 GiB、`~/Library/Caches/lima/download` 3.3 GiB 可再生缓存。仓外 `ai-agent-config/codex` 12 GiB、`skill-configs` 8 GiB 未盘点。
+
+**闭合方向**：sync 结束后删除工作快照（或改用 `VACUUM INTO` 到临时路径后即删）；给磁盘水位一条告警（A 系列或 run-or-alert 包裹的 cron 探针）；历史副本的去留交用户。

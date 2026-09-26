@@ -666,3 +666,11 @@ A5 在微信解读被配置关闭时可从既有 firing 直接进入 resolved，
 2. **A2 的 episode 语义遮住了烈度跃升**：A2 page 自 2026-09-24 07:48 因「prefilter 错误率 55.6% > 30%」firing，按 ADR-acdd「同一 episode 持续 firing 不再按时间重复提醒」，今天升到 prefilter 100% / enrich 100% 只是同一 episode 的延续，不再投递。低烈度 firing 一天没人处理，就把随后的完全中断也一起静音了。**未修**。候选方向：把「触发阈值的阶段集合」或「错误率跨过 ≥95% 档」纳入 episode 身份（跃升即新事故），或给同 episode 加一次「烈度升级」通知；两者都要过 acdd 的去噪判据，不在本次范围内。
 
 另一处只记不改：`pipeline.sh` 的 `PIPELINE DONE (failed=N)` 只数阶段退出码，`prefilter processed=400 errors=400` 的一轮照样 `failed=0`——日志级别的"全绿"与 LLM 全挂同形，靠 A1/A2 兜底而它们恰好都没响。
+
+### 追加（2026-09-26 取证）：`ValueError` 错误的真身是 ARK 内容审核拒绝 + 无退避重试
+
+上条第 2 点里让 A2 自 09-24 07:48 起常态 firing 的 `code=ValueError`，实测不是模型吐坏 JSON：gateway 账本里这些请求 `outcome=success`、~190 ms、`prompt_tokens=completion_tokens=0`，响应 `finish_reason: "content_filter"`、正文固定话术「你好，我无法给到相关内容。」——是火山方舟**输入端内容审核**拦下了请求（样本 5 条全是特朗普–习近平峰会类政治新闻），模型没有运行。09-22 迁 gateway 前 prefilter 零此类错误；迁后按行统计 09-22 3% → 09-23 26% → 09-24 43% → 09-26 63%。
+
+**按条目看只有 1.5%**（续费后 3,302 条中 50 条始终被拒；另有 133 条曾被拒后又成功，审核并非完全确定），**放大来自重试**：被拒条目在 24h 候选窗内每 15 分钟重试一次，平均 41 次、最多 59 次。三层各漏一处：gateway 只对声明了 `response_format=json_object` 的请求校验 `content_filter`（prefilter 因部分 ARK endpoint 拒绝该参数而不声明，见 `deepseek_chat.py:79`），于是当 `success` 放行；客户端 `_parse_json_object` 把它记成泛化 `ValueError`；重试对确定性拒绝无退避。代价不是 token（零计费），是 A2 被它占住——正是这一点让 09-25 的订阅故障没有被单独通知。
+
+**闭合方向**（用户 2026-09-26 裁决：本轮不修，只记账）：客户端把 `finish_reason=content_filter` 识别为独立错误类，同一条目不再逐轮重试；gateway 侧把 `content_filter` 记为失败属另一仓的语义改动，客户端修完后不再是本仓阻塞项。
