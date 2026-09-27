@@ -16,6 +16,22 @@
 
 ## 重建、扩充、运行
 
+### P 阶段：材料呈现与证据理由复用
+
+`scripts/eval/category_evidence_study.py` 从一个已核源单调用分类run重放其完整cohort；不重建题库、不改gold。运行前核原dataset/quote/body/human-review/model/transport身份，缺失或漂移即拒绝，不先调用后发现。当前源run为 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/13-53-09`（O3，48人评题）。
+
+```bash
+PYTHONPATH=src:. uv run python scripts/eval/category_evidence_study.py \
+  --source-run runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/13-53-09 \
+  --arm documents --label p1-repeat --env-file .env
+```
+
+`control` 固定为legacy呈现并关闭evidence-reason，本阶段以O3为源时等于原配置重复；不承诺对任意P1/P2源保留其原呈现。`documents` 是P1，材料仅去逐字重复并保留来源角色；`evidence` 是P2，在documents基础上要求reason绑定新闻贡献与证据归属，类别条件仍不变。每次生成新标准分区，保留源run比较；`comparison.json` 默认相对传入源run，P2对直接父P1另用 `python -m evals._shared.category_compare --baseline-runs <P1> --candidate-runs <P2> --human-reviews <冻结票> --output <未占用比较文件>`，不要把源O3比较误称P1比较。
+
+材料呈现实现为 `evals/_shared/category_materials.py`，只消费原标题/正文、已使用sidecar内容和冻结quote；从repair_materials识别的片段必须已在sidecar实际正文中出现，未送达候选不会新增进来，无法拆分的残余保留。用户prompt采用JSON列表，元素为 `origins`（role/part/url/author）和原样 `text`；同文本的多来源并列，不按URL覆盖不同文本。这个JSON只是模型输入呈现，不是benchmark题目schema变更，也不含人评答案。`--material-layout documents` 要求 `--body-limit 0`，不提供隐式截断。
+
+未来新的题集/人票/补全文本应先用基础 `evaluate.py` 建立新的冻结对照，再用此脚本派生，不修改旧run以复用旧身份。基础runner默认 `legacy`、无evidence-reason，生产默认不变。当前P1为研究起点，不是正式生产版本；本轮结果和未解决边界见[状态](../../status.md#2026-09-27p-阶段材料呈现与证据化理由已终态)。
+
 ### 2026-09-27：O 阶段输入材料修复
 
 本轮不改 v1 题目、参考和人票，而是在 M2 的48道人评题上把补充输入另存为 `body-context.jsonl`；原 `cases.jsonl` 与 as-of 引用保持原样。依据 [ADR-8ea1](../../../../adr/20260927-8ea1-repair-category-source-material.md)，先固定 M2 rubric 比较输入补全，再据错误归因调整候选；新正文和新引用属于被测输入配置，不是原 benchmark 的历史输入。

@@ -1,5 +1,11 @@
 # 运行台账
 
+## 2026-09-27：P阶段材料呈现与证据理由
+
+四批UTC：`15-07-59` P1 37/48，`15-09-30` P2 33/48，`15-11-23` P1重复38/48，`15-12-38` O3同期35/48。各48题/48调用，失败依次1/1/2/3；实际Flash，报告tokens依次138916/145602/139086/130876，共192调用554480 tokens，金额未知。全部为同一48道人评开发题，无新增独立样本。P1对历史O3修5/退2，P2对P1修2/退6，目标12题和余36题独立列报。
+
+标准根 `{runs,experiments}/content-enrichment/aihot-category-navigation/v1/2026-09-27/`。首批 `study-summary.json` 记录12题ID、五轮汇总及具名配对；各批的人评成绩读 `human-priority-scores.json` 而非AIHOT原 `scores.json`。原件、归档与统一索引本地接续；无正式版本认可、无发布要求，未发布网站或HTML快照。按既有迁移表解析工作树历史绝对路径，不改冻结原件。采用和归因边界详见[分类状态P阶段](../content-enrichment/status.md#2026-09-27p-阶段材料呈现与证据化理由已终态)。
+
 ## 2026-09-23：K阶段分类边界（Flash）
 
 七轮UTC分区，根`{runs,experiments}/content-enrichment/aihot-category-navigation/v1/2026-09-23/`：

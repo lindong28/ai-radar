@@ -15,6 +15,7 @@ from airadar.enrich.classification import PRIMARY_CATEGORY_SLUGS
 from . import assets
 from .category_human import score_human_categories
 from .category_metrics import check_metric_definitions, score_categories
+from .category_materials import EVIDENCE_REASON, render_materials
 from .category_review import review_prompt, routing_output, routing_prompt
 from .cli import transport_factory
 from .prefilter_eval import select_cases
@@ -89,7 +90,12 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              reasoning_effort: str | None = None, max_tokens: int = 700,
              human_reviews: Path | None = None, body_context: Path | None = None,
              quote_guidance: str = "", case_ids: set[str] | None = None,
-             request_interval: float = 0) -> dict:
+             request_interval: float = 0, material_layout: str = "legacy",
+             evidence_reason: bool = False) -> dict:
+    if material_layout not in {"legacy", "documents"}:
+        raise ValueError("unknown material layout")
+    if material_layout == "documents" and body_limit is not None:
+        raise ValueError("documents layout requires full frozen body (body_limit=None)")
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
     if request_interval < 0:
@@ -153,6 +159,16 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
             prompts[row["case_id"]]["user"] += render_quotes(row["quotes"], body_limit=body_limit)
             if quote_contribution and any(q["status"] == "available" for q in row["quotes"]):
                 prompts[row["case_id"]]["system"] += "\n" + (quote_guidance or QUOTE_CONTRIBUTION)
+    if material_layout == "documents":
+        by_id = {row["case_id"]: row["quotes"] for row in contexts}
+        for case in cases:
+            key = case["case_id"]
+            prompts[key]["user"] = render_materials(case["input"], bodies.get(key, {}), by_id.get(key, []))
+            if include_source_context:
+                prompts[key]["user"] += source_context(case["input"])
+    if evidence_reason:
+        for prompt in prompts.values():
+            prompt["system"] += "\n" + EVIDENCE_REASON
     base_prompts = prompts
     if conditional_review:
         prompts = {key: routing_prompt(prompt, guidance=routing_guidance) for key, prompt in base_prompts.items()}
@@ -168,7 +184,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              "evals/_shared/transport.py", "evals/_shared/cli.py", "src/airadar/provider/llm_gateway.py",
              "evals/_shared/category_human.py", "evals/_shared/human_store.py",
              "evals/_shared/score_type_study.py", "evals/_shared/quote_context.py",
-             "evals/_shared/identity.py", "evals/_shared/dataset.py", "evals/_shared/category_review.py")
+             "evals/_shared/identity.py", "evals/_shared/dataset.py", "evals/_shared/category_review.py",
+             "evals/_shared/category_materials.py")
 
     def identity():
         return {"code": {p: assets.file_digest(assets.ROOT / p) for p in paths},
@@ -181,6 +198,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                              "routing_guidance": routing_guidance,
                              "quote_guidance": quote_guidance,
                              "request_interval": request_interval,
+                             "material_layout": material_layout, "evidence_reason": evidence_reason,
                              "include_source_context": include_source_context},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
@@ -302,6 +320,8 @@ def main(argv=None):
     p.add_argument("--quote-contribution", action="store_true", help="Separate current-post contribution from available quoted background")
     p.add_argument("--quote-guidance", type=Path, help="Alternative contribution guidance; requires --quote-contribution")
     p.add_argument("--body-context", type=Path, help="Frozen current article supplement; original cases remain unchanged")
+    p.add_argument("--material-layout", choices=["legacy", "documents"], default="legacy")
+    p.add_argument("--evidence-reason", action="store_true", help="Require explicit contribution and evidence attribution in reason")
     p.add_argument("--human-reviews", type=Path, help="Human acceptable-label book; produces a separate score view")
     p.add_argument("--case-ids", type=Path, help="JSON array of explicit IDs, e.g. rejected calls in a previous immutable run")
     p.add_argument("--request-interval", type=float, default=0, help="Minimum seconds between request starts; does not change worker concurrency")
@@ -335,6 +355,7 @@ def main(argv=None):
                       routing_guidance=a.routing_guidance.read_text() if a.routing_guidance else "",
                       thinking=a.thinking, reasoning_effort=a.reasoning_effort, max_tokens=a.max_tokens,
                       human_reviews=a.human_reviews, body_context=a.body_context,
+                      material_layout=a.material_layout, evidence_reason=a.evidence_reason,
                       quote_guidance=a.quote_guidance.read_text() if a.quote_guidance else "",
                       case_ids=set(assets.read_json(a.case_ids)) if a.case_ids else None,
                       request_interval=a.request_interval)

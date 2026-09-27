@@ -57,7 +57,8 @@ def test_only_eligible_category_field_is_scored_and_failures_stay_in_denominator
 
 
 @pytest.mark.parametrize("bad", [float("nan"), "not-a-category"])
-def test_real_runner_archives_invalid_response_and_full_denominator(tmp_path, bad):
+@pytest.mark.parametrize("layout,grounded", [("legacy", False), ("documents", False), ("documents", True)])
+def test_real_runner_archives_invalid_response_and_full_denominator(tmp_path, bad, layout, grounded):
     from evals._shared import assets
     from evals._shared.category_eval import evaluate
 
@@ -77,10 +78,14 @@ def test_real_runner_archives_invalid_response_and_full_denominator(tmp_path, ba
 
     result = evaluate(dataset, config={"models": {"category": "fixture"}, "transport_identity": "fixture"},
                       split="dev", limit=None, seed="fixture", label="invalid", chat_factory=factory,
-                      workers=2, root=tmp_path)
+                      workers=2, root=tmp_path, body_limit=None,
+                      material_layout=layout, evidence_reason=grounded)
     assert result["complete"] is False
     assert result["category_accuracy"]["value"] == .5
     assert result["category_accuracy"]["denominator"] == 2
     predictions = assets.read_jsonl(Path(result["run"]) / "predictions.jsonl")
     assert predictions[0]["status"] == "error"
     assert "response_json" in predictions[0]
+    prompts = assets.read_jsonl(Path(result["run"]) / "prompts.jsonl")
+    assert ("Source materials" in prompts[0]["prompt"]["user"]) == (layout == "documents")
+    assert ("reason 用简短的证据链" in prompts[0]["prompt"]["system"]) == grounded
