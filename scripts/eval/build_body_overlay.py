@@ -28,128 +28,25 @@ feed 喂进来的、几乎不受限，而 `airadar.egress` 对字面 loopback �
 from __future__ import annotations
 
 import argparse
-import ipaddress
-import socket
 import sqlite3
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-from airadar.egress import selector_httpx_client  # noqa: E402
-from airadar.fetcher.content import clean_content  # noqa: E402
-
-MAX_REDIRECTS = 5
-MAX_BYTES = 4_000_000
-
-
-class UnsafeTarget(RuntimeError):
-    """目标主机解析到不可路由/内网地址，或协议不是 http(s)。"""
-
-
-INTERNAL_NAME_SUFFIXES = (".localhost", ".internal", ".local", ".home.arpa")
-INTERNAL_NAMES = {"localhost", "metadata.google.internal", "instance-data"}
-
-
-def assert_public_http(url: str) -> None:
-    """按**主机形态**判，不靠本机 DNS 解析。
-
-    **第一版靠 `getaddrinfo` 判地址，跑 1157 条时误拦了一条**（`www.youtube.com → 2001::1`）。
-    那不是 YouTube 的地址，是 clash 的 **fake-IP**：本机 DNS 返回假地址、真实解析发生在代理里。
-    于是地址校验对**走代理**的主机只会误拦，守不住东西——而失败形态是"静默保留 stub"，
-    与"这条本来就抓不到"完全同形，没有下游发现得了。
-
-    ⚠️ **第二版这里写过「只有 `is_loopback_url()` 那一组绕过代理，因此只有它们能到达本机服务」，
-    后半句被实测证伪**：经 selector 客户端 GET `http://127.0.0.1:11434/` 返回
-    **200 `Ollama is running`**。到得了本机服务的是「解析到 loopback 的**全部**写法」，
-    而等价类比那三个字面量大得多——第二版因此漏了 5 种（见 `_as_ip`）。
-    所以判据是「**这个主机形态会不会落在 loopback / 内网等价类里**」，用 `_as_ip` 认全部写法。
-
-    **两条残余风险，如实记**：
-    1. 一个**由代理解析**到内网地址的域名（`127.0.0.1.nip.io` 一类），这道闸挡不住——
-       它要在代理 / egress 层用主机名单解决，不在本脚本的作用域内。
-    2. DNS rebinding 有 TOCTOU 窗口：本函数判一次、httpx 再解析一次。要钉住得自己解析并连 IP。
-    3. **判据随 Python 版本变**（复核轮的 L18）：`ipaddress` 对 `::ffff:*` 的 `is_private`、
-       对 `100.64/10` 的归类都改过。本机实测在 **3.13**；换解释器要重跑那组对照。
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise UnsafeTarget(f"scheme {parsed.scheme!r}")
-    host = (parsed.hostname or "").casefold().rstrip(".")   # 尾点 FQDN：`localhost.` 曾绕过
-    if not host:
-        raise UnsafeTarget("no host")
-    if host in INTERNAL_NAMES or host.endswith(INTERNAL_NAME_SUFFIXES):
-        raise UnsafeTarget(f"内网名 {host}")
-    addr = _as_ip(host)
-    if addr is None:
-        return  # 域名：交给代理，见上面 docstring
-    # `is_global` 单独不够：它对部分保留段给 True，逐项判更稳。
-    # `100.64/10`（RFC 6598 CGNAT）逐项全 False 而 `is_global` 也 False ⇒ 单独补。
-    if (addr.is_loopback or addr.is_private or addr.is_link_local
-            or addr.is_reserved or addr.is_multicast or addr.is_unspecified
-            or not addr.is_global):
-        raise UnsafeTarget(f"字面地址 {addr}")
-
-
-def fetch_article(url: str, timeout: float) -> tuple[str, str]:
-    """逐跳校验地跟转，返回 (正文, 备注)。任何失败都返回空正文，不抛。"""
-    current = url
-    try:
-        for _ in range(MAX_REDIRECTS):
-            assert_public_http(current)
-            with selector_httpx_client(
-                callsite_id="scripts.eval.build_body_overlay",
-                request_url=current,
-                timeout=timeout,
-                follow_redirects=False,  # 逐跳自己判，否则跳板可绕过上面的校验
-            ) as client:
-                # **流式读 + 边读边截**（复核轮的 M13）：第一版在 `len(resp.content)` 之后才判
-                # `MAX_BYTES`，那时整份 body 已经下载并解压进内存了，闸什么都没护住
-                # ——实测有一条抽出 93019 字（原文 57 字），原始字节更大，而并发无上界。
-                with client.stream(
-                    "GET", current,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; ai-radar-eval)"},
-                ) as resp:
-                    if resp.status_code == 200:
-                        chunks: list[bytes] = []
-                        size = 0
-                        for chunk in resp.iter_bytes():
-                            size += len(chunk)
-                            if size > MAX_BYTES:
-                                return "", f"过大 >{MAX_BYTES}B"
-                            chunks.append(chunk)
-                        resp_text = b"".join(chunks).decode(
-                            resp.encoding or "utf-8", errors="replace")
-                    else:
-                        resp_text = ""
-                        resp.read()
-            if resp.status_code in (301, 302, 303, 307, 308):
-                nxt = resp.headers.get("location")
-                if not nxt:
-                    return "", f"{resp.status_code} 无 location"
-                current = str(resp.url.join(nxt))
-                continue
-            if resp.status_code != 200:
-                return "", f"HTTP {resp.status_code}"
-            ctype = resp.headers.get("content-type", "").lower()
-            if "html" not in ctype and "xml" not in ctype:
-                return "", f"content-type {ctype.split(';')[0] or '?'}"
-            body = clean_content(resp_text)
-            # **空正文要有自己的 note**（2026-09-11 复核轮的 New-6）：返回 `("", "ok")` 时
-            # `_miss_is_permanent("ok")` 为 False ⇒ 每次续跑都重抓、永不收敛，
-            # 而这正是 H6 要修的那一类。抽取为空是关于该页面的事实，永久。
-            return (body, "ok") if body else ("", "抽取为空")
-        return "", "跟转过多"
-    except UnsafeTarget as exc:
-        return "", f"UNSAFE {exc}"
-    except Exception as exc:  # noqa: BLE001
-        return "", type(exc).__name__
+from airadar.enrich.article_context import (  # noqa: E402,F401
+    MAX_BYTES,
+    MAX_REDIRECTS,
+    UnsafeTarget,
+    _as_ip,
+    assert_public_http,
+    fetch_article,
+)
 
 
 def eligible_sources(conn: sqlite3.Connection, min_rate: float, lookback_days: int) -> set[str]:
@@ -174,32 +71,6 @@ def eligible_sources(conn: sqlite3.Connection, min_rate: float, lookback_days: i
     # 最大一组 ×6。信息增量为零、噪声为正，而 `--min-gain` 挡不住（23 字拿到 46 字就过闸）。
     dropped = {s for s in keep if s.startswith("x_")}
     return keep - dropped
-
-
-def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """把主机解析成地址**对象**，认全部等价写法；不是地址就返回 None。
-
-    **第二版闸只用 `ipaddress.ip_address(host)`，漏了 5 种写法**（2026-09-11 review-gate 的 H7，
-    逐条实测）：`127.1` / `127.0.1` / `2130706433`（32 位整数）/ `0x7f000001`（十六进制）
-    全部被放过，而它们在本机 `getaddrinfo` 下**真解析到 127.0.0.1**；`localhost.`（尾点 FQDN）
-    也被放过。`ipaddress` 只认点分四段的严格写法，而 `inet_aton` 认 BSD 的全部宽松写法——
-    **浏览器、curl 与 httpx 走的是后者**，所以判据必须用后者。
-
-    同时订正第二版 docstring 里那句安全论证：它写「只有 `is_loopback_url()` 那一组绕过代理，
-    **因此只有它们能到达本机服务**」。**后半句被实测证伪**：经 selector 客户端
-    GET `http://127.0.0.1:11434/` 返回 **200 `Ollama is running`**。到得了本机服务的是
-    「解析到 loopback 的**全部**写法」，而不是那三个字面量——等价类比字面量集合大得多。
-    """
-    try:
-        return ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    # 宽松点分 / 整数 / 十六进制：`inet_aton` 的语义与 libc 解析器一致。
-    try:
-        packed = socket.inet_aton(host)
-    except OSError:
-        return None
-    return ipaddress.ip_address(packed)
 
 
 RETRYABLE_HTTP = {"408", "429"}

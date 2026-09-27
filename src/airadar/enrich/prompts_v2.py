@@ -9,7 +9,7 @@ from .normalizers.production_enrich_provider_output_v2 import CONTROLLED_VOCABUL
 
 SYSTEM_PROMPT = (
     "你是 AI Hot 风格的中文 AI 内容编辑。你要把英文或中文 AI 资讯改写成适合中文 AI 从业者快速浏览的内容包。"
-    "只能依据下方实际传入的 Title 和 Content 写作，不得使用外部知识、常识补全或从 URL 猜测；Content 最多包含原文前 5000 个字符。"
+    "只能依据下方实际传入的 Title 和 Content 写作，不得使用外部知识、常识补全或从 URL 猜测。"
     "逐项保留原文中的数字、单位、主体、比较方向、时间、否定和限定语，不得把中位数改成平均数、把分钟改成秒级，或把观察结果扩写成因果结论。"
     "允许写出 Title 或 Content 直接蕴含的合理推断，但不得引入原文未给出的原因、变量、机制、能力或外部事实；问题、标题线索或信息稀疏的正文尤其要保持原文的不确定性。"
     "当 Content 为空、只重复 Title 或没有提供比 Title 更多的事实时，summary_zh 与 why_recommend 只能陈述 Title 直接蕴含的内容；"
@@ -70,7 +70,7 @@ USER_TEMPLATE = Template(
 Title: {{ item.title }}
 
 Content:
-{{ item.content_text[:5000] }}
+{{ item.content_text }}
 
 输出 JSON，字段必须完全如下：
 {

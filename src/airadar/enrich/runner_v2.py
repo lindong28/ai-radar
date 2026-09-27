@@ -5,7 +5,8 @@ import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from ..stage_common import failed_retry_cutoff as _failed_retry_cutoff
 from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
 from ..stage_common import provider_item_from_row as _to_provider_item
+from .article_context import prepare_article_context
 from .normalizers.production_enrich_provider_output_v2 import normalize
 from .prompts_v2 import render_enrich_prompt
 from .schema_v2 import EnrichOutputV2
@@ -87,7 +89,7 @@ def _candidate_rows(
         params.append(_failed_retry_cutoff())
         params.extend(f"{prefix}%" for prefix in _DETERMINISTIC_PREFIXES)
     sql = f"""
-      SELECT i.id, i.title, i.url, i.source_id, s.tier, i.author, i.published_at, i.content_text
+      SELECT i.id, i.title, i.url, i.source_id, s.tier, i.author, i.published_at, i.content_text, s.kind
       FROM items i
       JOIN sources s ON s.id=i.source_id
       WHERE {item_filter}
@@ -193,6 +195,7 @@ def _insert_evaluation(
     output: dict[str, Any],
     error: str | None,
     latency_ms: int,
+    article_context: dict | None = None,
 ) -> None:
     insert_evaluation(
         conn,
@@ -200,7 +203,7 @@ def _insert_evaluation(
         stage="enrich",
         ruleset_version=ruleset_version,
         model_id=provider.model_id,
-        input_data=render_enrich_prompt(item),
+        input_data={**render_enrich_prompt(item), "article_context": article_context},
         output_data=enriched.model_dump() if enriched else output,
         numeric_data=None,
         latency_ms=latency_ms,
@@ -224,6 +227,24 @@ def run_enrich(
     items = [_to_provider_item(row) for row in rows]
     total = len(items)
     selected_workers = max(1, min(workers, total or 1))
+    database_file = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
+    cache_dir = Path(database_file).parent / "article-context" if database_file else None
+    # Prepare only selected enrichment candidates, never mutate raw items/prefilter input.
+    def prepare(pair):
+        row, item = pair
+        context = prepare_article_context(
+            {"title": item.title, "url": item.url, "content_text": item.content_text, "source_kind": row[8]},
+            cache_dir=cache_dir,
+        )
+        body = item.content_text
+        if context["status"] == "available":
+            body += "\n\nRetrieved article context (current retrieval):\n" + context["content_text"]
+        return replace(item, content_text=body), context
+
+    with ThreadPoolExecutor(max_workers=min(8, total or 1)) as executor:
+        prepared = list(executor.map(prepare, zip(rows, items)))
+    items = [item for item, _ in prepared]
+    contexts = {item.id: context for item, context in prepared}
     processed = 0
     errors = 0
 
@@ -241,7 +262,7 @@ def run_enrich(
     ) -> None:
         nonlocal errors, processed
         errors += 1 if error else 0
-        _insert_evaluation(conn, item, selected_provider, selected_ruleset, enriched, output, error, latency_ms)
+        _insert_evaluation(conn, item, selected_provider, selected_ruleset, enriched, output, error, latency_ms, contexts[item.id])
         processed += 1
         conn.commit()
         if progress_callback:
