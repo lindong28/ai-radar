@@ -18,6 +18,10 @@ def main():
     parser.add_argument("--label", required=True)
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=assets.ROOT)
+    parser.add_argument("--temperature", type=float, help="Override only this frozen request parameter")
+    parser.add_argument("--max-tokens", type=int)
+    parser.add_argument("--thinking", choices=["disabled", "enabled"])
+    parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"])
     args = parser.parse_args()
     cases, _, _, _ = collect([args.source_run])
     meta = assets.read_json(args.source_run / "started.json")
@@ -51,8 +55,11 @@ def main():
         chat_factory=transport_factory(config, args.env_file), rubric=behavior["rubric"],
         workers=8, root=args.output_root, quote_source=manifests[0] if manifests else None,
         body_limit=behavior["body_limit"], quote_contribution=behavior["quote_contribution"],
-        quote_guidance=behavior["quote_guidance"], thinking=behavior["thinking"],
-        reasoning_effort=request.get("reasoning_effort"), max_tokens=request["max_tokens"],
+        quote_guidance=behavior["quote_guidance"],
+        thinking=args.thinking if args.thinking is not None else behavior["thinking"],
+        reasoning_effort=args.reasoning_effort if args.reasoning_effort is not None else request.get("reasoning_effort"),
+        max_tokens=args.max_tokens if args.max_tokens is not None else request["max_tokens"],
+        temperature=args.temperature if args.temperature is not None else request["temperature"],
         human_reviews=reviews, body_context=body if body.exists() else None,
         case_ids=set(cases), request_interval=1,
         material_layout="legacy" if args.arm == "control" else "documents",

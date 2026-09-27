@@ -87,7 +87,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              conditional_review: bool = False, include_source_context: bool = False,
              blind_review: bool = False, review_guidance: str = "",
              routing_guidance: str = "", thinking: str = "disabled",
-             reasoning_effort: str | None = None, max_tokens: int = 700,
+             reasoning_effort: str | None = None, max_tokens: int = 700, temperature: float = 0,
              human_reviews: Path | None = None, body_context: Path | None = None,
              quote_guidance: str = "", case_ids: set[str] | None = None,
              request_interval: float = 0, material_layout: str = "legacy",
@@ -102,6 +102,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         raise ValueError("request_interval must be nonnegative")
     if thinking not in {"disabled", "enabled"} or max_tokens <= 0:
         raise ValueError("invalid thinking mode or max_tokens")
+    if not 0 <= temperature <= 2:
+        raise ValueError("temperature must be finite and between 0 and 2")
     if reasoning_effort is not None and (thinking != "enabled" or reasoning_effort not in {"low", "medium", "high", "max"}):
         raise ValueError("reasoning_effort requires enabled thinking and a supported level")
     if (blind_review or review_guidance or routing_guidance) and not conditional_review:
@@ -172,7 +174,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     base_prompts = prompts
     if conditional_review:
         prompts = {key: routing_prompt(prompt, guidance=routing_guidance) for key, prompt in base_prompts.items()}
-    request = {"model": config["models"]["category"], "temperature": 0, "max_tokens": max_tokens}
+    request = {"model": config["models"]["category"], "temperature": temperature, "max_tokens": max_tokens}
     if thinking != "disabled":
         request["thinking"] = thinking
     if reasoning_effort is not None:
@@ -338,6 +340,7 @@ def main(argv=None):
     p.add_argument("--thinking", choices=["disabled", "enabled"], default="disabled")
     p.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"])
     p.add_argument("--max-tokens", type=int, default=700)
+    p.add_argument("--temperature", type=float, default=0)
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--output-root", type=Path, default=assets.ROOT)
     a = p.parse_args(argv)
@@ -354,6 +357,7 @@ def main(argv=None):
                       review_guidance=a.review_guidance.read_text() if a.review_guidance else "",
                       routing_guidance=a.routing_guidance.read_text() if a.routing_guidance else "",
                       thinking=a.thinking, reasoning_effort=a.reasoning_effort, max_tokens=a.max_tokens,
+                      temperature=a.temperature,
                       human_reviews=a.human_reviews, body_context=a.body_context,
                       material_layout=a.material_layout, evidence_reason=a.evidence_reason,
                       quote_guidance=a.quote_guidance.read_text() if a.quote_guidance else "",

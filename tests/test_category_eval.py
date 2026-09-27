@@ -58,7 +58,8 @@ def test_only_eligible_category_field_is_scored_and_failures_stay_in_denominator
 
 @pytest.mark.parametrize("bad", [float("nan"), "not-a-category"])
 @pytest.mark.parametrize("layout,grounded", [("legacy", False), ("documents", False), ("documents", True)])
-def test_real_runner_archives_invalid_response_and_full_denominator(tmp_path, bad, layout, grounded):
+@pytest.mark.parametrize("temperature", [0, 0.5])
+def test_real_runner_archives_invalid_response_and_full_denominator(tmp_path, bad, layout, grounded, temperature):
     from evals._shared import assets
     from evals._shared.category_eval import evaluate
 
@@ -73,13 +74,23 @@ def test_real_runner_archives_invalid_response_and_full_denominator(tmp_path, ba
     definitions = assets.read_json(assets.ROOT / "evals/content-enrichment/aihot-category-navigation/metrics.json")
     assets.write_json(tmp_path / "evals/content-enrichment/aihot-category-navigation/metrics.json", definitions)
 
+    requests = []
     def factory(_):
-        return lambda key: lambda **kwargs: {"json": {"reason": "原文判断", "primary_category": bad if key == "bad" else "opinion"}}
+        def for_case(key):
+            def chat(**kwargs):
+                requests.append(kwargs)
+                return {"json": {"reason": "原文判断", "primary_category": bad if key == "bad" else "opinion"}}
+            return chat
+        return for_case
 
     result = evaluate(dataset, config={"models": {"category": "fixture"}, "transport_identity": "fixture"},
                       split="dev", limit=None, seed="fixture", label="invalid", chat_factory=factory,
                       workers=2, root=tmp_path, body_limit=None,
-                      material_layout=layout, evidence_reason=grounded)
+                      material_layout=layout, evidence_reason=grounded, temperature=temperature)
+    assert len(requests) == 2
+    assert all(r["request"]["temperature"] == temperature for r in requests)
+    meta = assets.read_json(Path(result["run"]) / "started.json")
+    assert meta["object_identity"]["behavior"]["request"]["temperature"] == temperature
     assert result["complete"] is False
     assert result["category_accuracy"]["value"] == .5
     assert result["category_accuracy"]["denominator"] == 2
@@ -89,3 +100,11 @@ def test_real_runner_archives_invalid_response_and_full_denominator(tmp_path, ba
     prompts = assets.read_jsonl(Path(result["run"]) / "prompts.jsonl")
     assert ("Source materials" in prompts[0]["prompt"]["user"]) == (layout == "documents")
     assert ("reason 用简短的证据链" in prompts[0]["prompt"]["system"]) == grounded
+
+
+@pytest.mark.parametrize("temperature", [float("nan"), float("inf"), -0.1, 2.1])
+def test_invalid_temperature_fails_before_reading_dataset(temperature):
+    from evals._shared.category_eval import evaluate
+    with pytest.raises(ValueError, match="temperature"):
+        evaluate(Path("absent"), config={}, split="dev", limit=None, seed="test",
+                 label="test", chat_factory=None, temperature=temperature)

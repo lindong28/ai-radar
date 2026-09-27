@@ -16,6 +16,21 @@
 
 ## 重建、扩充、运行
 
+### Q 阶段：冻结 P1 的调用参数消融
+
+`category_evidence_study.py` 现接受 `--temperature`、`--max-tokens`、`--thinking` 和 `--reasoning-effort`；不指定时继承源run对应参数。基础 `evaluate.py` 的temperature默认仍为0，生产分类器不变。若源启用了reasoning_effort，关闭thinking前应选一个原本关闭thinking的控制源，避免继承不兼容的effort而被预检拒绝。
+
+```bash
+PYTHONPATH=src:. uv run python scripts/eval/category_evidence_study.py \
+  --source-run runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/15-11-23 \
+  --arm documents --label p1-thinking-high-repeat --env-file .env \
+  --temperature 0 --max-tokens 8192 --thinking enabled --reasoning-effort high
+```
+
+该命令重跑源run的48道人评题，不是全361题；省略四个参数即P1原参数重复，`--arm documents`仍须显式保留。每次生成新分区，不覆盖成功预测。用实际 `attempts/*.json` 的请求、响应usage和finish_reason核对生效情况；接受请求不等于供应商一定区别所有effort档位。对照必须同题、同人票、同实际prompt，目标旧错题与其余题分开配对，不能只统计修复而遗漏回退。
+
+Q阶段零调用复算工具位于 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/20-16-47/support/summarize.py`：以 `PYTHONPATH=src:. uv run python <脚本> <父run绝对路径> <各候选run绝对路径...>` 执行，JSON输出可写入一个新文件。它检查终态身份、实际cases/prompts及人票摘要一致性，复用既有确定性计分与配对函数。机器结果 `study-summary.json` 保存每类P/R、旧错题/余题、调用用量和具名配对；结论与取数边界见[分类状态](../../status.md)。
+
 ### P 阶段：材料呈现与证据理由复用
 
 `scripts/eval/category_evidence_study.py` 从一个已核源单调用分类run重放其完整cohort；不重建题库、不改gold。运行前核原dataset/quote/body/human-review/model/transport身份，缺失或漂移即拒绝，不先调用后发现。当前源run为 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/13-53-09`（O3，48人评题）。

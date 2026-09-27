@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-28（分类P1调用参数实验）
+
+- 离线分类新增 `--temperature`，冻结重放脚本支持覆盖temperature、max_tokens、thinking与reasoning_effort；默认参数不变。
+- 同48道人评题完成五组参数对照，原参数39/48，增大上限及升温各38/48，low/high thinking为36/48、32/48，未替换默认或生产。完整逐类指标与修退归因见[分类状态](docs/evaluations/content-enrichment/status.md)。
+
 ## 2026-09-27（分类源材料修复，未部署）
 
 - 分类可读取更完整的引用帖及外链文章材料；尚未部署、生产分类默认未切换。48道人评开发题上的输入对照与优化实验见[分类状态](docs/evaluations/content-enrichment/status.md)，不把单次成绩提升当作稳定改善。
