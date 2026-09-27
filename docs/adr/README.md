@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260927-8ea1](./20260927-8ea1-repair-category-source-material.md) | 分类输入原文、直接引用与文章材料修复，同题离线消融 | accepted for implementation and offline evaluation；未部署 | 2026-09-27 |
 | [20260927-53ab](./20260927-53ab-human-category-scoring.md) | 分类人评集合计分与 C5 修订，正文补充独立留存 | accepted for offline evaluation | 2026-09-27 |
 | [20260922-6bc2](./20260922-6bc2-test-category-routing-guidance.md) | C5/I2竞争证据路由指导的离线实验 | accepted for offline experiment | 2026-09-22 |
 | [20260922-81af](./20260922-81af-test-blind-conditional-category-review.md) | C5 条件盲复核与仅二次生效的局部证据指导实验 | accepted for offline experiment | 2026-09-22 |

@@ -20,8 +20,14 @@ def collected_quotes(conn: sqlite3.Connection, source_kind: str, extra_json: str
                   if isinstance(ref, dict) and ref.get("type") == "quoted" and ref.get("id")})
     result = []
     for post_id in ids:
+        embedded = [q for q in extra.get("x_quoted_posts", [])
+                    if isinstance(q, dict) and str(q.get("post_id")) == post_id
+                    and q.get("status") == "available" and str(q.get("content_text") or "").strip()]
+        if len(embedded) == 1:
+            result.append(embedded[0])
+            continue
         rows = conn.execute(
-            "SELECT i.id,i.url,i.author,i.content_text,i.fetched_at FROM items i "
+            "SELECT i.id,i.url,i.author,i.content_text,i.fetched_at,i.extra_json FROM items i "
             "JOIN sources s ON s.id=i.source_id WHERE s.kind='x' "
             "AND json_extract(CASE WHEN json_valid(i.extra_json) THEN i.extra_json ELSE '{}' END,'$.x_post_id')=? "
             "ORDER BY i.fetched_at DESC,i.id", (post_id,),
@@ -33,8 +39,12 @@ def collected_quotes(conn: sqlite3.Connection, source_kind: str, extra_json: str
                 entry["status"] = "ambiguous"
             else:
                 row = rows[0]
+                try:
+                    entities = json.loads(row[5] or "{}").get("entities", {})
+                except (ValueError, AttributeError):
+                    entities = {}
                 entry.update(status="available" if (row[3] or "").strip() else "empty_body",
-                             item_id=row[0], url=row[1], author=row[2], content_text=row[3], fetched_at=row[4])
+                             item_id=row[0], url=row[1], author=row[2], content_text=row[3], fetched_at=row[4], entities=entities)
         result.append(entry)
     return result
 

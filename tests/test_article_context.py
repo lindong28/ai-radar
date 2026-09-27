@@ -67,7 +67,7 @@ def test_context_fallback_cache_and_input_binding(tmp_path):
     assert raw["content_text"] == "short"
 
 
-@pytest.mark.parametrize("kind", ["x", "wechat", "web", None])
+@pytest.mark.parametrize("kind", ["x", "wechat", None])
 def test_non_feed_never_fetches(kind):
     def forbidden(*args):
         pytest.fail("non-feed fetched")
@@ -198,6 +198,13 @@ def test_unexpected_fetch_exception_isolated():
     result = prepare_article_context(raw, fetcher=broken)
     assert result["status"] == "unavailable" and result["content_text"] == "original"
     assert "RuntimeError" in result["detail"]
+
+
+def test_web_original_is_not_skipped():
+    raw = {"source_kind": "web", "url": "https://arxiv.org/abs/2609.20800", "content_text": "title"}
+    result = prepare_article_context(raw, fetcher=lambda *_: ("Original paper abstract and methods", "ok"))
+    assert result["status"] == "available"
+    assert "methods" in result["content_text"]
 
 
 def test_production_enrich_gets_collected_quotes_and_missing_status(tmp_path, monkeypatch):

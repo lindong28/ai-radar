@@ -166,7 +166,7 @@ J阶段复现：在I2命令追加`--routing-guidance evals/content-enrichment/pr
 
 默认仍只有原标题正文。要检验输入缺失，可在同一命令增加 `--quote-source ~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v2`，并保持相同 dataset、split、seed、limit、config、rubric，另给 label。来源必须是题库 manifest.source_datasets 哈希绑定的直接父数据集；raw-inputs.jsonl 哈希也要匹配其 manifest，不能任意换成最新档案。
 
-只沿原始 X 元数据的 quoted 关系查一跳；每题按 provenance.observed_at 排除未来观测，实质版本不一致、无正文或查不到则不追加、不猜内容、不剔题。引用的 author/url/title/content_text（正文最多4,000字符）追加为不可信原始材料，不取 AIHOT 生成摘要/标签/参考答案。每题仍一次调用，不做实时抓取，也未接入生产。原题和gold保持不变，这是分类对象的可选检索输入配置，不是改写 benchmark/v1。
+只沿原始 X 元数据的 quoted 关系查一跳；每题按 provenance.observed_at 排除未来观测，实质版本不一致、无正文或查不到则不追加、不猜内容、不剔题。引用的 author/url/title/content_text 追加为不可信原始材料，不取 AIHOT 生成摘要/标签/参考答案。正文与引用统一受 `--body-limit` 控制：默认各最多5,000字符，`0` 表示全文；历史运行的4,000字符截断原件不改写。此离线引用选项不做实时抓取，不等同于生产引用链路；后者的本地修复尚未部署。原题和gold保持不变，这是分类对象的可选检索输入配置，不是改写 benchmark/v1。
 
 新增运行原件 `quote-context.jsonl`：每行 case_id＋quotes，包含 post_id、status；available时还有 raw_sha256、observed_at、raw_run、input。完整引用原件保存在该sidecar，实际发送截断文本以prompts.jsonl为准。metadata.object_identity.behavior.quote_context 锁父manifest、raw和解析结果摘要；object_identity.inputs.quote_sources 在运行前与结束时重读源哈希，漂移则指标作废。关闭时不生成sidecar。未来扩题若更换父数据集，按新版本的source_datasets选择来源，不绕过哈希绑定。
 

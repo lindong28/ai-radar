@@ -7,6 +7,8 @@ from __future__ import annotations
 import gzip
 from html.parser import HTMLParser
 
+from bs4 import BeautifulSoup
+
 from .assets import digest
 from .dataset import raw_content_hash, timestamp
 from .identity import input_url, split_for, substantive_hash
@@ -81,6 +83,27 @@ class OriginalBody(HTMLParser):
         return result
 
 
+def original_body(html: str, item_id: str) -> str:
+    """Prefer the identity-bound original-language tab, never surrounding AI fields."""
+    soup = BeautifulSoup(html, "html.parser")
+    templates = soup.find_all("template", id=f"detail-rich-html-{item_id}-original")
+    if len(templates) > 1:
+        raise ValueError("ambiguous_original_template")
+    if templates:
+        # BeautifulSoup represents template contents as a different string type.
+        fragment = BeautifulSoup(templates[0].decode_contents(), "html.parser")
+        for node in fragment.select("script,style,button,noscript"):
+            node.decompose()
+        text = fragment.get_text("\n", strip=True)
+        if not text:
+            raise ValueError("empty_original_template")
+        return text
+    parser = OriginalBody(item_id)
+    parser.feed(html)
+    parser.close()
+    return parser.text()
+
+
 def original_input(ref, item, source):
     title = item.get("original_title")
     if not isinstance(title, str) or not title.strip():
@@ -95,10 +118,7 @@ def original_input(ref, item, source):
     body = ref.files[path]
     if path.endswith(".gz"):
         body = gzip.decompress(body)
-    parser = OriginalBody(item["id"])
-    parser.feed(body.decode("utf-8"))
-    parser.close()
-    content = parser.text()
+    content = original_body(body.decode("utf-8"), item["id"])
     observed = ref.capture["finished_at"]
     raw = {"source_id": source["slug"], "url": item["original_url"], "title": title,
            "author": None, "published_at": item.get("published_at"), "fetched_at": observed,

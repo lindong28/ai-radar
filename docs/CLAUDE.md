@@ -18,6 +18,10 @@
 
 ### docs/ [Developer]
 
+[20260927-8ea1](adr/20260927-8ea1-repair-category-source-material.md)：分类源材料补全与同题消融；冻结输入和当前补采分开，复用方式见[分类 v1 输入修复](evaluations/content-enrichment/aihot-category-navigation/v1/README.md#2026-09-27o-阶段输入材料修复)，效果见[分类状态](evaluations/content-enrichment/status.md)。
+
+[分类方案履历](evaluations/content-enrichment/versions.md)：O阶段的实际parents、inspiration、两个输入窗口及运行身份；正式生产认可未知，不以研究父充作正式基线。
+
 [20260927-53ab](adr/20260927-53ab-human-category-scoring.md)：人评可接受集合优先、单答案子集 P/R 与 C5 修订；AIHOT 历史成绩及冻结输入保持原义，正文补充独立保存，结果由[分类状态](evaluations/content-enrichment/status.md)定位。
 
 [20260922-6bc2](adr/20260922-6bc2-test-category-routing-guidance.md)：竞争证据路由指导；区分首轮变化、送达覆盖与复核净收益。

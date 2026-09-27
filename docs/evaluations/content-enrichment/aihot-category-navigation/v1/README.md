@@ -16,6 +16,22 @@
 
 ## 重建、扩充、运行
 
+### 2026-09-27：O 阶段输入材料修复
+
+本轮不改 v1 题目、参考和人票，而是在 M2 的48道人评题上把补充输入另存为 `body-context.jsonl`；原 `cases.jsonl` 与 as-of 引用保持原样。依据 [ADR-8ea1](../../../../adr/20260927-8ea1-repair-category-source-material.md)，先固定 M2 rubric 比较输入补全，再据错误归因调整候选；新正文和新引用属于被测输入配置，不是原 benchmark 的历史输入。
+
+准备入口为 `scripts/eval/category_input_repair.py`。它读取 `--cases`、`--previous-context`、`--aihot-evidence`，写入尚不存在的 `--output` 目录；需要当前补采时才加 `--lookup-x`、`--fetch-web` 和凭据来源 `--env-file`。`--x-response` 可复用已冻结成功 lookup receipt，避免重新请求已有帖子。输出包括 `body-context.jsonl`、`case-ids.json`、`receipt.json` 和实际/复用的 X 响应；receipt 绑定 cases 与旧正文摘要，补充记录在 `repair_materials` 保留来源与取数时点。准备脚本会访问网络；只复算已有模型输出不需要再次准备材料。
+
+O阶段准备原件归档于 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/13-48-38/input-preparation/`，保存first/second/final窗口。复用本轮final输入可直接使用该run自含的 `body-context.jsonl`、`cases.jsonl`、`human-reviews.json`。重新准备时，`--aihot-evidence` 必须指向 `~/research/video-eval-arena/data/benchmarks/ai-radar/content-enrichment/aihot-enrichment-fields/v2/evidence/aihot`，即其下能直接拼接题目 `provenance.aihot[].reference` 的目录；旧 receipt 没有记录这个根路径，不能只凭它推断。`--previous-context` 可取该run的 `body-context.jsonl` 保留已成功材料，`--x-response` 取 `input-preparation/final/x-lookup-reused.json`，另指定尚不存在的输出目录，不覆盖旧窗口。仅得到48行不证明材料齐全：本轮 final 的8份归档原文、9份母帖、10份引用、7份外链文本送达核对及限制见[状态](../../status.md)，新准备须按实际材料重新核对。实际运行关联见[方案履历](../../versions.md)。
+
+可补材料包括身份绑定的 AIHOT detail original 正文区（优先原文语言 template，不读摘要/评分/分类）、当前 X 母帖及其直接引用、母帖或直接引用明确链接的文章。文章链接不递归扩展；web 与 feed 都可补正文。只采用比已有正文更长的归档文章，并保留已有成功材料及 provenance，后次获取失败不能抹去旧证据。当前 API 文本不覆盖媒体内容，`available` 只表示取得可读材料，不证明全文完整或历史同一版本；补采时间与准备时间不冒充历史可得时间。实质内容变化仍须核对原人评是否适用，不能自动转移人票。
+
+实际模型调用沿用[执行 README](../../../../../evals/content-enrichment/aihot-category-navigation/README.md#人评优先计分与当前正文补充)，把 `--body-context` 指向本次冻结 sidecar、`--case-ids` 指向同批48题，并显式固定 `--human-reviews`；M2对照使用 `category-m2.txt` 与原模型/参数。`--body-limit 0` 同时向已有引用渲染传递全文模式，不再隐含截在4,000字符。人评整体命中含1道多答案，六类 P/R 只用47道单答案；原 `scores.json` 仍是 AIHOT 口径，人工结果另读 `human-priority-scores.json`。运行分区、输入覆盖、配对和成绩以[状态](../../status.md)为准。
+
+生产路径的本地实现与上述离线补采不同：X 时间线在原请求中获取直接引用 expansions，保存长帖 note entities 和引用原文；富化优先读同响应保存的引用，缺失再查本地已采集数据，不新增逐题 X lookup。X 母帖/直接引用的外链文章及 feed/web 正文通过正文补充路径进入分类输入。实现存在不等于生产已部署，本轮未切换默认分类 rubric。
+
+### 既有建题与运行记录
+
 2026-09-22接续说明：本版361题未增加或改标；如今285dev与76reg均已有分类实验曝光，不再将下方建题时的“本轮未参与”当作当前独立性证明。来源上下文、正文全文与引用主次均是被测输入配置，不创建新benchmark版本；最新配置与成绩由[状态](../../status.md)及[执行入口](../../../../../evals/content-enrichment/aihot-category-navigation/README.md)维护。
 
 命令的唯一维护入口在 [执行 README](../../../../../evals/content-enrichment/aihot-category-navigation/README.md)。本版使用该 build.py、`--inputs .../aihot-enrichment-fields/v2 --capture data/category-navigation-evidence/20260921 --version v1` 生成；当时capture目录现已归档至 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-21/10-08-04/support/category-navigation-evidence/20260921`，重跑时以此替换 `--capture`，并另用空的 `--data-root`。捕获原件也已冻结在本数据版本 evidence 中，不依赖临时网页服务存活；manifest保留当时命令，不改写历史路径。

@@ -2,6 +2,8 @@
 
 > [Developer] · 2026-09-17 已认可设计及本轮澄清。当前进度见 [status](status.md)。
 
+实验标记、实际父方案、输入窗口和运行关联见[方案履历](versions.md)；研究候选不等于用户已认可的生产正式版本。
+
 网站分类使用 [aihot-category-navigation / v1](aihot-category-navigation/v1/README.md)，其六类参考来自实际网页过滤成员，不与旧五类 API 的 category 混算。其它字段使用 [aihot-enrichment-fields / v2](aihot-enrichment-fields/v2/README.md)，按字段子集消费。缺少 Radar raw 时接入获准 AIHOT 原标题与绑定原文属于来源适配；网站六类 gold 则改变消费者语义，所以另开 benchmark。历史成绩保留原身份。
 
 ## 对象与边界

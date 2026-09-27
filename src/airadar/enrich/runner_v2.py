@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -21,7 +22,7 @@ from ..stage_common import failed_retry_cutoff as _failed_retry_cutoff
 from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
 from ..stage_common import provider_item_from_row as _to_provider_item
-from .article_context import prepare_article_context
+from .article_context import prepare_article_context, prepare_linked_contexts, render_linked_contexts
 from .normalizers.production_enrich_provider_output_v2 import normalize
 from .prompts_v2 import render_enrich_prompt
 from .quote_context import collected_quotes, render_collected_quotes
@@ -243,6 +244,14 @@ def run_enrich(
         if context["status"] == "available":
             body += "\n\nRetrieved article context (current retrieval):\n" + context["content_text"]
         body += render_collected_quotes(quotes[item.id])
+        if row[8] == "x":
+            try:
+                extra = json.loads(row[9] or "{}")
+            except (ValueError, TypeError):
+                extra = {}
+            linked = prepare_linked_contexts(extra, quotes[item.id], cache_dir=cache_dir)
+            context["linked_articles"] = linked
+            body += render_linked_contexts(linked)
         return replace(item, content_text=body), context
 
     with ThreadPoolExecutor(max_workers=min(8, total or 1)) as executor:

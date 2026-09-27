@@ -150,7 +150,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         context_paths = [quote_source / "manifest.json", quote_source /
                          assets.read_json(quote_source / "manifest.json")["shared_evidence"] / "raw-inputs.jsonl"]
         for row in contexts:
-            prompts[row["case_id"]]["user"] += render_quotes(row["quotes"])
+            prompts[row["case_id"]]["user"] += render_quotes(row["quotes"], body_limit=body_limit)
             if quote_contribution and any(q["status"] == "available" for q in row["quotes"]):
                 prompts[row["case_id"]]["system"] += "\n" + (quote_guidance or QUOTE_CONTRIBUTION)
     base_prompts = prompts

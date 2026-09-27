@@ -14,8 +14,8 @@ from .dedup import FetchedItem
 X_API_BASE_URL = "https://api.x.com"
 X_RECENT_LOOKBACK = timedelta(minutes=20)
 X_MAX_RESULTS_PER_SOURCE = 5
-X_TWEET_FIELDS = "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets"
-X_EXPANSIONS = "attachments.media_keys"
+X_TWEET_FIELDS = "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets,entities"
+X_EXPANSIONS = "attachments.media_keys,referenced_tweets.id,referenced_tweets.id.author_id"
 X_MEDIA_FIELDS = "media_key,type,url,preview_image_url,width,height,alt_text"
 X_MEDIA_HOSTS = frozenset({"pbs.twimg.com", "video.twimg.com"})
 
@@ -35,6 +35,11 @@ def _post_text(post: dict[str, Any]) -> str:
     if isinstance(note_tweet, dict) and note_tweet.get("text"):
         return str(note_tweet["text"]).strip()
     return str(post.get("text") or "").strip()
+
+
+def _post_entities(post: dict[str, Any]) -> dict:
+    note = post.get("note_tweet") or {}
+    return note.get("entities") or post.get("entities") or {}
 
 
 def _media_index(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -122,6 +127,7 @@ def _post_extra(
     post: dict[str, Any],
     username: str,
     media_index: dict[str, dict[str, Any]] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     extra: dict[str, Any] = {
         "x_post_id": str(post["id"]),
@@ -132,13 +138,39 @@ def _post_extra(
         value = post.get(key)
         if value not in (None, "", [], {}):
             extra[key] = value
+    if _post_entities(post):
+        extra["entities"] = _post_entities(post)
     if media_index is not None:
         # Once the request asked for media, always record the result — the
         # resolved stills, or [] for a post with none. Resolution is terminal
         # (see _post_media), so this marks the post processed and it is not
         # looked up again on every later backfill run.
         extra["x_media"] = _post_media(post, media_index)
+    if payload is not None:
+        extra["x_quoted_posts"] = quoted_posts(post, payload)
     return extra
+
+
+def quoted_posts(post: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Preserve direct quoted originals from this response, not replies/recursive context."""
+    includes = payload.get("includes") or {}
+    tweets = {str(t.get("id")): t for t in includes.get("tweets", []) if isinstance(t, dict)}
+    users = {str(u.get("id")): u for u in includes.get("users", []) if isinstance(u, dict)}
+    result = []
+    for ref in post.get("referenced_tweets", []) or []:
+        if not isinstance(ref, dict) or ref.get("type") != "quoted" or not str(ref.get("id", "")).isdigit():
+            continue
+        post_id = str(ref["id"])
+        original = tweets.get(post_id, {})
+        text = _post_text(original)
+        username = users.get(str(original.get("author_id")), {}).get("username")
+        result.append({"post_id": post_id, "status": "available" if text else "unavailable",
+                       "url": f"https://x.com/i/web/status/{post_id}",
+                       "author": "@" + username if username else None,
+                       "content_text": text, "published_at": original.get("created_at"),
+                       "entities": _post_entities(original),
+                       "origin": "x-api-expansion"})
+    return result
 
 
 def _usable_timeline_payload(payload: dict[str, Any]) -> bool:
@@ -407,7 +439,7 @@ def fetch_x_timeline(
                 fetched_at=_utc_timestamp(fetched_at),
                 content_text=text,
                 content_html=None,
-                extra=_post_extra(raw_post, username, media_index),
+                extra=_post_extra(raw_post, username, media_index, payload),
             )
         )
     return XTimelinePage(

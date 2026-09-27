@@ -222,8 +222,8 @@ def test_fetch_x_timeline_uses_one_bounded_cold_start_page_and_persists_cursor(m
         "start_time": "2026-08-12T13:40:00Z",
         "max_results": 5,
         "exclude": "retweets,replies",
-        "tweet.fields": "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets",
-        "expansions": "attachments.media_keys",
+        "tweet.fields": "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets,entities",
+        "expansions": "attachments.media_keys,referenced_tweets.id,referenced_tweets.id.author_id",
         "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
     }
     assert result.items[0].source_id == "x_openai"
@@ -241,6 +241,9 @@ def test_fetch_x_timeline_uses_one_bounded_cold_start_page_and_persists_cursor(m
         "lang": "en",
         "public_metrics": {"like_count": 7},
         "referenced_tweets": [{"type": "quoted", "id": "9"}],
+        "x_quoted_posts": [{"post_id": "9", "status": "unavailable", "url": "https://x.com/i/web/status/9",
+                            "author": None, "content_text": "", "published_at": None,
+                            "entities": {}, "origin": "x-api-expansion"}],
     }
     assert result.meta["x_pagination_token"] == "must-not-be-followed"
     assert result.meta["x_pending_since_id"] == "1234567890123456789"
@@ -287,8 +290,8 @@ def test_fetch_x_timeline_drains_one_saved_page_per_round_then_advances_since_id
         "pagination_token": "page-2",
         "max_results": 5,
         "exclude": "retweets,replies",
-        "tweet.fields": "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets",
-        "expansions": "attachments.media_keys",
+        "tweet.fields": "attachments,author_id,created_at,lang,note_tweet,public_metrics,referenced_tweets,entities",
+        "expansions": "attachments.media_keys,referenced_tweets.id,referenced_tweets.id.author_id",
         "media.fields": "media_key,type,url,preview_image_url,width,height,alt_text",
     }
     assert result.meta["x_since_id"] == "200"
@@ -1186,7 +1189,7 @@ def test_x_request_asks_for_media_expansions() -> None:
     from airadar.fetcher.x_api import _request_cursor
 
     params, _ = _request_cursor(_media_source(), datetime(2026, 8, 18, tzinfo=UTC))
-    assert params["expansions"] == "attachments.media_keys"
+    assert set(params["expansions"].split(",")) == {"attachments.media_keys", "referenced_tweets.id", "referenced_tweets.id.author_id"}
     assert "media_key" in str(params["media.fields"])
     assert "url" in str(params["media.fields"])
     assert "preview_image_url" in str(params["media.fields"])

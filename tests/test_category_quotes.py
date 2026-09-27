@@ -110,6 +110,14 @@ def test_body_limit_projection(length):
         render_category_prompt(raw_input, body_limit=-1)
 
 
+def test_full_quote_rendering_preserves_tail():
+    from evals._shared.quote_context import render_quotes
+    quotes = [{"status": "available", "input": {"author": "a", "url": "https://x.com/i/status/42",
+               "title": "original", "content_text": "a" * 4500 + "DECISIVE_TAIL"}}]
+    assert "DECISIVE_TAIL" not in render_quotes(quotes)
+    assert "DECISIVE_TAIL" in render_quotes(quotes, body_limit=None)
+
+
 @pytest.mark.parametrize("blind", [False, True])
 @pytest.mark.parametrize("failure_mode", ["none", "api", "archive"])
 def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tmp_path, monkeypatch, failure_mode, blind):
