@@ -124,6 +124,12 @@ PYTHONPATH=src:. uv run pytest -q tests/test_category_human_review.py
 
 build 只生成冻结证据，不能代替已有 Codex/Claude 判断，也不能覆盖已有材料。扩展到新 Atlas 应生成新材料批次，再按题目及输入身份关联已有真实人评；不把本批 98 题硬编码为建题要求。测试覆盖模型/用户权威分离、两标签票导入、部分人评、幂等、冲突拒绝、错输入/错版本/缺题拒绝、Claude 追加以及可移植渲染。
 
+### 2026-09-26 Claude 意见追加
+
+- 追加模型意见批次 `claude-editorial-20260926`（`reviewer.model=claude-fable-5-1`），覆盖全部 98 题：95 题给出分类（其中 61 题多选，表示多个类别均可接受），3 题因仅有标题/无法判断被编辑对象而记 `uncertain` 并附理由（case `de78e0b4…` 康威猜想证明、`a157eb24…` "Edited with Astra"、`d1382ed0…` "Your Agent Aced the Task"）。
+- 评价流程为先盲判后非盲对照：先只读每题冻结标题、正文与所附引用独立判断，再对照 AIHOT/C5/Codex，最终结论未按多数票或任一评价者调整；`reviewer.method` 如实记为非盲、每条 reason 先于分类写出、未访问外链与媒体。这是模型意见，不是用户人评，`add-opinions` 只追加不改 AIHOT/C5 原记录，也不改 gold、指标或生产分类器。
+- 追加后 `material_identity` 不变（冻结证据未变），`material_sha256` 变为 `c9ceeb9e…`（绑定用户看到的意见版本）。`test_category_human_review.py` 15 项通过。新独立页面 `.label-serve/category-human-review-claude-20260926/`（gitignored 渲染产物），真浏览器按读者路径核验：四方意见卡片齐全、Claude 卡显示分类与理由、多选勾选与一键导出得到 98 行 ballot、`material_sha256` 绑定当前版本；测试草稿已清理，未创建 `reviews.json`（等真实用户票再建）。
+
 ### 2026-09-27 验证记录
 
 - 新增测试 15 项通过：包含冻结 98 题、六类标签、正常/篡改输入与票、模型追加/用户冲突，以及真实 Chromium 两页面共享草稿的复现与回归。独立审查发现的多页整份覆盖问题已修复并由原 reviewer 定点复核通过。

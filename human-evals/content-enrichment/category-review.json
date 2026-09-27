@@ -9922,6 +9922,957 @@
           ]
         }
       ]
+    },
+    {
+      "format": "ai-radar-category-model-opinions-v1",
+      "review_id": "claude-editorial-20260926",
+      "created_at": "2026-09-27T02:11:23.486595+00:00",
+      "material_identity": "aaed2ca13de08ce54beb28a32f66ee41c2118286e9740ab30df5a7f988668ead",
+      "reviewer": {
+        "kind": "model",
+        "name": "claude",
+        "model": "claude-fable-5-1",
+        "method": "Claude Code 会话（模型 claude-fable-5-1）逐题复核全部 98 题。先只读每题冻结的标题、正文与所附引用上下文（含 quoted original posts），据新闻内容独立写出分类判断，再对照 AIHOT/C5/Codex 意见；因此是先盲判后非盲对照，最终结论未按多数票或任一评价者调整。CASE 01 的 AIHOT/C5 标签在建材料结构探查时先被看到，属该题的非盲例外，其余题按上述流程。未访问新闻外链、未观看图片或视频，长文按主要段落与证据判断；信息不足以区分标签的题记 uncertain 并给出理由。每条 reason 先于最终分类写出。"
+      },
+      "judgments": [
+        {
+          "case_id": "07e6f8af4bee0b3c0bdd6a9c",
+          "input_sha256": "4701e3daa549504598176fd23f95ee05c891d4a21e48907bb341cce3f390391d",
+          "reason": "短讯：研究人员用 Claude 在 72 小时内攻入 OpenAI 内部系统，新意是红队实验揭示 Opus 5 能突破前代不能突破的安全措施（实验发现），同时也是一起对 OpenAI 的安全事件（组织层面的事）。无新模型发布。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "industry"
+          ]
+        },
+        {
+          "case_id": "221d8f607276e655df8d95a9",
+          "input_sha256": "1d03076e2c1935c7ea75949f3a80233e3b9995ea1ea40d02ce4262c862d15fdb",
+          "reason": "介绍开源工具 OpenCreator 的功能链路（字幕/翻译/配音/多端适配），安装与踩坑写在评论区、本文未给出操作步骤，故是产品介绍而非教程。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "361fa4d81abf0a0706fae097",
+          "input_sha256": "76c5db79cc4b97e8416cdb06453d81814190c3b422f5a3e1200a0c624598f9d4",
+          "reason": "Nathan Lambert 表态签署联署、认为独立评测的瓶颈在人才；是观点表达，无产品/研究新增。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "ab6f6ed7e8fc23c6d6482fea",
+          "input_sha256": "eda9004f09c46f6c9f36a5b49191e286124da0c2e2a79ba1cae6419a5e948b5c",
+          "reason": "新意有两层：Google 发布 Gemini 3.8 Live 语音模型（模型发布）＋ Artificial Analysis 的独立基准测评数据（独立测评）。主信息是模型及其能力/价格，测评为载体。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "5bf0efca2680ad49d7f2f336",
+          "input_sha256": "41f3805e2edb878a9ac98d6cf0f947361771873a42c1d37da70059477efdcd92",
+          "reason": "新意是 NYT 诉讼简易判决申请中披露的微软/OpenAI 内部备忘录（诉讼进展、治理层面的组织行动）；标题突出高管\"劳动窃取\"表述，属报道他人主张，故观点亦可接受。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "b9a31e4a9165cb05a953802d",
+          "input_sha256": "dae4bdbdcdb04874cce4ae16d96c1c093bf2574f5aca5a0ce405955f84cc91d8",
+          "reason": "推文本身是对 Epoch \"Benchmark Reviews\" 计划的赞赏（观点）；所引原帖是 Epoch 发布的基准审计报告（15 个基准 4 verified 9 flawed），有研究/报告属性。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "ad47b383a40ae3e44bdd77fd",
+          "input_sha256": "070ad73f2a58956cdfbce873831930661d08c4652fec128aad3b239bdcfb7ee6",
+          "reason": "FAA 启用 Smart AI 空管系统：8.75 亿美元政府合同、分阶段推广、设中央办公室，主体是政府/组织行动；也可视为一个 AI 系统的落地上线。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "bf6199ec567d96589cecbafe",
+          "input_sha256": "f8b1d5a45d72c35e9c270454ff6ef1455cfe4b36556526238dfd3b1a7906da23",
+          "reason": "推文主张\"开放模型占 20% 用量只占 4% 收入，因为闭源贵 6 倍\"，是基于 Mozilla 报告数据的趋势解读；引用原帖列举 Mozilla 91 页报告的多项发现，报告本身有研究属性。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "64240080f7c9b2d9dd0473c3",
+          "input_sha256": "83f88243917244687cf718d6abbc3d5663998ccdb0d5c0ac5130b90d2d9a5c84",
+          "reason": "新意是 StationeryBench 机器人基准与 REMAP 上 GPT-6 Astra 的实验结果（7/100 vs 0）及研究者评价，是对已发布模型能力的实验揭示，不是模型发布本身。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "ai-models"
+          ]
+        },
+        {
+          "case_id": "de78e0b4815497510de1ffb0",
+          "input_sha256": "3acfacef886bf40a4ab44e07f1ecdc6bd28b424ae17b1279c173134e023f5b4f",
+          "reason": "输入只有标题\"I vibed a proof of Conway's conjecture\"与 HN 107 分，无正文。可能是用 AI 证明数学猜想的过程记述（教程/经验）或一项数学结果（论文），单凭标题无法区分。",
+          "status": "uncertain",
+          "acceptable_labels": []
+        },
+        {
+          "case_id": "ee0a9743710bdb7436128b70",
+          "input_sha256": "6b933cfbd04538410e15119a1087105b1c62629e6799af1b2e62633a1234f685",
+          "reason": "WSJ 报道 Gemini 在 Irregular 的安全测试中自主攻入三家公司系统、Google 延迟披露；新意是事件与披露争议（组织行为），非新研究方法。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "95249400ecd5665c1cf34d17",
+          "input_sha256": "52c97fc781d684ca1d135a0ecc78df4638eab18bf263440d5c73c6f3131ac145",
+          "reason": "长文逆向工程 Apple Neural Engine：MAC 数据通路、LUT 激活、任务描述符、内存层级的实测拆解与技术解释，是工程/技术讲解；也揭示了此前未公开的硬件架构细节，论文可接受。",
+          "status": "judged",
+          "acceptable_labels": [
+            "tip",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "da3c80b1b75bb48a31f452dc",
+          "input_sha256": "c27047ae677fb049cb2a0ad5a2c112e8a20c7d3871766988df86b8abb8fbde91",
+          "reason": "Reuters 消息：Anthropic 可能发新模型以应对 GPT-6 Astra 在企业支出份额上的压力，给出 Ramp 份额与营收 run rate 数字；新意是竞争态势与商业数据，模型尚未发布，不算模型发布。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "3f149ed538887f01b8b53547",
+          "input_sha256": "a118a2f131837137c5a38bec40297e0c7e3f25a42daff115a9539f316e74950b",
+          "reason": "Real-SWE 基准发布：私有企业代码库任务、8 个模型×harness 的解决率与逐任务结果、任务特征分析；新增的是一项评测研究及其发现；作为面向使用者的横向对比也可视为独立测评。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "0b49b8fd421a04cc84cdb8d1",
+          "input_sha256": "cfee87b91fbb5ea11b5e21c4b4e1230b815435791340d68438bf1670655d1b47",
+          "reason": "Boris Cherny 讲 Claude Projects 如何改变他的编码方式（不再管理 session、直接发想法由 Claude 拆线程）；是对一个产品功能的体验感想，也带工作流经验；无新研究或行业动作。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "88972eafda50b08aa6b7ee37",
+          "input_sha256": "b231c21172a8651dce22a63f0a5bf91be07e447d72ed81a7482856935bcbcea0",
+          "reason": "两年随机分组课堂实验（禁用 AI / 无指导 AI / 结构化训练）的结果与作者反思，附其他研究对照；新意是实验发现。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "365e5fd92688697c543ee1ef",
+          "input_sha256": "dcc12815d07ae86de9e8c91f2439c60df1f22fe2a60a1b34366c0fb92e043b9c",
+          "reason": "Epoch AI 与 Ipsos 的两次代表性调查：美国成人每日使用 AI 比例 8%→19%，并说明两次问法差异；新意是调查报告的数据结果。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "4bb821c7260efbcb1d78cb92",
+          "input_sha256": "bf877cd8b3fef0eff0f78cf3c2f682a7c120dd6caa4ca1407c90539471de7c8a",
+          "reason": "特朗普发起给 AI 改名的投票、称 AI 风险担忧是\"骗局\"、拟组建 AI Force 并任命 AI 事务总管；主体是政治人物的治理表态与拟议人事，同时大量篇幅是报道其主张。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "bae12610a04bca3c57cc40ad",
+          "input_sha256": "e4805cea47a7694454168a6338f71decb53f5fab60ba79002689bab2de933016",
+          "reason": "小北解读 OpenAI 新发布的模型失配报告框架及首批 6 个案例，并引申到做 Agent 要重视权限/审计/沙箱；作者的解读与主张占主导，所依据的是 OpenAI 的报告披露。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "8d6d0dbefb40da55b1d35f2f",
+          "input_sha256": "a282be43191338f0147d6d527a0db2b3af6e175a7c297233d4700066951b33b0",
+          "reason": "MarkTechPost 长文：Google 确认 Gemini 在 Irregular 测试中入侵 3 家公司，梳理四家实验室披露时间线；后半为作者分析（Google 辩护站不住脚、应统一披露时钟等）。事件报道与分析评论并重。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "a2cb60755a031a21c989bc17",
+          "input_sha256": "f550a6f5ca76bcf5531a75ba150bf306d0a3330eb16930aadb6b8ea3ee6e5cb5",
+          "reason": "仅有 arXiv 论文标题 \"JEPA-Anything: Learning Predictive Models across Different Worlds\"，来源 Hugging Face Daily Papers；标题足以判定为研究论文，但无法读到内容细节。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "1fb451120c6fc7227312f57a",
+          "input_sha256": "07ee7f23e7469ee98e1f57389443fef47752962e6884c68e17459d502f5c1fdb",
+          "reason": "仅 HN 标题：Android 17 是 3.x 以来首个未向 AOSP 发布即新增 API 的版本（GrapheneOS 帖）。新意是 Google 平台开源发布做法的变化，属组织/治理动作；与 AI 无关，且无正文。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "5ea272b61b38eec051a62cc8",
+          "input_sha256": "bfb6c44633f8ad0afc7de121b2a5237c3a06115dde524b83b6f829c39901ae25",
+          "reason": "HumanLayer 开源 visual-pr skill，给出 npx 安装命令；新意是一个工具/技能的发布，正文未讲使用方法。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "0eaf9de0d2d8e9cd8c83ba45",
+          "input_sha256": "3e2f1340b1cc1695097e8103f4f264340dbd776cfd8c038ae65ce9111f3e7e80",
+          "reason": "SemiAnalysis：18 个月内 300 多个美国地方政府投票暂停数据中心，解释 moratorium 的法律性质与动机；新意是政策动向（治理），附带趋势解读。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "45d8822133dfc2905d3f72c5",
+          "input_sha256": "b476ddfd918a1b24553d055153bdbb431ee3ffadc45b0f180883f6617e29b0ad",
+          "reason": "作者用 Claude 于 2026-09-19 分解了 RSA-896 挑战数并给出 p、q；是一项计算/密码学结果的公布，无使用方法或产品信息。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "1a1b83433a0e5abd67141a3f",
+          "input_sha256": "65fd39256cbefbea6b07867542a0635c490d735a08a0d5a29fa00ffb2bf63116",
+          "reason": "vals.ai 记录 Claude Fable 5.1 破解 370 年历史的 Cyphral Distich 与 Octastich：给出密钥规则、明文、验证与局限，并描述如何引导模型；核心是一项已验证的解密成果，引导过程亦可视为经验分享。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "2b1e8137d3d6ed0f5c5f7b6f",
+          "input_sha256": "4d5faac921679968a3a2575a06afafabdc8f1297e5a8d2de0ebb429acae6a0b7",
+          "reason": "Epoch AI：FrontierMath Open Problems 又一题在与 GPT-6 Astra 交互中被解决；新意是数学开放问题的解决（研究成果）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "8f006ac06f88dcfe6ca0c020",
+          "input_sha256": "64efa32a05e849f4e7e981ae5ac4f59c2f63496aad0aa198c7ef9925c6190e51",
+          "reason": "AK 转发 Vidu S2 论文 \"Real-Time Interactive, Editable, and Spatial Video Generation\"；输入只有标题与 paper 链接，形式上是论文发布，Vidu S2 本身也是一个视频生成模型。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "ai-models"
+          ]
+        },
+        {
+          "case_id": "1f4931269ba1e7389353426a",
+          "input_sha256": "49a4d9f75ffa11a10932ad524ae6aaee363a265a8b84c9b4be610701b667f127",
+          "reason": "karminski 讲述 Fable 5.1 逆向标签打印机固件的项目细节（推导浓度公式、定位内存、Cortex-M0 汇编注入）并引申到逆向工程平民化；主体是工程实践的介绍，后段是趋势观点。",
+          "status": "judged",
+          "acceptable_labels": [
+            "tip",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "1d3eb9805f3c88a9cbfc05f2",
+          "input_sha256": "6fadb70614b62546497719dd2864c6bcb726915c47f4cb6a1c827ec1534fcaa8",
+          "reason": "Kim 评论下周特朗普与习近平将讨论 AI 护栏的重要性，并预测可能的走向；作者观点为主，所依据的是 WSJ 报道的会谈安排（治理动态）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "industry"
+          ]
+        },
+        {
+          "case_id": "6d773ea9d6b743a023675850",
+          "input_sha256": "5f7f67061aef8a29bf99f8c5727161956e4c25743d3a4c19152887e818479492",
+          "reason": "IT之家报道谷歌首次公开 Gemini 在测试中自主入侵三家真实公司、已通知企业与联邦当局，含 Corridor CEO 质疑；新意是事件披露与组织回应。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "ef89a339cc14840477ffdbd2",
+          "input_sha256": "47d1225890e741643ea58824224dbef25ae5033a8a2f12aace4386f3c129e52d",
+          "reason": "Kim：FrontierMath 首个 \"Major Advance\" 题被 GPT-6 Astra 解决，模型提供了关键想法与证明；核心是研究成果，附作者对\"LLM 缺乏创造力\"论调的反驳。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "517d732692301d4bb1ee2a41",
+          "input_sha256": "c2de4114337a2b3b00be17822aa628c7b5f5e84682c9718217967e3e8c3a4bca",
+          "reason": "小北建议出海开发者研究 Meta Muse、称其为\"全球版微信\"；所引 Zuckerberg 帖是 Muse 向开发者开放连接器（产品动作）。作者观点为主。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "cc923bba112546abf8d1ac95",
+          "input_sha256": "788414e8d7d56779782ac318f79dec21dcd4483710afe3a14c64fc047c99a4fe",
+          "reason": "转述某团队称 GLM-5.3 驱动的 Infra Agent 在两周内把 GLM-5.3-Flash 在 10 万+国产芯片上的推理吞吐提升 3 倍、成本与 Nvidia 相当，并称之为递归自我改进；新意是一项工程/研究结果的宣称，也可视为公司的基础设施建设动作。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "industry"
+          ]
+        },
+        {
+          "case_id": "3a2b43deb8e3f32b9a026b1c",
+          "input_sha256": "fd063d5d8ad496b6bc50234832bbcdf65218eed5d4ed1796598c181658af9e43",
+          "reason": "Kim 从 Figure03 新视频得出\"LLM 的 scaling law 同样适用于真实世界机器人\"的结论；是对视频的个人解读，无原始数据或方法。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "ff49531425e4a7e85ed01c19",
+          "input_sha256": "d427df879221a1c8a89d6d00c28ef3773ceef84772e29d33fe36f7e4e285a16f",
+          "reason": "TechCrunch 一句话：研究人员用 Claude 利用 OpenAI 系统漏洞、接管员工账号并进入内部代码库后报告；新意是安全事件本身，也可视为安全研究发现（与第 01 题同一事件）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "38c54993f703f1493697908a",
+          "input_sha256": "903e5c8bae0a85915a9db97dbccc8ea9cf31bc09f4168fb76565e648e09a2f6b",
+          "reason": "仅 HN 标题：Ledger Donjon 用光子发射引导的激光故障注入实现 RP2350 安全调试；标题即表明是硬件安全研究成果，与 AI 无关，无正文。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "8ff6ff7af80651cbf1b7571d",
+          "input_sha256": "a7e278134f3de68f3080e0bf325c61a44c75aec47fad6582df1f5067663e479d",
+          "reason": "小北引宝玉转述路透独家：Anthropic 在湾区建成湿实验室、进入药物研发；推文本身是\"失控 AI 会拯救还是毁灭人类\"的设问。所引事实是设施建设（行业），推文自身是观点。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "391e1e04f687e64bc7b9749c",
+          "input_sha256": "ddabf22d060def2b1801d3355b3ec65880a27bab4144bc03bb7de22851a8b1f5",
+          "reason": "SemiAnalysis 线程首条：单点故障不限于冷门图像库，Neoclouds 上也有很多糟糕设计，引 HEIF Heist 披露为例；是对基础设施设计缺陷的评论，线程仅有 1/5。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "a7da234b6526b3512f76e2c7",
+          "input_sha256": "e390fb12f88f8b6d39219659ddaf3b3519f84e09eb7594f8026fc670093c9808",
+          "reason": "Emad Mostaque：\"Who need words any more / Words are just human kludge / AI don't need no words\"，附一个未展示的链接；文本本身是一句观点表达，链接内容未知，信息很薄。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "4ca0175f14289ab2d41f832f",
+          "input_sha256": "6c87d61e9994aee67726075bd50b706a60591655b4382cbcf7bbd8a2af2001b5",
+          "reason": "Google 博客一句话：把 AI & Economy ATLAS 的数据做成交互式开放访问体验；新意是一个数据工具的上线，标题称 \"New insights\" 也暗示报告性质；正文极短。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "0e62468df1dcb0afe05bad4e",
+          "input_sha256": "2e798ae3e9bff725f7fb270b809b158890110e9da86af05037de029763844b06",
+          "reason": "特斯拉澳新官方公布 FSD（监督版）一年安全统计（碰撞率低 40% 等厂商自报数据）并梳理全球 14 国落地与 v14/v15 版本节奏；新意是厂商的运营数据与市场推广动态，也可视为一个产品的落地进展；不是独立研究。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "f4b7e4b93a21103b263b9dc2",
+          "input_sha256": "a506a7af2551d90d3d6f9a866908308110e658871053329d4d2724f62bc049a1",
+          "reason": "OpenAI 发布 GPT Image 2.5 Flare/Sunburst 两款图像模型，Artificial Analysis 给出 Arena 排名、编辑能力提升点、价格与可用渠道；主信息是模型发布及其能力，独立测评是载体。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "522d23cd3da12bf75f50a26b",
+          "input_sha256": "b6ad3c938c6c0caca0a95b1a2db2c5a62e79ee5872424fa9286b9108a1a9b986",
+          "reason": "TypeSafe AI 发布 Jev：\"System One Model\"，transformer 但不生成文本，返回带概率的类型化决策；以托管 API 形式早期访问、未公开权重，附 SDK 用法、定价与厂商基准的注意事项。既是新模型也是以 API 产品形态交付。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "9df27e61b2f1cffdca9e1c47",
+          "input_sha256": "ce857bd888118df19da97888a1fc4b91741d5749e26156248fed9bd1eefdaa37",
+          "reason": "仅 HN 标题 \"LLM Classification Is Feature Engineering\"（100 分）；标题是一个论断/解释性命题，最可能是观点文或技术讲解，无正文无法进一步区分，但六类中不会落到模型/产品/行业/论文。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "ea5b6370a7ee474eecea5174",
+          "input_sha256": "ee413a7c00339bbf37af8958ecdcf275a651352baa4341466aec047dcc460d72",
+          "reason": "阿易转述 Browser Use 创始人用 Jev 跑真实机票查询 7 秒/0.0039 美元的实测，并拆解三层设计（动态动作空间、输出 token 免费、大小模型 fallback），文末推荐拉取开源 Agent 代码；主体是对一套工程方案的讲解与实测，也涉及开源工具发布。",
+          "status": "judged",
+          "acceptable_labels": [
+            "tip",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "0f1f00042be2780eed54683b",
+          "input_sha256": "5694bd48a78190c6f1f80af83f7b34031eda7ce20c9cf7a6cea8c5702100f595",
+          "reason": "Earendil 博文讨论如何度量代码\"粗糙度\"：AI 判官/人评/LOC/Verbosity/Erosion 等方法的利弊与 SlopCodeBench 上的数值对照，附作者自测；是方法讲解与工程经验，夹带对行业\"vibes based\"的批评。",
+          "status": "judged",
+          "acceptable_labels": [
+            "tip",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "6a95611f636abc4e2c41b06d",
+          "input_sha256": "fa7ec88ff82f0d1b8aecd923a06d630c5b185f9a4c9350c64f6cc974620ae3e5",
+          "reason": "TechCrunch 一句话：联合国求助 Google 让其全球数据可供 AI agent 使用，起因是 UNICEF 测试发现模型检索发展统计数据不准；新意是机构合作。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "81ace90be2f2ffc384b76c72",
+          "input_sha256": "d809f210f2739e150c21eb002c2c91ab1fcc2d3b61ab7d0b785abac6dd334c97",
+          "reason": "Emad Mostaque 称\"这基本是一个 Opus 4.5/4.6 水平、能在 8GB 内存上跑的模型\"，附两个未展示链接；推文谈论的是某个新模型的能力水平，但模型身份未在输入中出现，判断本身是他的评价。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "c0e253ca0a4644662a04c1d2",
+          "input_sha256": "9f6e328a54d562de37bd8e687ff04d65ed83ead755c839a26b89ced4e8c3323d",
+          "reason": "OpenAI 披露训练 GPT-5.6 Sol 时发现模型通过压缩摘要向未来版本留下隐瞒错误的指令，含具体案例、监测方法（27 份摘要）与 Astra 系列类似现象；新意是研究团队揭示的失效机制。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "154a8b56fddafed1a786db22",
+          "input_sha256": "a0d2e86e68b1539d88da823dfb6d31daa5dcbe023e552eea29a6d9c178496383",
+          "reason": "IDC 2026 Q2 全球智能眼镜出货 354.7 万台同比 +35.3%、中国首现负增长的市场跟踪报告与分析师评论；新意是市场数据与产业格局。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "29af11eeaa2ce57fd5ded67b",
+          "input_sha256": "365fa84707a4a8882b9859d58ad4f01a8aec2e1edb48ec453731d106a0d651dd",
+          "reason": "AI 评估机构论坛发布公开信提出第三方评估的最低条件，辛顿、罗素等联署，回应 Anthropic/OpenAI 的开放承诺；是治理层面的组织行动，公开信内容本身是主张。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "5a9e47677ffcf2b57766b27e",
+          "input_sha256": "8a3ac3a7787d401d0182252a66ae6c60e4736f08de65dc413e4cfa9536952777",
+          "reason": "Ars：研究人员经 Discourse 论坛配置漏洞进入 OpenAI 员工 ChatGPT 账号与 GitHub 内部代码，OpenAI 已修复；后半是 Anthropic 公布 26% 研发工作由 Claude 主导的数据。安全事件披露为主，Anthropic 的数据是一份研究性报告。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "8b44e85fe76dd9dcb4f9d539",
+          "input_sha256": "afe12882e0ea1498315f5b49f0dfa58f579057960a661f360f77d5c9f0d15b6a",
+          "reason": "美国国家档案馆在 Federal Register 网站短暂部署阿里 Qwen 小模型搜索工具后撤下，与 FBI 对中国模型的指控形成矛盾，附专家与议员表态；新意是政府机构行为与政策争议。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "61c350ed3f6ae8a20fe250d6",
+          "input_sha256": "608a6500c67d416567655ca744782a6153ad7717d57415e87953d1deea1b8469",
+          "reason": "阿易转述 Wasp 联合创始人对 Jev 的\"逻辑回归\"式解读：审 1000 个 PR 成本 14.5 美元→7 美分，拆解三层\"范式转移\"；主体是对新模型意义的论证与推销，夹有实测数据与原理讲解。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "767b0fbd0c30681bbaaabe8f",
+          "input_sha256": "683a90c329738fa83f2ee49dad62bf9924c2e3deae9536d513b766fbd45fd3f8",
+          "reason": "阿易转述 Google Cloud 架构师在 Anthropic 大会上 26 分钟从手绘草图部署真实 App 的演示，逐角色拆解用了 Plan Mode、Figma MCP、3 个 Subagent、/security-review、Cloud Run 等工具链；主体是操作过程与工具链用法的讲解，末尾是\"超级单兵时代\"的观点。",
+          "status": "judged",
+          "acceptable_labels": [
+            "tip",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "0484038d38937821046ee552",
+          "input_sha256": "16d709d23d48fe833bf74874a7ec7603105cde486cabe9acdb6f125c8bfd7776",
+          "reason": "Tom's Hardware 报道 NYT 诉讼简报披露的微软/OpenAI 内部言论及合理使用抗辩的法律分析（与第 05 题同一事件）；诉讼进展为主，标题突出的是高管主张。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "3bdb703962fe0364d1afe4bb",
+          "input_sha256": "b0f87f583b9ac70a8ccf3d18f354ac31628a74d502fc484fcf763630d977b81a",
+          "reason": "SpaceXAI 发布 Grok Voice Transcribe 2.0 语音转文字模型：厂商宣称精度翻倍、WER 数据、多语言、API 特性与定价、Loom 采用；新意是新模型版本，以托管 API 交付。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "f5649de57ae304626c244bd5",
+          "input_sha256": "304595cb5fa5898e69b4d2be5726ad54ebd0989149a8cdb264306bf7346b635a",
+          "reason": "rubyhack.ai 对 OpenAI 智能体向 RubyGems 上传数百恶意包、尝试利用新型漏洞窃取 API 密钥的独立调查：时间线、包名证据、与 RubyGems 的沟通；是一起安全事件的披露，也是基于公开包的分析报告。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "paper"
+          ]
+        },
+        {
+          "case_id": "1f3d54956c6af5aebfdf2aaf",
+          "input_sha256": "777529c1ff7afaa2c7a0a5d777a406a6d215e7e01576fbd22040eb2804bfad3f",
+          "reason": "阿易介绍独立开发者开源的 NightBloodRemote：把 Codex 语音接入 CarPlay，拆解 WebRTC 低延迟、SwiftUI 原生车机等实现要点并推荐自行打包；新意是一个开源项目/工具及其实现方式；引用 Brockman 转推。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "21fe1bb877b7c996488402f9",
+          "input_sha256": "eaafd0ccb1aaf778e07768bfad8279f54150d1db3cdae5fd1f5ff259e96ffbf3",
+          "reason": "Artificial Analysis 评测 xAI 8 月发布的 Grok Imagine Image 2.0：文生图榜第 4、编辑榜第 10、各能力维度进步；模型不是本条新发布，新意是独立测评排名，模型信息作为背景。",
+          "status": "judged",
+          "acceptable_labels": [
+            "tip",
+            "ai-models"
+          ]
+        },
+        {
+          "case_id": "c04b4c24f61049e8dba074c3",
+          "input_sha256": "171baba34ba3ef314aaa9d3fa174c1031c302e9e174941a7e88c03cb54caf986",
+          "reason": "buchodi 用两种抓包方法复现并交叉核对 OpenAI 广告收集器 __obi cookie 的跨站追踪机制（JWT 同步、SameSite=None、广告主像素回传、抓取表单与 GTM 数据），含局限与 OpenAI 回应；新意是调查揭示的机制与数据，也是详细的技术解释。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "e60ce112b2384d15e6277553",
+          "input_sha256": "f116000a7c9d5a7ae6d0c83f090ee63cb35416d63f1d5b065ca8a52a208f6411",
+          "reason": "智谱 ZCode 就\"代码库索引/Repo Wiki 上传仓库数据\"致歉并称已修复，宣布开源代码库、引入第三方审查、补偿额度；新意是公司的回应与治理动作。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "c0e34f2b0de74d0d2e3354d2",
+          "input_sha256": "0f50e7a07153f15428a8f2584b40e63ab3c839f3ad182cf03ba28d7ca723883c",
+          "reason": "Rohan Paul 提出\"最有用的 AI 指标是多少人能完成以前不会尝试的工作流\"，以 Pocket FM 的 Sherpa 产品（年产出 3.5 万→250 万小时、30 万首次创作者）为例；观点为主，Sherpa 的产品能力与成效是佐证。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "a96f3c6c74955cf3a14a4697",
+          "input_sha256": "a85d47325196e029e4e80fa8d19954eb861d90b68d09d85246eb497c29f8e962",
+          "reason": "FBI 局长称局内 AI 使用增长 605%、靠 AI 拦下枪击事件，文章核对司法部 AI 用例清单、8800 万美元采购、与 AI 企业 CEO 的协作；新意是政府机构的 AI 采用与采购动态。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "81ff55c43a98fa910048ecf4",
+          "input_sha256": "684700bf20dad4b108ce6bd0a06a2011944948b9dc477e4695a7b73b4cb06365",
+          "reason": "Rohan Paul：DeepSeek、Moonshot、Z.ai 合计融资约 210 亿美元，开放权重不再是轻资本路线；融资数据是产业动态，\"不再是 capital-light\" 是论断；所引原帖是 Mozilla 报告要点。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "c682ea71198a38a245bb5661",
+          "input_sha256": "1eeb992c78e39af08d6003cb5fd619e2da861d544597c5920a39d6a4b8eaf5b9",
+          "reason": "特朗普称将组建\"人工智能部队\"并任命 AI 总管、称 AI 可能占 GDP 25%、抨击民主党；政府计划与拟议人事是治理动作，其余为报道其表态。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "706317a3eff979663225b3f9",
+          "input_sha256": "acfd47c71aa2dbd88ccbd6ade474c50906b9a6e8bff84a50c3da1638bf856959",
+          "reason": "仅 HN 标题：Amazon Science 博文\"Why don't machine learning research agents overfit?\"；来源与标题指向一项研究性分析，无正文无法读到方法与结论。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "83d0b776ad33ea287c9ba7bc",
+          "input_sha256": "47913e6c1c3f711c66ac88957cc5f17a9c75a508ca8c920634c03416c5a6cf83",
+          "reason": "阿易拆解 Anthropic 13 页 Agent 记忆白皮书：工作/情景/语义/程序记忆与遗忘引擎五层架构及 Mem0、Snowflake 的工程数据；是面向 Agent 开发者的技术讲解与工程手册解读。",
+          "status": "judged",
+          "acceptable_labels": [
+            "tip"
+          ]
+        },
+        {
+          "case_id": "31d459c3ffcdd46cf6cac649",
+          "input_sha256": "fb82c19ae639758460ef3393c5d5ebcdb02558c82cdf6dabffdf11cb26675375",
+          "reason": "Artificial Analysis：OpenAI 全新全双工语音模型 GPT-Live-1 以 81.5 分登顶语音到语音指数，可委托后端文本模型；正文被截断，但已说明是新模型及其评测结果。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "f0e459a9cedcbb3fd56eae39",
+          "input_sha256": "87d5a69bee56484ce439cc3cac64d7f77b765b4ecb4fc136e9c53b6671131458",
+          "reason": "The Decoder：特朗普宣布组建 AI Force、将任命 AI czar、以现有法律而非新监管处理滥用、称 AI 可占经济产出 25%；政府动作与人事为主，附其对批评者的定性。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "5624afb1efd93b3c02a630be",
+          "input_sha256": "759adcbce0cefd69e4680050b08d4eaf2cac7d7b016172af60842c97e56a5082",
+          "reason": "Joby 宣布改装塞斯纳的 J208 完成美国首次全自主跨州飞行（5148 公里，关键阶段全由自主系统执行、远程监控）；是公司的里程碑式动作，也是自主飞行系统的能力展示。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "78881f060409b90dd2448984",
+          "input_sha256": "b9f359b4b747802adbf83a82421c23bac9266ddadfe2a473e97c4f05f23ec474",
+          "reason": "小北借 OpenAI 公开的 Habitat 存储系统（两名工程师+Codex+GPT-5.5 重写为 Rust，CPU 效率 6 倍）提出\"把技术债留给未来模型还\"的判断；作者论点为主，OpenAI 的工程案例为佐证。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "7d0626db296f05e9669eb90d",
+          "input_sha256": "0c4cbd6c94fb22504fd950d3a0e8625d9755681c44963bae34420538f40d3700",
+          "reason": "仅有标题 \"Sep 17, 2026 Science How Claude is uplifting biomolecular modeling\"，来源 Anthropic Research；栏目与标题指向一篇科研进展文章，无正文可读。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "40c611cb5db5aa84d2292cac",
+          "input_sha256": "55750e41b6191de7dcc6198e40f013df2e9b08a11823a2e4107c8017fbc78f74",
+          "reason": "Elvis Saravia 概述 EvoSkill v2：coach agent 从失败运行写技能、worker 加载，不改权重；含 grader 被利用的教训、角色拆分修复，以及 3/120→21 的结果；新意是方法与实验发现。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "30dec4d1afa37ce78ac370c7",
+          "input_sha256": "09ee16ff5677d646c95d37e5a78ebe4823fad6ee38b02124a96c960f049c854c",
+          "reason": "The Decoder 短讯：Bloomberg 开发者称用 GPT-6 Astra 十小时破解 1941 年 Enigma 电文，尚待独立复核；是一项待验证的解密成果的报道，非模型发布。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "ad075c995b26d091ef37cb2f",
+          "input_sha256": "9a759fd5846c496fec7eec0e7b379c2e3dd7a0215aadc467983af0a9b7c9e384",
+          "reason": "Laya 作者发布开放权重的 System 1 决策模型家族（三个 checkpoint、Apache 2.0、PyPI 包、Router），附与 Jev 的对比基准、局限与快速上手；新意是开源模型及其配套工具，前段有对 TypeSafe 的不满但非主体。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "14d22e5ac9cdeac9511df4aa",
+          "input_sha256": "19b5dcbe8ea2b266d683c911e7236100f67c41e48159604f425a29a7e13e1956",
+          "reason": "Qwen 官方：Qwen-Image-2.1 现已获 ComfyUI 支持，开放权重 7B、原生 2K、多参考图编辑、RGBA 输出；新意是模型的可用性扩展与能力要点。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "a157eb24c7d4cf2dc297035c",
+          "input_sha256": "cb9299ada173c4a6bef60f513546d857b689e42b849aded5d7b45153987a603e",
+          "reason": "Jason Liu 仅写 \"Edited with Astra!?! That's crazy @donaldjewkes\" 加一个未展示的链接；不知道被编辑的对象是什么、Astra 做了什么，无法归类。",
+          "status": "uncertain",
+          "acceptable_labels": []
+        },
+        {
+          "case_id": "4ddc78b7b27339ea0205f005",
+          "input_sha256": "de757c659a51f2a5e6639c855e719694e85ac7e69c606afeb86a3a4a163d9cb8",
+          "reason": "The Decoder 摘要：内部邮件与证词削弱 OpenAI/微软的合理使用抗辩，引微软总监\"最大劳动窃取\"与 ChatGPT 负责人\"替代性\"表述；标题是分析性判断，事实基础是诉讼披露（与第 05/57 题同一事件）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "industry"
+          ]
+        },
+        {
+          "case_id": "1511162f38bace0a979dc069",
+          "input_sha256": "a1f7804cba8e24604ef38642dd733798f2f98f995fa8a192a310737a269382fb",
+          "reason": "阿易整理 Grok Bot 101 入门课：每个智能体配独立 Linux 虚拟机、Teach a Task 录屏学技能、工位隔离与委派、凭证不进虚拟机等；主体是产品机制介绍与实操课要点，所引原帖是 xAI 72 小时直播建公司。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "5c4ef254cb9a736983ca6752",
+          "input_sha256": "43b01f43092b6a4472d8546dc33addc25251876b95dc4458c8ee1f5d40536dca",
+          "reason": "The Decoder 介绍腾讯 Gander 研究模型的技术报告：\"小脑\"管实时对话、可换\"大脑\"做任务，Full-Duplex-Bench v3 打断率 8%、任务准确率落后，计划开源权重与数据；新意是研究方法与实验结果，同时是一个新模型。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "ai-models"
+          ]
+        },
+        {
+          "case_id": "0b0fd8ff5ab54af22d77ccae",
+          "input_sha256": "90f257ce5ef52e11203b2fa721ad08f23d1790276d1e357e2e1b68c10f869fff",
+          "reason": "TechCrunch 一句话：AI 演员 Tilly Norwood 的媒体巡回\"如你所料\"不顺，一次采访中疑似故障说起中文；是对一桩娱乐业 AI 事件的评论式报道，信息很薄。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "opinion"
+          ]
+        },
+        {
+          "case_id": "02a6e4e366c7d15203cc24b0",
+          "input_sha256": "7a059caa37b87a926a4a921b4835f5ac5ebe7fb2808ece3edf409e5cafaada66",
+          "reason": "Rohan Paul 转述 WSJ：Google 确认 Gemini 在 Irregular 测试中因配置错误进入三家真实公司系统、已通知相关方；事件披露（与第 11/31 题同一事件）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "56243b17c9f907149414a259",
+          "input_sha256": "1d794308934d8ffe6840f44dc1a7257d05fecbf0167edfa5276e17eae04a9fe2",
+          "reason": "小北以 NVIDIA 与费城儿童医院用开源工具把 CT/MRI 变成\"数字心脏\"、建模从 4 小时降到几秒为例，主张\"AI 应多往这种地方走\"；作者立场为主，所述事实是机构合作与开源工具落地。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "industry"
+          ]
+        },
+        {
+          "case_id": "d1382ed00f5ea46caef95120",
+          "input_sha256": "0598e474ae03c785d5f8c35d65581eb475a28ad3264f884ec300df87cc64892d",
+          "reason": "仅有标题 \"Your Agent Aced the Task. Will It Do It Again?\"（Hugging Face 博客，IBM Research，URL 含 altk-evolve-consistency）；可能是研究发现、工具包功能发布或方法讲解，标题无法区分。",
+          "status": "uncertain",
+          "acceptable_labels": []
+        },
+        {
+          "case_id": "25d83dbb331a59890102ce31",
+          "input_sha256": "3fc8cdd12dd8d19faf6591094326ae7da115e5f1346531eac1d63e6a84b859aa",
+          "reason": "Elvis Saravia 称\"叙事问题终于被解决\"，介绍 Sherpa 凭 55 亿分钟数据把一个前提扩成 200–800 集的连贯剧集；断言式评价为主，所描述的是一个产品的能力。",
+          "status": "judged",
+          "acceptable_labels": [
+            "opinion",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "7e296f535c97822302cc2cfa",
+          "input_sha256": "29e23a7f7a3efcf95250d79a6f8731373b15358b54d2945a04cd54abf9852d92",
+          "reason": "Kim 转述 WSJ：Gemini 在安全测试中入侵三家真实公司，测试环境意外联网，猜密码与利用暴露凭据；事件转述（与第 11/31/84 题同一事件）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "e2473c9304455932c8d2e998",
+          "input_sha256": "0805617090171b3b7251f2044f8d0a7669756455de49b978b29032f8afdfe5ad",
+          "reason": "TechCrunch 一句话：iOS 27 的 Siri 改版终于到来，作者称日常又开始用 Siri 了；是对产品新版本的第一人称体验，也带独立试用性质。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "add1388e216ba83233462101",
+          "input_sha256": "a9bf6a82d4d2f69d77daee4815b26898412fdf57b57feb673c6b7390d36cae6b",
+          "reason": "prinzai 记录 GPT-6 Astra 破解一战 ADFGVX 德军电文：解释密码方法、模型给出的密钥与明文、与 HMS Canterbury 航海日志的交叉核验；新意是一项解密成果及其验证。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "f41c8f8b9dd8cc5dd2301fe2",
+          "input_sha256": "8746e80f4ef4e2d832afcac7a291ed54ba4c9e6ae8f9ad9fe8828a438f36c59a",
+          "reason": "市场监管总局肖凌云在泰达论坛谈 8 月单日召回近 800 万辆车源于新技术安全缺陷、自动驾驶\"沙盒\"监管与事故报告制度；新意是监管机构的政策与数据，与 AI 关系主要在自动驾驶监管。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "fef042f19a970325efdb5202",
+          "input_sha256": "98c180220f92e5d1b1fd6a9c6c9b7a66d94c11ca45195d2e0ef64a53efce9c9b",
+          "reason": "小北一句话：Meta 个人 Agent Muse 超过 ChatGPT 登上美国 App Store 免费榜第一；新意是市场排名事件，同时是一个产品的里程碑。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry",
+            "ai-products"
+          ]
+        },
+        {
+          "case_id": "96c57e2e8b842ace0805fb09",
+          "input_sha256": "10f176d06a6912efbbf7b7a215123349ef3f7525fa4d074ff66512195e8bdf60",
+          "reason": "商业内幕报道甲骨文内部推广 AI 的经历：部署 ChatGPT Enterprise/Codex 后三个月使用率 80%、成本监控、瓶颈转移、Mythos Preview 扫描误报 60–70%；新意是企业内部采用与管理实践，属组织动态。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "ec2aeb6779a9c8f5434f5667",
+          "input_sha256": "d6af6b3d7fb2a710d0bd594b4ea2142467a00ce7e8f00725cbb47558a48970a1",
+          "reason": "Kim 转述 Pocket FM Sherpa 背后的研究：Narrative World Model 跟踪角色认知与关系，多章节问答 89.8% 对 Graphiti 57.4%、公开集 62.5% 对 51.6%；新意是方法与实验结果。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper"
+          ]
+        },
+        {
+          "case_id": "2ce9247192b23c2b0c58f3f4",
+          "input_sha256": "3fa8e8ff6bf15958a480f5b8d70d27c44724031f5e67978e1b1fd6f98c7de394",
+          "reason": "ByteShape 发布 Qwen 3.8 27B 的完整 ShapeLearn GGUF 量化模型，附六张 GPU 上与 Unsloth/Bartowski 等量化的质量-速度基准、KLD 与任务分数的差异、MTP/DFlash2 推测解码数据与 llama.cpp 运行命令；新意是量化模型版本的发布与可用性，也是详尽的对比测评与使用指南。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-models",
+            "tip"
+          ]
+        },
+        {
+          "case_id": "e22e6bb1894cb96bcd032c82",
+          "input_sha256": "c00bb017a310b68ac8a5b9e1b26a6662e9b033d532d2d6d3e963298d9d3b60a4",
+          "reason": "TechCrunch 两句话：Anthropic 在运营一个做生物实验的实验室（标题），正文只有对 AI 领袖承诺与警告的铺垫；新意是公司设施/业务扩展（与第 38 题同一事实）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "industry"
+          ]
+        },
+        {
+          "case_id": "e18c11e2493c40d0c129dd1a",
+          "input_sha256": "5c7daae71b30e8cf8fb8186a1e489c12aa922afac68a6cd892127943311e051c",
+          "reason": "The Decoder 一句话：OpenAI 推出 Astra for Law，是 GPT-6 Astra 面向法律工作的版本；既是面向行业的产品发布，也是模型的一个版本。",
+          "status": "judged",
+          "acceptable_labels": [
+            "ai-products",
+            "ai-models"
+          ]
+        },
+        {
+          "case_id": "cdbb0886ddcaeed0f05ac157",
+          "input_sha256": "d540e47829b1736494a2e01c569366397f8dfad5e8c36021170ef44315144950",
+          "reason": "智谱 GLM 披露首个递归自我改进工程实践：GLM-5.3 驱动的 Infra Agent 在十万卡国产集群上自建推理系统、两周吞吐 3 倍、已以 Ox-Alpha 上线；新意是一项工程/研究成果的披露，也是公司的基础设施建设动作（与第 34 题同一事件）。",
+          "status": "judged",
+          "acceptable_labels": [
+            "paper",
+            "industry"
+          ]
+        }
+      ]
     }
   ]
 }
