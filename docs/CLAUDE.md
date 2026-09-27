@@ -80,6 +80,8 @@
 
 [人评标注与优先级](evaluations/human-labels.md)：四对象的人评权威、原票归档、标签应用/重评分命令、判官分歧及 reason-first 规则（2026-09-20 用户裁决）。
 
+[C5 分类人评工作台](evaluations/content-enrichment/category-human-review.md)：98 道历史分歧材料、AIHOT/C5/Codex/Claude 意见、用户多选回票的 Git 资产、格式及追加/复用命令；不自动改 gold 或指标。
+
 [评测代码导航](../evals/README.md)：四对象当前入口、历史兼容入口、对象级 prompt 和测试职责；记录与历史归档的保留范围见 [assets](evaluations/assets.md)。
 
 [新闻准入时间标注修订](evaluations/news-admission/time-label-design.md)：用户已批准修改 gold 与重建；当前消费者及命令见 [aihot-observed-membership/v1](evaluations/news-admission/aihot-observed-membership/v1/README.md)，旧 ±12h benchmark 保留原义。历史出版边界见 [20260919-9365](adr/20260919-9365-publish-admission-time-label-proposal.md)。

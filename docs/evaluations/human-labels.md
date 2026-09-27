@@ -17,7 +17,7 @@
 
 ## 资产与使用
 
-原票与派生记录统一位于项目根 `human-evals/<target>/reviews.json`，不进 Git。日期、批次、实验名与处理阶段不占目录层级；一个对象的多批人评保存在同一文件的 `batches[]` 中。本次实际文件是 `human-evals/news-admission/reviews.json`。存储代码为 `evals/_shared/human_store.py`，标签应用仍为 `human_labels.py`；题目大数据根仍按 assets.md，不在 DGX。
+原票与派生记录统一位于项目根 `human-evals/<target>/reviews.json`，默认不进 Git。**2026-09-27 用户明确要求的分类复核例外**：`human-evals/content-enrichment/category-review.json`（新闻及归属明确的模型意见）和收到真实用户票后创建的同目录 `reviews.json` 允许 Git 持久化，格式和命令见[分类人评工作台](content-enrichment/category-human-review.md)。模型意见不是人评，分类多选集合保存在 `category_judgments`，不混进单标签 `annotations`。日期、批次、实验名与处理阶段不占目录层级；一个对象的多批人评保存在同一文件的 `batches[]` 中。既有人评文件是 `human-evals/news-admission/reviews.json`。存储代码为 `evals/_shared/human_store.py`，标签应用仍为 `human_labels.py`；题目大数据根仍按 assets.md，不在 DGX。
 
 ### metadata 字典（字段位置均相对 reviews.json）
 

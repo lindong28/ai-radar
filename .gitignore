@@ -95,7 +95,11 @@ deploy/wechat2rss/data/
 /runs/
 /experiments/
 /data/evaluation-archive/
-/human-evals/
+/human-evals/*
+!/human-evals/content-enrichment/
+/human-evals/content-enrichment/*
+!/human-evals/content-enrichment/category-review.json
+!/human-evals/content-enrichment/reviews.json
 
 # Execution-plan workspace (audit trail is promoted to docs/plans/ after completion).
 # tests/test_repository_hygiene.py requires this to be the last rule in the file.

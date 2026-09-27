@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C5 分类分歧 · 人评工作台</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div><span class="eyebrow">AI RADAR / CATEGORY REVIEW</span><h1>C5 分类分歧复核</h1></div>
+    <div class="actions"><button id="copy" class="primary" disabled>复制全部反馈</button><button id="download" disabled>下载反馈 JSON</button><label class="button">恢复反馈<input id="restore" type="file" accept="application/json" hidden></label></div>
+  </header>
+  <div id="notice" role="status" aria-live="polite">正在加载冻结材料…</div>
+  <div class="workspace">
+    <aside>
+      <p id="progress">—</p>
+      <label for="search">搜索新闻 / case ID</label><input id="search" type="search" placeholder="输入关键词">
+      <label for="filter">浏览范围</label><select id="filter"><option value="all">全部历史分歧</option><option value="latest">最新全量仍不一致</option><option value="pending">未评</option><option value="reviewed">已评</option><option value="uncertain">暂无法判断</option><option value="claude-pending">Claude 待补充</option></select>
+      <p id="count" class="muted"></p><nav id="case-list" aria-label="新闻列表"></nav>
+    </aside>
+    <main id="main"><p>加载后可逐题查看原文、比较判断并多选可接受分类。</p></main>
+  </div>
+  <dialog id="export-dialog"><h2>全部反馈 JSON</h2><p>剪贴板不可用时，选中下方全文复制，或下载 JSON 交给 agent。</p><textarea id="export-text" aria-label="全部反馈 JSON" readonly></textarea><button id="close-export">关闭</button></dialog>
+</body>
+</html>
