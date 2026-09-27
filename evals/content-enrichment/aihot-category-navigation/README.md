@@ -25,6 +25,46 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 ## 真实模型评测
 
+### 人评优先计分与当前正文补充
+
+runner 默认发现输出根下的 `human-evals/content-enrichment/reviews.json` 时生成独立人评视图；跨工作树或另设 `--output-root` 时用 `--human-reviews /path/to/reviews.json` 显式固定原票。缺失显式文件、冲突人评或同题输入身份不匹配会在调用前报错。人评不进入推理 prompt，原 `scores.json` 和统一指标索引继续保持 AIHOT 口径，人工结果单独读取 `human-priority-scores.json`。
+
+不要把 `experiments/metrics/summary.json` 中原 AIHOT 值读成当前分类人评成绩。本轮分类的人评优先入口是[分类状态](../../../docs/evaluations/content-enrichment/status.md)所指比较报告及各 run 的 `human-priority-scores.json`；含失败恢复或局部输入消融的整臂结果还需使用比较报告的逐题来源映射，不能直接相加各 run 的分母。
+
+人工整体 accuracy 按单标签预测是否属于可接受集合计算；未人评回退原 AIHOT。传统六类 precision/recall 只取最终参考为单答案的固定题目子集，多答案题仅从 P/R 排除，仍参加整体 accuracy；失败保留分母。输出列出 `human_reviewed`、`precision_recall_scope`、`reviews_sha256` 与逐题参考来源。实现入口为 `evals/_shared/category_human.py`；原票和追加规则见[人评工作台](../../../docs/evaluations/content-enrichment/category-human-review.md)。
+
+在下方 C5 命令上替换或追加这些参数即可运行 L1 研究候选：
+
+```text
+--rubric evals/content-enrichment/prompts/category-l1.txt
+--quote-contribution
+--quote-guidance evals/content-enrichment/prompts/category-l1-quotes.txt
+--human-reviews /path/to/reviews.json
+```
+
+L1 从 C5 的 `category-c1.txt` 修订分类边界和引用主次，不是生产默认；`--quote-guidance` 必须配 `--quote-contribution`，并仅在 `--quote-source` 提供可用引用时追加到 system。要独立检验当前抓回的正文，再加 `--body-context /path/to/body-context.jsonl --body-limit 0`；它在推理原文后附上新正文，不改冻结 benchmark cases、reference 或原输入摘要。补充文件按题存 `case_id/original_input_sha256/url/status/content_text/fetched_at`，只采用 available 且非空、带抓取时间的正文，其他状态继续原文；重复题或输入/URL 错配拒绝。runner 将采用的补充材料随运行归档，勿把补抓时间当历史新闻时点或全文完整性证明。新正文实质内容变化时须另核人工适用性。
+
+比较先固定同题、同模型、同人评文件，分别报告 AIHOT 原口径与人评优先结果；不要把更换计分参考产生的差值叫模型改进。L1、正文补充的实际运行与覆盖边界见[分类状态](../../../docs/evaluations/content-enrichment/status.md)。
+
+L1 全量退化后，本轮取消原定 L1＋正文（L2）调用，改以 `--rubric evals/content-enrichment/prompts/category-l3.txt` 比较保留 C5 研究/教程边界的窄修订，仍共用 `category-l1-quotes.txt`。最终分别对 L3、C5 做正文消融：每臂只调用正文实际变化的69题，其余292题复用各自父预测，不声称整臂361次都是新调用。L1、L3和两条正文臂均已终态，结果见分类状态；没有候选被设为生产默认。
+
+零模型调用复算入口为 `python -m evals._shared.category_compare`。从保存原件的主checkout执行，例如复算 C5＋正文到一个新的输出路径：
+
+```bash
+category_runs=runs/content-enrichment/aihot-category-navigation/v1/2026-09-27
+PYTHONPATH=src:. uv run python -m evals._shared.category_compare \
+  --baseline-runs "$category_runs/08-34-14" "$category_runs/08-39-41" "$category_runs/08-45-03" \
+  --candidate-runs "$category_runs/08-34-14" "$category_runs/08-39-41" "$category_runs/08-45-03" \
+  --body-runs "$category_runs/09-04-12" "$category_runs/09-05-01" \
+  --body-context "$category_runs/09-07-46/body-context.jsonl" \
+  --human-reviews "$category_runs/09-07-46/human-reviews.json" \
+  --output /path/to/new-c5-body-comparison.json
+```
+
+L1比较将 candidate-runs 改为同日 `08-48-26` / `08-53-52`，去掉两个 body 参数；L3比较将 candidate-runs 改为 `08-55-26` / `09-00-45`，body-runs 改为 `09-02-25` / `09-03-46`，其余沿冻结原件。已有结果在 `experiments/content-enrichment/aihot-category-navigation/v1/2026-09-27/09-07-46/{l1,l3,c5-body}-comparison.json`，不要覆盖。比较器核终态身份、原case/prompt和逐题响应，拒绝重新采样已成功预测；正文臂必须恰好覆盖69个available输入，不用父预测掩盖正文臂缺失或失败。
+
+服务限流后的定向恢复可用 `--case-ids /path/to/rejected-case-ids.json --request-interval 1`：前者为非空 case_id JSON 数组，在既有 split/limit 选集内再筛选，后者限制全 run 请求起始间隔（秒），不改变 workers 的并发上限。恢复创建新 run，原失败 run 不覆盖；成功题不需重跑。合并结果须逐题固定取原成功或恢复预测，并保存来源 run 映射；既不能把被拒请求视作能力回退，也不能隐藏这些真实失败及其成本。默认间隔为0，无内建自动重试或模型切换。
+
 ### Flash thinking 参数消融
 
 在既有 [C5 命令](#c5-command)上追加 `--thinking enabled --reasoning-effort high --max-tokens 8192` 即可测试思考模式；省略时保持历史默认 `disabled / 不传 effort / 700`。`--reasoning-effort` 只允许与 enabled 同用，可显式传 low/medium/high/max，CLI 接受不等于供应商保证该档位语义，实际可用性与效果须读该轮 attempt。2026-09-23 的 Ark 精确 Flash smoke 已接受 low/high/max，且返回非零 reasoning tokens；medium 本轮未测。temperature 仍为0，单调用、90秒超时、无重试或provider fallback。

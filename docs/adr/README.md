@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260927-53ab](./20260927-53ab-human-category-scoring.md) | 分类人评集合计分与 C5 修订，正文补充独立留存 | accepted for offline evaluation | 2026-09-27 |
 | [20260922-6bc2](./20260922-6bc2-test-category-routing-guidance.md) | C5/I2竞争证据路由指导的离线实验 | accepted for offline experiment | 2026-09-22 |
 | [20260922-81af](./20260922-81af-test-blind-conditional-category-review.md) | C5 条件盲复核与仅二次生效的局部证据指导实验 | accepted for offline experiment | 2026-09-22 |
 | [20260922-7d82](./20260922-7d82-route-llm-calls-through-gateway.md) | 仓内模型与评测统一接入 LLM Gateway，明确模型身份与仓外边界 | accepted for local implementation | 2026-09-22 |

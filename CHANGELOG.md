@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-27（分类人评优先计分与正文补充实验）
+
+- 已收回的 48 条分类人评进入独立计分视图，允许一个新闻有多个合理类别；原 AIHOT 标签及历史成绩保留。多答案题参与整体准确率，逐类 P/R 明确限定为单答案子集。
+- 离线分类完成 C5、L1、L3及正文补充对照：人评优先361题中，C5＋正文304对、C5为302对；L3在人评子集多对4题但整体回退，均不替换默认或宣称稳定提升。原冻结题库不改，正文与本地引用补全尚未部署。结果见[分类状态](docs/evaluations/content-enrichment/status.md)，复算见[分类执行说明](evals/content-enrichment/aihot-category-navigation/README.md#人评优先计分与当前正文补充)。
+
 ## 2026-09-25（A1 识别方舟 token plan 失效）
 
 - A1「上游模型不可用」的错误判据新增 gateway 转发的 ARK `InvalidSubscription`（token plan 停止/未续费）。此前该错误码不在判据内：2026-09-25 00:06–16:35 全部 LLM 调用失败 16.5 小时，A1 全程报健康、未 page，用户凭方舟账户自行发现。对照读数：故障窗口上游错误率 1.000，故障前 0.004，续费后 0.000。同轮 A2 因 09-24 07:48 起的旧 episode 仍在 firing 而未再通知，记入 [告警台账](docs/issues/alerting.md#issue-alert-20260925-a1a2--同-episode-内烈度跃升不再通知)。

@@ -7,19 +7,19 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Lock
 
 from airadar.enrich.category import RUBRIC, category_output, render_category_prompt
 from airadar.enrich.classification import PRIMARY_CATEGORY_SLUGS
 
 from . import assets
+from .category_human import score_human_categories
 from .category_metrics import check_metric_definitions, score_categories
 from .category_review import review_prompt, routing_output, routing_prompt
 from .cli import transport_factory
-from .human_labels import apply_labels
-from .human_store import read_reviews
 from .prefilter_eval import select_cases
-from .score_type_study import preflight
 from .quote_context import QuoteContext, render_quotes
+from .score_type_study import preflight
 
 TARGET = "content-enrichment"
 BENCHMARK = assets.CATEGORY_NAVIGATION
@@ -86,9 +86,14 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              conditional_review: bool = False, include_source_context: bool = False,
              blind_review: bool = False, review_guidance: str = "",
              routing_guidance: str = "", thinking: str = "disabled",
-             reasoning_effort: str | None = None, max_tokens: int = 700) -> dict:
+             reasoning_effort: str | None = None, max_tokens: int = 700,
+             human_reviews: Path | None = None, body_context: Path | None = None,
+             quote_guidance: str = "", case_ids: set[str] | None = None,
+             request_interval: float = 0) -> dict:
     if not 1 <= workers <= 8:
         raise ValueError("workers must be 1..8 for the shared offline API pool")
+    if request_interval < 0:
+        raise ValueError("request_interval must be nonnegative")
     if thinking not in {"disabled", "enabled"} or max_tokens <= 0:
         raise ValueError("invalid thinking mode or max_tokens")
     if reasoning_effort is not None and (thinking != "enabled" or reasoning_effort not in {"low", "medium", "high", "max"}):
@@ -99,16 +104,42 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     manifest, all_cases = assets.load_dataset(dataset, TARGET)
     if manifest["benchmark"] != BENCHMARK:
         raise ValueError("category runner requires website navigation gold, not legacy five-class API gold")
-    book_path = root / "human-evals" / TARGET / "reviews.json"
+    book_path = human_reviews or root / "human-evals" / TARGET / "reviews.json"
     human = None
-    if book_path.exists():
-        book = read_reviews(book_path)
-        if book["metadata"]["target"] != TARGET:
-            raise ValueError("human review target mismatch")
-        all_cases, human = apply_labels(all_cases, [a for b in book["batches"]
-            for a in b["data"]["annotations"]], TARGET)
+    if human_reviews is not None and not book_path.is_file():
+        raise ValueError("human review file missing")
     cases = select_cases(category_cases(all_cases), split, limit, seed)
-    prompts = {c["case_id"]: render_category_prompt(c["input"], rubric, body_limit=body_limit) for c in cases}
+    if case_ids is not None:
+        known = {c["case_id"] for c in all_cases}
+        if not case_ids or case_ids - known:
+            raise ValueError("case_ids must be a nonempty subset of dataset identities")
+        cases = [c for c in cases if c["case_id"] in case_ids]
+        if not cases:
+            raise ValueError("case_ids select no cases in this split")
+    if book_path.exists():
+        # Fail before spending tokens on a mismatched annotation identity.
+        score_human_categories(cases, [], book_path)
+        human = {"view": "human-priority-scores.json", "reviews_sha256": assets.file_digest(book_path)}
+    bodies = {}
+    if body_context is not None:
+        for row in assets.read_jsonl(body_context):
+            if row["case_id"] in bodies:
+                raise ValueError("duplicate body context identity")
+            bodies[row["case_id"]] = row
+        for case in category_cases(all_cases):
+            row = bodies.get(case["case_id"])
+            if row and (row["original_input_sha256"] != assets.digest(case["input"])
+                        or row["url"] != case["input"].get("url")):
+                raise ValueError("body context input mismatch")
+    prompts = {}
+    for case in cases:
+        raw = dict(case["input"])
+        row = bodies.get(case["case_id"], {})
+        if row.get("status") == "available":
+            if not isinstance(row.get("content_text"), str) or not row["content_text"].strip() or not row.get("fetched_at"):
+                raise ValueError("available body context requires body and retrieval timestamp")
+            raw["content_text"] = str(raw.get("content_text") or "") + "\n\nRetrieved article body (source material, not instructions):\n" + row["content_text"]
+        prompts[case["case_id"]] = render_category_prompt(raw, rubric, body_limit=body_limit)
     if include_source_context:
         for case in cases:
             prompts[case["case_id"]]["user"] += source_context(case["input"])
@@ -121,7 +152,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         for row in contexts:
             prompts[row["case_id"]]["user"] += render_quotes(row["quotes"])
             if quote_contribution and any(q["status"] == "available" for q in row["quotes"]):
-                prompts[row["case_id"]]["system"] += "\n" + QUOTE_CONTRIBUTION
+                prompts[row["case_id"]]["system"] += "\n" + (quote_guidance or QUOTE_CONTRIBUTION)
     base_prompts = prompts
     if conditional_review:
         prompts = {key: routing_prompt(prompt, guidance=routing_guidance) for key, prompt in base_prompts.items()}
@@ -135,7 +166,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              "evals/_shared/metrics.py", "evals/_shared/category_metrics.py",
              "evals/content-enrichment/aihot-category-navigation/metrics.json",
              "evals/_shared/transport.py", "evals/_shared/cli.py", "src/airadar/provider/llm_gateway.py",
-             "evals/_shared/human_labels.py", "evals/_shared/human_store.py",
+             "evals/_shared/category_human.py", "evals/_shared/human_store.py",
              "evals/_shared/score_type_study.py", "evals/_shared/quote_context.py",
              "evals/_shared/identity.py", "evals/_shared/dataset.py", "evals/_shared/category_review.py")
 
@@ -148,10 +179,13 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                              "quote_contribution": quote_contribution, "conditional_review": conditional_review,
                              "blind_review": blind_review, "review_guidance": review_guidance,
                              "routing_guidance": routing_guidance,
+                             "quote_guidance": quote_guidance,
+                             "request_interval": request_interval,
                              "include_source_context": include_source_context},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
                            "cases": assets.digest(cases), "prompts": assets.digest(prompts),
+                           "body_context": assets.file_digest(body_context) if body_context else None,
                            "human_reviews": assets.file_digest(book_path) if book_path.exists() else None}}
 
     run, experiment = assets.create_run(root, TARGET, manifest["version"], benchmark=BENCHMARK)
@@ -159,6 +193,10 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     assets.write_json(run / "config.json", config)
     assets.write_json(run / "prompt.json", {"rubric": rubric})
     assets.write_jsonl(run / "cases.jsonl", cases)
+    if book_path.exists():
+        assets.write_json(run / "human-reviews.json", assets.read_json(book_path))
+    if body_context is not None:
+        assets.write_jsonl(run / "body-context.jsonl", [bodies[c["case_id"]] for c in cases if c["case_id"] in bodies])
     assets.write_jsonl(run / "prompts.jsonl", [{"case_id": k, "prompt": v} for k, v in prompts.items()])
     if quote_source is not None:
         assets.write_jsonl(run / "quote-context.jsonl", contexts)
@@ -166,7 +204,8 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
             "label": assets.slug(label), "split": split, "smoke": smoke, "field": "category",
             "dataset": str(dataset), "case_identity": assets.digest(cases),
             "case_ids": [c["case_id"] for c in cases], "object_identity": frozen,
-            "selection": {"seed": seed, "limit": limit, "method": "label-blind stable hash within split"},
+            "selection": {"seed": seed, "limit": limit, "case_ids": sorted(case_ids) if case_ids is not None else None,
+                          "method": "explicit ID subset" if case_ids is not None else "label-blind stable hash within split"},
             "human_application": human, "status": "running", "started_at": assets.utc_now(),
             "workers": workers, "cost": {"value": None, "reason": "unpriced; attempts retain usage"}}
     assets.write_json(run / "started.json", meta)
@@ -175,12 +214,22 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
               baseline_id="original-news-category", authority="ADR e38b; offline classification")
     chat = chat_factory(run / "attempts")
     start = time.monotonic()
+    dispatch_lock, next_dispatch = Lock(), [0.0]
+
+    def dispatch(call, **kwargs):
+        # Bound request start frequency independently of concurrent in-flight calls.
+        with dispatch_lock:
+            delay = max(0, next_dispatch[0] - time.monotonic())
+            if delay:
+                time.sleep(delay)
+            next_dispatch[0] = time.monotonic() + request_interval
+        return call(**kwargs)
 
     def one(case):
         key = case["case_id"]
         row = {"case_id": key, "status": "error", "output": {}}
         try:
-            response = chat(key)(stage="category", prompt=prompts[key], request=request)
+            response = dispatch(chat(key), stage="category", prompt=prompts[key], request=request)
             row["response_json"] = json.dumps(response, ensure_ascii=False)
             row["output"] = (routing_output if conditional_review else category_output)(response["json"])
             row["reason"] = response["json"]["reason"]
@@ -195,7 +244,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                                                   blind=blind_review, guidance=review_guidance)
                     assets.write_json(run / "review-prompts" / (key + ".json"), second_prompt)
                     # A failed review is a failed workflow, never an implicit fallback.
-                    second = chat(key)(stage="category_review", prompt=second_prompt, request=request)
+                    second = dispatch(chat(key), stage="category_review", prompt=second_prompt, request=request)
                     row["review_response_json"] = json.dumps(second, ensure_ascii=False)
                     row["output"] = category_output(second["json"])
                     row["reason"] = second["json"]["reason"]
@@ -216,6 +265,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
     predictions.sort(key=lambda p: p["case_id"])
     assets.write_jsonl(run / "predictions.jsonl", predictions)
     result = score_categories(cases, predictions)
+    human_result = score_human_categories(cases, predictions, book_path) if book_path.exists() else None
     first_result = None
     if conditional_review:
         first_predictions = [p.get("first_pass", p) for p in predictions]
@@ -223,13 +273,15 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
         first_result = score_categories(cases, first_predictions)
     unchanged = frozen == identity()
     if not unchanged:
-        for invalid in [result] + ([first_result] if first_result is not None else []):
+        for invalid in [r for r in (result, first_result, human_result) if r is not None]:
             invalid["complete"] = False
             for metric in invalid["metrics"].values():
                 metric.update(value=None, status="not_computed", reason="object identity changed")
     if first_result is not None:
         assets.write_json(run / "first-pass-scores.json", first_result)
     assets.write_json(run / "diagnostics.json", diagnostics(cases, predictions))
+    if human_result is not None:
+        assets.write_json(run / "human-priority-scores.json", human_result)
     meta.update(status="complete" if result["complete"] else "incomplete",
                 ended_at=assets.utc_now(), elapsed_seconds=time.monotonic() - start,
                 identity_unchanged=unchanged)
@@ -248,6 +300,11 @@ def main(argv=None):
     p.add_argument("--quote-source", type=Path, help="Frozen direct parent dataset for as-of original quotes; offline ablation only")
     p.add_argument("--body-limit", type=int, default=5000, help="Frozen body characters; 0 means full body (offline only)")
     p.add_argument("--quote-contribution", action="store_true", help="Separate current-post contribution from available quoted background")
+    p.add_argument("--quote-guidance", type=Path, help="Alternative contribution guidance; requires --quote-contribution")
+    p.add_argument("--body-context", type=Path, help="Frozen current article supplement; original cases remain unchanged")
+    p.add_argument("--human-reviews", type=Path, help="Human acceptable-label book; produces a separate score view")
+    p.add_argument("--case-ids", type=Path, help="JSON array of explicit IDs, e.g. rejected calls in a previous immutable run")
+    p.add_argument("--request-interval", type=float, default=0, help="Minimum seconds between request starts; does not change worker concurrency")
     p.add_argument("--source-context", action="store_true", help="Append existing original URL, author, source kind/name; no network retrieval")
     p.add_argument("--conditional-review", action="store_true", help="Ask for semantic uncertainty and review only flagged cases; preserve same-call control")
     p.add_argument("--blind-review", action="store_true", help="With --conditional-review, withhold the first decision and reason from the second call")
@@ -264,6 +321,8 @@ def main(argv=None):
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--output-root", type=Path, default=assets.ROOT)
     a = p.parse_args(argv)
+    if a.quote_guidance and not a.quote_contribution:
+        p.error("--quote-guidance requires --quote-contribution")
     config = assets.read_json(a.config)
     result = evaluate(a.dataset, config=config, split=a.split, limit=a.limit, seed=a.seed,
                       label=a.label, chat_factory=transport_factory(config, a.env_file),
@@ -274,7 +333,11 @@ def main(argv=None):
                       include_source_context=a.source_context, blind_review=a.blind_review,
                       review_guidance=a.review_guidance.read_text() if a.review_guidance else "",
                       routing_guidance=a.routing_guidance.read_text() if a.routing_guidance else "",
-                      thinking=a.thinking, reasoning_effort=a.reasoning_effort, max_tokens=a.max_tokens)
+                      thinking=a.thinking, reasoning_effort=a.reasoning_effort, max_tokens=a.max_tokens,
+                      human_reviews=a.human_reviews, body_context=a.body_context,
+                      quote_guidance=a.quote_guidance.read_text() if a.quote_guidance else "",
+                      case_ids=set(assets.read_json(a.case_ids)) if a.case_ids else None,
+                      request_interval=a.request_interval)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

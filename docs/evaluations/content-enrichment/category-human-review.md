@@ -7,7 +7,7 @@
 ```text
 human-evals/content-enrichment/
   category-review.json             # 冻结新闻、原预测/prompt、按评价者追加的模型意见（已入 Git）
-  reviews.json                     # 收到用户真实反馈后创建；人评原票及展示快照（允许入 Git）
+  reviews.json                     # 已收到的真实人评原票及展示快照（入 Git）
 evals/content-enrichment/aihot-category-navigation/
   human_review.py                  # 建材料、校验、追加模型意见、渲染、导入用户票
   human_review/{index.html,app.js,style.css}  # 通用静态渲染器，不硬编码新闻
@@ -20,7 +20,17 @@ tests/test_category_human_review.py
 
 来源 Atlas：`.label-serve/category-atlas-reusable-20260923-v4`，源 run 位于 `runs/content-enrichment/aihot-category-navigation/v1/`。每次 build 核对原件 SHA、逐题 input/gold/prediction/reason/prompt；同 ID 跨 run 输入或参照不同则拒绝混合。网页的“AI Radar / C5”是这些实验的历史输出，**不是重新调用当前生产 DeepSeek**；展开历史运行可看不同输出与各自实际模型名。
 
-Codex 本批给出 95 道判断、3 道输入不足的 uncertain；这是非盲模型意见，没有人工权威。精确 Codex 模型 ID 未由会话暴露，记 null，不猜型号。Claude 尚未评价，页面明确显示待补充，不造票。AIHOT 原档没有分类理由，显示“未记录”，不让其他模型代写。
+Codex 本批给出 95 道判断、3 道输入不足的 uncertain；这是非盲模型意见，没有人工权威。精确 Codex 模型 ID 未由会话暴露，记 null，不猜型号。Claude 已追加全部 98 题的模型意见，流程与边界见下方历史记录。AIHOT 原档没有分类理由，显示“未记录”，不让其他模型代写。
+
+## 当前人评与计分（2026-09-27）
+
+真实回票已保存在 `reviews.json`：98 条中 48 条 reviewed、50 条 pending；47 条为单答案，1 条允许模型或教程（`ai-models` / `tip`）。pending 不表示接受原标签，模型意见不算人评。当前导入批次保留原票、实际展示材料和用户理由，历史材料及 AIHOT reference 不覆盖。
+
+分类 runner 已接入独立的人评优先视图：`scores.json` 仍按 AIHOT 单标签计分，`human-priority-scores.json` 按明确人工可接受集合计命中；未人评题回退原 AIHOT。六类 P/R 仅在参考集合为单答案的固定题目子集上计算，多答案题仍参加整体 accuracy，不强选其中一个标签，也不随预测选择 gold。视图保留人工覆盖数、逐题 reference_source、P/R 排除题数和人评文件摘要；失败照计错。具体参数和复用入口见[分类执行说明](../../../evals/content-enrichment/aihot-category-navigation/README.md#人评优先计分与当前正文补充)。
+
+关联以原 `case_id` 和输入摘要核对，同题输入不匹配在模型调用前拒绝。9/27 新补正文作为独立材料保存；这不是旧输入的历史完整版本，也不能凭相同 URL 自动证明人工标签对新实质内容适用。历史成绩不自动重算，已实施计分接口不等于分类修订已取得收益。
+
+本轮同361题的C5/L1/L3与正文对照已终态，当前人评成绩从[分类状态](status.md)所指 `*-comparison.json` 或各run的 `human-priority-scores.json` 读取；统一 `experiments/metrics/summary.json` 保持原AIHOT口径。人评48题只是历史分歧子集，不能只看它的提高就宣称全体改进；原票中的50条pending仍未转成用户标签。
 
 ## 材料格式
 
@@ -110,7 +120,7 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 复用入口 `accepted_categories(Path('human-evals/content-enrichment/reviews.json'))` 返回 `{(case_id, exact_input_digest): frozenset(labels)}`。新消费者可以判断单标签预测是否属于人工集合；同题同输入人工集合冲突则报错，不按导入顺序覆盖。这里精确 hash 用于冻结材料的安全关联；更多原始数据中只有 HTML、时间戳等非实质变化时，仍按项目的人评实质性适用规则核验后显式关联，不能因为 hash 不同宣布人评失效，也不能跳过核验直接套用。
 
-**此轮仅建立存储/读取接口，不自动重算历史成绩。** 人工多可接受标签不同于 AIHOT 单标签；未来评测需显式记录人评批次摘要、采用集合命中定义，并保留 AIHOT 原口径。逐类 P/R 的多答案计数语义不能无声沿用原单标签 confusion matrix，需在消费者中明确后再报告。
+最初工作台只建立存储/读取接口；9/27 后续消费者现按上方“当前人评与计分”执行。人工多可接受标签不同于 AIHOT 单标签，历史单标签 confusion matrix 与成绩保持原义，不由导票动作自动重算。
 
 ## 重建与验证
 

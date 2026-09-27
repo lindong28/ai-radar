@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260927-53ab](adr/20260927-53ab-human-category-scoring.md)：人评可接受集合优先、单答案子集 P/R 与 C5 修订；AIHOT 历史成绩及冻结输入保持原义，正文补充独立保存，结果由[分类状态](evaluations/content-enrichment/status.md)定位。
+
 [20260922-6bc2](adr/20260922-6bc2-test-category-routing-guidance.md)：竞争证据路由指导；区分首轮变化、送达覆盖与复核净收益。
 
 [20260922-81af](adr/20260922-81af-test-blind-conditional-category-review.md)：C5 条件盲复核与局部证据指导；保持默认/gold，分别量路由覆盖与复核净收益。
@@ -80,7 +82,7 @@
 
 [人评标注与优先级](evaluations/human-labels.md)：四对象的人评权威、原票归档、标签应用/重评分命令、判官分歧及 reason-first 规则（2026-09-20 用户裁决）。
 
-[C5 分类人评工作台](evaluations/content-enrichment/category-human-review.md)：98 道历史分歧材料、AIHOT/C5/Codex/Claude 意见、用户多选回票的 Git 资产、格式及追加/复用命令；不自动改 gold 或指标。
+[C5 分类人评工作台](evaluations/content-enrichment/category-human-review.md)：98 道历史分歧材料、四方意见及真实多选回票的 Git 资产、追加/复用命令；人评优先视图与 AIHOT 原指标分开，不覆盖历史 gold。
 
 [评测代码导航](../evals/README.md)：四对象当前入口、历史兼容入口、对象级 prompt 和测试职责；记录与历史归档的保留范围见 [assets](evaluations/assets.md)。
 
