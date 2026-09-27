@@ -24,6 +24,7 @@ from ..stage_common import provider_item_from_row as _to_provider_item
 from .article_context import prepare_article_context
 from .normalizers.production_enrich_provider_output_v2 import normalize
 from .prompts_v2 import render_enrich_prompt
+from .quote_context import collected_quotes, render_collected_quotes
 from .schema_v2 import EnrichOutputV2
 
 
@@ -89,7 +90,7 @@ def _candidate_rows(
         params.append(_failed_retry_cutoff())
         params.extend(f"{prefix}%" for prefix in _DETERMINISTIC_PREFIXES)
     sql = f"""
-      SELECT i.id, i.title, i.url, i.source_id, s.tier, i.author, i.published_at, i.content_text, s.kind
+      SELECT i.id, i.title, i.url, i.source_id, s.tier, i.author, i.published_at, i.content_text, s.kind, i.extra_json
       FROM items i
       JOIN sources s ON s.id=i.source_id
       WHERE {item_filter}
@@ -196,6 +197,7 @@ def _insert_evaluation(
     error: str | None,
     latency_ms: int,
     article_context: dict | None = None,
+    quote_context: list[dict] | None = None,
 ) -> None:
     insert_evaluation(
         conn,
@@ -203,7 +205,7 @@ def _insert_evaluation(
         stage="enrich",
         ruleset_version=ruleset_version,
         model_id=provider.model_id,
-        input_data={**render_enrich_prompt(item), "article_context": article_context},
+        input_data={**render_enrich_prompt(item), "article_context": article_context, "quote_context": quote_context or []},
         output_data=enriched.model_dump() if enriched else output,
         numeric_data=None,
         latency_ms=latency_ms,
@@ -229,6 +231,7 @@ def run_enrich(
     selected_workers = max(1, min(workers, total or 1))
     database_file = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
     cache_dir = Path(database_file).parent / "article-context" if database_file else None
+    quotes = {item.id: collected_quotes(conn, row[8], row[9]) for row, item in zip(rows, items)}
     # Prepare only selected enrichment candidates, never mutate raw items/prefilter input.
     def prepare(pair):
         row, item = pair
@@ -239,6 +242,7 @@ def run_enrich(
         body = item.content_text
         if context["status"] == "available":
             body += "\n\nRetrieved article context (current retrieval):\n" + context["content_text"]
+        body += render_collected_quotes(quotes[item.id])
         return replace(item, content_text=body), context
 
     with ThreadPoolExecutor(max_workers=min(8, total or 1)) as executor:
@@ -262,7 +266,7 @@ def run_enrich(
     ) -> None:
         nonlocal errors, processed
         errors += 1 if error else 0
-        _insert_evaluation(conn, item, selected_provider, selected_ruleset, enriched, output, error, latency_ms, contexts[item.id])
+        _insert_evaluation(conn, item, selected_provider, selected_ruleset, enriched, output, error, latency_ms, contexts[item.id], quotes[item.id])
         processed += 1
         conn.commit()
         if progress_callback:

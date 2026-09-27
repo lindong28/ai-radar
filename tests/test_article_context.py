@@ -198,3 +198,54 @@ def test_unexpected_fetch_exception_isolated():
     result = prepare_article_context(raw, fetcher=broken)
     assert result["status"] == "unavailable" and result["content_text"] == "original"
     assert "RuntimeError" in result["detail"]
+
+
+def test_production_enrich_gets_collected_quotes_and_missing_status(tmp_path, monkeypatch):
+    from test_enrich_runner import _add_prefiltered_item, _db
+
+    from airadar.enrich import article_context, runner_v2
+    conn = _db(tmp_path)
+    original_id, original_body = conn.execute("SELECT id,content_text FROM items").fetchone()
+    quoted_id = _add_prefiltered_item(conn, "Quoted evidence", 40)
+    quote_body = "Evidence from the collected original post."
+    conn.execute("UPDATE sources SET kind='x'")
+    conn.execute("UPDATE items SET extra_json=?, content_text=? WHERE id=?",
+                 (json.dumps({"x_post_id": "42"}), quote_body, quoted_id))
+    conn.execute("UPDATE items SET extra_json=? WHERE id=?", (json.dumps({"referenced_tweets": [
+        {"id": "42", "type": "quoted"}, {"id": "43", "type": "quoted"},
+        {"id": "44", "type": "retweeted"}]}), original_id))
+    conn.commit()
+    def forbidden(*_):
+        pytest.fail("X quote preparation must not fetch")
+    monkeypatch.setattr(article_context, "fetch_article", forbidden)
+    class Provider:
+        model_id = "fake"
+        def enrich(self, item):
+            assert item.content_text.startswith(original_body)
+            assert quote_body in item.content_text
+            assert '"status": "missing_in_database"' in item.content_text
+            assert '"post_id": "44"' not in item.content_text
+            raise RuntimeError("deliberate provider failure")
+    result = runner_v2.run_enrich(conn, provider=Provider(), item_ids=[original_id], workers=2)
+    assert result.processed == result.errors == 1
+    saved = json.loads(conn.execute("SELECT input_json FROM item_evaluations WHERE stage='enrich'").fetchone()[0])
+    assert [(q["post_id"], q["status"]) for q in saved["quote_context"]] == [("42", "available"), ("43", "missing_in_database")]
+    assert saved["quote_context"][0]["content_text"] == quote_body
+    assert saved["quote_context"][0]["url"] and saved["quote_context"][0]["fetched_at"]
+    assert conn.execute("SELECT content_text FROM items WHERE id=?", (original_id,)).fetchone()[0] == original_body
+
+
+def test_quote_lookup_scope_empty_and_conflicting_material(tmp_path):
+    from test_enrich_runner import _add_prefiltered_item, _db
+
+    from airadar.enrich.quote_context import collected_quotes
+    conn = _db(tmp_path)
+    refs = json.dumps({"referenced_tweets": [{"id": "42", "type": "quoted"}]})
+    assert collected_quotes(conn, "feed", refs) == []
+    assert collected_quotes(conn, "x", "broken") == [{"status": "invalid_reference_metadata"}]
+    conn.execute("UPDATE sources SET kind='x'")
+    conn.execute("UPDATE items SET extra_json=?,content_text=''", (json.dumps({"x_post_id": "42"}),))
+    assert collected_quotes(conn, "x", refs)[0]["status"] == "empty_body"
+    other = _add_prefiltered_item(conn, "Conflicting snapshot", 40)
+    conn.execute("UPDATE items SET extra_json=? WHERE id=?", (json.dumps({"x_post_id": "42"}), other))
+    assert collected_quotes(conn, "x", refs)[0]["status"] == "ambiguous"
