@@ -1,5 +1,13 @@
 # 分类实验提示
 
+U2是当前Pro人评48题的研究对照：首轮45/48，冻结重复43/48；不是稳定达标或生产默认。U3/U4/U5的目标修复与回退、人评口径及复跑命令统一见[分类状态](../../../docs/evaluations/content-enrichment/status.md#u阶段pro-全48道人评题归因优化)。使用完整 `category-u2.txt`，不逐题拼接各候选输出；六类P/R未全部达到90%。
+
+`category-u5.txt`在U4局部组合上修复独立分析、研究代码和调查深度的判断捷径；它与U4同属显式研究候选，最终选择与冻结重复读数仍以下文链接的状态文档为准。
+
+`category-u4.txt` 是 U2 加 U3 的论文/行业局部边界，不包含 U3 的全局主体与观点条款；不能由 U3 的局部修复数推定组合后的成绩，按 U4 自身全48运行记录判断。
+
+U阶段（2026-09-29本地）固定全48道人评题及R8完整材料、Ark Pro/high/32768/T0：`category-u1.txt` 基于T2修组织行动与独立分析条件；`category-u2.txt`保留U1并修工程讲解、框架/模型及分析深度；`category-u3.txt`保留U2并修主体优先、研究摘要和事件机制条件。均为研究候选，未改变生产默认；结果、已知参考前提与复跑要求见[状态U阶段](../../../docs/evaluations/content-enrichment/status.md#u阶段pro-全48道人评题归因优化)，父方案见[方案履历](../../../docs/evaluations/content-enrichment/versions.md)。
+
 T阶段（2026-09-28 UTC）从 S1 Pro 使用的 R8 rubric 派生 `category-t1.txt`，明确发布/研究、引用/方法、机构变革/产品的条件；`category-t2.txt` 再修研究原创性、教程独立性和新增功能的判断门槛。模型仍为 Ark Pro/high/32768/T0，材料不变，无 few-shot；均为研究 prompt，不是生产默认。实际六题首轮、冻结重复及同期对照统一见[状态T阶段](../../../docs/evaluations/content-enrichment/status.md#t阶段s1-pro-reasoning-驱动的冲突边界修订)。后续复用必须同时读取[方案履历](../../../docs/evaluations/content-enrichment/versions.md)，不能仅由 prompt 文件名推断模型或输入。
 
 2026-09-28 R阶段在P1的材料呈现上修订分类条件，全部为研究候选而非默认：R1补政策职权、引用主体和工程解释；R2收窄独立评论；R3改为主要交付物构框；R4使用R2加`category-r4-review.txt`事后复核；R5使用R2加`--evidence-first`先整理事实再分类；R6在R2中恢复P1研究边界；R7收紧模型发布并调整研究/教程条件；R8回到P1/O3原骨架做最小整合修复。R9沿用R8，仅改变思考配置。`category-r4-review.txt`只供第二阶段，不能作为完整rubric；R5没有单独rubric文件。实际48道人评结果、配对修复/回退和采用边界见[状态](../../../docs/evaluations/content-enrichment/status.md)，父关系见[履历](../../../docs/evaluations/content-enrichment/versions.md)。下文较早“当前”判断只代表相应历史阶段。
