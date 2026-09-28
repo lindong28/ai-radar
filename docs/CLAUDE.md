@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260928-9f3c](adr/20260928-9f3c-test-pro-reasoning-category-boundaries.md)：固定 S1 六道人评题，基于实际 reasoning 收窄分类冲突边界；仅离线研究，不改生产或 gold。
+
 [20260928-7552](adr/20260928-7552-retry-orbstack-start-periodically.md)：OrbStack 登录启动增加周期重试；记录 20 分钟调度、维护停用和实际恢复验证的边界。
 
 [20260927-8ea1](adr/20260927-8ea1-repair-category-source-material.md)：分类源材料补全与同题消融；冻结输入和当前补采分开，复用方式见[分类 v1 输入修复](evaluations/content-enrichment/aihot-category-navigation/v1/README.md#2026-09-27o-阶段输入材料修复)，效果见[分类状态](evaluations/content-enrichment/status.md)。

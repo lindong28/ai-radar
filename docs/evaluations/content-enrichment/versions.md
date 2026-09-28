@@ -2,6 +2,18 @@
 
 > [Developer] · 2026-09-27 起登记 O 阶段；实验标记不等于生产正式版本。历史 A–K 谱系见[分类图谱](../../../evals/content-enrichment/aihot-category-navigation/atlas/README.md)，M/N 记录见[状态](status.md)。本文件不批量重建历史身份。
 
+## T阶段（2026-09-28 UTC，S1 Pro reasoning 后的局部 prompt 修订）
+
+`formal_version=null`，没有新增正式生产认可；研究对照为S1原轮及同期重复，而不是自动将S1设为正式基线。源代码基于`77578e97f2df3e9052b1544fdd85952d08792849`，每个run冻结实际rubric与代码/材料身份。全部为相同六道已见人评题，Pro/high/32768/T0、单调用；无输入、gold或生产变更。
+
+| id | parents | inspiration | 实际改动 | UTC run / 人评 |
+|---|---|---|---|---|
+| T1 | `[S1]` | S1三错公开reasoning | `category-t1.txt`收窄发布/研究、引用/方法、机构/产品条件 | `15-54-47`：2/6 |
+| T2 | `[T1]` | T1失败与回退reasoning | `category-t2.txt`再修研究原创性、方法独立性、平台能力新增判断 | `15-58-30`：6/6；冻结重复`15-59-45`：6/6 |
+| S1 repeat | `[S1]` | T2重复对照 | 原R8 rubric与同一Pro配置，不改prompt | `16-01-22`：3/6 |
+
+运行前缀为 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/`，metadata在`experiments/`同分区。T2对原S1及同期S1都修3/退0，但修复的题目集合不同；局部收益不外推48/361题或Flash。T2为后续扩覆盖研究候选、不是生产默认；完整逐题、成本及复跑入口见[状态T阶段](status.md#t阶段s1-pro-reasoning-驱动的冲突边界修订)。
+
 ## S 阶段（2026-09-28，六题计算配置诊断）
 
 S1：`parents=[R8]`，`inspiration=[]`，`formal_version=null`，正式`comparison_baseline=null`。用户指定Pro/high/32k；固定R8 prompt与材料，仅联合切换Ark Pro、thinking/high与32768上限，T0不变。源码`b8ae9aa93967964dc5677e27d6c5efda3725c9cb`，冻结身份见run。六道人评开发题从R8同题2/6到S1的3/6，修2/退1；不能与R8全48题41/48直接比百分比。`runs=[2026-09-28/15-16-12]`，路径前缀`runs/content-enrichment/aihot-category-navigation/v1/`；元数据对应`experiments/`同分区，逐题配对在run的`comparison.json`。未晋级或部署；结果、剩余错题归因、实际调用与复用方式见[状态S1](status.md#2026-09-28s1prohigh32k-六题诊断)。

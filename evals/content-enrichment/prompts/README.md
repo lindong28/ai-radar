@@ -1,5 +1,7 @@
 # 分类实验提示
 
+T阶段（2026-09-28 UTC）从 S1 Pro 使用的 R8 rubric 派生 `category-t1.txt`，明确发布/研究、引用/方法、机构变革/产品的条件；`category-t2.txt` 再修研究原创性、教程独立性和新增功能的判断门槛。模型仍为 Ark Pro/high/32768/T0，材料不变，无 few-shot；均为研究 prompt，不是生产默认。实际六题首轮、冻结重复及同期对照统一见[状态T阶段](../../../docs/evaluations/content-enrichment/status.md#t阶段s1-pro-reasoning-驱动的冲突边界修订)。后续复用必须同时读取[方案履历](../../../docs/evaluations/content-enrichment/versions.md)，不能仅由 prompt 文件名推断模型或输入。
+
 2026-09-28 R阶段在P1的材料呈现上修订分类条件，全部为研究候选而非默认：R1补政策职权、引用主体和工程解释；R2收窄独立评论；R3改为主要交付物构框；R4使用R2加`category-r4-review.txt`事后复核；R5使用R2加`--evidence-first`先整理事实再分类；R6在R2中恢复P1研究边界；R7收紧模型发布并调整研究/教程条件；R8回到P1/O3原骨架做最小整合修复。R9沿用R8，仅改变思考配置。`category-r4-review.txt`只供第二阶段，不能作为完整rubric；R5没有单独rubric文件。实际48道人评结果、配对修复/回退和采用边界见[状态](../../../docs/evaluations/content-enrichment/status.md)，父关系见[履历](../../../docs/evaluations/content-enrichment/versions.md)。下文较早“当前”判断只代表相应历史阶段。
 
 J阶段新增`category-j1-routing.txt`和`category-j2-routing.txt`，只能通过`--routing-guidance`用于首轮，不是完整rubric。第二轮继续I2指导。J2按材料结构触发，冻结全361题184次复核覆盖47/80错，但仅281→282（13修/12退），不替换C5整体主方案或生产A0；保留该路由作为后续复核研究组件。J1/J2开发162/161对，同期C5为165/200；全部已见，双90未达。逐类指标、成本、归因和下一研究路线见[状态](../../../docs/evaluations/content-enrichment/status.md#2026-09-22j阶段材料结构路由)。下方I/H等均为历史阶段记录。
