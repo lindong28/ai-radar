@@ -2,6 +2,10 @@
 
 > [Developer] · 2026-09-27 起登记 O 阶段；实验标记不等于生产正式版本。历史 A–K 谱系见[分类图谱](../../../evals/content-enrichment/aihot-category-navigation/atlas/README.md)，M/N 记录见[状态](status.md)。本文件不批量重建历史身份。
 
+## S 阶段（2026-09-28，六题计算配置诊断）
+
+S1：`parents=[R8]`，`inspiration=[]`，`formal_version=null`，正式`comparison_baseline=null`。用户指定Pro/high/32k；固定R8 prompt与材料，仅联合切换Ark Pro、thinking/high与32768上限，T0不变。源码`b8ae9aa93967964dc5677e27d6c5efda3725c9cb`，冻结身份见run。六道人评开发题从R8同题2/6到S1的3/6，修2/退1；不能与R8全48题41/48直接比百分比。`runs=[2026-09-28/15-16-12]`，路径前缀`runs/content-enrichment/aihot-category-navigation/v1/`；元数据对应`experiments/`同分区，逐题配对在run的`comparison.json`。未晋级或部署；结果、剩余错题归因、实际调用与复用方式见[状态S1](status.md#2026-09-28s1prohigh32k-六题诊断)。
+
 ## R 阶段（2026-09-28，最新人评）
 
 没有正式生产认可，`formal_version=null`、正式`comparison_baseline=null`；用户指定P1为修复基础，本轮辅助对照是P1原参数重复Q0 `2026-09-27/20-16-47`，最新9票重算43/48。不是沿用其旧人票39/48直接比较，也不是P1新调用。以下运行位于`runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/<UTC>/`，同分区`experiments/`保存metadata；全部固定48已见人评题，仅首轮smoke为其中9题。实现未晋级生产。

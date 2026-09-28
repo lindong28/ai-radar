@@ -2,6 +2,33 @@
 
 > [Developer] · Mutable snapshot · 2026-09-28。区分能力、实际运行与有效成绩。
 
+## 2026-09-28：S1——Pro/high/32k 六题诊断
+
+### L1：结果与归因
+
+按用户要求测试六道此前讨论的“关键文字已经送达”题，固定R8的system/user prompt与人票，改用Ark `personal_ark::deepseek-v4-pro-ga-260813`、thinking=enabled、reasoning_effort=high、max_tokens=32768、T0。六题不是R8全错集合：R8原来2/6，S1为3/6（50%），修2/退1；四道旧错修复2道，两道原正确保留1道。全部是已暴露开发题、6个不同输入、4个不同人评类别，单次运行，不外推全48题或六类整体P/R。③⑤不适用，④复用人评接受集合确定性命中；原AIHOT口径2/6不是本轮主指标。
+
+| 题目（case_id前缀） | 人评 | R8 Flash | S1 Pro | 变化 |
+|---|---|---|---|---|
+| Helix 2.5（3a2b43） | 模型 | 模型 | 模型 | 保持正确 |
+| StationeryBench（642400） | 论文 | 模型 | 模型 | 仍错 |
+| Mozilla 91页报告（bf6199） | 论文 | 行业 | 论文 | 修复 |
+| 分类即特征工程（9df27e） | 论文 | 教程 | 论文 | 修复 |
+| Browser Use 工程讲解（ea5b63） | 教程 | 产品 | 产品 | 仍错 |
+| 联合国/Google（6a9561） | 行业 | 行业 | 产品 | 回退 |
+
+Pro对Mozilla明确采用多组数据与系统研究贡献，对特征工程明确采用提出并验证方法的实验，两处与人评一致。剩余三题不是调用失败：StationeryBench的reason承认新基准却仍把它降为展示模型能力的证据；Browser Use承认工程机制说明却把工具发布置于首位；联合国题承认合作却把平台发布/功能当主信息。前两题仍表现为已送达证据的主体与冲突条件应用问题；联合国题暴露“合作行动还是平台发布”的边界与人评意图不一致。仅凭这一次输出不能进一步把原因单独归为模型能力、prompt唯一歧义或数据不足。也不声称拿到了Mozilla整篇91页报告，判的是既存材料中的关键研究信息。
+
+### L2：原件与复用
+
+run：`runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/15-16-12/`；同路径分区的`experiments/`保存metadata与原AIHOT scores。run内`human-priority-scores.json`为本轮主口径，`comparison.json`调用既有collect/scores/paired对R8原48题截取相同六题重算；`predictions.jsonl`保留原reason，`prompts.jsonl`保留完整输入，`attempts/`保留请求、原响应及usage。`support/run_s1.py`为本次复跑入口，从repo根用`PYTHONPATH=src:. .venv/bin/python runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/15-16-12/support/run_s1.py`执行会产生新付费run，不覆写旧结果。
+
+六次调用均首次成功、finish_reason=stop，无重试或输出截断。实际返回模型为`deepseek-v4-pro-ga-260813`，有13,872 reasoning tokens；输入17,538、completion 14,316（含reasoning）、总计31,854 tokens，runner墙钟65.99秒。max_tokens是上限而非强制用量。美元成本未定价，不能记零；high参数确已发送且有推理用量，不代表核实了provider内部effort档位映射。
+
+### L3：身份与采用边界
+
+被测源码Git为`b8ae9aa93967964dc5677e27d6c5efda3725c9cb`；运行前后源码/行为/资产身份一致，调用前完整六题prompt逐字对R8冻结记录，终态再核cases、prompts及人票。实际父为R8，S1只改联合计算配置，因此不能拆称Pro、high或32k的单因素收益。运行脚本属于实验编排，未改分类器或生产默认；没有正式生产认可。保留两题局部修复证据，但没有解决全部六题，也未运行其余42题、全361题或重复稳定性验证。本轮只同步证据文档，不购买外审：无生产行为改动，计分与配对复用既有实现，实际prompt/输入一致性有直接检查。
+
 ## 2026-09-28：R 阶段——最新人评与 P1 缺口修复
 
 ### L1：实际结果与采用边界
