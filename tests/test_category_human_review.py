@@ -66,6 +66,44 @@ def test_p1_material_rejects_candidate_ambiguity_and_changed_prompt(p1_material,
         review.validate(bad)
 
 
+def test_explicit_partial_revision_preserves_prior_human_votes(p1_material, tmp_path):
+    ballot = ballot_for(p1_material)
+    for row in ballot["judgments"][:2]:
+        row.update(status="reviewed", acceptable_labels=["paper"])
+    path, output = tmp_path / "first.json", tmp_path / "reviews.json"
+    review.write_new(path, ballot)
+    prior = review.import_ballot(p1_material, path, output, "fixture")
+    revised = ballot_for(p1_material)
+    revised["judgments"][0].update(status="reviewed", acceptable_labels=["industry", "paper"])
+    next_path = tmp_path / "second.json"
+    review.write_new(next_path, revised)
+    with pytest.raises(ValueError, match="existing"):
+        review.import_ballot(p1_material, next_path, output, "fixture", ["unknown"])
+    bid = prior["metadata"]["batch_id"]
+    imported = review.import_ballot(p1_material, next_path, output, "user explicitly revises", [bid])
+    assert review.import_ballot(p1_material, next_path, output, "user explicitly revises", [bid]) == imported
+    accepted = review.accepted_categories(output)
+    keys = [(r["case_id"], r["input_sha256"]) for r in ballot["judgments"][:2]]
+    assert accepted[keys[0]] == {"industry", "paper"}
+    assert accepted[keys[1]] == {"paper"}
+    book = review.read_reviews(output)
+    assert book["batches"][0] == prior
+    third_ballot = deepcopy(revised)
+    third_ballot["judgments"][0]["acceptable_labels"] = ["industry"]
+    third_path = tmp_path / "third.json"
+    review.write_new(third_path, third_ballot)
+    review.import_ballot(p1_material, third_path, output, "user revises again",
+                         [imported["metadata"]["batch_id"]])
+    before_reimport = output.read_bytes()
+    assert review.import_ballot(p1_material, next_path, output, "user explicitly revises", [bid]) == imported
+    assert output.read_bytes() == before_reimport
+    from evals._shared.category_human import resolve_categories
+    bad = deepcopy(book)
+    bad["batches"][1]["metadata"]["supersedes"][0]["sha256"] = "bad"
+    with pytest.raises(ValueError, match="preceding"):
+        resolve_categories(bad)
+
+
 def test_real_frozen_material_and_codex_coverage(material):
     review.validate(material)
     assert len(material["cases"]) == 98

@@ -25,6 +25,18 @@ capture 是只读公网 GET，六个类别并发、每类游标顺序翻页；�
 
 ## 真实模型评测
 
+### 调用失败与历史重放
+
+新运行默认 `--max-attempts 3`：每个 stage 最多总共尝试三次，包含第一次调用，**不是额外重试三次**。成功即停止该阶段的重试；调用或格式校验连续失败达到上限后，该题保留失败状态并留在计分分母。存储失败停止该题，不靠重复付费调用恢复。`predictions.jsonl` 的逐题 `attempts` 保存阶段、序号与结果，失败追踪另存 `retry-traces/<case_id>/<stage>-<number>.json`，实际调用原件仍在 `attempts/`。
+
+重放此前无重试的实验时须显式加 `--max-attempts 1`，其余条件沿原运行身份；行为身份中的 `retry_count` 等于总尝试上限减一。多阶段配置分别对各 stage 限次，不把三次当整条两阶段流程的调用上限。该离线机制不切换模型、不修改生产默认，也不回写旧运行或旧成绩。
+
+### 可选：先整理证据、再分类
+
+`--evidence-first` 默认关闭，与 `--conditional-review` 互斥。开启后，每题先进入 `category_evidence` 阶段：保留原始送达材料，以不负责分类的资料整理指令提取 `reason`、`contributions` 和 `relationship`，不提供分类 rubric、初始类别判断或人评票，也不要求生成类别名称。成功后进入 `category` 阶段，使用原分类 rubric、完整原材料及首阶段整理结果做最终决策；整理结果明确是模型意见，须对照原文核实，不删原文、不把整理当标准答案。首阶段失败则该题停止，不能凭空补证据继续分类。
+
+`prompts.jsonl` 保留基础分类 prompt；实际首阶段 prompt 在调用前写入 `evidence-prompts/<case_id>.json`，实际第二阶段 prompt 写入 `decision-prompts/<case_id>.json`，各阶段响应与重试沿调用原件追溯，解析后的整理结果另保存在逐题 `evidence`。`object_identity.behavior.evidence_first` 记录开关。此开关用于两阶段离线试验，不能仅凭实现或调用完成宣称分类收益；实际成绩从[分类状态](../../../docs/evaluations/content-enrichment/status.md)进入。
+
 ### 人评优先计分与当前正文补充
 
 runner 默认发现输出根下的 `human-evals/content-enrichment/reviews.json` 时生成独立人评视图；跨工作树或另设 `--output-root` 时用 `--human-reviews /path/to/reviews.json` 显式固定原票。缺失显式文件、冲突人评或同题输入身份不匹配会在调用前报错。人评不进入推理 prompt，原 `scores.json` 和统一指标索引继续保持 AIHOT 口径，人工结果单独读取 `human-priority-scores.json`。
@@ -63,11 +75,11 @@ PYTHONPATH=src:. uv run python -m evals._shared.category_compare \
 
 L1比较将 candidate-runs 改为同日 `08-48-26` / `08-53-52`，去掉两个 body 参数；L3比较将 candidate-runs 改为 `08-55-26` / `09-00-45`，body-runs 改为 `09-02-25` / `09-03-46`，其余沿冻结原件。已有结果在 `experiments/content-enrichment/aihot-category-navigation/v1/2026-09-27/09-07-46/{l1,l3,c5-body}-comparison.json`，不要覆盖。比较器核终态身份、原case/prompt和逐题响应，拒绝重新采样已成功预测；正文臂必须恰好覆盖69个available输入，不用父预测掩盖正文臂缺失或失败。
 
-服务限流后的定向恢复可用 `--case-ids /path/to/rejected-case-ids.json --request-interval 1`：前者为非空 case_id JSON 数组，在既有 split/limit 选集内再筛选，后者限制全 run 请求起始间隔（秒），不改变 workers 的并发上限。恢复创建新 run，原失败 run 不覆盖；成功题不需重跑。合并结果须逐题固定取原成功或恢复预测，并保存来源 run 映射；既不能把被拒请求视作能力回退，也不能隐藏这些真实失败及其成本。默认间隔为0，无内建自动重试或模型切换。
+服务限流后的定向恢复可用 `--case-ids /path/to/rejected-case-ids.json --request-interval 1`：前者为非空 case_id JSON 数组，在既有 split/limit 选集内再筛选，后者限制全 run 请求起始间隔（秒），不改变 workers 的并发上限。恢复创建新 run，原失败 run 不覆盖；成功题不需重跑。合并结果须逐题固定取原成功或恢复预测，并保存来源 run 映射；既不能把被拒请求视作能力回退，也不能隐藏这些真实失败及其成本。默认间隔为0，阶段内重试按上方 `--max-attempts` 限制，不自动切换模型。
 
 ### Flash thinking 参数消融
 
-在既有 [C5 命令](#c5-command)上追加 `--thinking enabled --reasoning-effort high --max-tokens 8192` 即可测试思考模式；省略时保持历史默认 `disabled / 不传 effort / 700`。`--reasoning-effort` 只允许与 enabled 同用，可显式传 low/medium/high/max，CLI 接受不等于供应商保证该档位语义，实际可用性与效果须读该轮 attempt。2026-09-23 的 Ark 精确 Flash smoke 已接受 low/high/max，且返回非零 reasoning tokens；medium 本轮未测。temperature 仍为0，单调用、90秒超时、无重试或provider fallback。
+在既有 [C5 命令](#c5-command)上追加 `--thinking enabled --reasoning-effort high --max-tokens 8192` 即可测试思考模式；省略时保持历史默认 `disabled / 不传 effort / 700`。`--reasoning-effort` 只允许与 enabled 同用，可显式传 low/medium/high/max，CLI 接受不等于供应商保证该档位语义，实际可用性与效果须读该轮 attempt。2026-09-23 的 Ark 精确 Flash smoke 已接受 low/high/max，且返回非零 reasoning tokens；medium 该轮未测。该轮 temperature 为0，单调用、90秒超时、无重试或provider fallback；按原调用策略重放时显式加 `--max-attempts 1`。
 
 `max_tokens` 是请求上限，不是实际消耗或保证思考量。实际请求归 `attempts/*.json.request_parameters`，实际用量归 `usage.completion_tokens_details.reasoning_tokens`，截断归 `raw.choices[].finish_reason`；这些与 `object_identity.behavior.request` 一起归档。保持题目和 system/user prompt 完全一致再比较，失败留分母；不因 max 名称推定它比 high 更好或实际思考更多。开发/冻结记录及复算入口见[分类状态](../../../docs/evaluations/content-enrichment/status.md)。不改变生产模型或默认分类逻辑。
 
@@ -133,7 +145,7 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
   --env-file /path/to/project/.env --split dev --limit 8 --smoke --label category-smoke --workers 8
 ```
 
-smoke 验证链路，不代表质量。随后固定 seed/开发题比较 rubric（`--rubric path.txt`）；冻结候选后使用 regression，不把开发或反复选型结果称盲测。默认模型输入只有 title 与前 5,000 字正文，参考、tags、AIHOT 摘要不进入 prompt；默认每题一个 Flash 调用，输出 reason 后 primary_category。共享实现位于 `src/airadar/enrich/category.py`，runner 为 `evals/_shared/category_eval.py`；独立调用成绩不代表完整 enrich 或生产已上线。
+smoke 验证链路，不代表质量。随后固定 seed/开发题比较 rubric（`--rubric path.txt`）；冻结候选后使用 regression，不把开发或反复选型结果称盲测。默认模型输入只有 title 与前 5,000 字正文，参考、tags、AIHOT 摘要不进入 prompt；默认每题一个分类阶段，首次成功只需一次 Flash 调用，输出 reason 后 primary_category，失败按 `--max-attempts` 限次。共享实现位于 `src/airadar/enrich/category.py`，runner 为 `evals/_shared/category_eval.py`；独立调用成绩不代表完整 enrich 或生产已上线。
 
 ### A4+主线的结构消融（2026-09-22）
 
@@ -195,4 +207,4 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 补算 `experiments/.../metadata.json` 字典：`run_kind: metric_recompute` 区别新推理；`source_run` 是已解析的原推理绝对路径（跨 checkout 不丢失源根，迁移时由资产路径解析处理）；`source_sha256` 锁 cases/predictions/scores/metadata；`object_identity` 原样继承源轮被测对象，`metric_identity` 则锁本次计分代码/规则/输入；`additional_model_calls: 0` 与 `cost.value: 0` 只指此次补算的增量，不改源轮历史费用。原题身份、split 与 benchmark/v1 不变，仅扩充指标输出。指标查询时按 source_run 关联，不把补算当新模型候选或新增题量。
 
-逐题 prompt/response/reason、attempts、scores、diagnostics、conclusion 保存在 `runs/content-enrichment/aihot-category-navigation/vN/<UTC-date>/<UTC-time>/`；metadata 与指标在同分区 experiments，统一索引由 assets.rebuild_index 重建。`--output-root` 可指定主 checkout 归档而在隔离 worktree 执行代码。失败/无参考类别不从分母静默丢弃；不自动 fallback、重试、改 gold 或部署。
+逐题 prompt/response/reason、attempts、scores、diagnostics、conclusion 保存在 `runs/content-enrichment/aihot-category-navigation/vN/<UTC-date>/<UTC-time>/`；metadata 与指标在同分区 experiments，统一索引由 assets.rebuild_index 重建。`--output-root` 可指定主 checkout 归档而在隔离 worktree 执行代码。失败/无参考类别不从分母静默丢弃；重试只按 `--max-attempts` 限次，不自动 fallback、改 gold 或部署。

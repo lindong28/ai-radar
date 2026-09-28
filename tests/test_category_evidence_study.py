@@ -4,7 +4,7 @@ from evals._shared import assets
 from scripts.eval import category_evidence_study as study
 
 
-@pytest.mark.parametrize("broken", ["body-missing", "body-drift", "dataset", "quote", "reviews", "model"])
+@pytest.mark.parametrize("broken", ["body-missing", "body-drift", "dataset", "quote", "reviews", "model", "evidence-first"])
 def test_frozen_source_drift_rejected_before_transport(tmp_path, monkeypatch, broken):
     run, dataset, quote = tmp_path / "run", tmp_path / "dataset", tmp_path / "quote"
     assets.write_json(dataset / "manifest.json", {})
@@ -18,6 +18,7 @@ def test_frozen_source_drift_rejected_before_transport(tmp_path, monkeypatch, br
               "human_reviews": assets.file_digest(run / "human-reviews.json")}
     assets.write_json(run / "started.json", {"dataset": str(dataset), "object_identity": {
         "inputs": inputs, "behavior": {"conditional_review": False, "include_source_context": False,
+        "evidence_first": broken == "evidence-first",
         "request": {"model": "model"}, "transport": {}}}})
     if broken == "body-missing":
         (run / "body-context.jsonl").unlink()
@@ -27,7 +28,7 @@ def test_frozen_source_drift_rejected_before_transport(tmp_path, monkeypatch, br
         ((dataset if broken == "dataset" else quote) / "manifest.json").write_text('{"changed":true}')
     elif broken == "reviews":
         (run / "human-reviews.json").write_text('{"changed":true}')
-    else:
+    elif broken == "model":
         (run / "config.json").write_text('{"models":{"category":"other"},"transport_identity":{}}')
     monkeypatch.setattr(study, "collect", lambda _: ({}, {}, {}, []))
     monkeypatch.setattr(study, "transport_factory", lambda *_: pytest.fail("transport reached before validation"))

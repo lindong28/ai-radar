@@ -14,6 +14,7 @@ from airadar.enrich.classification import PRIMARY_CATEGORY_SLUGS
 
 from . import assets
 from .category_human import score_human_categories
+from .category_evidence import decision_prompt, evidence_output, evidence_prompt
 from .category_metrics import check_metric_definitions, score_categories
 from .category_materials import EVIDENCE_REASON, render_materials
 from .category_review import review_prompt, routing_output, routing_prompt
@@ -91,7 +92,12 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              human_reviews: Path | None = None, body_context: Path | None = None,
              quote_guidance: str = "", case_ids: set[str] | None = None,
              request_interval: float = 0, material_layout: str = "legacy",
-             evidence_reason: bool = False) -> dict:
+             evidence_reason: bool = False, max_attempts: int = 3,
+             evidence_first: bool = False) -> dict:
+    if evidence_first and conditional_review:
+        raise ValueError("evidence first and conditional review are separate workflows")
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 3:
+        raise ValueError("max_attempts must be an integer in 1..3")
     if material_layout not in {"legacy", "documents"}:
         raise ValueError("unknown material layout")
     if material_layout == "documents" and body_limit is not None:
@@ -187,13 +193,13 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
              "evals/_shared/category_human.py", "evals/_shared/human_store.py",
              "evals/_shared/score_type_study.py", "evals/_shared/quote_context.py",
              "evals/_shared/identity.py", "evals/_shared/dataset.py", "evals/_shared/category_review.py",
-             "evals/_shared/category_materials.py")
+             "evals/_shared/category_materials.py", "evals/_shared/category_evidence.py")
 
     def identity():
         return {"code": {p: assets.file_digest(assets.ROOT / p) for p in paths},
                 "behavior": {"metric_registry": check_metric_definitions(root),
                              "request": request, "transport": config["transport_identity"],
-                             "rubric": rubric, "thinking": thinking, "retry_count": 0,
+                             "rubric": rubric, "thinking": thinking, "retry_count": max_attempts - 1,
                              "quote_context": context_identity, "body_limit": body_limit,
                              "quote_contribution": quote_contribution, "conditional_review": conditional_review,
                              "blind_review": blind_review, "review_guidance": review_guidance,
@@ -201,6 +207,7 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                              "quote_guidance": quote_guidance,
                              "request_interval": request_interval,
                              "material_layout": material_layout, "evidence_reason": evidence_reason,
+                             "evidence_first": evidence_first,
                              "include_source_context": include_source_context},
                 "inputs": {"dataset": assets.file_digest(dataset / "manifest.json"),
                            "quote_sources": {str(p): assets.file_digest(p) for p in context_paths},
@@ -247,16 +254,53 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
 
     def one(case):
         key = case["case_id"]
-        row = {"case_id": key, "status": "error", "output": {}}
+        row = {"case_id": key, "status": "error", "output": {}, "attempts": []}
+
+        def infer(stage, prompt, parser):
+            for number in range(1, max_attempts + 1):
+                receipt = {"stage": stage, "number": number, "status": "error"}
+                response = None
+                try:
+                    response = dispatch(chat(key), stage=stage, prompt=prompt, request=request)
+                    # Preserve malformed responses too; no reconstruction of model reasons.
+                    receipt["response_json"] = json.dumps(response, ensure_ascii=False)
+                    receipt["attempt_id"] = response.get("attempt_id")
+                    output = parser(response["json"])
+                    receipt["status"] = "ok"
+                except Exception as exc:
+                    receipt.update(error_type=type(exc).__name__,
+                                   attempt_id=getattr(exc, "attempt_id", receipt.get("attempt_id")))
+                    row["attempts"].append(receipt)
+                    # Evidence persistence failures must not cause additional paid calls.
+                    assets.write_json(run / "retry-traces" / key / f"{stage}-{number}.json", receipt)
+                    if (number == max_attempts or isinstance(exc, OSError)
+                            or getattr(exc, "error_type", None) in {
+                                "OSError", "PermissionError", "FileNotFoundError",
+                                "FileExistsError", "IsADirectoryError", "NotADirectoryError"}):
+                        if response is not None:
+                            row["response_json"] = receipt["response_json"]
+                        raise
+                    continue
+                row["attempts"].append(receipt)
+                return response, output
+
         try:
-            response = dispatch(chat(key), stage="category", prompt=prompts[key], request=request)
+            actual_prompt = prompts[key]
+            if evidence_first:
+                preparation = evidence_prompt(actual_prompt)
+                assets.write_json(run / "evidence-prompts" / (key + ".json"), preparation)
+                _, evidence = infer("category_evidence", preparation, evidence_output)
+                row["evidence"] = evidence
+                actual_prompt = decision_prompt(actual_prompt, evidence)
+                assets.write_json(run / "decision-prompts" / (key + ".json"), actual_prompt)
+            response, output = infer("category", actual_prompt, routing_output if conditional_review else category_output)
             row["response_json"] = json.dumps(response, ensure_ascii=False)
-            row["output"] = (routing_output if conditional_review else category_output)(response["json"])
+            row["output"] = output
             row["reason"] = response["json"]["reason"]
             row["status"] = "ok"
             if conditional_review:
                 row["needs_review"] = response["json"]["needs_review"]
-                row["first_pass"] = dict(row)
+                row["first_pass"] = {**row, "attempts": list(row["attempts"])}
                 if row["needs_review"]:
                     # Includes prompt construction/archival failures, not only API errors.
                     row.update(status="error", output={})
@@ -264,9 +308,9 @@ def evaluate(dataset: Path, *, config: dict, split: str, limit: int | None, seed
                                                   blind=blind_review, guidance=review_guidance)
                     assets.write_json(run / "review-prompts" / (key + ".json"), second_prompt)
                     # A failed review is a failed workflow, never an implicit fallback.
-                    second = dispatch(chat(key), stage="category_review", prompt=second_prompt, request=request)
+                    second, second_output = infer("category_review", second_prompt, category_output)
                     row["review_response_json"] = json.dumps(second, ensure_ascii=False)
-                    row["output"] = category_output(second["json"])
+                    row["output"] = second_output
                     row["reason"] = second["json"]["reason"]
                     row["status"] = "ok"
         except Exception as exc:
@@ -329,6 +373,7 @@ def main(argv=None):
     p.add_argument("--request-interval", type=float, default=0, help="Minimum seconds between request starts; does not change worker concurrency")
     p.add_argument("--source-context", action="store_true", help="Append existing original URL, author, source kind/name; no network retrieval")
     p.add_argument("--conditional-review", action="store_true", help="Ask for semantic uncertainty and review only flagged cases; preserve same-call control")
+    p.add_argument("--evidence-first", action="store_true", help="Prepare source-only evidence before classification, without an initial label")
     p.add_argument("--blind-review", action="store_true", help="With --conditional-review, withhold the first decision and reason from the second call")
     p.add_argument("--review-guidance", type=Path, help="With --conditional-review, append this UTF-8 guidance only to the second call")
     p.add_argument("--routing-guidance", type=Path, help="With --conditional-review, append this UTF-8 guidance only to the first call")
@@ -340,6 +385,7 @@ def main(argv=None):
     p.add_argument("--thinking", choices=["disabled", "enabled"], default="disabled")
     p.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"])
     p.add_argument("--max-tokens", type=int, default=700)
+    p.add_argument("--max-attempts", type=int, default=3, help="Total attempts per failed stage, not additional retries; 1 replays legacy behavior")
     p.add_argument("--temperature", type=float, default=0)
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--output-root", type=Path, default=assets.ROOT)
@@ -362,7 +408,8 @@ def main(argv=None):
                       material_layout=a.material_layout, evidence_reason=a.evidence_reason,
                       quote_guidance=a.quote_guidance.read_text() if a.quote_guidance else "",
                       case_ids=set(assets.read_json(a.case_ids)) if a.case_ids else None,
-                      request_interval=a.request_interval)
+                      request_interval=a.request_interval, max_attempts=a.max_attempts,
+                      evidence_first=a.evidence_first)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["complete"] else 1
 

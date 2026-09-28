@@ -198,7 +198,8 @@ def render(material_path: Path, output: Path) -> None:
         shutil.copyfile(HERE / "human_review" / filename, output / filename)
 
 
-def import_ballot(material: dict, ballot_path: Path, output: Path, authority: str) -> dict:
+def import_ballot(material: dict, ballot_path: Path, output: Path, authority: str,
+                  supersedes: list[str] | None = None) -> dict:
     validate(material)
     raw = ballot_path.read_text(encoding="utf-8")
     ballot = json.loads(raw)
@@ -238,6 +239,20 @@ def import_ballot(material: dict, ballot_path: Path, output: Path, authority: st
         "user_authority": authority, "material_identity": material_identity(material),
         "material_sha256": digest(material)}, "data": {"feedback_raw": raw,
         "material": material, "annotations": [], "category_judgments": judgments}}
+    if supersedes:
+        from evals._shared.category_human import resolve_categories
+        book = read_reviews(output)
+        prior = {b["metadata"]["batch_id"]: b for b in book["batches"]}
+        if len(set(supersedes)) != len(supersedes) or any(b not in prior for b in supersedes):
+            raise ValueError("supersedes must name existing distinct batches")
+        batch["metadata"]["supersedes"] = [
+            {"batch_id": bid, "sha256": prior[bid]["sha256"]} for bid in supersedes]
+        # Validate the prospective human view before publishing the revision.
+        # Keep re-imports in place: later revisions may reference this batch.
+        # append_batch below still verifies identical imported content.
+        prospective = book if batch["metadata"]["batch_id"] in prior else {
+            **book, "batches": book["batches"] + [{**batch, "sha256": digest(batch)}]}
+        resolve_categories(prospective)
     return append_batch(output, "content-enrichment", batch)
 
 
@@ -247,23 +262,8 @@ def accepted_categories(reviews_path: Path) -> dict[tuple[str, str], frozenset[s
     Consumers may test prediction in this set. This does NOT rescore existing
     runs or rewrite scalar category references; conflicting human sets raise.
     """
-    book = read_reviews(reviews_path)
-    if book["metadata"]["target"] != "content-enrichment":
-        raise ValueError("not content-enrichment reviews")
-    resolved = {}
-    for batch in book["batches"]:
-        if batch["metadata"].get("kind") != "category-acceptable-labels":
-            continue
-        for j in batch["data"]["category_judgments"]:
-            if j["provenance"] != "user" or j["field"] != "acceptable_categories":
-                raise ValueError("not an explicit human category judgment")
-            valid_labels(j["value"])
-            key = (j["case_id"], j["input_identity"])
-            value = frozenset(j["value"])
-            if key in resolved and resolved[key] != value:
-                raise ValueError(f"conflicting human category sets: {j['case_id']}")
-            resolved[key] = value
-    return resolved
+    from evals._shared.category_human import accepted_categories as resolve
+    return resolve(reviews_path)
 
 
 def main() -> None:
@@ -285,6 +285,8 @@ def main() -> None:
         if name == "import-ballot":
             cmd.add_argument("--ballot", type=Path, required=True)
             cmd.add_argument("--user-authority", required=True)
+            cmd.add_argument("--supersedes", action="append", default=[],
+                             help="Explicit prior batch ID; replaces only overlapping reviewed cases")
     args = parser.parse_args()
     if args.command == "build":
         material = build(args.atlas, args.repo, args.batch_id, args.scope)
@@ -298,7 +300,7 @@ def main() -> None:
             material = add_opinions(material, read(args.opinions))
             write_new(args.output, material)
         elif args.command == "import-ballot":
-            imported = import_ballot(material, args.ballot, args.output, args.user_authority)
+            imported = import_ballot(material, args.ballot, args.output, args.user_authority, args.supersedes)
             print(f"已归档用户原票：{len(imported['data']['category_judgments'])} 条明确多选标注；未改原 gold。")
     print(f"{len(material['cases'])} 道复核材料；{len(material['model_reviews'])} 批模型意见；未运行模型评测。")
     print(f"material_identity={material_identity(material)}")

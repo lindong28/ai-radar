@@ -12,13 +12,25 @@ from .metrics import _metric
 
 
 def accepted_categories(path: Path) -> dict[tuple[str, str], frozenset[str]]:
-    book = read_reviews(path)
+    return resolve_categories(read_reviews(path))
+
+
+def resolve_categories(book: dict) -> dict[tuple[str, str], frozenset[str]]:
+    """Resolve explicit, input-bound revisions without inferring authority from time."""
     if book["metadata"]["target"] != "content-enrichment":
         raise ValueError("not content-enrichment reviews")
-    resolved = {}
+    resolved, owners, previous = {}, {}, {}
     for batch in book["batches"]:
         if batch["metadata"].get("kind") != "category-acceptable-labels":
             continue
+        bid = batch["metadata"]["batch_id"]
+        supersedes = batch["metadata"].get("supersedes", [])
+        replaced = set()
+        for ref in supersedes:
+            if (not isinstance(ref, dict) or set(ref) != {"batch_id", "sha256"}
+                    or previous.get(ref["batch_id"]) != ref["sha256"]):
+                raise ValueError("supersedes must bind a preceding category batch and its hash")
+            replaced.add(ref["batch_id"])
         for row in batch["data"]["category_judgments"]:
             values = row["value"]
             if (row["provenance"] != "user" or row["field"] != "acceptable_categories"
@@ -28,9 +40,12 @@ def accepted_categories(path: Path) -> dict[tuple[str, str], frozenset[str]]:
                 raise ValueError("not an explicit valid human category judgment")
             key = (row["case_id"], row["input_identity"])
             value = frozenset(values)
-            if key in resolved and resolved[key] != value:
+            active = owners.get(key, set()) - replaced
+            if key in resolved and resolved[key] != value and active:
                 raise ValueError(f"conflicting human category sets: {row['case_id']}")
             resolved[key] = value
+            owners[key] = active | {bid}
+        previous[bid] = batch["sha256"]
     return resolved
 
 

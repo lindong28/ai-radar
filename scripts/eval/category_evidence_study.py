@@ -29,7 +29,8 @@ def main():
     inputs = meta["object_identity"]["inputs"]
     if assets.file_digest(Path(meta["dataset"]) / "manifest.json") != inputs["dataset"]:
         raise ValueError("frozen dataset identity drift")
-    if behavior["conditional_review"] or behavior["include_source_context"]:
+    if (behavior["conditional_review"] or behavior["include_source_context"]
+            or behavior.get("evidence_first")):
         raise ValueError("study currently supports single-call controls without extra source-context")
     source_files = meta["object_identity"]["inputs"]["quote_sources"]
     for name, expected in source_files.items():
@@ -63,7 +64,7 @@ def main():
         human_reviews=reviews, body_context=body if body.exists() else None,
         case_ids=set(cases), request_interval=1,
         material_layout="legacy" if args.arm == "control" else "documents",
-        evidence_reason=args.arm == "evidence")
+        evidence_reason=args.arm == "evidence", max_attempts=behavior.get("retry_count", 0) + 1)
     run = Path(result["run"])
     comparison = compare([args.source_run], [run], reviews=reviews)
     assets.write_json(run / "comparison.json", comparison)

@@ -2,6 +2,26 @@
 
 > [Developer] · 2026-09-27 起登记 O 阶段；实验标记不等于生产正式版本。历史 A–K 谱系见[分类图谱](../../../evals/content-enrichment/aihot-category-navigation/atlas/README.md)，M/N 记录见[状态](status.md)。本文件不批量重建历史身份。
 
+## R 阶段（2026-09-28，最新人评）
+
+没有正式生产认可，`formal_version=null`、正式`comparison_baseline=null`；用户指定P1为修复基础，本轮辅助对照是P1原参数重复Q0 `2026-09-27/20-16-47`，最新9票重算43/48。不是沿用其旧人票39/48直接比较，也不是P1新调用。以下运行位于`runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/<UTC>/`，同分区`experiments/`保存metadata；全部固定48已见人评题，仅首轮smoke为其中9题。实现未晋级生产。
+
+| id | parents | inspiration | 改动与UTC run | 新人评结果 |
+|---|---|---|---|---:|
+| R1 | `[P1]` | 最新9票 | `category-r1.txt`补政策职权、引用主体、工程解释；`14-00-07`、`14-01-21` | 7/9；40/48 |
+| R2 | `[R1]` | R1回退 | `category-r2.txt`区分独立评论；`14-03-27` | 41/48 |
+| R3 | `[R2]` | R2条件矛盾 | `category-r3.txt`主要交付物构框；`14-10-43` | 37/48 |
+| R4 | `[R2]` | O4复核机制 | R2＋`category-r4-review.txt`，全题第二调用；`14-13-06` | 38/48 |
+| R5 | `[R2]` | R4初判锚定 | `category_evidence.py`先事实后分类，`--evidence-first`；`14-17-22` | 41/48 |
+| R6 | `[R2]` | P1研究边界 | `category-r6.txt`恢复被删研究段；`14-19-15` | 41/48 |
+| R7 | `[R6]` | R5实际事实提取 | `category-r7.txt`调整模型发布和研究/教程条件；`14-20-39` | 39/48 |
+| R8 | `[P1]` | R1/R2/R6局部修复 | `category-r8.txt`保留P1骨架，最小整合四处；`14-23-49` | 41/48 |
+| R9 | `[R8]` | 条件执行偏差 | 同prompt，thinking/low、8192上限；`14-28-37` | 39/48 |
+
+实验期间Git基底为`c39a3ff`＋未提交的本轮改动，非干净Git身份。源代码与实际配置身份由各run冻结文件SHA证明；本轮源码提交只是post-run映射，不替换历史身份。R1–R9均启用最多3次失败尝试；重试及显式人票修订为已验证工程修复，分类prompt和额外调用未证明整体超过43/48，不设默认。详细修复/回退、六类P/R、剩余问题与归因边界见[状态R阶段](status.md#2026-09-28r-阶段最新人评与-p1-缺口修复)。下方Q/P/O表保持当时人票口径。
+
+## Q/P/O 历史窗口
+
 本轮 `comparison_baseline=null`：没有已取得用户生产认可的正式分类基线；M2/O1 都只是具名研究比较对象。`formal_version=null`，生产认可来源为空，所有 O 节点未部署、不切默认。用户授权依据为 [ADR-8ea1](../../adr/20260927-8ea1-repair-category-source-material.md)。源节点 M2 的实现、来源和三批原件由[状态中的 M 阶段](status.md#2026-09-27m-阶段条件类别冲突已终态)定位，不能把它登记为无父根节点。
 
 | id | parents | inspiration | 实际改动与 runs（UTC，2026-09-27） | 当前结论 |

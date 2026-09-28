@@ -22,15 +22,23 @@ tests/test_category_human_review.py
 
 Codex 本批给出 95 道判断、3 道输入不足的 uncertain；这是非盲模型意见，没有人工权威。精确 Codex 模型 ID 未由会话暴露，记 null，不猜型号。Claude 已追加全部 98 题的模型意见，流程与边界见下方历史记录。AIHOT 原档没有分类理由，显示“未记录”，不让其他模型代写。
 
-## 当前人评与计分（2026-09-27）
+## 首批人评与计分（2026-09-27）
 
-真实回票已保存在 `reviews.json`：98 条中 48 条 reviewed、50 条 pending；47 条为单答案，1 条允许模型或教程（`ai-models` / `tip`）。pending 不表示接受原标签，模型意见不算人评。当前导入批次保留原票、实际展示材料和用户理由，历史材料及 AIHOT reference 不覆盖。
+2026-09-27 首批真实回票已保存在 `reviews.json`：98 条中 48 条 reviewed、50 条 pending；当时 47 条为单答案，1 条允许模型或教程（`ai-models` / `tip`）。pending 不表示接受原标签，模型意见不算人评。该导入批次保留原票、实际展示材料和用户理由，历史材料及 AIHOT reference 不覆盖；后续有效集合见下节修订记录。
 
 分类 runner 已接入独立的人评优先视图：`scores.json` 仍按 AIHOT 单标签计分，`human-priority-scores.json` 按明确人工可接受集合计命中；未人评题回退原 AIHOT。六类 P/R 仅在参考集合为单答案的固定题目子集上计算，多答案题仍参加整体 accuracy，不强选其中一个标签，也不随预测选择 gold。视图保留人工覆盖数、逐题 reference_source、P/R 排除题数和人评文件摘要；失败照计错。具体参数和复用入口见[分类执行说明](../../../evals/content-enrichment/aihot-category-navigation/README.md#人评优先计分与当前正文补充)。
 
 关联以原 `case_id` 和输入摘要核对，同题输入不匹配在模型调用前拒绝。9/27 新补正文作为独立材料保存；这不是旧输入的历史完整版本，也不能凭相同 URL 自动证明人工标签对新实质内容适用。历史成绩不自动重算，已实施计分接口不等于分类修订已取得收益。
 
 本轮同361题的C5/L1/L3与正文对照已终态，当前人评成绩从[分类状态](status.md)所指 `*-comparison.json` 或各run的 `human-priority-scores.json` 读取；统一 `experiments/metrics/summary.json` 保持原AIHOT口径。人评48题只是历史分歧子集，不能只看它的提高就宣称全体改进；原票中的50条pending仍未转成用户标签。
+
+## 九票明确修订后的有效人评（2026-09-28）
+
+P1 九题复核的 9 条真实用户票已追加到同一 `reviews.json`，明确修订首批中的同题同输入判断。当前有效人评仍为 **48 题：45 题单答案、3 题多答案**；九票不是新增九道题，首批 50 条 pending 不因此变成人评。计分仍按可接受集合判断命中，三道多答案题参加 accuracy、从单答案 P/R 子集排除。这项标签修订不表示分类器已解完 48 题，也不切换生产默认。
+
+修订批次的 `metadata.supersedes` 保存 `[{"batch_id": "…", "sha256": "…"}]`，绑定先前分类人评批次及其完整摘要；本次引用的原批 ID 为 `category-ab0d3e030f3a01601ff8d21336d1f45b3b9f6dbfe0249b37a3cee846588fdae6`。只有新批实际包含、且 `(case_id, input_identity)` 相同的票获得明确覆盖，原批其余判断继续有效；旧批原票、展示材料和理由逐字保留。未指定该关系时，同输入的不同人工集合仍报冲突，不按时间或导入先后自动覆盖。相同批次、相同内容重导幂等，即使后面已有继续修订，也不移动或重写旧批。
+
+CLI 用 `import-ballot --supersedes <原批ID>` 声明显式修订，可重复该参数引用多个已存在批次；工具读取并绑定对应摘要。该参数只记录已有用户修订授权，不能代替取得授权。完整 P1 导入命令见下方“复用与重建”；历史运行继续绑定当时冻结的人评，采用新票的比较另存结果，不覆盖旧 gold、预测或成绩。
 
 ## 材料格式
 
@@ -118,9 +126,9 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
 
 沿用共享 `ai-radar-human-reviews-v1` 追加容器。批次 `metadata.kind=category-acceptable-labels`；`data.feedback_raw` 保存原票，`data.material` 保存实际展示快照，`data.category_judgments[]` 只包含明确用户选择。每条以 `(case_id,input_identity,field=acceptable_categories)` 定位，value 是可接受类别集合，reason 是用户原话，provenance=user。`data.annotations=[]`，防止旧的单标签消费者无声误读。模型意见即使与用户一致，也永远不是用户票。原票到手前不创建空 reviews.json。
 
-复用入口 `accepted_categories(Path('human-evals/content-enrichment/reviews.json'))` 返回 `{(case_id, exact_input_digest): frozenset(labels)}`。新消费者可以判断单标签预测是否属于人工集合；同题同输入人工集合冲突则报错，不按导入顺序覆盖。这里精确 hash 用于冻结材料的安全关联；更多原始数据中只有 HTML、时间戳等非实质变化时，仍按项目的人评实质性适用规则核验后显式关联，不能因为 hash 不同宣布人评失效，也不能跳过核验直接套用。
+复用入口 `accepted_categories(Path('human-evals/content-enrichment/reviews.json'))` 返回 `{(case_id, exact_input_digest): frozenset(labels)}`。新消费者可以判断单标签预测是否属于人工集合；未按上方 `supersedes` 明确修订的同题同输入人工集合冲突仍报错，不按导入顺序覆盖。这里精确 hash 用于冻结材料的安全关联；更多原始数据中只有 HTML、时间戳等非实质变化时，仍按项目的人评实质性适用规则核验后显式关联，不能因为 hash 不同宣布人评失效，也不能跳过核验直接套用。
 
-最初工作台只建立存储/读取接口；9/27 后续消费者现按上方“当前人评与计分”执行。人工多可接受标签不同于 AIHOT 单标签，历史单标签 confusion matrix 与成绩保持原义，不由导票动作自动重算。
+最初工作台只建立存储/读取接口；9/27 后续消费者现按上方计分说明执行，并解析明确修订关系。人工多可接受标签不同于 AIHOT 单标签，历史单标签 confusion matrix 与成绩保持原义，不由导票动作自动重算。
 
 ## 重建与验证
 
@@ -207,7 +215,8 @@ PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigatio
   --material human-evals/content-enrichment/category-p1-review.json \
   --ballot /path/to/user-p1-feedback.json \
   --user-authority '用户在本会话明确交回的 P1 九题复核原票' \
+  --supersedes category-ab0d3e030f3a01601ff8d21336d1f45b3b9f6dbfe0249b37a3cee846588fdae6 \
   --output human-evals/content-enrichment/reviews.json
 ```
 
-导入沿用追加容器，保留原票与实际展示材料，不覆盖历史 AIHOT/P1 输出或旧人评。同题同输入出现不同人工可接受集合时，消费接口会拒绝冲突，不能按新旧顺序自动覆盖；须把具体冲突交用户明确裁决后再处理。此处是复用说明，不表示本批已经收到或导入新用户票。
+导入沿用追加容器，保留原票与实际展示材料，不覆盖历史 AIHOT/P1 输出或旧人评原件。P1 材料初次建立时尚未收到新票；2026-09-28 已收到并追加九票，当前状态见上方修订记录。上例的 `--supersedes` 仅适用于用户明确修订所指原批的情形；未获明确裁决的同输入冲突仍须交用户处理，不能按新旧顺序自动覆盖。

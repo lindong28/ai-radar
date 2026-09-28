@@ -120,7 +120,8 @@ def test_full_quote_rendering_preserves_tail():
 
 @pytest.mark.parametrize("blind", [False, True])
 @pytest.mark.parametrize("failure_mode", ["none", "api", "archive"])
-def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tmp_path, monkeypatch, failure_mode, blind):
+@pytest.mark.parametrize("max_attempts", [1, 3])
+def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tmp_path, monkeypatch, failure_mode, blind, max_attempts):
     leaf, source, cases = dataset
     calls = []
     review_failure = failure_mode != "none"
@@ -157,7 +158,7 @@ def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tm
                       split="dev", limit=None, seed="fixture", label="conditional", chat_factory=factory,
                       workers=2, root=tmp_path, quote_source=source, conditional_review=True,
                       blind_review=blind, review_guidance="SECOND_ONLY_GUIDANCE",
-                      routing_guidance="FIRST_ONLY_GUIDANCE")
+                      routing_guidance="FIRST_ONLY_GUIDANCE", max_attempts=max_attempts)
     run = Path(result["run"])
     behavior = assets.read_json(run / "started.json")["object_identity"]["behavior"]
     assert behavior["blind_review"] is blind
@@ -165,7 +166,7 @@ def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tm
     assert behavior["routing_guidance"] == "FIRST_ONLY_GUIDANCE"
     expected = [("available", "category"), ("future", "category")]
     if failure_mode != "archive":
-        expected.append(("available", "category_review"))
+        expected.extend([("available", "category_review")] * (max_attempts if failure_mode == "api" else 1))
     assert sorted(calls) == sorted(expected)
     assert assets.read_json(run / "first-pass-scores.json")["metrics"]["category_accuracy"]["value"] == .5
     assert result["category_accuracy"]["value"] == (.5 if review_failure else 1.)
@@ -174,6 +175,7 @@ def test_conditional_review_pairs_same_first_pass_and_keeps_failures(dataset, tm
     assert (run / "review-prompts/available.json").exists() == (failure_mode != "archive")
     assert not (run / "review-prompts/future.json").exists()
     p = {p["case_id"]: p for p in assets.read_jsonl(run / "predictions.jsonl")}["available"]
+    assert len(p["first_pass"]["attempts"]) == 1
     assert p["first_pass"]["output"] == {"category": "ai-products"}
     if review_failure:
         assert p["status"] == "error" and p["output"] == {}

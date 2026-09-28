@@ -16,6 +16,22 @@
 
 ## 重建、扩充、运行
 
+### R 阶段：最新人票、失败重试与规则修复
+
+2026-09-28收到9题明确修订，当前仍是48个不同输入（45单答案、3多答案），不是新增9题；原始361题及AIHOT参考不变。`human-evals/content-enrichment/reviews.json`保留旧批并通过显式`supersedes`应用最新接受集合，导入语义见[人评说明](../../category-human-review.md)。以下Q/P/O记录中的47单答案口径均为当时快照，不代表当前人票。
+
+复用R8冻结输入和最新票据、重跑相同48题的命令如下。`--source-run`绑定模型、rubric、正文sidecar、引用来源和人票，`--arm documents`保留P1呈现；每stage最多3次失败尝试来自源run。新运行生成新分区，不覆盖原件。
+
+```bash
+PYTHONPATH=src:. uv run python scripts/eval/category_evidence_study.py \
+  --source-run runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/14-23-49 \
+  --arm documents --label r8-repeat --env-file .env
+```
+
+该脚本只重放单调用源，不能以R5的两阶段源静默重放成单调用。研究新rubric或evidence-first时用[执行入口](../../../../../evals/content-enrichment/aihot-category-navigation/README.md)的基础runner，并显式提供相同`--body-context`、`--human-reviews`、`--case-ids`、`--quote-source`、`--body-limit 0 --material-layout documents --max-attempts 3`。R5新增`--evidence-first`，两次成功调用都看原文而非只看摘要，不接收人票/AIHOT标签作为推理输入。其结果不能归给单一调用步骤。
+
+零调用复算工具在`runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/14-00-07/support/summarize.py`，以`--baseline <P1/Q0源run> --runs <R日期目录> --reviews <当前reviews.json> --material <category-p1-review.json> --output <新结果路径>`执行；结果核当前人评、逐题身份、旧错修复及原正确回退。固定分母48，模型/调用失败仍计错误。整体接受集合命中及45单答案各类P/R在`human-priority-scores.json`，`scores.json`仍为AIHOT口径；成绩和未完成目标归[状态](../../status.md)。
+
 ### Q 阶段：冻结 P1 的调用参数消融
 
 `category_evidence_study.py` 现接受 `--temperature`、`--max-tokens`、`--thinking` 和 `--reasoning-effort`；不指定时继承源run对应参数。基础 `evaluate.py` 的temperature默认仍为0，生产分类器不变。若源启用了reasoning_effort，关闭thinking前应选一个原本关闭thinking的控制源，避免继承不兼容的effort而被预检拒绝。
