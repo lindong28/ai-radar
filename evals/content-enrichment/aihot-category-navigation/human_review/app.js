@@ -13,7 +13,10 @@
   const name = label => material.labels[label] || '无有效分类';
   const baseDraft = c => ({case_id:c.case_id,input_sha256:c.input_sha256,status:'pending',acceptable_labels:[],reason:''});
   const getDraft = c => drafts[c.case_id] || baseDraft(c);
-  const latest = c => c.c5_observations.at(-1);
+  const observations = c => c.candidate_observations || c.c5_observations;
+  const latest = c => observations(c).at(-1);
+  const candidate = () => material.source.candidate.id;
+  const humanScope = () => material.metadata.scope === 'single-run-human-labelled-errors';
   const differs = c => latest(c).status !== 'ok' || latest(c).label !== c.aihot.label;
   const modelRows = (c, reviewer) => material.model_reviews.filter(r => r.reviewer.name === reviewer)
     .flatMap(r => r.judgments.filter(j => j.case_id === c.case_id).map(j => ({review:r, judgment:j})));
@@ -112,20 +115,38 @@
     current = c.case_id;
     if (updateHash) history.replaceState(null,'',`#${current}`);
     renderList();const main = $('main');main.replaceChildren();
-    main.append(el('div','“分歧”仅指 C5 某次输出与 AIHOT 不同，不代表 C5 必然错。请按新闻内容选择一个或多个可接受类别；模型意见不是人评，也不会自动改 gold。','intro'));
-    const meta = el('div',undefined,'case-meta');meta.append(el('span',`第 ${material.cases.indexOf(c)+1} / ${material.cases.length} 道`),el('span',c.case_id),el('span',differs(c)?'最新全量仍不一致':'仅历史运行不一致','badge warn'));main.append(meta,el('h2',c.input.title));
+    const failed=material.cases.filter(c=>latest(c).status!=='ok').length;
+    main.append(el('div',humanScope() ? `本页仅包含指定 ${candidate()} 运行未命中既有人评的 ${material.cases.length} 题（${material.cases.length-failed} 道分类分歧、${failed} 道调用失败），不是全量题集或线上分类。旧人评单独保留；请结合完整材料重新判断，可多选。模型意见不替代人评，也不会自动改 gold。` : `“分歧”仅指 ${candidate()} 某次输出与 AIHOT 不同，不代表模型必然错。请按新闻内容选择一个或多个可接受类别；模型意见不是人评，也不会自动改 gold。`,'intro'));
+    const meta = el('div',undefined,'case-meta');meta.append(el('span',`第 ${material.cases.indexOf(c)+1} / ${material.cases.length} 道`),el('span',c.case_id),el('span',humanScope() ? (latest(c).status==='ok'?'与既有人评不一致':'调用失败 · 无分类') : (differs(c)?'最新全量仍不一致':'仅历史运行不一致'),'badge warn'));main.append(meta,el('h2',c.input.title));
     const article = el('section',undefined,'article'), actions = el('div',undefined,'article-actions');
     actions.append(el('h3','原始新闻'));
     const expand = el('button','展开全文');expand.onclick = () => {const yes=article.classList.toggle('expanded');expand.textContent=yes?'收起全文':'展开全文';};actions.append(expand);
     try {const url = new URL(c.input.url);if (['http:','https:'].includes(url.protocol)) {const a=el('a','打开原始链接 ↗');a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';actions.append(a);}} catch {}
-    article.append(actions,el('p',`${c.input.source_name || c.input.source_id || '未知来源'} · ${c.input.author || '作者未记录'} · ${c.input.published_at || '发布时间未记录'}`,'muted'),el('div',c.input.content_text || '档案中没有正文，请结合标题；未补抓外链。','article-text'));
+    article.append(actions,el('p',`${c.input.source_name || c.input.source_id || '未知来源'} · ${c.input.author || '作者未记录'} · ${c.input.published_at || '发布时间未记录'}`,'muted'),el('div',c.input.content_text || '冻结题目 input 未含正文；请查看下方实际调用材料，补充原文若有会在那里展示。','article-text'));
     main.append(article);
+    if (humanScope()) {
+      const raw = c.prompts[latest(c).prompt_sha256].user;
+      let docs=[];try{const parsed=JSON.parse(raw.slice(raw.indexOf('\n')+1));if(Array.isArray(parsed))docs=parsed;}catch{}
+      const materials=el('details');materials.append(el('summary','阅读全部送达材料（原文 / 引用帖 / 外链，按来源分块，无删节）'));
+      const roleNames={'current-item':'原始新闻','current-post':'补采当前帖','quoted-post':'被引用帖','linked-article':'外链文章','aihot-original':'AIHOT 归档原文','supplement-context':'补充材料来源标记'};
+      for(const doc of docs){
+        const section=el('section',undefined,'article');
+        section.append(el('h3',doc.origins.map(o=>`${roleNames[o.role]||o.role} · ${o.part}`).join(' / ')));
+        for(const origin of doc.origins)if(origin.url){try{const u=new URL(origin.url);if(['http:','https:'].includes(u.protocol)){const a=el('a',u.href);a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';section.append(a);}}catch{}}
+        section.append(el('pre',doc.text));materials.append(section);
+      }
+      main.append(materials);
+    }
     const context=el('details');context.append(el('summary','查看该题完整输入（含引用信息，以原调用为准）'));
     context.append(el('pre',c.prompts[latest(c).prompt_sha256].user));main.append(context);
     const o = latest(c), model = material.source.runs[o.run_id].model;
-    const grid = el('div',undefined,'grid');grid.append(card('AIHOT 原参照',name(c.aihot.label),'归档记录的是页面分类，未记录 AIHOT 的分类理由。','原参考标签，尚未经你逐题确认'),card('AI RADAR / C5 · DeepSeek',name(o.label),o.reason || '原运行未记录理由',`${o.run_id} · ${model} · status=${o.status} · Atlas 最新覆盖该题的运行；非线上版本声明`),modelCard(c,'codex'),modelCard(c,'claude'));main.append(grid);
-    const details = el('details');details.append(el('summary',`查看 C5 完整输入 prompt 与 ${c.c5_observations.length} 次历史输出`));
-    for (const obs of [...c.c5_observations].reverse()) {
+    const filtered=(o.attempt_evidence?.choices||[]).some(c=>c.finish_reason==='content_filter');
+    const missing=filtered?'本次响应 finish_reason=content_filter、content 为空：没有有效分类或 reason。这是调用失败，不是模型选错了一个类别。':(o.status!=='ok'?'本次调用未返回有效分类及 reason；请查看下方失败证据。':'原运行未记录理由');
+    const grid = el('div',undefined,'grid');grid.append(card('AIHOT 原参照',name(c.aihot.label),'归档记录的是页面分类，未记录 AIHOT 的分类理由。','原始观测标签，不被后续人评覆盖'),card(`AI RADAR / ${candidate()} · DeepSeek`,name(o.label),o.reason || missing,`${o.run_id} · ${model} · status=${o.status} · 冻结实验输出；非线上版本声明`),modelCard(c,'codex'),modelCard(c,'claude'));main.append(grid);
+    for(const h of c.prior_human_reviews||[]) main.append(card('你之前的人评（未自动填入本次票）',h.acceptable_labels.map(name).join(' / '),h.reason||'原票未填写理由',`${h.batch_id} · 针对当时展示的材料；本页可查看本轮实际补充材料。`));
+    if(o.status!=='ok') {const failure=el('details');failure.append(el('summary','查看调用失败证据（不是分类理由）'),el('pre',JSON.stringify(o.attempt_evidence||o,null,2)));main.append(failure);}
+    const details = el('details');details.append(el('summary',`查看 ${candidate()} 完整输入 prompt 与 ${observations(c).length} 次历史输出`));
+    for (const obs of [...observations(c)].reverse()) {
       const row = el('section',undefined,'history-row');
       row.append(el('strong',`${obs.run_id} · ${name(obs.label)} · ${obs.label===c.aihot.label?'与 AIHOT 一致':'与 AIHOT 不同'}`),el('p',obs.reason || '未记录理由','reason'));
       const pd=el('details');pd.append(el('summary','原调用的 system / user prompt'));const p=c.prompts[obs.prompt_sha256];pd.append(el('pre',`SYSTEM\n${p.system}\n\nUSER\n${p.user}`));row.append(pd);details.append(row);
@@ -155,6 +176,9 @@
   async function start() {
     const [mr,ir]=await Promise.all([fetch('material.json'),fetch('identity.json')]);
     if(!mr.ok||!ir.ok) throw new Error('材料文件无法读取');material=await mr.json();identity=await ir.json();
+    document.title=`${candidate()} 分类复核 · ${material.cases.length} 题`;
+    document.querySelector('h1').textContent=`${candidate()} 分类分歧复核 · ${material.cases.length} 题`;
+    if(humanScope()) {document.querySelector('#filter option[value=all]').textContent='本轮全部人评错题';document.querySelector('#filter option[value=latest]').textContent='其中与 AIHOT 不一致';}
     storageKey='category-review:'+identity.material_sha256;
     let restored=false, restoreError='';
     try {const raw=localStorage.getItem(storageKey);if(raw){const b=JSON.parse(raw);validateBallot(b);drafts=Object.fromEntries(b.judgments.map(j=>[j.case_id,j]));baseline=structuredClone(drafts);restored=true;}} catch(e){restoreError='草稿未自动恢复：'+e.message;}
@@ -165,7 +189,7 @@
     $('restore').onchange=async e=>{try{const file=e.target.files[0];if(!file)return;const b=JSON.parse(await file.text());validateBallot(b);if(Object.values(drafts).some(j=>j.status!=='pending'||j.reason)&&!window.confirm('用导入文件替换本页草稿？请先导出需要保留的草稿。其它页面同题冲突不会被覆盖。'))return;await saveQueue;drafts=Object.fromEntries(b.judgments.map(j=>[j.case_id,j]));await save();openCase(current);notice(saveError?'已加载到当前页，但草稿未保存：'+saveError:'反馈草稿已恢复，尚未写入仓库。');}catch(err){notice('未导入：'+err.message);}finally{e.target.value='';}};
     window.onhashchange=()=>openCase(location.hash.slice(1),false);
     openCase(location.hash.slice(1),false);
-    notice(restoreError||`${material.cases.length} 道历史分歧（最新全量仍不一致 ${material.cases.filter(differs).length} 道）。${restored?'已恢复本浏览器草稿。':'尚未给你预选任何标签。'}完成后复制全部反馈或下载 JSON 一次交回。`);
+    notice(restoreError||`${material.cases.length} 道${humanScope()?'指定运行的人评错题':'历史分歧'}。${restored?'已恢复本浏览器草稿。':'尚未给你预选任何标签。'}完成后复制全部反馈或下载 JSON 一次交回。`);
   }
   start().catch(e=>notice('加载失败：'+e.message));
 })();

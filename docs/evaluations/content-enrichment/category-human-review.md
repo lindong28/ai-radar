@@ -146,3 +146,68 @@ build 只生成冻结证据，不能代替已有 Codex/Claude 判断，也不能
 - 真浏览器按读者路径核验：两类多选＋自由理由、重载恢复、下载 98 行完整回票、后端仅导入 1 条明确测试票、空浏览器导入恢复；测试票仅写隔离测试目录，未创建正式人评文件。不同题的两页修改保留为 2/98，同题不同理由则提示冲突，存储和各自导出都保留原判断。
 - 页面观察覆盖标题/原文、四方意见、完整输入及原 system/user prompt、安全展开、人评控件、导航和导出。抽看短帖、长文、引用帖和输入不足共 6 条；桌面 1440×1000、移动模拟 390×844，移动文档宽度 390，无横向溢出。这不等于用户浏览器或其它浏览器已验收，也不代表 Codex 判断经过人评确认。
 - 全部源材料重新 build 与 canonical 冻结证据一致（忽略新生成时间及后补模型意见）。`test_repository_hygiene.py` 的 runtime-owned 检查仍因基线已跟踪的 `data/aihot-reference` gitlink 失败（基线 eb7628f 中已存在）；不属于本改动，不宣称全仓测试全绿。未修改该独立历史资产，后续若处理归仓库运行时资产清理。
+
+## P1 单运行九题复核（2026-09-28）
+
+本批材料为 `human-evals/content-enrichment/category-p1-review.json`，Codex 意见原件为同层 `category-p1-codex-opinions.json`；批次 ID、日期和来源放在 JSON metadata，不新建日期目录。上文 C5 的 98 题材料、历史说明与命令仍保留原义。
+
+来源是 `runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/20-16-47` 的 P1（`q0-p1-parameters-control`）冻结运行，运行身份来自 `experiments/content-enrichment/aihot-category-navigation/v1/2026-09-27/20-16-47/metadata.json`。原调用模型为 `personal_ark::deepseek-v4-flash-ga-260731`。`build_run_review.py` 先用该 run 的 cases、predictions、human-reviews 重算并核对已存逐题人评分数，只选 `reference_source=human` 且未命中的题；本批 9 题包含 8 道有效分类与既有人评不一致、1 道调用失败，不是全量错误集，也不是线上分类结果。
+
+失败题 `1d3eb9805f3c88a9cbfc05f2` 的归档 attempt 返回 `finish_reason=content_filter` 且 content 为空，因此没有 P1 分类或分类理由。页面展示该失败证据，不把它算作选错某个类别。AIHOT 的 9 条参照均未归档分类理由，保持“未记录”，不能由 Codex 或其他模型补写。
+
+### 材料与权威边界
+
+P1 材料使用 `ai-radar-category-review-material-v2`，以 `cases[].candidate_observations[]` 保存候选运行；旧 v1 的 `c5_observations[]` 继续由同一校验器和渲染器支持，两种字段不能混放。每题保留原新闻 input、原调用完整 system/user prompt、预测与理由；补采原文、引用帖、外链文本以实际 user prompt 的内容为准，不能仅凭冻结 input 的正文判断模型看过什么。页面提供按来源分块的完整送达材料和原始 prompt，原链接只用于进一步查看，不声称当前网页与冻结材料一致。
+
+`prior_human_reviews[]` 保留旧票的 `batch_id/input_sha256/acceptable_labels/reason`，可沿 batch_id 回到源 run 的 `human-reviews.json` 原票；旧票针对当时展示材料，不会自动填入本次草稿。即使 case_id 和基础 input 相同，补充材料也须重新审视其适用性。Codex 意见批次 `codex-p1-full-material-20260928` 覆盖 9 题，方法记录明确为读过完整 P1 材料且已知 AIHOT、P1 和旧人评的非盲复核，精确模型 ID 为 null；这些是模型意见，不是新增人评，也不是独立盲测。
+
+复核页面支持六类多选、自由理由和“暂不能判断”；初始票为 pending。用户可一次复制全部 9 题反馈，包含仍未评的题，也可下载 JSON；浏览器不能直接复制时显示完整文本供复制。浏览器草稿、复制或下载都不等于写入 `reviews.json`。
+
+### 复用与重建
+
+直接复用已含 Codex 意见的材料时，从项目根校验并渲染到尚不存在的新目录：
+
+```bash
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/human_review.py validate \
+  --material human-evals/content-enrichment/category-p1-review.json
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/human_review.py render \
+  --material human-evals/content-enrichment/category-p1-review.json \
+  --output .label-serve/category-p1-review-new
+```
+
+需要从源运行重建时，将 `P1_ARCHIVE_ROOT` 设置为持有上述 runs 与 experiments 原件的 checkout。以下操作只读源归档，先 build 到新文件；不会重跑模型，也不会修改原 run。输出文件和最终渲染目录必须尚不存在，失败后先核对输入身份与输出去向，不覆盖旧材料。
+
+```bash
+P1_ARCHIVE_ROOT=/path/to/archive-checkout
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/build_run_review.py \
+  --run "$P1_ARCHIVE_ROOT/runs/content-enrichment/aihot-category-navigation/v1/2026-09-27/20-16-47" \
+  --metadata "$P1_ARCHIVE_ROOT/experiments/content-enrichment/aihot-category-navigation/v1/2026-09-27/20-16-47/metadata.json" \
+  --candidate P1 --batch-id p1-category-review-rebuild \
+  --output .label-serve/category-p1-rebuild/material.base.json
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/human_review.py validate \
+  --material .label-serve/category-p1-rebuild/material.base.json
+```
+
+随后按上文模型意见格式另写本批意见文件，绑定这次 validate 给出的 `material_identity` 与逐题 `input_sha256`，如实说明评价方法。重建会生成新的 created_at，批次或其他冻结字段变化也会改变 material_identity；已存 `category-p1-codex-opinions.json` 绑定原材料，不能直接套入重建批次或只改摘要冒充重新评价。只需使用原有意见时采用上一组直接渲染命令。新批意见就绪后先追加到另一新文件，再渲染新目录：
+
+```bash
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/human_review.py add-opinions \
+  --material .label-serve/category-p1-rebuild/material.base.json \
+  --opinions /path/to/new-batch-opinions.json \
+  --output .label-serve/category-p1-rebuild/material.with-opinions.json
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/human_review.py render \
+  --material .label-serve/category-p1-rebuild/material.with-opinions.json \
+  --output .label-serve/category-p1-rebuild-page
+```
+
+收到用户真实回票并确认其授权后，才使用与该票完全一致的展示材料导入；下例对应原 P1 材料，新批次须替换 `--material`，不能将旧票套到新版本。`--user-authority` 记录真实会话授权，不是替代授权的口令。
+
+```bash
+PYTHONPATH=src:. uv run python evals/content-enrichment/aihot-category-navigation/human_review.py import-ballot \
+  --material human-evals/content-enrichment/category-p1-review.json \
+  --ballot /path/to/user-p1-feedback.json \
+  --user-authority '用户在本会话明确交回的 P1 九题复核原票' \
+  --output human-evals/content-enrichment/reviews.json
+```
+
+导入沿用追加容器，保留原票与实际展示材料，不覆盖历史 AIHOT/P1 输出或旧人评。同题同输入出现不同人工可接受集合时，消费接口会拒绝冲突，不能按新旧顺序自动覆盖；须把具体冲突交用户明确裁决后再处理。此处是复用说明，不表示本批已经收到或导入新用户票。

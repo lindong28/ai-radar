@@ -99,6 +99,8 @@ deploy/wechat2rss/data/
 !/human-evals/content-enrichment/
 /human-evals/content-enrichment/*
 !/human-evals/content-enrichment/category-review.json
+!/human-evals/content-enrichment/category-p1-review.json
+!/human-evals/content-enrichment/category-p1-codex-opinions.json
 !/human-evals/content-enrichment/reviews.json
 
 # Execution-plan workspace (audit trail is promoted to docs/plans/ after completion).

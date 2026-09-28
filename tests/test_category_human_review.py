@@ -26,6 +26,46 @@ def ballot_for(material):
             "reason": "", "status": "pending", "acceptable_labels": []} for c in material["cases"]]}
 
 
+@pytest.fixture
+def p1_material():
+    return review.read(ROOT / "human-evals/content-enrichment/category-p1-review.json")
+
+
+def test_p1_material_preserves_failure_and_separate_human_authority(p1_material, tmp_path):
+    review.validate(p1_material)
+    assert p1_material["metadata"]["format"] == review.RUN_FORMAT
+    cases = p1_material["cases"]
+    assert len(cases) == 9
+    assert all("c5_observations" not in c and c["prior_human_reviews"] for c in cases)
+    failed = [c for c in cases if c["candidate_observations"][0]["status"] != "ok"]
+    assert len(failed) == 1
+    observation = failed[0]["candidate_observations"][0]
+    assert observation["label"] is None
+    assert observation["attempt_evidence"]["choices"][0]["finish_reason"] == "content_filter"
+    assert len(p1_material["model_reviews"][0]["judgments"]) == 9
+    ballot = ballot_for(p1_material)
+    assert all(j["status"] == "pending" and not j["acceptable_labels"] for j in ballot["judgments"])
+    ballot["judgments"][0].update(status="reviewed", acceptable_labels=["industry", "paper"], reason="fixture")
+    path = tmp_path / "ballot.json"
+    review.write_new(path, ballot)
+    output = tmp_path / "reviews.json"
+    review.import_ballot(p1_material, path, output, "test fixture only")
+    assert len(review.accepted_categories(output)) == 1
+
+
+@pytest.mark.parametrize("mutation", ["ambiguous-field", "prompt"])
+def test_p1_material_rejects_candidate_ambiguity_and_changed_prompt(p1_material, mutation):
+    bad = deepcopy(p1_material)
+    bad["model_reviews"] = []  # Isolate the structural guard from opinion identity checks.
+    c = bad["cases"][0]
+    if mutation == "ambiguous-field":
+        c["c5_observations"] = c["candidate_observations"]
+    else:
+        c["prompts"][c["candidate_observations"][0]["prompt_sha256"]]["user"] += "changed"
+    with pytest.raises(ValueError):
+        review.validate(bad)
+
+
 def test_real_frozen_material_and_codex_coverage(material):
     review.validate(material)
     assert len(material["cases"]) == 98
@@ -126,13 +166,16 @@ def test_render_is_portable_and_does_not_overwrite(material, tmp_path):
     with pytest.raises(FileExistsError): review.render(path, output)
 
 
-def test_browser_multiselect_export_and_two_tab_preservation(material, tmp_path):
+@pytest.mark.parametrize("material_name", ["material", "p1_material"])
+def test_browser_multiselect_export_and_two_tab_preservation(material_name, request, tmp_path):
     """Exercise actual static renderer, Web Locks and browser storage together."""
     from functools import partial
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
     from playwright.sync_api import sync_playwright
 
+    material = request.getfixturevalue(material_name)
+    count = len(material["cases"])
     source = tmp_path / "source.json"
     review.write_new(source, material)
     root = tmp_path / "page"
@@ -150,16 +193,16 @@ def test_browser_multiselect_export_and_two_tab_preservation(material, tmp_path)
                 page.goto(url)
                 page.wait_for_selector(".vote")
             a.locator('input[value="industry"]').check()
-            a.wait_for_function('document.querySelector("#progress").innerText.includes("1 / 98")')
+            a.wait_for_function(f'document.querySelector("#progress").innerText.includes("1 / {count}")')
             with b.expect_download():
                 b.locator("#download").click()
             assert b.locator('input[value="industry"]').is_checked()
             b.locator("#case-list button").nth(1).click()
             b.locator('input[value="paper"]').check()
-            b.wait_for_function('document.querySelector("#progress").innerText.includes("2 / 98")')
+            b.wait_for_function(f'document.querySelector("#progress").innerText.includes("2 / {count}")')
             a.reload()
             a.wait_for_selector(".vote")
-            assert "2 / 98" in a.locator("#progress").inner_text()
+            assert f"2 / {count}" in a.locator("#progress").inner_text()
             b.reload()
             b.wait_for_selector(".vote")
             a.locator("#case-list button").nth(1).click()
@@ -173,10 +216,21 @@ def test_browser_multiselect_export_and_two_tab_preservation(material, tmp_path)
             download.value.save_as(exported)
             ballot = review.read(exported)
             assert ballot["judgments"][1]["reason"] == "B fixture reason"
-            assert len(ballot["judgments"]) == 98
+            assert len(ballot["judgments"]) == count
             a.reload()
             a.wait_for_selector(".vote")
             assert a.locator("#human-reason").input_value() == "A fixture reason"
+            if material_name == "p1_material":
+                a.locator("#case-list button").nth(4).click()
+                failure = a.locator('main > details').filter(has_text="查看调用失败证据")
+                assert failure.count() == 1
+                failure.locator("summary").click()
+                assert "content_filter" in failure.inner_text()
+                a.set_viewport_size({"width": 390, "height": 844})
+                a.locator("#case-list button").nth(6).click()
+                a.locator("main > details > summary").first.click()
+                assert "被引用帖" in a.locator("main > details").first.inner_text()
+                assert a.evaluate("document.documentElement.scrollWidth <= innerWidth")
             browser.close()
     finally:
         server.shutdown()

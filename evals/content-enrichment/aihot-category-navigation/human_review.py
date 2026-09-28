@@ -16,6 +16,7 @@ from evals._shared.assets import digest, read_jsonl, utc_now
 from evals._shared.human_store import append_batch, read_reviews
 
 FORMAT = "ai-radar-category-review-material-v1"
+RUN_FORMAT = "ai-radar-category-review-material-v2"
 BALLOT = "ai-radar-category-review-ballot-v1"
 OPINIONS = "ai-radar-category-model-opinions-v1"
 LABELS = {"ai-models": "模型", "ai-products": "产品", "industry": "行业",
@@ -142,7 +143,8 @@ def validate_opinions(material: dict, opinion: dict) -> None:
 
 
 def validate(material: dict) -> None:
-    if material["metadata"]["format"] != FORMAT or material["labels"] != LABELS:
+    fmt = material["metadata"]["format"]
+    if fmt not in {FORMAT, RUN_FORMAT} or material["labels"] != LABELS:
         raise ValueError("invalid review material format/labels")
     if not material["cases"]:
         raise ValueError("empty review material")
@@ -152,9 +154,11 @@ def validate(material: dict) -> None:
             raise ValueError("duplicate case or input hash mismatch")
         seen.add(c["case_id"])
         valid_labels([c["aihot"]["label"]])
-        if not c["c5_observations"]:
-            raise ValueError("missing C5 observation")
-        for o in c["c5_observations"]:
+        key = "c5_observations" if fmt == FORMAT else "candidate_observations"
+        other = "candidate_observations" if fmt == FORMAT else "c5_observations"
+        if other in c or not c.get(key):
+            raise ValueError("missing or ambiguous candidate observation")
+        for o in c[key]:
             if o["run_id"] not in material["source"]["runs"]:
                 raise ValueError("unknown source run")
             prompt = c["prompts"][o["prompt_sha256"]]

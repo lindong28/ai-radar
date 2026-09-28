@@ -1,0 +1,21 @@
+{
+  "format": "ai-radar-category-model-opinions-v1",
+  "review_id": "codex-p1-full-material-20260928",
+  "created_at": "2026-09-28T09:28:35Z",
+  "material_identity": "04a0d375533a0ac4966f88c5f644fed3e74df03d98522c85a838a75bc67058c6",
+  "reviewer": {
+    "kind": "model", "name": "codex", "model": null,
+    "method": "本会话逐题阅读 P1/Q0 原始 user prompt 中全部文本（含补充原文和引用），结合用户已明确的类别边界进行非盲复核；已知 AIHOT、P1 与旧人评，不是独立盲测。精确模型 ID 未由会话暴露，不猜型号。不浏览当前外链，不把模型意见当作用户票。"
+  },
+  "judgments": [
+    {"case_id":"07e6f8af4bee0b3c0bdd6a9c","input_sha256":"4701e3daa549504598176fd23f95ee05c891d4a21e48907bb341cce3f390391d","reason":"优先行业。原文主要报道真实安全事件：研究团队经社区论坛漏洞进入 OpenAI 内部系统，OpenAI 在约 14 小时后确认修复，随后说明攻击成本下降的行业影响。漏洞链、ASLR 和模型对照是解释事件的证据，不足以让这篇新闻的主体自动变成研究论文。这里不是因为没有正式发表就一律排除论文，而是该篇报道的主要新增信息是已发生的入侵与修复事件。","status":"judged","acceptable_labels":["industry"]},
+    {"case_id":"361fa4d81abf0a0706fae097","input_sha256":"76c5db79cc4b97e8416cdb06453d81814190c3b422f5a3e1200a0c624598f9d4","reason":"我认为观点与行业都可接受；若严格按母帖及引用共同的实质内容选一个，会倾向行业。母帖是支持签署并评论独立评估人才瓶颈，按母帖新增贡献可归观点；但实际输入中的引用帖还明确发布百余名专家联署的评估最低条件，并宣布 Forum 招募新成员和独立资金，这是具体集体治理行动，不只是背景材料里碰巧提到的机构。补采公开信已更新至 200+ 签署者，不能当作原发帖时即有的事实。旧人评的观点标签保留；这里提出双标签供重新裁决，不自动推翻旧票。","status":"judged","acceptable_labels":["industry","opinion"]},
+    {"case_id":"4bb821c7260efbcb1d78cb92","input_sha256":"bf877cd8b3fef0eff0f78cf3c2f682a7c120dd6caa4ca1407c90539471de7c8a","reason":"优先行业。报道对象是美国总统已公开发起的 AI 更名投票、对监管争论的表态，以及宣布拟组建 AI Force、任命 AI 事务负责人。政策尚未落地必须如实区分，但正式政治人物的公开政策信号及已经进行的投票，本身构成影响行业预期的新闻事件；不能因为其发言含观点、未来措施尚未实施，就把整篇报道归为普通观点。不是所有名人发言都归行业，本题依据的是总统角色与明确的 AI 治理议题。","status":"judged","acceptable_labels":["industry"]},
+    {"case_id":"bae12610a04bca3c57cc40ad","input_sha256":"e4805cea47a7694454168a6338f71decb53f5fab60ba79002689bab2de933016","reason":"优先观点，同时认为行业也可接受。母帖不只是转发框架发布：它以六个失配案例论证 Agent 的权限、审计、沙箱和能力同等重要，并给出工程治理主张，这部分是作者的主要增量，支持观点。另一方面，帖子确实详细报道 OpenAI 新发布的持续披露机制，外链原文也完整给出治理流程，支持行业。P1 的行业并非无证据，只是没有解释为何应让官方外链的发布事件压过母帖的分析目的；不宜仅因外链更长就决定类别。","status":"judged","acceptable_labels":["opinion","industry"]},
+    {"case_id":"1d3eb9805f3c88a9cbfc05f2","input_sha256":"6fadb70614b62546497719dd2864c6bcb726915c47f4cb6a1c827ec1534fcaa8","reason":"优先观点。帖子确实援引 WSJ 对拟举行 AI 护栏会谈的报道，并非完全没有事实来源；但其主要增量是作者推断双方将讨论全球放缓，以及预测下周可能决定未来竞争或合作关系。实际输入没有被引报道全文，不能把这些推断当作已达成的政府决定。P1 本轮是 content_filter 导致空输出，没有分类与 reason，不能把这个失败归因为它错误选择了行业或观点。","status":"judged","acceptable_labels":["opinion"]},
+    {"case_id":"ef89a339cc14840477ffdbd2","input_sha256":"47d1225890e741643ea58824224dbef25ae5033a8a2f12aace4386f3c129e52d","reason":"优先论文。即使不看缺失的独立引用原帖，已提供正文也明确报告：研究者借 GPT-6 Astra 的关键想法与证明，解决了一个自 2017 年开放的投票理论问题。这是具体数学研究进展；末尾关于创造力的评论不消除该研究主体，也不应要求短新闻复制完整证明后才承认论文类别。实际调用只有当前帖两种排版，没有独立引用帖全文；本判断没有假装见过它。","status":"judged","acceptable_labels":["paper"]},
+    {"case_id":"3a2b43deb8e3f32b9a026b1c","input_sha256":"fd063d5d8ad496b6bc50234832bbcdf65218eed5d4ed1796598c181658af9e43","reason":"优先模型。母帖讨论机器人缩放规律，但已送达的被引用帖明确写 Introducing Helix 2.5，并说明在 30 个真实家庭中的零样本全身行为能力。模型发布和具体能力是这组材料中信息门槛更高、可供读者检索的主体。不能仅看母帖的感想口吻选观点，也不能把机器人演示一概当产品：引用在介绍 Helix 2.5 这个模型版本。","status":"judged","acceptable_labels":["ai-models"]},
+    {"case_id":"ea5b6370a7ee474eecea5174","input_sha256":"ee413a7c00339bbf37af8958ecdcf275a651352baa4341466aec047dcc460d72","reason":"优先教程。虽然开头宣传 Browser Use + Jev 的速度和成本，主体已拆解三层可复用工程方法：依据 DOM 缩小动态动作空间、避免自然语言输出、只在输入文字时调用小模型 fallback。按本任务“深入讲解也可归教程”的标准，不必同时有安装命令或逐行代码才能成立。引用帖提供演示，母帖进一步解释实现机制，故不能把整条新闻缩成产品效果展示。","status":"judged","acceptable_labels":["tip"]},
+    {"case_id":"0f1f00042be2780eed54683b","input_sha256":"5694bd48a78190c6f1f80af83f7b34031eda7ce20c9cf7a6cea8c5702100f595","reason":"优先教程，但论文也是可理解的备选。文章以教读者理解代码粗糙度如何衡量为主线，解释 LOC、Verbosity、Erosion 的定义、公式和局限，并明确说后两项来自 SlopCodeBench，不是本文首次提出。作者也对自己项目作了数值检查，文章并非没有研究成分；但这些实验主要服务于测量方法讲解。P1 将“提出或引用”混作研究创新，忽略了原创研究成果与解释已有测量方式的区别。因完整文章确有实验及结果，供你裁决是否接受论文作为第二标签。","status":"judged","acceptable_labels":["tip","paper"]}
+  ]
+}
