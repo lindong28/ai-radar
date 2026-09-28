@@ -105,3 +105,12 @@ ruff、mypy、2790 个测试、`create-commit` 的导出树执行检查、`git c
 **顺带一条读法**：`git push` 报成功不代表部署跑了。部署脚本自己在输出里写着
 `git push will still report success; post-receive cannot fail it`。**push 的退出码不是部署的读数**，
 要读的是 remote 那几行——而它们只出现一次、翻过去就没了。
+
+## 2026-09-28 OrbStack 运行期间因磁盘满停机，不在登录自启的覆盖范围内
+
+- Problem: `/wechat` 最新文章停在 9 月 26 日 07:56（UTC+08），对应本地 `wx_wechat2rss` 的 `published_at=2026-09-25T23:56:00Z`；最后抓取时间为 `2026-09-26T04:03:14Z`（UTC+08 的 12:03:14）。OrbStack 日志在 `2026-09-26T04:04:13Z` 报 `StorageFull / No space left on device`，一秒后记录 `stop requested reason=9` 与 `VM stopped`。9 月 28 日排查时仍为 `Stopped`，Docker socket 缺席、8080 不可达；当日磁盘已有 11 GiB 可用，但增长来源及后来释放空间的动作未核实。
+- Boundary: 本文 9 月 5 日的登录自启修复仍在：实机 LaunchAgent 的 `runs=1`、`last exit code=0`，与 [OrbStack 模板](../../deploy/launchd/ai-radar-orbstack.plist.example) 的 `RunAtLoad` 一致。它只在加载时执行 `orbctl start`，不覆盖运行期间退出；[容器 restart 策略](../../deploy/wechat2rss/docker-compose.yml) 也依赖 daemon 已运行。这次不应归因为“登录自启没有安装”。
+- Recovery: 9 月 28 日 15:57（UTC+08）执行 `orbctl start` 后回读 `Running`、容器 `Up`；账号先返回 `-2012`，随后自动刷新 token，回到 `available=true`、`needCheck=false`，容器日志已出现订阅检查和新发现的 9 月 28 日文章。这些读数证明上游发现链路恢复；本条记录时，AI Radar 入库、解读及公网展示的恢复尚待主线程核实，不以容器启动代替公网恢复。
+- Applies when: `/wechat` 停更而站点仍可访问时，分别检查上游发现、AI Radar 数据处理和同步后的公网内容。[healthcheck.sh](../../deploy/wechat2rss/healthcheck.sh) 的健康读数只覆盖容器可达与账号状态；[同步脚本](../../deploy/sync/sync-db-to-server.sh) 的快照提交也不证明上游有新文章。本次远端 9 月 28 日仍有已提交的接受快照，不能据此排除上游已停机。告警账本在 `2026-09-26T04:11:00.834Z` 记录 `wechat2rss-unreachable` 的飞书 `push=sent`，后续为 `skipped(unchanged)`；这是发送侧证据，不是用户已收到的回执。本次未改自动恢复策略或提高可用性承诺。
+
+现场证据保存在事故日志目录 `logs/wechat-recovery-20260928/` 的 `evidence.md` 与 `orb-stop.txt`（本地运维证据，不入 git）；本条保留关键时间、原始错误及已验证边界，供后续同类诊断使用。
