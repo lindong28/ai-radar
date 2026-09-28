@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260928-7552](./20260928-7552-retry-orbstack-start-periodically.md) | OrbStack 登录启动增加每 20 分钟重试，明确维护停用与恢复边界 | accepted | 2026-09-28 |
 | [20260927-c74e](./20260927-c74e-category-evidence-presentation.md) | O3 材料呈现与证据化理由分步消融；M2保留历史对照 | accepted for offline experiment | 2026-09-27 |
 | [20260927-8ea1](./20260927-8ea1-repair-category-source-material.md) | 分类输入原文、直接引用与文章材料修复，同题离线消融 | accepted for implementation and offline evaluation；未部署 | 2026-09-27 |
 | [20260927-53ab](./20260927-53ab-human-category-scoring.md) | 分类人评集合计分与 C5 修订，正文补充独立留存 | accepted for offline evaluation | 2026-09-27 |

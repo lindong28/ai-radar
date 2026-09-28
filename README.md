@@ -283,10 +283,11 @@ LLM 用量写入独立 SQLite 文件 `data/llm_usage.db`（可用 `AI_RADAR_LLM_
 | `cost-report` | 定期发送上一自然周的 LLM 成本报表 |
 | `performance-remediate` | 探针确认退化后生成仅供人工审阅的候选修复 commit；启用 gate 与 cron 入口见 [`monitoring-alerting.md`](docs/operations/monitoring-alerting.md#安装-remediation-cron启用-gate-全文) |
 | DB sync | 把主库同步到只读副本主机（维护者实例用；单机部署不需要）；职责、手动入口与终态判据见 [`services.md`](docs/operations/services.md#db-sync-职责验证与故障证据) |
-| Wechat2RSS | 自建微信公众号 feed 服务。program assembly 合入 T3 资产后，目标运行时可由 Lima ≥2.2 在开机时恢复；当前 T1 checkout 尚无 `deploy/wechat2rss/compose.sh` 与 `boot-witness.sh`，不能按目标运维流程操作。组装依赖、迁移边界与后续运维见 [`deploy/wechat2rss/RUNBOOK.md`](deploy/wechat2rss/RUNBOOK.md) |
-| Wechat2RSS healthcheck | 当前无参数入口用于对 Wechat2RSS 外部探活和异常告警。program assembly 合入 T3 后才增加 `--observe-only`、四态输出与 receipt；当前 T1 checkout 的旧脚本不支持这些参数，不要传入它们。当前与目标入口见 [`docs/operations/services.md`](docs/operations/services.md) |
+| `orbstack` | macOS 登录时启动 OrbStack，并每 20 分钟重试启动；安装或更新运行配置用 `./install.sh orbstack`，查看用 `./status.sh orbstack`。前提是用户已登录且 job 已加载，20 分钟是重试间隔，不是恢复期限；恢复与维护边界见 [微信摄取运维](docs/operations/wechat-ingestion.md) |
+| Wechat2RSS | 自建微信公众号 feed 服务；当前运行时为 OrbStack，容器沿用 `restart=unless-stopped`。运行时恢复与维护入口见 [微信摄取运维](docs/operations/wechat-ingestion.md) |
+| Wechat2RSS healthcheck | `deploy/wechat2rss/healthcheck.sh` 无参数运行，对 Wechat2RSS 外部探活并通过 `im-notify` 告警；配置与调度见 [服务运维](docs/operations/services.md) |
 
-要看自己这份 checkout 的状态：脚本管理的服务运行 `./status.sh`。Wechat2RSS 在 program assembly 之前不要运行尚不存在的 `compose.sh`，也不要向旧 `healthcheck.sh` 传入 `--observe-only`；组装后须先确认 T3 资产已存在，再按各行链接的 runbook 检查。
+要看自己这份 checkout 的状态：脚本管理的服务运行 `./status.sh`，Wechat2RSS 按表内运维入口检查。OrbStack 定时重试需重新运行 `./install.sh orbstack` 才生效；有意停机维护前先运行 `./uninstall.sh orbstack` 注销自动启动 job，再停止 OrbStack，维护后重新安装以恢复自动启动。
 
 ### 维护者实例附加库存（fork 跳过）
 
@@ -306,7 +307,7 @@ X 的图片还需要一条出口代理：`.env` 未配 `AI_RADAR_IMG_PROXY_URL` 
 ./uninstall.sh [service]   # 注销 supervisor，停服务，保留数据/日志
 ```
 
-服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `cost-report`）。**显式逐个安装你需要的服务**，不要用无参数全量安装。单服务安装幂等——重复跑不报错。DB sync、Wechat2RSS、Wechat2RSS healthcheck 与 `performance-remediate` 不由这三个脚本管理，各自入口见服务表链接的运维文档；`shadow-observe` 只属于上面的维护者实例附加库存。
+服务名是位置参数（`serve` / `tunnel` / `pipeline` / `alert` / `performance-probe` / `orbstack` / `cost-report`）。**显式逐个安装你需要的服务**，不要用无参数全量安装。单服务安装幂等——重复跑不报错。DB sync、Wechat2RSS、Wechat2RSS healthcheck 与 `performance-remediate` 不由这三个脚本管理，各自入口见服务表链接的运维文档；`shadow-observe` 只属于上面的维护者实例附加库存。
 
 `./install.sh` 会先检查该服务脚本可判定的依赖（LLM key、飞书 webhook、`im-notify`、tunnel 配置文件等），缺失时在交互式终端询问并追加到 `./.env`、非交互环境自动跳过，跳过原因列在命令末尾的 summary 里。变量按当前进程环境、项目 `./.env`、`~/.claude/.env` 依次查找。Playwright Chromium 是 `install.sh` **不会**自动下载或校验的运行时前置，按快速开始那一步先装好。逐服务的依赖清单、隐含依赖与验证命令见 [`docs/operations/services.md`](docs/operations/services.md)。
 

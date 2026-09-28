@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260928-7552](adr/20260928-7552-retry-orbstack-start-periodically.md)：OrbStack 登录启动增加周期重试；记录 20 分钟调度、维护停用和实际恢复验证的边界。
+
 [20260927-8ea1](adr/20260927-8ea1-repair-category-source-material.md)：分类源材料补全与同题消融；冻结输入和当前补采分开，复用方式见[分类 v1 输入修复](evaluations/content-enrichment/aihot-category-navigation/v1/README.md#2026-09-27o-阶段输入材料修复)，效果见[分类状态](evaluations/content-enrichment/status.md)。
 
 [分类方案履历](evaluations/content-enrichment/versions.md)：O阶段的实际parents、inspiration、两个输入窗口及运行身份；正式生产认可未知，不以研究父充作正式基线。

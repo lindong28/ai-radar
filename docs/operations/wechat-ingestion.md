@@ -48,9 +48,17 @@ cron / launchd 不继承交互式 shell 的 `export`。启用 Wechat2RSS 自动�
 
 ## Wechat2RSS 与跨源去重
 
-自建 Wechat2RSS 的部署见 `deploy/wechat2rss/RUNBOOK.md`。`/feed/all.xml` 是合集端点，全局上限 50 条（各账号自己的 feed 各 20 条）。缺 `k` 参数时它返回 `HTTP 200` 加 `{"err":"k param is empty..."}`，所以判断它是否可用要看返回体、不能只看状态码。
+当前 Wechat2RSS 运行在 OrbStack；当前生命周期以本节和 [服务清单](services.md#服务) 为准，[旧 RUNBOOK](../../deploy/wechat2rss/RUNBOOK.md) 保留已放弃的 Lima 计划正文，不作为当前启动指令。`/feed/all.xml` 是合集端点，全局上限 50 条（各账号自己的 feed 各 20 条）。缺 `k` 参数时它返回 `HTTP 200` 加 `{"err":"k param is empty..."}`，所以判断它是否可用要看返回体、不能只看状态码。
 
 **重启后自启（2026-09-05 起）**：`./install.sh orbstack` 装一个登录时跑 `orbctl start` 的 LaunchAgent，Wechat2RSS 容器靠既有的 `restart=unless-stopped` 随之自回。它修的是一个实际发生过的故障——Aug 31 21:49 那次重启后 OrbStack 一直没起来，`/wechat` 停更五天。OrbStack 自带的 `app.start_at_login` 不能用：`orbctl config set` 退出 0 但值不变，只能从图形界面改。用 `./status.sh orbstack` 查状态。
+
+**运行期间自动重试（2026-09-28 批准）**：既有 LaunchAgent 保留 `RunAtLoad=true` 与 `/opt/homebrew/bin/orbctl start`，增加 `StartInterval=1200`，见 [自动重试决策](../adr/20260928-7552-retry-orbstack-start-periodically.md)。用户已登录且 job 已加载时，每 20 分钟尝试启动 OrbStack；磁盘仍满也会尝试，不检测自定义可用空间阈值、不清理磁盘。20 分钟是重试间隔，不是恢复 deadline：主机睡眠或前一次命令仍在运行时会跳过该次 tick，挂起不返回的命令也不由此修复。原命令未指定机器，可能恢复上次停止时仍在运行的机器，并非只恢复 Wechat2RSS 容器。
+
+模板更新后须从拥有该 job 的 checkout 重新运行 `./install.sh orbstack`，刷新已安装 plist 并重载 launchd；只更新仓库不会让旧 job 获得定时器。故意停 OrbStack 维护前先运行 `./uninstall.sh orbstack`，否则后续重试会把它拉起；该卸载只移除启动 job，不停止已经运行的 OrbStack 或容器。维护结束运行 `./install.sh orbstack` 恢复自动启动。状态看 `./status.sh orbstack`，启动命令日志为 `/tmp/ai-radar-orbstack.log` 与 `/tmp/ai-radar-orbstack.err`；服务健康仍由既有每 20 分钟 Wechat2RSS healthcheck 观测与告警。
+
+安装后运行 `launchctl print "gui/$(id -u)/live.aiplanet.ai-radar.orbstack"`，确认输出含 `run interval = 1200 seconds`；`./status.sh orbstack` 的 `loaded` 只证明 job 已加载，不能区分新旧周期配置。服务状态另按[服务清单的 OrbStack 检查](services.md#隐含依赖repo-外)确认。
+
+验证边界：隔离的原生 launchd 计时器已记录两次自动执行（首次 exit 1、后续 exit 0，无 kickstart）；它只证明失败后会再次调度，不是生产 job 安装生效或真实 ENOSPC 恢复验收。
 
 原计划把运行时迁到 Lima 以取得「开机前（无人登录也能起）」这一档，已放弃：两次尝试都卡在 guest 出网（默认 provisioning 拉不到 docker 包；SOCKS 隧道下安装器内部 curl 报 TLS error），而现有 ai-radar 服务全部是 LaunchAgent + 用户 crontab、无任何 LaunchDaemon——无人登录时 serve / tunnel / alert 本来就都不起，所以那一档不会带来实际可用性提升。
 
@@ -101,7 +109,7 @@ A5 与 interpret 仍按 enabled 语义处理历史微信条目，不受 paused �
 
 ### 日志与凭据脱敏
 
-program assembly 后，`deploy/wechat2rss/logs.sh` 才通过 Lima socket-aware `compose.sh` 查看部署日志，并对 feed token 做脱敏。2026-08-20 起脱敏改为匹配到值末尾、在 `&` 处停下（此前只匹配 `[A-Za-z0-9_.~-]+`，`k=abc+def/ghi=` 这类合法 token 会漏出后缀），`&` 之后有诊断价值的 query 字段保留。注意脱敏要覆盖两条独立通道：服务自己打印的（启动横幅、配置回显），以及你构造的带 token URL 被对方记进访问日志的——只堵前一条时第二条原样漏出。
+`deploy/wechat2rss/logs.sh` 当前直接调用 `docker compose logs` 查看部署日志，并对 feed token 做脱敏。2026-08-20 起脱敏改为匹配到值末尾、在 `&` 处停下（此前只匹配 `[A-Za-z0-9_.~-]+`，`k=abc+def/ghi=` 这类合法 token 会漏出后缀），`&` 之后有诊断价值的 query 字段保留。注意脱敏要覆盖两条独立通道：服务自己打印的（启动横幅、配置回显），以及你构造的带 token URL 被对方记进访问日志的——只堵前一条时第二条原样漏出。
 
 ## 公众号后台发现候选与微信读书 canary（默认关闭，已停止推进）
 

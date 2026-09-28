@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-28（OrbStack 自动恢复）
+
+- OrbStack 自启配置新增每 20 分钟重试启动，磁盘清理后可继续尝试恢复；需重新安装该任务才生效，20 分钟不是恢复时限。计划停机须先卸载自启任务，操作见[微信采集运维](docs/operations/wechat-ingestion.md)。
+
 ## 2026-09-28（分类P1调用参数实验）
 
 - 离线分类新增 `--temperature`，冻结重放脚本支持覆盖temperature、max_tokens、thinking与reasoning_effort；默认参数不变。
