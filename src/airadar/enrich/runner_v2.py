@@ -23,6 +23,7 @@ from ..stage_common import insert_evaluation
 from ..stage_common import parse_since as _parse_since
 from ..stage_common import provider_item_from_row as _to_provider_item
 from .article_context import prepare_article_context, prepare_linked_contexts, render_linked_contexts
+from .category_release import ClassificationFailed, classify, production_prompt
 from .normalizers.production_enrich_provider_output_v2 import normalize
 from .prompts_v2 import render_enrich_prompt
 from .quote_context import collected_quotes, render_collected_quotes
@@ -154,7 +155,7 @@ def _output_from_result(result: EnrichResultV2, item: ProviderItem) -> dict[str,
 
 
 def _evaluate_item(
-    provider: EnrichProviderV2, item: ProviderItem
+    provider: EnrichProviderV2, item: ProviderItem, category_prompt: dict | None = None, db_path=None
 ) -> tuple[EnrichOutputV2 | None, dict[str, Any], str | None, int]:
     start = time.monotonic()
     attempts = 0
@@ -169,11 +170,22 @@ def _evaluate_item(
             # this the rejected rows carry no model output at all, and the one question worth
             # asking about them -- what did the model actually emit -- has no answer on disk.
             last_raw = result.raw
+            category_trace = None
+            if category_prompt is not None:
+                category, category_trace = classify(category_prompt, item_id=item.id, db_path=db_path)
+                last_output["category_trace"] = category_trace
+                result = replace(result, primary_category=category, is_opinion=category == "opinion")
             output = _output_from_result(result, item)
+            if category_trace is not None:
+                output["category_trace"] = category_trace
             last_output = output
-            enriched = EnrichOutputV2.model_validate({key: value for key, value in output.items() if key != "raw"})
+            enriched = EnrichOutputV2.model_validate({key: value for key, value in output.items() if key not in {"raw", "category_trace"}})
             latency_ms = int((time.monotonic() - start) * 1000)
             return enriched, output, None, latency_ms
+        except ClassificationFailed as exc:
+            last_output["category_trace"] = exc.trace
+            prefix = "output rejected" if exc.output_rejected else "enrich failed"
+            last_error = f"{prefix}: {exc}"
         except ValidationError as exc:
             last_error = f"schema validation failed: {exc}"
         except (ValueError, TypeError) as exc:
@@ -206,7 +218,8 @@ def _insert_evaluation(
         stage="enrich",
         ruleset_version=ruleset_version,
         model_id=provider.model_id,
-        input_data={**render_enrich_prompt(item), "article_context": article_context, "quote_context": quote_context or []},
+        input_data={**render_enrich_prompt(item), "article_context": article_context, "quote_context": quote_context or [],
+                    **({"category_trace": output["category_trace"]} if "category_trace" in output else {})},
         output_data=enriched.model_dump() if enriched else output,
         numeric_data=None,
         latency_ms=latency_ms,
@@ -228,6 +241,7 @@ def run_enrich(
     selected_ruleset = current_version_v2()
     rows = _candidate_rows(conn, since, selected_ruleset, limit, item_ids)
     items = [_to_provider_item(row) for row in rows]
+    original_items = {item.id: item for item in items}
     total = len(items)
     selected_workers = max(1, min(workers, total or 1))
     database_file = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
@@ -258,13 +272,19 @@ def run_enrich(
         prepared = list(executor.map(prepare, zip(rows, items)))
     items = [item for item, _ in prepared]
     contexts = {item.id: context for item, context in prepared}
+    category_prompts = {
+        item.id: production_prompt(
+            {"title": original_items[item.id].title, "content_text": original_items[item.id].content_text,
+             "url": original_items[item.id].url}, contexts[item.id], quotes[item.id])
+        for item in items
+    } if provider is None else {}
     processed = 0
     errors = 0
 
     def evaluate_with_usage_context(
         item: ProviderItem,
     ) -> tuple[EnrichOutputV2 | None, dict[str, Any], str | None, int]:
-        return _evaluate_item(selected_provider, item)
+        return _evaluate_item(selected_provider, item, category_prompts.get(item.id), database_file or None)
 
     def record(
         item: ProviderItem,

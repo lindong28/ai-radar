@@ -4,6 +4,7 @@
 
 | # | Title | Status | Date |
 |---|---|---|---|
+| [20260929-bd7c](./20260929-bd7c-promote-v2-category-production.md) | V2 Pro 正式分类 0.1.0，接入默认 v2 富化；研究成绩与发布状态分开 | accepted for production implementation | 2026-09-29 |
 | [20260929-6a82](./20260929-6a82-test-pro-human-category-boundaries.md) | 固定48道人评题验证 Pro 分类边界 | accepted for offline experiment | 2026-09-29 |
 | [20260929-b7e1](./20260929-b7e1-separate-category-eligibility-and-selection.md) | V1 准入/选择分层；ATLAS 明确修订（该题 supersedes 6a82 旧票口径） | accepted for offline experiment | 2026-09-29 |
 | [20260929-9a0d](./20260929-9a0d-repair-v1-category-boundaries.md) | 保留两层结构修复V1定义漂移；新增V2有限验证 | accepted for offline experiment | 2026-09-29 |

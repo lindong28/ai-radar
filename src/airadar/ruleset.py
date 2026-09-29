@@ -99,12 +99,17 @@ def enrich_inputs_digest() -> str:
     The three runtime switches go in separately: they decide who answers and how, which
     the rendered text cannot show.
     """
+    import json
+
+    from .enrich.category_release import CONFIG, VERSION, render_prompt
     from .enrich.prompts_v2 import render_enrich_prompt
 
     rendered = render_enrich_prompt(_DIGEST_PROBE_ITEM)  # type: ignore[arg-type]
     digest = hashlib.sha256()
     digest.update(rendered["system"].encode("utf-8"))
     digest.update(rendered["user"].encode("utf-8"))
+    category = render_prompt({"title": "<title>", "content_text": "<body>"}, {}, [])
+    digest.update(json.dumps({"version": VERSION, "config": CONFIG, "prompt": category}, sort_keys=True).encode())
     for name in _ENRICH_RUNTIME_ENV:
         digest.update(f"{name}={os.environ.get(name, '')}\u0000".encode())
     return digest.hexdigest()[:8]

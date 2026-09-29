@@ -1,8 +1,27 @@
-# O3 · 分类研究方案履历
+# O3 · 分类方案履历
 
 > [Developer] · 2026-09-27 起登记 O 阶段；实验标记不等于生产正式版本。历史 A–K 谱系见[分类图谱](../../../evals/content-enrichment/aihot-category-navigation/atlas/README.md)，M/N 记录见[状态](status.md)。本文件不批量重建历史身份。
 
+## 分类正式版 0.1.0（2026-09-29）
+
+用户认可来源：本轮明确要求“挑选目前为止的最好的结果，作为线上使用的主方案，放到 main branch，对目前为止做的所有评测和优化工作进行收尾”。按该授权选择 V2 Pro 为首次正式分类版本 **0.1.0**；正式号不改变 benchmark `aihot-category-navigation/v1` 的输入版本，也不是新的实验候选或新增模型成绩。
+
+| 身份项 | 记录 |
+|---|---|
+| 实验身份与正式号 | `id=V2`，`formal_version=0.1.0`；后续采用状态不覆盖下方研究阶段的历史身份 |
+| 直接来源与正式比较基线 | `parents=[V1]`，V1来源U2；`comparison_baseline=null`，此前没有已确认生产认可的正式分类版本，U2只是具名研究对照 |
+| 实际研究运行 | `runs/content-enrichment/aihot-category-navigation/v1/2026-09-29/01-54-43/` 与 `01-57-51/`；metadata在 `experiments/` 同分区 |
+| 运行源码与材料身份 | 源码基底 `15037b4be8284cdea1d3febbfe14f8c75622b083` 加当时prompt改动；run冻结的源码/规则/材料SHA才定义完整实测对象。研究收尾提交 `46026594e6d9403a1ae64596d35de57cb8c18f85` 是 post-run 映射，不冒充运行时干净commit |
+| 生产实现定位 | [category_release.py](../../../src/airadar/enrich/category_release.py)、[category_v2.txt](../../../src/airadar/enrich/category_v2.txt)、[runner_v2.py](../../../src/airadar/enrich/runner_v2.py)；这次生产适配的提交由 Git 履历定位，不用研究commit替代 |
+| 调用与材料 | Ark Pro `personal_ark::deepseek-v4-pro-ga-260813` / thinking enabled / high /32768/T0；documents材料、无few-shot、单分类call、失败至多3次尝试 |
+| 成绩和限制 | 两次46/48（95.83%），同48道已见人评；U2共同口径45/48、44/48，配对分别修3/退2、修4/退2。不能外推未见集或361题，六类P/R全部90%未达；逐类及两道错误见 [状态](status.md#v阶段类别准入与主分类选择分层) |
+| 采用与部署 | 已作生产主方案采用决定并接入默认 enrich_v2；线上部署未验证，未据此声称已上线。其它富化字段保留既有实现，is_opinion为主类映射而非新增已评测对象 |
+
+复核路径：以上两轮 `human-priority-scores.json` 为当前人评确定性计分，`scores.json` 是原AIHOT口径；`prompts.jsonl`、`predictions.jsonl`、`attempts/`及冻结`human-reviews.json`保留实际输入、理由和人票。共同口径比较为 `2026-09-29/01-44-28/v-final-comparison.json`；实际输入/标签条件、复跑命令与成本缺口见 [状态 L2](status.md#l2资产成本与复用)。本轮不重写这些原件，不将新生产适配的单元/接线验证计成新的48题模型评测。
+
 ## V阶段（2026-09-29，规则两层收敛）
+
+以下为正式采用前的历史研究记录；后续0.1.0采用不回写当时的`formal_version`与运行元数据。
 
 `formal_version=null`，无生产认可。源码基底`15037b4be8284cdea1d3febbfe14f8c75622b083`，实际rubric与源码SHA以run冻结身份为准；最终提交仅为post-run映射。人票仅ATLAS经用户批准增加paper接受标签，所有比较使用同一新口径：U2两次45/48、44/48；历史U2重复43→44仅为改票收益。完整规则、指标、残余错题和复跑命令见[状态V阶段](status.md#v阶段类别准入与主分类选择分层)。
 

@@ -18,6 +18,8 @@
 
 ### docs/ [Developer]
 
+[20260929-bd7c](adr/20260929-bd7c-promote-v2-category-production.md)：V2 Pro 正式分类 0.1.0 的选型、默认 v2 富化接入与采用边界；发布和验证读数见[分类状态](evaluations/content-enrichment/status.md)。
+
 [20260929-6a82](adr/20260929-6a82-test-pro-human-category-boundaries.md)：固定48道人评题、Pro/high/32768 的分类边界实验，保留材料、标签和生产默认。
 
 [20260929-b7e1](adr/20260929-b7e1-separate-category-eligibility-and-selection.md)：V1 分类证据准入与主类选择分层；ATLAS 新人票与模型收益分开。
@@ -30,7 +32,7 @@
 
 [20260927-8ea1](adr/20260927-8ea1-repair-category-source-material.md)：分类源材料补全与同题消融；冻结输入和当前补采分开，复用方式见[分类 v1 输入修复](evaluations/content-enrichment/aihot-category-navigation/v1/README.md#2026-09-27o-阶段输入材料修复)，效果见[分类状态](evaluations/content-enrichment/status.md)。
 
-[分类方案履历](evaluations/content-enrichment/versions.md)：O阶段的实际parents、inspiration、两个输入窗口及运行身份；正式生产认可未知，不以研究父充作正式基线。
+[分类方案履历](evaluations/content-enrichment/versions.md)：研究方案的实际 parents、inspiration、输入窗口及运行身份，以及正式分类版本记录；研究谱系不替代生产采用和部署状态。
 
 [20260927-53ab](adr/20260927-53ab-human-category-scoring.md)：人评可接受集合优先、单答案子集 P/R 与 C5 修订；AIHOT 历史成绩及冻结输入保持原义，正文补充独立保存，结果由[分类状态](evaluations/content-enrichment/status.md)定位。
 

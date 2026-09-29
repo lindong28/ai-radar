@@ -2,7 +2,27 @@
 
 > [Developer] · Mutable snapshot · 2026-09-29。区分能力、实际运行与有效成绩。
 
+## 当前采用：分类 0.1.0（V2 Pro）
+
+2026-09-29 用户要求“挑选目前为止的最好的结果，作为线上使用的主方案，放到 main branch”，本次采用 **V2 Pro，正式版 0.1.0**。理由是规则已分清“类别证据是否成立”和“多类成立时的主类选择”，且在最新共同人票与完整冻结材料上，两次均46/48（95.83%），高于同口径 U2 的45/48与44/48；不是仅因字母更晚或单轮最高分。完整指标、目标/其余子集及两条残余错误仍由下方 V 阶段保存，履历与认可来源见 [versions](versions.md#分类正式版-0102026-09-29)。
+
+生产接入由 [category_release.py](../../../src/airadar/enrich/category_release.py) 和 [runner_v2.py](../../../src/airadar/enrich/runner_v2.py) 持有：默认 enrich_v2 保留其它字段生成，另用一次 V2 分类调用覆盖 primary_category，is_opinion 仅映射为主类是否 opinion。调用固定 Ark `personal_ark::deepseek-v4-pro-ga-260813`、thinking enabled/high、max_tokens=32768、temperature=0；分类调用失败最多3次尝试，三次失败记 enrich error，不回退到旧类别。显式注入 provider 的测试/调用不自动增加分类请求；旧 enrich 路径未被静默切换，运行需要 `--v2` 或 `AI_RADAR_ENRICH_V2=1`。
+
+材料使用当前条目 title/body、已取得的 article/linked-article 正文及已收集引用帖，以 documents 形式保留来源；分类器本身不新增抓取、不按旧5000字符阈值截断，不推测缺失正文。实际运行可用材料仍取决于采集/正文解析结果，不能把48题冻结材料完整等同于每条未来新闻都完整。分类 trace 随 evaluation 的 input_json 保存实际 prompt、配置、输出 reason、reasoning 与尝试记录；其它字段输出及其生产投影不改口径。
+
+采用决定和代码接入不等于线上已验：本轮不 push、不部署、不主动重跑生产条目；本地整合与测试结果由本次交付记录确认。分类版本、prompt 与参数纳入 enrich_v2 ruleset stamp，因此后续正常调度会将其查询时间窗内、尚无新 stamp 成功结果的条目列为候选，可能包括近期旧条目；不是承诺旧条目永不重算，也不是全历史回填。
+
+本轮收尾不继续开放 prompt 搜索。46/48 是既有研究调用，不是新增生产链路的模型实测；两次仍只有48个独立已见开发题，没有未见集或完整361题的 V2 泛化结论。六类P/R全部90%的目标尚未达成：产品P75%、教程R66.67%，其余值见下表；完整 enrich 的其它字段与 is_opinion 独立质量也未由此证明。两条剩余分类边界归未来另行授权的研究，保留原题、原票、失败与历史实验，不为收尾删题或清档。
+
+### 接入验证与失败边界
+
+本次运行时渲染器在第二次 V2 运行的48条冻结输入上生成的 system/user 与原 prompts 逐字节一致（48种 user、1种 system，原 `prompts.jsonl` SHA256 `9efbf451e31ef8f5595bf47929d1383e1b0bb7fce58d9fb97c29b3fe0be9e0e2`）；未因此重复付费评测。接入回归90项通过，范围为 `test_category_release`、`test_category_materials`、`test_enrich_runner`、`test_enrich_ruleset_stamp`、`test_llm_gateway`、`test_six_category_consumers`：含成功/输出无效/503恢复三类结果、0/2/3次失败、默认/注入provider、正文/链接文/引用三类补充材料、SQLite落库及六类消费者。它验证本地接线与模拟响应，不证明真实模型或每条未来输入的质量。
+
+分类三次均输出无效才沿用确定性错误退避；包含传输失败时记 `enrich failed`，保留下一轮重试机会，不误触24小时的输出错误退避。解析失败也保留已收到的响应及 gateway 身份，便于从 trace 查看 reasoning。分类错误仍进入既有 enrich 阶段错误统计与 A2 告警入口（`admin/alerts.py`），不另建分类常驻服务；本轮没有验证线上告警投递。
+
 ## V阶段：类别准入与主分类选择分层
+
+以下记录 V 阶段当时的研究结论；后续生产采用状态以上方 0.1.0 区段为准，不将采用决定回写成当时已上线。
 
 ### L1：两件事与实际结果
 

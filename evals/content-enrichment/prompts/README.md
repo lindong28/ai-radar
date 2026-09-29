@@ -1,6 +1,8 @@
 # 分类实验提示
 
-V2是当前Pro人评48题的下一轮研究主方案：`category-v2.txt`先判类别证据资格，再按贡献作用解决主类冲突；两次冻结运行均46/48。V1保留两层重写的首版，V2基于V1修定义漂移，不逐题拼接预测。U2继续作为对照，新共同人票下两次45/48、44/48（旧第二次43→44仅为用户批准ATLAS改票）。规则、成本、目标/剩余题及两道残余错误见[分类状态V阶段](../../../docs/evaluations/content-enrichment/status.md#v阶段类别准入与主分类选择分层)。六类P/R未全部90%，不是生产默认或未见题结论。
+2026-09-29 用户授权选定最佳结果作为线上主方案，本次采用 **V2 Pro → 分类0.1.0**。本目录 `category-v2.txt` 保留研究rubric，生产运行使用 [category_v2.txt](../../../src/airadar/enrich/category_v2.txt) 与 [category_release.py](../../../src/airadar/enrich/category_release.py)；不能只指定研究rubric便称复现正式版，仍需匹配 Ark Pro/high/32768/T0 和 documents 材料。采用与部署状态见 [当前状态](../../../docs/evaluations/content-enrichment/status.md#当前采用分类-010v2-pro)，正式身份见 [履历](../../../docs/evaluations/content-enrichment/versions.md#分类正式版-0102026-09-29)。
+
+V2先判类别证据资格，再按贡献作用解决主类冲突；两次冻结运行均46/48。V1保留两层重写的首版，V2基于V1修定义漂移，不逐题拼接预测。U2继续作为研究对照，新共同人票下两次45/48、44/48（旧第二次43→44仅为用户批准ATLAS改票）。规则、成本、目标/剩余题及两道残余错误见[分类状态V阶段](../../../docs/evaluations/content-enrichment/status.md#v阶段类别准入与主分类选择分层)。六类P/R未全部90%，没有未见题结论；以下各研究阶段的“当前”与“未晋级”均保留其发生时点。
 
 `category-u5.txt`在U4局部组合上修复独立分析、研究代码和调查深度的判断捷径；它与U4同属显式研究候选，最终选择与冻结重复读数仍以下文链接的状态文档为准。
 
@@ -28,6 +30,6 @@ D阶段保留四个未晋级的C5干预：D1正文证据贡献、D2新发现/分
 
 C阶段保留三个显式候选：`category-c1.txt`在A4上澄清研究成果/实践/观点边界；C2在C1上追加实际安全/法律/政策事件边界；C3在C1上改产品介绍/实践交付边界。C4复用C1加`--source-context`，C5复用C1加`--body-limit 0`，均保留B1的冻结引用及`--quote-contribution`。开关、rubric、模型、输入组合才定义方案，文件名不是完整身份；成绩与当前研究推荐见[状态](../../../docs/evaluations/content-enrichment/status.md)。C2/C3负结果也保留，不因文件存在就视为推荐。
 
-本目录只保留非默认研究候选：`category-a1.txt` 收窄模型发布并扩大研究/观点定义，`category-a2.txt` 按文章内容贡献区分行业、教程和观点。A1/A2仅为研究候选，回归不支持将A2设为默认；禁止把文件编号当作已推广顺序。
+本目录保留研究候选及已经采用候选的原研究prompt：`category-a1.txt` 收窄模型发布并扩大研究/观点定义，`category-a2.txt` 按文章内容贡献区分行业、教程和观点。A1/A2仅为研究候选，回归不支持将A2设为默认；禁止把文件编号当作已推广顺序。
 
-当前默认 A0 由 `src/airadar/enrich/category.py:RUBRIC` 单一持有，evaluate.py 未传 `--rubric` 时直接使用它；重复的 `category-a0.txt` 已移除，不改变默认 prompt。精确复现历史轮次以该 run 的 prompt.json 为准，不假定将来的默认始终等于历史 A0。A1/A2通过 `--rubric` 显式选择。输入、执行命令、指标与历史run见[执行入口](../aihot-category-navigation/README.md)和[状态](../../../docs/evaluations/content-enrichment/status.md)。
+评测 CLI 的默认 A0 仍由 `src/airadar/enrich/category.py:RUBRIC` 持有，evaluate.py 未传 `--rubric` 时使用它；这不是已采用的生产分类0.1.0。重复的 `category-a0.txt` 已移除。精确复现历史轮次以该 run 冻结的prompt为准，不假定将来的默认始终等于历史 A0。A1/A2通过 `--rubric` 显式选择，V2固定48题复跑沿 [状态 V 阶段](../../../docs/evaluations/content-enrichment/status.md#l2资产成本与复用) 的完整入口；输入、通用执行命令、指标与历史run见[执行入口](../aihot-category-navigation/README.md)。

@@ -68,6 +68,10 @@ src/airadar/
 │
 ├── enrich/             # 阶段 3：中文翻译富化
 │   ├── runner.py       #   run_enrich 主流程（支持并发 workers）
+│   ├── runner_v2.py    #   v2 富化；默认 provider 后接独立正式分类
+│   ├── category_release.py # 分类 0.1.0 的精确模型配置、三次尝试与轨迹
+│   ├── category_v2.txt #   正式分类的 V2 两层规则
+│   ├── category_materials.py # 原文/引用/文章来源分块，生产与评测共享
 │   ├── prompts.py      #   Prompt 模板
 │   └── schema.py       #   EnrichOutput Pydantic schema
 │
@@ -528,7 +532,11 @@ FastAPI 应用，通过 `create_app()` 工厂函数创建。前端是 HTML + JS�
 
 ### 分类系统
 
-前端的 category 过滤在后端 SQL 层实现。分类基于 enrich 阶段产生的标签，`web/routes/categories.py` 的 `CATEGORY_CONTRACT` 是分类规则的单一契约：SQL 谓词与 Python matcher 均由该契约生成，前端不再保留分类规则副本。
+前端的 category 过滤在后端 SQL 层实现。v2 富化保存独立 `primary_category`，由 `enrich/classification.py` 投影到模型、产品、行业、论文、教程、观点六类；历史 v1 记录才走该模块的 `LEGACY_CATEGORY_CONTRACT` 标签兼容投影。`web/routes/categories.py` 消费这个共享分类契约，前端不另写一份规则。
+
+默认 v2 runner 的正式分类是 V2 Pro `0.1.0`：保留联合富化的其他字段，独立通过 gateway 的 Ark Pro/high/32768/T0 调用覆盖主类，`is_opinion` 由主类映射。分类读取原始正文及已收集的直接引用/文章材料，与评测共用来源分块渲染器；失败最多三次业务尝试，不重做其他富化，也不降级旧分类。`item_evaluations.input_json.category_trace` 保存实际分类输入、控制参数与尝试输出，成功 `output_json` 仍遵循 `EnrichOutputV2`。分类配置进入 v2 ruleset stamp，近期调度窗口可因此重算；legacy runner 和显式注入 provider 的开发调用不自动切换。选型与限制见 [ADR-bd7c](adr/20260929-bd7c-promote-v2-category-production.md)，生效状态见[分类状态](evaluations/content-enrichment/status.md)。
+
+以下仅为历史 v1 标签兼容规则，不是正式分类 prompt：
 
 | Category | 包含的标签 | 冲突处理 |
 |---|---|---|

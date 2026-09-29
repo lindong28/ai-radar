@@ -27,6 +27,7 @@ class ChatJsonResult:
     model: str
     gateway: dict[str, Any] = field(default_factory=dict)
     sent_request_id: str | None = None
+    reasoning: str | None = None
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:
@@ -50,6 +51,9 @@ def chat_json(
     ark_model_env: str,
     temperature: float,
     max_tokens: int | None = None,
+    thinking: str | None = None,
+    reasoning_effort: str | None = None,
+    timeout: float | None = None,
     stage: str | None = None,
     item_id: str | None = None,
     input_item_count: int = 1,
@@ -64,7 +68,7 @@ def chat_json(
     completion = None
     client = None
     try:
-        timeout = float(os.environ.get("AI_RADAR_DEEPSEEK_TIMEOUT", "90"))
+        timeout = timeout if timeout is not None else float(os.environ.get("AI_RADAR_DEEPSEEK_TIMEOUT", "90"))
         client = gateway_client(
             callsite_id="provider.deepseek_chat.chat_json",
             timeout=timeout,
@@ -82,6 +86,10 @@ def chat_json(
             request["extra_body"]["thinking"] = {"type": os.environ.get("AI_RADAR_DEEPSEEK_THINKING", "disabled")}
         if max_tokens is not None:
             request["max_tokens"] = max_tokens
+        if thinking is not None:
+            request["extra_body"]["thinking"] = {"type": thinking}
+        if reasoning_effort is not None:
+            request["reasoning_effort"] = reasoning_effort
         completion = client.chat.completions.create(**request)
         identity = gateway_identity(completion, request_id)
         if identity["requested_logical_model"] != model:
@@ -121,6 +129,7 @@ def chat_json(
         return ChatJsonResult(
             json=_parse_json_object(content), provider=provider, model=actual_model,
             gateway=identity, sent_request_id=request_id,
+            reasoning=getattr(completion.choices[0].message, "reasoning_content", None),
         )
     except Exception as exc:
         raise gateway_error(exc, request_id, completion=completion) from exc
