@@ -5,6 +5,8 @@
 | # | Title | Status | Date |
 |---|---|---|---|
 | [20260929-6a82](./20260929-6a82-test-pro-human-category-boundaries.md) | 固定48道人评题验证 Pro 分类边界 | accepted for offline experiment | 2026-09-29 |
+| [20260929-b7e1](./20260929-b7e1-separate-category-eligibility-and-selection.md) | V1 准入/选择分层；ATLAS 明确修订（该题 supersedes 6a82 旧票口径） | accepted for offline experiment | 2026-09-29 |
+| [20260929-9a0d](./20260929-9a0d-repair-v1-category-boundaries.md) | 保留两层结构修复V1定义漂移；新增V2有限验证 | accepted for offline experiment | 2026-09-29 |
 | [20260928-9f3c](./20260928-9f3c-test-pro-reasoning-category-boundaries.md) | 固定 S1 六题，基于 Pro reasoning 收窄冲突边界 | accepted for offline experiment | 2026-09-28 |
 | [20260928-7552](./20260928-7552-retry-orbstack-start-periodically.md) | OrbStack 登录启动增加每 20 分钟重试，明确维护停用与恢复边界 | accepted | 2026-09-28 |
 | [20260927-c74e](./20260927-c74e-category-evidence-presentation.md) | O3 材料呈现与证据化理由分步消融；M2保留历史对照 | accepted for offline experiment | 2026-09-27 |

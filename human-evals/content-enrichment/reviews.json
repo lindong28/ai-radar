@@ -12298,6 +12298,44 @@
         ]
       },
       "sha256": "5a2ab6947a137d92709de1dd5deb70b5f33e9aa8f6c2ac87cab5b0605e89f376"
+    },
+    {
+      "metadata": {
+        "batch_id": "category-atlas-user-revision-20260929",
+        "kind": "category-acceptable-labels",
+        "reviewed_at": null,
+        "feedback_exported_at": null,
+        "recorded_at": "2026-09-29T01:44:27.294251+00:00",
+        "user_authority": "本会话向用户说明 ATLAS 全文兼有新交互平台与独立研究，询问并明确将回答追加为人评。用户原话：主选产品，两类均接受。仅修订此题。",
+        "source_run": "/Users/lindong/research/ai-radar/runs/content-enrichment/aihot-category-navigation/v1/2026-09-28/17-26-15",
+        "material_identity": "731cbfd69860a0544fea86b306b5a5e1e2d3e36aa0025aa9c46088b0e2abb5df",
+        "material_sha256": "2ee8d26f6127c42c82386833c7936f6b6ef5ed3dc791aed00a3f2a487f11a4d1",
+        "supersedes": [
+          {
+            "batch_id": "category-ab0d3e030f3a01601ff8d21336d1f45b3b9f6dbfe0249b37a3cee846588fdae6",
+            "sha256": "daef20a496a1cb1375cffedf0bd6754400ff9bac69556d4484a02efa200cf83a"
+          }
+        ]
+      },
+      "data": {
+        "annotations": [],
+        "category_judgments": [
+          {
+            "target": "content-enrichment",
+            "case_id": "4ca0175f14289ab2d41f832f",
+            "field": "acceptable_categories",
+            "input_identity": "6c87d61e9994aee67726075bd50b706a60591655b4382cbcf7bbd8a2af2001b5",
+            "reason": "主选产品，两类均接受",
+            "value": [
+              "ai-products",
+              "paper"
+            ],
+            "provenance": "user"
+          }
+        ],
+        "feedback_raw": "主选产品，两类均接受"
+      },
+      "sha256": "6188b18f1e309206fa2bd8be3f76b4dc3b7db0af3f604d2cae6b67ccfc89a7d4"
     }
   ]
 }

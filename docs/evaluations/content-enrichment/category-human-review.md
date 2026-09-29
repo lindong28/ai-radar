@@ -34,6 +34,8 @@ Codex 本批给出 95 道判断、3 道输入不足的 uncertain；这是非盲�
 
 ## 九票明确修订后的有效人评（2026-09-28）
 
+最新修订（2026-09-29）：用户在获知 ATLAS 完整材料同时包含新交互平台与独立研究后，回答“主选产品，两类均接受”。`reviews.json` 的 `category-atlas-user-revision-20260929` 批次仅将 `4ca0175f14289ab2d41f832f` 改为 `ai-products/paper`，显式 supersedes 下文原批及SHA，其余47票不变。当前有效48题为44单标签、4多标签；下面45/3描述9/28历史状态。首选产品记在该批 `data.feedback_raw` 和 `data.category_judgments[].reason` 的用户原话中；集合顺序没有优先级语义，现有 scorer 仍只算命中集合，实验另报告实际是否选产品。`metadata.source_run`、`material_identity`（该题完整system/user结构化摘要）、`material_sha256`（该run完整prompts.jsonl文件摘要）绑定此次解释所依据的补全材料，不冒充用户阅读了所有48题。原票、原材料与历史计分不改写。
+
 P1 九题复核的 9 条真实用户票已追加到同一 `reviews.json`，明确修订首批中的同题同输入判断。当前有效人评仍为 **48 题：45 题单答案、3 题多答案**；九票不是新增九道题，首批 50 条 pending 不因此变成人评。计分仍按可接受集合判断命中，三道多答案题参加 accuracy、从单答案 P/R 子集排除。这项标签修订不表示分类器已解完 48 题，也不切换生产默认。
 
 修订批次的 `metadata.supersedes` 保存 `[{"batch_id": "…", "sha256": "…"}]`，绑定先前分类人评批次及其完整摘要；本次引用的原批 ID 为 `category-ab0d3e030f3a01601ff8d21336d1f45b3b9f6dbfe0249b37a3cee846588fdae6`。只有新批实际包含、且 `(case_id, input_identity)` 相同的票获得明确覆盖，原批其余判断继续有效；旧批原票、展示材料和理由逐字保留。未指定该关系时，同输入的不同人工集合仍报冲突，不按时间或导入先后自动覆盖。相同批次、相同内容重导幂等，即使后面已有继续修订，也不移动或重写旧批。
