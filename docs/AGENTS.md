@@ -1,4 +1,4 @@
-# docs/CLAUDE.md -- ai-radar 文档索引与协议规则
+# docs/AGENTS.md -- ai-radar 文档索引与协议规则
 
 > Mutable snapshot. docs/ 下新增、重命名或删除文档时同步更新本索引。
 >

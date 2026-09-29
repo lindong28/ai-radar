@@ -452,7 +452,7 @@ def audit_eval_system(*, project_root: Path, runs_dir: Path, ledger_path: Path |
         ),
         "attribution_admission": _entry(
             "manual",
-            "CLAUDE.md + docs/issues/aihot-fit-eval.md",
+            "AGENTS.md + docs/issues/aihot-fit-eval.md",
             "differential_prediction must precede intervention; no fake mechanical proof of causal support is claimed",
         ),
         "archive_index": _entry(
