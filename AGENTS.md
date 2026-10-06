@@ -48,7 +48,7 @@ AI Radar is a Python 3.12 FastAPI application for collecting AI-related RSS, X-c
   那句作废；**但分岔的其余部分没有被裁决，遇到仍要问**）。
   **同一次裁决的否决项**：「直接拟合我方读数」（以我方 TV / 达标数为目标函数反解系数），
   **「按目标比例硬配额」仍被禁**。允许的是**改判据本身**——以输入为自变量的规则
-  （区别见 `~/.claude/references/prompt-distribution-fitting.md`）。**别外推成"这类分岔以后都不用问"。**
+  （区别见 `~/.claude/skills/eval-workflows/references/prompt-distribution-fitting.md`）。**别外推成"这类分岔以后都不用问"。**
 - **达标线**（用户 2026-09-10 裁定）= **逐类占比落进 AIHOT 该类的 95% CI**，不是整页 TV
   （TV 的绝对值**指不出是哪一类**——相互抵消的偏差在它上面看不见）。
   **权威观察面自 2026-09-11 起是「归档面」**（用户裁定，见下）：

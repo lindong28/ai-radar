@@ -2,8 +2,8 @@
 
 > Mutable snapshot. docs/ 下新增、重命名或删除文档时同步更新本索引。
 >
-> 协议正文：`~/.claude/references/docs-organization-protocol.md`
-> 格式模板：`~/.claude/references/docs-format-templates.md`
+> 协议正文：`~/.claude/skills/documentation-workflows/references/docs-organization-protocol.md`
+> 格式模板：`~/.claude/skills/documentation-workflows/references/docs-format-templates.md`
 
 ---
 
