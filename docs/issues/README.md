@@ -2,7 +2,7 @@
 
 > Agent 驱动的轻量 issue tracker，按 domain 分文件。
 >
-> 协议：`~/.claude/references/docs-organization-protocol.md` §4.8。domain 文件**只存 open 条目**；判定 resolved / wontfix 的同一步把整条（含证据与不修理由）移入 [archive/closed.md](archive/closed.md)，不留在原文件、不删除。
+> 协议：`~/.claude/skills/documentation-workflows/references/docs-organization-protocol.md` §4.8。domain 文件**只存 open 条目**；判定 resolved / wontfix 的同一步把整条（含证据与不修理由）移入 [archive/closed.md](archive/closed.md)，不留在原文件、不删除。
 
 | 文件 | Scope |
 |---|---|

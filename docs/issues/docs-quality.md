@@ -1,6 +1,6 @@
 # Docs Quality Issues
 
-> 文档自身的质量债跟踪（README 定位、重复、可观察性等审查遗留）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
+> 文档自身的质量债跟踪（README 定位、重复、可观察性等审查遗留）。协议：`~/.claude/skills/documentation-workflows/references/docs-organization-protocol.md` §4.8。
 
 ## [open] 2026-09-14：ADR 索引保留了一条不存在的目标文件
 

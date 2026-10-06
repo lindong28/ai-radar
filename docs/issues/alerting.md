@@ -2,7 +2,7 @@
 
 来源：2026-08-18 对 A1–A7 全告警面按 `~/.claude/references/alerting-review-principles.md` P1–P9 逐条评审（每条原则一个独立 reviewer）。本轮只交付了 A4/A7 处置指引的文案更正；下列各条是**同批发现、未在该次改动内闭合**的项，全部独立于那次文案改动而成立。
 
-分工：投递与去重契约（`im-notify`、dedup-key）归 `~/.claude/references/service-operations-protocol.md` §6，不在本文件。成本口径相关的未闭合项在 [cost-observability.md](cost-observability.md)。
+分工：投递与去重契约（`im-notify`、dedup-key）归 `~/.claude/skills/service-workflows/references/service-operations-protocol.md` §6，不在本文件。成本口径相关的未闭合项在 [cost-observability.md](cost-observability.md)。
 
 ## ISSUE-A01 · A4 在故障持续中发出「已恢复」，此后长时间静默
 

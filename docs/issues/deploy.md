@@ -1,6 +1,6 @@
 # Deploy / DB-sync Issues
 
-> 部署、服务生命周期与 DB 同步链路的运维问题跟踪（含影响其验收的测试基线）。协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
+> 部署、服务生命周期与 DB 同步链路的运维问题跟踪（含影响其验收的测试基线）。协议：`~/.claude/skills/documentation-workflows/references/docs-organization-protocol.md` §4.8。
 
 ## [open] 2026-08-21：quarantine 只写不收，每次切换失败沉淀两份全量 DB 且永不回收
 

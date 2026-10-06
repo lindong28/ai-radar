@@ -2,7 +2,7 @@
 
 > Mutable。test-ux 跑测中发现的、与 ux-contract 演化相关的观察。domain 文件只存 **open** 条目；判定 resolved / wontfix 时整条移入 [archive/closed.md](archive/closed.md)。owner sweep 后决定是否升级为契约修订。
 >
-> 协议：`~/.claude/references/docs-organization-protocol.md` §4.8——该节同时承载「ux-issues.md 与本文件只能由真实端到端产品观察写入」这条约束。
+> 协议：`~/.claude/skills/documentation-workflows/references/docs-organization-protocol.md` §4.8——该节同时承载「ux-issues.md 与本文件只能由真实端到端产品观察写入」这条约束。
 > type 语义：`drift`（契约声 X 实际 Y）/ `expansion`（未覆盖但合理的扩展候选）/ `redesign`（契约结构本身改进建议）。
 >
 > 契约演化候选**不由 agent 直写契约**（协议 §4.6 fallback）：本文件的条目由用户经 `/custom:create-ux-contract` 处理。

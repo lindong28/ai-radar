@@ -151,7 +151,7 @@ Issues with the **agent harness** (hooks, wrappers, plugins, agent/skill behavio
 
 - **放大效应**：上一轮的 CSS 忠实度审计朝这些死规则的方向"修正"过我方的值（把 `--tl-dot-top` 中档改成 16、把 `.timeline-time` 改回 12.5px/1.1）。**审计越忠实，可见缺陷越多**——这是一个负向反馈，比单纯漏抄危险。
 
-- **建议**：`~/.claude/references/web-ui-observation.md` 的「有参照产品时的对比纪律」增加一条——参照站与我方响应式架构不同（尤其两棵 DOM 树 vs 一棵）时，抄录的每条规则必须附**参照站上的可见性**判定；只有在参照站上实际渲染的规则才构成我方的目标值，隐藏子树上的规则要映射到参照站**可见**的对应件、或明确记为不适用。判据来自参照站自己的 `display:none`/`display:contents` 与冻结 DOM，不能凭 selector 名字猜。同时「必须覆盖的轴」可提示：参照站在断点两侧切换的是**哪棵树**，而不只是哪套值。
+- **建议**：`~/.claude/skills/web-ui-workflows/references/web-ui-observation.md` 的「有参照产品时的对比纪律」增加一条——参照站与我方响应式架构不同（尤其两棵 DOM 树 vs 一棵）时，抄录的每条规则必须附**参照站上的可见性**判定；只有在参照站上实际渲染的规则才构成我方的目标值，隐藏子树上的规则要映射到参照站**可见**的对应件、或明确记为不适用。判据来自参照站自己的 `display:none`/`display:contents` 与冻结 DOM，不能凭 selector 名字猜。同时「必须覆盖的轴」可提示：参照站在断点两侧切换的是**哪棵树**，而不只是哪套值。
 
 - **未就地修的原因**：目标载体在 `ai-agent-config` 仓库，本轮该仓库有另一 session 在活跃写入（36 个 dirty 文件、我方 `cd9d426` 之上已有新 commit），按 `concurrent-plan-isolation` 不在此刻跨仓库写。本条留待该仓库空闲时落地。
 

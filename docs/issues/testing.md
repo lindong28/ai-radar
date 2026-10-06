@@ -1,7 +1,7 @@
 # Test-suite Issues
 
 > 测试套件自身的红项与基线债——与具体功能 domain 无关、但会污染每一次改动的验收读数。
-> 协议：`~/.claude/references/docs-organization-protocol.md` §4.8。
+> 协议：`~/.claude/skills/documentation-workflows/references/docs-organization-protocol.md` §4.8。
 
 ## [open] 2026-09-22：egress exact-registry 基线仍缺三项子进程调用
 

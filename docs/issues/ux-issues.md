@@ -2,7 +2,7 @@
 
 > Mutable。配对 [`ux-contract.md`](../contracts/ux-contract.md) 的 issue ledger，装当前 product 已确认的 user-observable 问题。
 >
-> 协议：`~/.claude/references/docs-organization-protocol.md` §4.8——该节同时承载「本文件与 ux-contract-issues.md 只能由真实端到端产品观察写入」这条约束。
+> 协议：`~/.claude/skills/documentation-workflows/references/docs-organization-protocol.md` §4.8——该节同时承载「本文件与 ux-contract-issues.md 只能由真实端到端产品观察写入」这条约束。
 > 状态语义（协议枚举）：`open` 已发现未处理 / `resolved` 已修复并验证 / `wontfix` 决定不修。本文件只存 open 条目；判定 resolved / wontfix 时整条移入 [archive/closed.md](archive/closed.md)。
 
 ---
