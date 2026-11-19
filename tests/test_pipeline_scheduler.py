@@ -569,7 +569,7 @@ def test_pipeline_launchd_fallback_runs_every_fifteen_minutes() -> None:
 
 
 def test_readme_documents_automatic_scheduler_setup() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "README.legacy.md").read_text(encoding="utf-8")
 
     assert "## 自动化调度" in readme
     assert "./pipeline.sh" in readme

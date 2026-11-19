@@ -1080,7 +1080,7 @@ def test_source_pool_contains_exact_aihot_active_x_allowlist(monkeypatch) -> Non
 
 def test_current_x_limits_are_documented() -> None:
     root = Path(__file__).resolve().parents[1]
-    readme = (root / "README.md").read_text(encoding="utf-8")
+    readme = (root / "README.legacy.md").read_text(encoding="utf-8")
     architecture = (root / "docs" / "architecture.md").read_text(encoding="utf-8")
 
     assert X_RECENT_LOOKBACK.total_seconds() == 20 * 60

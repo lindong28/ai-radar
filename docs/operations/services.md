@@ -386,7 +386,7 @@ pipeline 在 cron ↔ launchd 之间切换：先 `./uninstall.sh pipeline`，再
 
 ## 相关参考
 
-- [README.md §服务](../../README.md#服务) — 用户视角的脚本入口表
+- [旧版使用手册 §服务](../../README.legacy.md#服务) — 用户视角的脚本入口表
 - [docs/operations/monitoring-alerting.md](monitoring-alerting.md) — `/admin` dashboard、A1–A7 与 D3 告警、周报、飞书 webhook 与旅程延迟
 - [docs/experiences/deployment.md](../experiences/deployment.md) — 历史踩坑（env 不继承、cron/launchd 共存、tunnel region、docker compose 守护）
 - [docs/operations/wechat-ingestion.md](wechat-ingestion.md) — 微信公众号摄取（Wechat2RSS 主动入口、Mp2RSS paused 历史身份、跨源去重、头像 backfill 与迁移门槛）

@@ -324,8 +324,8 @@ curl -s 'http://localhost:8010/api/v1/wechat?q=合集' | jq '.data.total' # 应�
 
 ## 相关参考
 
-- [README.md §信源](../../README.md#信源) — 用户视角的 `wechat` kind 说明
-- [README.md §微信文章解读](../../README.md#微信文章解读) — `/wechat` 与 ai-assistant KB 回写说明
+- [旧版使用手册 §信源](../../README.legacy.md#信源) — 用户视角的 `wechat` kind 说明
+- [旧版使用手册 §微信文章解读](../../README.legacy.md#微信文章解读) — `/wechat` 与 ai-assistant KB 回写说明
 - [docs/references/interpretation-engine.md](../references/interpretation-engine.md) — 本仓解读引擎、配置和脚本入口
 - [docs/references/ai-assistant-contract.md](../references/ai-assistant-contract.md) — 历史 KB 数据兼容契约
 - [docs/operations/services.md](services.md) — 服务清单（以该文件的服务表为准；`wewe` 已移除，附回滚说明）
